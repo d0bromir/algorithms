@@ -297,7 +297,7 @@ int main() {
     cout << "For sequences of length " << m << " and " << n << ":" << endl;
     cout << "  Needleman-Wunsch space: O(" << m << " x " << n << ") = ~" << (m * n) << " integers" << endl;
     cout << "  Hirschberg space: O(min(" << m << ", " << n << ")) = ~" << min(m, n) << " integers" << endl;
-    cout << "  Space reduction: ~" << ((m * n) / min(m, n)) << "x improvement" << endl;
+    cout << "  Space reduction: ~" << (static_cast<double>(m * n) / min(m, n)) << "x improvement" << endl;
     
     return 0;
 }
