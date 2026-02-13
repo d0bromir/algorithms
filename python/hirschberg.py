@@ -265,7 +265,7 @@ if __name__ == "__main__":
     print("-" * 60)
     m, n = 1000, 1000
     print(f"For sequences of length {m} and {n}:")
-    print(f"  Needleman-Wunsch space: O({m} × {n}) = ~{m*n:,} integers")
+    print(f"  Needleman-Wunsch space: O({m} x {n}) = ~{m*n:,} integers")
     print(f"  Hirschberg space: O(min({m}, {n})) = ~{min(m,n):,} integers")
     print(f"  Space reduction: ~{(m*n)/(min(m,n)):.0f}x improvement")
     
