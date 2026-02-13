@@ -11,6 +11,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'python'))
 
 from needleman_wunsch import needleman_wunsch
+from hirschberg import hirschberg
 from smith_waterman import smith_waterman
 from seed_and_extend import seed_and_extend, KmerIndex
 from bwt_fm_index import FMIndex, burrows_wheeler_transform, inverse_bwt
@@ -36,6 +37,41 @@ def test_needleman_wunsch():
     assert aligned2 == "ACG", f"Expected 'ACG', got '{aligned2}'"
     
     print("  ✓ Needleman-Wunsch tests passed")
+
+
+def test_hirschberg():
+    """Test Hirschberg algorithm."""
+    print("Testing Hirschberg...")
+    
+    # Test 1: Identical sequences
+    aligned1, aligned2, score = hirschberg("ACGT", "ACGT")
+    assert aligned1 == "ACGT", f"Expected 'ACGT', got '{aligned1}'"
+    assert aligned2 == "ACGT", f"Expected 'ACGT', got '{aligned2}'"
+    assert score == 4, f"Expected score 4, got {score}"
+    
+    # Test 2: Different sequences
+    aligned1, aligned2, score = hirschberg("GATTACA", "GCATGCU")
+    assert len(aligned1) == len(aligned2), "Aligned sequences must have same length"
+    assert score == 0, f"Expected score 0, got {score}"
+    
+    # Test 3: Empty sequences
+    aligned1, aligned2, score = hirschberg("", "ACG")
+    assert aligned1 == "---", f"Expected '---', got '{aligned1}'"
+    assert aligned2 == "ACG", f"Expected 'ACG', got '{aligned2}'"
+    assert score == -3, f"Expected score -3, got {score}"
+    
+    # Test 4: Verify same results as Needleman-Wunsch
+    seq1, seq2 = "AGTACGCA", "TATGC"
+    h_aligned1, h_aligned2, h_score = hirschberg(seq1, seq2)
+    nw_aligned1, nw_aligned2, nw_score = needleman_wunsch(seq1, seq2)
+    assert h_score == nw_score, f"Hirschberg and NW scores should match: {h_score} vs {nw_score}"
+    
+    # Test 5: Custom scoring parameters
+    aligned1, aligned2, score = hirschberg("AC", "AC", match_score=2, mismatch_penalty=-1, gap_penalty=-2)
+    nw_aligned1, nw_aligned2, nw_score = needleman_wunsch("AC", "AC", match_score=2, mismatch_penalty=-1, gap_penalty=-2)
+    assert score == nw_score, f"Scores should match with custom parameters: {score} vs {nw_score}"
+    
+    print("  ✓ Hirschberg tests passed")
 
 
 def test_smith_waterman():
@@ -114,6 +150,11 @@ def test_algorithm_properties():
     aligned1, aligned2, score2 = needleman_wunsch("AC", "AC", match_score=1)
     assert score1 > score2, "Higher match score should give higher total score"
     
+    # Test that Hirschberg also handles custom scores
+    aligned1, aligned2, score1 = hirschberg("AC", "AC", match_score=2)
+    aligned1, aligned2, score2 = hirschberg("AC", "AC", match_score=1)
+    assert score1 > score2, "Higher match score should give higher total score (Hirschberg)"
+    
     # Test that local alignment score >= 0
     aligned1, aligned2, score = smith_waterman("AAAA", "TTTT")
     assert score >= 0, "Smith-Waterman score should never be negative"
@@ -129,6 +170,7 @@ def run_all_tests():
     
     try:
         test_needleman_wunsch()
+        test_hirschberg()
         test_smith_waterman()
         test_seed_and_extend()
         test_bwt_fm_index()
