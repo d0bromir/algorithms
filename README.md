@@ -9,6 +9,7 @@ This repository contains implementations of algorithms used for alignment of seq
 1. **Dynamic Programming (DP)** – Exact alignment algorithms
    - Needleman-Wunsch (global alignment)
    - Smith-Waterman (local alignment)
+   - Smith-Waterman with Affine Gap Penalties (biologically realistic gaps)
 
 2. **Seed-and-Extend with Hash Tables / k-mers** – Fast approximate alignment
    - Used in BLAST, MAQ, SOAP
@@ -27,13 +28,17 @@ algorithms/
 ├── python/               # Python implementations
 │   ├── needleman_wunsch.py
 │   ├── smith_waterman.py
+│   ├── smith_waterman_affine.py
 │   ├── seed_and_extend.py
-│   └── bwt_fm_index.py
+│   ├── bwt_fm_index.py
+│   └── hirschberg.py
 ├── cpp/                  # C++ implementations
 │   ├── needleman_wunsch.cpp
 │   ├── smith_waterman.cpp
+│   ├── smith_waterman_affine.cpp
 │   ├── seed_and_extend.cpp
-│   └── bwt_fm_index.cpp
+│   ├── bwt_fm_index.cpp
+│   └── hirschberg.cpp
 └── examples/             # Example usage
 ```
 
@@ -83,6 +88,31 @@ aligned1, aligned2, score = smith_waterman(seq1, seq2)
 ```bash
 g++ -std=c++17 -o sw cpp/smith_waterman.cpp
 ./sw
+```
+
+#### 2.1 Smith-Waterman with Affine Gap Penalties
+
+Enhanced version using affine gap penalties (gap_open + gap_extend × length) for more biologically realistic alignments.
+
+- **Time Complexity:** O(m × n)
+- **Space Complexity:** O(m × n) - uses three matrices
+- **Use Case:** Protein alignment, sequences with indels
+
+**Python Usage:**
+```python
+from smith_waterman_affine import smith_waterman_affine
+
+seq1 = "GGTTGACTA"
+seq2 = "TGTTACGG"
+aligned1, aligned2, score = smith_waterman_affine(seq1, seq2, 
+                                                   gap_open=-3, 
+                                                   gap_extend=-1)
+```
+
+**C++ Usage:**
+```bash
+g++ -std=c++17 -o sw_affine cpp/smith_waterman_affine.cpp
+./sw_affine
 ```
 
 ### 3. Seed-and-Extend (K-mer Hashing)
@@ -139,8 +169,10 @@ g++ -std=c++17 -o bwt cpp/bwt_fm_index.cpp
 # Run individual algorithms
 python3 python/needleman_wunsch.py
 python3 python/smith_waterman.py
+python3 python/smith_waterman_affine.py
 python3 python/seed_and_extend.py
 python3 python/bwt_fm_index.py
+python3 python/hirschberg.py
 ```
 
 ### C++
@@ -148,8 +180,10 @@ python3 python/bwt_fm_index.py
 # Compile and run
 g++ -std=c++17 -o nw cpp/needleman_wunsch.cpp && ./nw
 g++ -std=c++17 -o sw cpp/smith_waterman.cpp && ./sw
+g++ -std=c++17 -o sw_affine cpp/smith_waterman_affine.cpp && ./sw_affine
 g++ -std=c++17 -o sae cpp/seed_and_extend.cpp && ./sae
 g++ -std=c++17 -o bwt cpp/bwt_fm_index.cpp && ./bwt
+g++ -std=c++17 -o hirsch cpp/hirschberg.cpp && ./hirsch
 ```
 
 ## Algorithm Comparison
@@ -158,6 +192,7 @@ g++ -std=c++17 -o bwt cpp/bwt_fm_index.cpp && ./bwt
 |-----------|------|-------|--------|----------|----------|
 | Needleman-Wunsch | DP | Slow | High | Optimal | Small sequences, global alignment |
 | Smith-Waterman | DP | Slow | High | Optimal | Small sequences, local alignment |
+| Smith-Waterman (Affine) | DP | Slow | High | Optimal | Proteins, realistic gap modeling |
 | Seed-and-Extend | Heuristic | Fast | Medium | Approximate | Medium sequences, BLAST-like |
 | BWT + FM-index | Exact | Very Fast | Low | Exact | Large genomes, read alignment |
 

@@ -74,6 +74,81 @@ The Smith-Waterman algorithm is a dynamic programming algorithm for local sequen
 - Ignores poorly matching regions
 - More sensitive for partial matches
 
+## 2.5. Smith-Waterman with Affine Gap Penalties
+
+### Overview
+An enhanced version of the Smith-Waterman algorithm that uses affine gap penalties instead of linear gap penalties. Affine gaps are more biologically realistic as they distinguish between opening a gap (more costly) and extending an existing gap (less costly).
+
+### Affine Gap Model
+- **Linear gap penalty** (basic version): gap_penalty × gap_length
+- **Affine gap penalty** (this version): gap_open + (gap_extend × gap_length)
+
+For example, a gap of length 3:
+- Linear: -1 × 3 = -3
+- Affine: -3 + (-1 × 3) = -6 (gap opening is more costly)
+
+### Three-Matrix Approach
+Uses three dynamic programming matrices:
+1. **M[i][j]**: Best score ending with match/mismatch at position (i,j)
+2. **I[i][j]**: Best score ending with insertion (gap in seq1) at position (i,j)
+3. **D[i][j]**: Best score ending with deletion (gap in seq2) at position (i,j)
+
+### Algorithm Steps
+1. **Initialize** - Create three (m+1) × (n+1) matrices
+   - M initialized with 0
+   - I and D initialized with negative infinity (except allowing gaps from 0)
+2. **Fill Matrices** - For each cell (i,j):
+   - I[i][j] = max(0, M[i][j-1] + gap_open + gap_extend, I[i][j-1] + gap_extend, D[i][j-1] + gap_open + gap_extend)
+   - D[i][j] = max(0, M[i-1][j] + gap_open + gap_extend, D[i-1][j] + gap_extend, I[i-1][j] + gap_open + gap_extend)
+   - M[i][j] = max(0, M[i-1][j-1] + s(i,j), I[i-1][j-1] + s(i,j), D[i-1][j-1] + s(i,j))
+   - Where s(i,j) is match_score or mismatch_penalty
+3. **Find Maximum** - Track highest score across all three matrices
+4. **Traceback** - Follow the path through appropriate matrices until score reaches 0
+
+### Parameters
+- `match_score`: Score for matching characters (default: 2)
+- `mismatch_penalty`: Penalty for mismatches (default: -1)
+- `gap_open`: Penalty for opening a new gap (default: -3)
+- `gap_extend`: Penalty for extending existing gap (default: -1)
+
+### Time and Space Complexity
+- Time: O(m × n) - same as basic Smith-Waterman
+- Space: O(3 × m × n) = O(m × n) - three matrices instead of one
+
+### Use Cases
+- Protein sequence alignment (gaps often appear in runs)
+- Aligning sequences with indels
+- When biological accuracy is important
+- Sequences where insertions/deletions tend to cluster
+
+### Advantages over Linear Gap Penalty
+- More biologically realistic
+- Penalizes scattered gaps more than clustered gaps
+- Better models evolutionary insertions/deletions
+- Produces cleaner alignments with fewer scattered gaps
+
+### When to Use Affine vs Linear
+- **Use Affine** when:
+  - Working with biological sequences (especially proteins)
+  - You expect runs of insertions/deletions
+  - Alignment quality is critical
+- **Use Linear** when:
+  - Speed is more important than accuracy
+  - Gap structure is not important
+  - Quick similarity scoring is needed
+
+### Typical Parameter Values
+**For DNA:**
+- match_score: 1 to 5
+- mismatch_penalty: -1 to -4
+- gap_open: -3 to -10
+- gap_extend: -1 to -2
+
+**For Proteins:**
+- Use substitution matrix (BLOSUM62, PAM250)
+- gap_open: -10 to -12
+- gap_extend: -1 to -2
+
 ## 3. Seed-and-Extend (K-mer Hashing)
 
 ### Overview
@@ -216,10 +291,11 @@ Are sequences very similar (>95% identity)?
 |----------|-----------|-----|
 | Database search | Seed-and-Extend | Fast, scalable |
 | NGS read alignment | BWT + FM-Index | Ultra-fast exact matching |
-| Protein comparison | Smith-Waterman | Finds functional domains |
+| Protein comparison | Smith-Waterman (Affine) | Finds functional domains, realistic gaps |
 | Gene comparison | Needleman-Wunsch | Complete gene alignment |
 | Finding motifs | Smith-Waterman | Local pattern matching |
 | SNP calling | BWT + FM-Index | Align millions of reads |
+| Sequences with indels | Smith-Waterman (Affine) | Better models clustered gaps |
 
 ### By Sequence Properties
 
