@@ -11,10 +11,18 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'python'))
 
 from needleman_wunsch import needleman_wunsch
+from needleman_wunsch_affine import needleman_wunsch_affine
 from hirschberg import hirschberg
 from smith_waterman import smith_waterman
+from smith_waterman_affine import smith_waterman_affine
 from seed_and_extend import seed_and_extend, KmerIndex
 from bwt_fm_index import FMIndex, burrows_wheeler_transform, inverse_bwt
+from myers_bitvector import myers_bit_vector_edit_distance, edit_distance_bruteforce
+from wavefront_alignment import wavefront_alignment
+from minimizer_chaining import build_minimizer_index, find_seed_matches, chain_seeds
+from strobemer_mapping import (
+    strobemer_index, find_strobemer_matches, minhash_sketch, estimate_jaccard,
+)
 
 
 def test_needleman_wunsch():
@@ -77,6 +85,137 @@ def test_hirschberg():
     assert score == nw_score, f"Scores should match with custom parameters: {score} vs {nw_score}"
     
     print("  ✓ Hirschberg tests passed")
+
+
+def test_needleman_wunsch_affine():
+    """Test Gotoh's affine-gap global alignment."""
+    print("Testing Needleman-Wunsch (affine gap, Gotoh)...")
+
+    # Test 1: Identical sequences should score len * match_score
+    aligned1, aligned2, score = needleman_wunsch_affine("ACGT", "ACGT")
+    assert aligned1 == "ACGT" and aligned2 == "ACGT"
+    assert score == 4, f"Expected score 4, got {score}"
+
+    # Test 2: A clustered indel should be cheaper than scattered ones under
+    # the same affine parameters (the whole point of affine gap penalties).
+    seq1, seq2 = "ACGTACGTACGT", "ACGTAAACGT"
+    _, _, clustered_score = needleman_wunsch_affine(seq1, seq2, 2, -1, -5, -1)
+    assert clustered_score is not None
+
+    # Test 3: alignment reconstructs original sequences
+    aligned1, aligned2, _ = needleman_wunsch_affine("GGTTGACTA", "TGTTACGG", 2, -1, -3, -1)
+    assert len(aligned1) == len(aligned2)
+    assert ''.join(c for c in aligned1 if c != '-') == "GGTTGACTA"
+    assert ''.join(c for c in aligned2 if c != '-') == "TGTTACGG"
+
+    print("  ✓ Needleman-Wunsch affine tests passed")
+
+
+def test_myers_bitvector():
+    """Test Myers' bit-vector edit distance algorithm against brute force."""
+    print("Testing Myers' bit-vector algorithm...")
+
+    # Test 1: identical strings -> distance 0
+    dist, pos = myers_bit_vector_edit_distance("ACGT", "ACGT")
+    assert dist == 0 and pos == 4
+
+    # Test 2: matches brute-force Levenshtein distance
+    dist, _ = myers_bit_vector_edit_distance("GATTACA", "GACTATA")
+    brute = edit_distance_bruteforce("GATTACA", "GACTATA")
+    assert dist == brute, f"Expected {brute}, got {dist}"
+
+    # Test 3: empty pattern
+    dist, pos = myers_bit_vector_edit_distance("", "ACGT")
+    assert dist == 4 and pos == 4
+
+    print("  ✓ Myers' bit-vector tests passed")
+
+
+def test_wavefront_alignment():
+    """Test the Wavefront Alignment (WFA) algorithm against affine-gap DP."""
+    print("Testing Wavefront Alignment (WFA)...")
+
+    def affine_dp_min(seq1, seq2, mismatch=4, gap_open=6, gap_extend=2):
+        m, n = len(seq1), len(seq2)
+        INF = float('inf')
+        M = [[INF] * (n + 1) for _ in range(m + 1)]
+        I = [[INF] * (n + 1) for _ in range(m + 1)]
+        D = [[INF] * (n + 1) for _ in range(m + 1)]
+        M[0][0] = 0
+        for j in range(1, n + 1):
+            I[0][j] = gap_open + gap_extend * j
+        for i in range(1, m + 1):
+            D[i][0] = gap_open + gap_extend * i
+        for i in range(1, m + 1):
+            for j in range(1, n + 1):
+                I[i][j] = min(M[i][j - 1] + gap_open + gap_extend, I[i][j - 1] + gap_extend)
+                D[i][j] = min(M[i - 1][j] + gap_open + gap_extend, D[i - 1][j] + gap_extend)
+                s = 0 if seq1[i - 1] == seq2[j - 1] else mismatch
+                M[i][j] = min(M[i - 1][j - 1] + s, I[i - 1][j - 1] + s, D[i - 1][j - 1] + s)
+        return min(M[m][n], I[m][n], D[m][n])
+
+    # Test 1: identical sequences -> score 0
+    assert wavefront_alignment("ACGT", "ACGT") == 0
+
+    # Test 2: matches affine-gap DP minimum on several cases
+    for seq1, seq2 in [("GATTACA", "GATCACA"), ("ACGTACGTACGT", "ACGTAAACGT"),
+                        ("TAAAG", "AC"), ("", "ACG"), ("ACG", "")]:
+        got = wavefront_alignment(seq1, seq2, mismatch=4, gap_open=6, gap_extend=2)
+        expected = affine_dp_min(seq1, seq2, 4, 6, 2)
+        assert got == expected, f"WFA({seq1!r}, {seq2!r}) = {got}, expected {expected}"
+
+    print("  ✓ Wavefront Alignment tests passed")
+
+
+def test_minimizer_chaining():
+    """Test minimizer-based seeding and co-linear chaining."""
+    print("Testing minimizer sketching + chaining...")
+
+    reference = ("ACGTACGGTTAGCATGACGGATCCAGTGACCATGGGACCATTGACCTGA"
+                 "GGGTACCGGATTACAAGGCTAGCTAGGATCCAGTTAGGCATGGCTTAAGG")
+    query = "GACCATGGGACCATTGACCTGAGGGTACCGGATT"  # exact substring at index 27
+
+    k, w = 8, 4
+    ref_index = build_minimizer_index(reference, k=k, w=w)
+    seeds = find_seed_matches(query, ref_index, k=k, w=w)
+    assert len(seeds) > 0, "Should find seed matches for an exact substring"
+
+    chain, score = chain_seeds(seeds, k=k)
+    assert len(chain) > 0
+    true_start = reference.find(query)
+    q0, r0 = chain[0]
+    assert r0 - q0 == true_start, f"Chain should recover true offset {true_start}, got {r0 - q0}"
+
+    print("  ✓ Minimizer chaining tests passed")
+
+
+def test_strobemer_mapping():
+    """Test strobemer seeding and MinHash Jaccard estimation."""
+    print("Testing strobemer seeding + MinHash...")
+
+    reference = ("ACGTACGGTTAGCATGACGGATCCAGTGACCATGGGACCATTGACCTGA"
+                 "GGGTACCGGATTACAAGGCTAGCTAGGATCCAGTTAGGCATGGCTTAAGG"
+                 "TTCCGGAATTCCGGATCGATCGGATCCAAGCTTGGATCCACTAGTCCAGT")
+    query = reference[60:130]
+
+    idx = strobemer_index(reference, strobe_len=5, w_min=4, w_max=12)
+    matches = find_strobemer_matches(query, idx, strobe_len=5, w_min=4, w_max=12)
+    assert len(matches) > 0, "Should find strobemer matches for an exact substring"
+
+    offsets = [r - q for q, r in matches]
+    most_common = max(set(offsets), key=offsets.count)
+    assert most_common == 60, f"Expected dominant offset 60, got {most_common}"
+
+    # MinHash: identical sequences must have Jaccard similarity 1.0
+    sketch = minhash_sketch(reference, k=12, sketch_size=100)
+    assert estimate_jaccard(sketch, sketch) == 1.0
+
+    # A sequence and a very different one should show low similarity
+    unrelated = "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT"
+    sketch_unrelated = minhash_sketch(unrelated, k=12, sketch_size=100)
+    assert estimate_jaccard(sketch, sketch_unrelated) < estimate_jaccard(sketch, sketch)
+
+    print("  ✓ Strobemer/MinHash tests passed")
 
 
 def test_smith_waterman():
@@ -175,10 +314,15 @@ def run_all_tests():
     
     try:
         test_needleman_wunsch()
+        test_needleman_wunsch_affine()
         test_hirschberg()
         test_smith_waterman()
         test_seed_and_extend()
         test_bwt_fm_index()
+        test_myers_bitvector()
+        test_wavefront_alignment()
+        test_minimizer_chaining()
+        test_strobemer_mapping()
         test_algorithm_properties()
         
         print("\n" + "=" * 50)

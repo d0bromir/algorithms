@@ -4,6 +4,12 @@
 
 This document provides detailed information about each algorithm implementation.
 
+> For a literature-review-style SWOT analysis (Strengths/Weaknesses/
+> Opportunities/Threats) of these and ~35 additional algorithms — SIMD
+> libraries, production aligners (Bowtie, BWA-MEM2, minimap2, vg), GPU/
+> hardware accelerators, and theoretical lower bounds — with full
+> citations, DOIs, and repository links, see [SWOT_ANALYSIS.md](SWOT_ANALYSIS.md).
+
 ## 1. Needleman-Wunsch (Global Alignment)
 
 ### Overview
@@ -149,7 +155,286 @@ Uses three dynamic programming matrices:
 - gap_open: -10 to -12
 - gap_extend: -1 to -2
 
-## 3. Seed-and-Extend (K-mer Hashing)
+## 2.6. Needleman-Wunsch with Affine Gap Penalties (Gotoh's Algorithm)
+
+### Overview
+The global-alignment counterpart to section 2.5: the same three-matrix
+(match/insert/delete) recurrence from Gotoh (1982), but without local-alignment
+flooring at zero and with traceback always running to (0, 0), since global
+alignment must account for the entire length of both sequences.
+
+### Why a Separate M/I/D Boundary Matters
+Unlike the local-alignment version, the boundary row/column carry real,
+finite costs: `M[0][j]` and `M[i][0]` must be `-infinity` (a match/mismatch
+cannot end an alignment that consumed zero characters from the other
+sequence), while `I[0][j] = gap_open + j * gap_extend` and
+`D[i][0] = gap_open + i * gap_extend` represent "align this whole prefix to
+gaps." Getting this boundary wrong is the most common implementation bug in
+affine-gap global alignment (an all-zero or aliased boundary silently
+produces wrong scores or an invalid traceback).
+
+### Algorithm Steps
+1. **Initialize** three `(m+1) x (n+1)` matrices M, I, D to `-infinity`,
+   except `M[0][0] = 0`, `I[0][j] = gap_open + j*gap_extend`, and
+   `D[i][0] = gap_open + i*gap_extend`.
+2. **Fill Matrices** - for i in 1..m, j in 1..n:
+   - `I[i][j] = max(M[i][j-1] + gap_open + gap_extend, I[i][j-1] + gap_extend, D[i][j-1] + gap_open + gap_extend)`
+   - `D[i][j] = max(M[i-1][j] + gap_open + gap_extend, D[i-1][j] + gap_extend, I[i-1][j] + gap_open + gap_extend)`
+   - `M[i][j] = max(M[i-1][j-1], I[i-1][j-1], D[i-1][j-1]) + s(i,j)`
+3. **Final Score** - `max(M[m][n], I[m][n], D[m][n])`
+4. **Traceback** - from `(m, n)` in whichever matrix achieved the final
+   score, back to `(0, 0)`, switching matrices exactly as in section 2.5
+   but never stopping early (no zero-flooring).
+
+### Time and Space Complexity
+- Time: O(m x n)
+- Space: O(m x n)
+
+### Use Cases
+- Global alignment of sequences where indels cluster into runs (structural
+  variants, whole-gene comparisons with a handful of large indels)
+- Any case requiring the biologically-realistic gap model of section 2.5,
+  but end-to-end rather than local
+
+### Reference
+Gotoh, O. (1982). An improved algorithm for matching biological sequences.
+*Journal of Molecular Biology*, 162(3), 705-708.
+https://doi.org/10.1016/0022-2836(82)90398-9
+
+Implementation: [`python/needleman_wunsch_affine.py`](python/needleman_wunsch_affine.py),
+[`cpp/needleman_wunsch_affine.cpp`](cpp/needleman_wunsch_affine.cpp)
+(validated against exhaustive brute-force alignment enumeration).
+
+## 3. Myers' Bit-Vector Algorithm (Edit Distance)
+
+### Overview
+Rather than filling the edit-distance DP matrix cell by cell, Myers' (1999)
+algorithm packs an *entire column* of the matrix into a couple of
+machine-word-sized bit-vectors — `Pv`/`Mv` (where the column's value
+increases/decreases by 1 going down) — and updates the whole column with a
+fixed sequence of AND/OR/XOR/ADD/shift operations. This gives O(n) time for
+patterns up to the machine word size w (64 on modern CPUs), a genuine
+constant-factor speedup over scalar DP that makes it the computational core
+of the `edlib` library and the fast-extension kernels inside several
+high-throughput aligners (see [SWOT_ANALYSIS.md](SWOT_ANALYSIS.md), section B).
+
+### Algorithm Steps
+1. **Precompute Peq** - for each alphabet character c, a bitmask with bit i
+   set iff `pattern[i] == c`.
+2. **Initialize** `Pv = all-ones`, `Mv = 0`, `score = m` (edit distance of
+   pattern against the empty text prefix).
+3. **For each text character**, in O(1) word operations:
+   - `Xv = Peq[c] | Mv`
+   - `Xh = (((Peq[c] & Pv) + Pv) ^ Pv) | Peq[c]`
+   - `Ph = Mv | ~(Xh | Pv)`, `Mh = Pv & Xh`
+   - Update `score` by +1/-1/unchanged based on the top bit of `Ph`/`Mh`
+   - Shift `Ph`, `Mh` and recompute `Pv`, `Mv` for the next column
+4. **Track the minimum score** seen across all columns to support
+   semi-global ("pattern anywhere in text") matching.
+
+### Parameters
+- Pattern length m (must be ≤ word size w for the single-word version in
+  this repository; production implementations tile ⌈m/w⌉ words for longer
+  patterns)
+
+### Time and Space Complexity
+- Time: O(n) for m ≤ w, O(n · ⌈m/w⌉) in general
+- Space: O(sigma) for Peq, O(1) running state
+
+### Use Cases
+- Fast exact edit-distance computation for short-to-medium sequences
+  (adapter/primer trimming, k-mer-length exact/near-exact matching)
+- The extension kernel inside bit-parallel hardware accelerators (GenASM)
+
+### Reference
+Myers, G. (1999). A fast bit-vector algorithm for approximate string
+matching based on dynamic programming. *Journal of the ACM*, 46(3), 395-415.
+https://doi.org/10.1145/316542.316550
+
+Implementation: [`python/myers_bitvector.py`](python/myers_bitvector.py)
+(arbitrary-precision word), [`cpp/myers_bitvector.cpp`](cpp/myers_bitvector.cpp)
+(single 64-bit word, patterns ≤ 64 chars) — both validated against
+brute-force Levenshtein distance over 2000+ random trials.
+
+## 4. Wavefront Alignment (WFA)
+
+### Overview
+WFA (Marco-Sola et al., 2021) is an exact, provably-optimal gap-affine
+alignment algorithm indexed by *score* rather than by sequence position.
+For each candidate score s = 0, 1, 2, ..., it tracks, per diagonal
+k = j - i, the furthest-reaching offset reachable with exactly that score —
+a "wavefront." Matching characters along a diagonal are free ("greedy
+extension"), so a wavefront snaps forward through long identical runs at no
+cost. Because scores are explored in increasing order, the algorithm
+terminates the instant a wavefront reaches the bottom-right corner,
+guaranteeing the score found is optimal. This gives O(n*s + s^2) time,
+where s is the optimal alignment score — near-linear whenever the sequences
+are similar (small s), a fundamentally different complexity regime from
+Needleman-Wunsch/Gotoh's O(mn), which is oblivious to how similar the
+inputs actually are.
+
+### Algorithm Steps
+1. **Initialize** wavefront 0 at diagonal 0, extended greedily through any
+   leading exact match.
+2. **For each score s = 1, 2, ...**:
+   - Compute the insertion wavefront (diagonal `k+1`, from a gap-open at
+     score `s - (gap_open+gap_extend)` or a gap-extend at score
+     `s - gap_extend`)
+   - Compute the deletion wavefront (diagonal `k-1`, symmetric)
+   - Compute the match/mismatch wavefront (substitution at
+     `s - mismatch`, or landing from an insertion/deletion), then greedily
+     extend each diagonal through further exact matches
+   - Discard any state whose diagonal or offset falls outside the valid
+     range `[-m, n]` / `[0, m]` / `[0, n]` (it has already overshot one
+     sequence and can never be part of an optimal path)
+   - If the wavefront for diagonal `n - m` reaches offset `m` (i.e., cell
+     `(m, n)`), return `s` as the optimal score.
+
+### Parameters
+- `mismatch`, `gap_open`, `gap_extend`: non-negative costs (this
+  implementation follows the original paper's MINIMIZATION convention,
+  the opposite sign convention from the maximization scores used
+  elsewhere in this repository)
+
+### Time and Space Complexity
+- Time: O(n*s + s^2) — near-linear for similar sequences (small s)
+- Space: O(s^2) in this straightforward implementation (the "BiWFA"
+  variant in WFA2-lib reduces this to O(s) via Hirschberg-style
+  divide-and-conquer — see section 5's linear-space discussion)
+
+### Use Cases
+- Exact alignment of long, highly similar sequences: long-read-to-
+  reference alignment, contig-to-contig comparison, assembly polishing
+- Any setting where classical O(mn) DP is too slow but an approximate
+  (non-exact) heuristic is undesirable
+
+### Reference
+Marco-Sola, S., Moure, J. C., Moreto, M., & Espinosa, A. (2021). Fast
+gap-affine pairwise alignment using the wavefront algorithm.
+*Bioinformatics*, 37(4), 456-463. https://doi.org/10.1093/bioinformatics/btaa777
+
+Implementation: [`python/wavefront_alignment.py`](python/wavefront_alignment.py),
+[`cpp/wavefront_alignment.cpp`](cpp/wavefront_alignment.cpp) (validated
+against an independent affine-gap DP minimizer over 2000 random trials).
+
+## 5. Minimizer Sketching + Co-linear Chaining (Minimap2-style)
+
+### Overview
+Modern long-read aligners do not index every k-mer of the reference: they
+index only a sparse, deterministic subset called minimizers (Roberts et al.,
+2004), then find matching seed pairs and chain them — a sparse dynamic
+program over the seeds themselves — to identify collinear runs consistent
+with a single alignment. Only the small region(s) around good chains are
+ever passed to base-level DP, which is what lets tools like minimap2 (Li,
+2018) scale to whole-genome references.
+
+### Algorithm Steps
+1. **Minimizer Sketch** - for every window of w consecutive k-mers, keep
+   only the numerically smallest k-mer hash as that window's minimizer;
+   any k-mer that is a minimizer for at least one window is indexed.
+   This guarantees any shared substring of length >= w+k-1 between two
+   sequences shares at least one minimizer, while indexing only ~2/(w+1)
+   of all k-mers.
+2. **Seed Lookup** - hash-table lookup of each query minimizer against the
+   reference index, in O(1) expected time per minimizer.
+3. **Co-linear Chaining** - find the highest-scoring subsequence of seeds
+   with jointly increasing query and reference coordinates (bounded gap
+   between consecutive seeds), via sparse dynamic programming — O(N log N)
+   with a Fenwick-tree-backed implementation (as in minimap2 itself); this
+   repository's reference implementation uses an O(N^2) DP for clarity.
+
+### Parameters
+- `k`: k-mer length; `w`: window size (larger w = sparser index, faster,
+  slightly less sensitive)
+- `max_gap`: maximum allowed gap between consecutive chained seeds
+
+### Time and Space Complexity
+- Sketching: O(L) for a sequence of length L
+- Chaining: O(N log N) for N seeds (production), O(N^2) (this repository's
+  reference implementation)
+
+### Use Cases
+- Long-read-to-genome and genome-to-genome seeding (minimap2, HISAT2,
+  GraphAligner all use variants of this architecture)
+- Any setting where full FM-index-based exact search is too memory-hungry
+  or too slow for the read lengths/error rates involved
+
+### Reference
+Roberts, M., Hayes, W., Hunt, B. R., Mount, S. M., & Yorke, J. A. (2004).
+Reducing storage requirements for biological sequence comparison.
+*Bioinformatics*, 20(18), 3363-3369. https://doi.org/10.1093/bioinformatics/bth408
+
+Li, H. (2018). Minimap2: pairwise alignment for nucleotide sequences.
+*Bioinformatics*, 34(18), 3094-3100. https://doi.org/10.1093/bioinformatics/bty191
+
+Implementation: [`python/minimizer_chaining.py`](python/minimizer_chaining.py),
+[`cpp/minimizer_chaining.cpp`](cpp/minimizer_chaining.cpp) (validated to
+recover the true offset of an exact substring, including under injected
+point mutations).
+
+## 6. Strobemers + MinHash Identity Estimation
+
+### Overview
+Two complementary newest-generation ideas. **Strobemers** (Sahlin, 2021;
+used in `strobealign`, Sahlin 2022) link several short "strobes" chosen by a
+*content-dependent* (hash-minimizing) rule rather than a fixed offset, so
+the resulting seed tends to reappear even when an indel falls between the
+strobes — directly fixing the brittleness of fixed-offset k-mers/minimizers
+under insertions and deletions. **MinHash** (Jain et al., 2018, MashMap;
+building on Broder's MinHash and Ondov et al.'s Mash) estimates the Jaccard
+similarity of two k-mer sets from a small, fixed-size sample of each set's
+minimum hash values, turning an O(nm) alignment question into an
+O(sketch-size) set comparison.
+
+### Algorithm Steps (Randstrobes)
+1. For each position i, the first strobe is `seq[i:i+strobe_len]`.
+2. The second strobe is chosen from a downstream window
+   `[i+strobe_len+w_min, i+strobe_len+w_max)` as whichever candidate
+   minimizes `hash(strobe1) XOR hash(candidate)` — a link function that
+   depends on the content of both strobes, not just their positions.
+3. The pair `(strobe1_pos, strobe2_pos)` and its combined hash form the
+   strobemer, indexed like a k-mer.
+
+### Algorithm Steps (MinHash / Jaccard Estimation)
+1. Hash every k-mer of a sequence; keep the `sketch_size` smallest distinct
+   hash values (a "bottom-k" sketch).
+2. To compare two sequences, merge their sketches, keep the smallest
+   `sketch_size` values overall, and take the fraction present in *both*
+   original sketches as the Jaccard estimate.
+3. Convert to an estimated per-base substitution rate via the Mash
+   distance formula: `D = -1/k * ln(2J / (1+J))`.
+
+### Time and Space Complexity
+- Strobemer sketch: O(L * (w_max - w_min))
+- MinHash sketch: O(L log(sketch_size))
+- Jaccard estimate from two sketches of size s: O(s)
+
+### Use Cases
+- Indel-robust short-read seeding (strobealign reports higher throughput
+  than BWA-MEM2/minimap2 at comparable-or-better accuracy for reads >= 150nt)
+- Fast pre-filtering / identity triage before committing to full alignment
+  (MashMap, Mash) — e.g., clustering long reads against huge reference
+  databases
+
+### Reference
+Sahlin, K. (2021). Effective sequence similarity detection with strobemers.
+*Genome Research*, 31(11), 2080-2094. https://doi.org/10.1101/gr.275648.121
+
+Sahlin, K. (2022). Strobealign: flexible seed size enables ultra-fast and
+accurate read alignment. *Genome Biology*, 23, 260.
+https://doi.org/10.1186/s13059-022-02831-7
+
+Jain, C., Dilthey, A., Koren, S., Aluru, S., & Phillippy, A. M. (2018). A
+fast approximate algorithm for mapping long reads to large reference
+databases. *Journal of Computational Biology*, 25(7), 766-779.
+https://doi.org/10.1089/cmb.2018.0036
+
+Implementation: [`python/strobemer_mapping.py`](python/strobemer_mapping.py),
+[`cpp/strobemer_mapping.cpp`](cpp/strobemer_mapping.cpp) (validated to
+recover the true offset of an exact substring via strobemer matching, and
+to give a Jaccard similarity of 1.0 for identical sequences).
+
+## 7. Seed-and-Extend (K-mer Hashing)
 
 ### Overview
 A heuristic algorithm that uses exact k-mer matches as "seeds" and extends them to find longer alignments. This is the basis for BLAST, MAQ, and SOAP.
@@ -199,7 +484,7 @@ A heuristic algorithm that uses exact k-mer matches as "seeds" and extends them 
 - May miss alignments without exact k-mer matches
 - Sensitive to k-mer choice
 
-## 4. Burrows-Wheeler Transform (BWT) + FM-Index
+## 8. Burrows-Wheeler Transform (BWT) + FM-Index
 
 ### Overview
 The BWT reorganizes text to make it more compressible, and the FM-index uses this for ultra-fast exact pattern matching. Used in BWA, Bowtie, and HISAT2.
@@ -290,23 +575,28 @@ Are sequences very similar (>95% identity)?
 | Use Case | Algorithm | Why |
 |----------|-----------|-----|
 | Database search | Seed-and-Extend | Fast, scalable |
-| NGS read alignment | BWT + FM-Index | Ultra-fast exact matching |
+| NGS read alignment | BWT + FM-Index, or Minimizer+Chaining | Ultra-fast exact matching / robust long-read seeding |
 | Protein comparison | Smith-Waterman (Affine) | Finds functional domains, realistic gaps |
-| Gene comparison | Needleman-Wunsch | Complete gene alignment |
+| Gene comparison | Needleman-Wunsch (Affine) | Complete gene alignment, realistic indel modeling |
 | Finding motifs | Smith-Waterman | Local pattern matching |
 | SNP calling | BWT + FM-Index | Align millions of reads |
-| Sequences with indels | Smith-Waterman (Affine) | Better models clustered gaps |
+| Sequences with indels | Smith-Waterman/NW (Affine), or Strobemers | Better models clustered gaps / survives indels in seeds |
+| Exact edit distance, short-medium patterns | Myers' Bit-Vector | O(n) per query, minimal memory |
+| Long, highly similar sequences | Wavefront Alignment (WFA) | Provably near-linear exact alignment |
+| Fast similarity/identity triage | MinHash (strobemer_mapping.py) | O(sketch) comparison, no alignment needed |
 
 ### By Sequence Properties
 
 | Property | Best Algorithm |
 |----------|---------------|
 | Very long (>100 Mbp) | BWT + FM-Index |
-| Long (10K-100K bp) | Seed-and-Extend |
+| Long (10K-100K bp), similar | Wavefront Alignment (WFA) or Minimizer+Chaining |
+| Long (10K-100K bp), divergent | Seed-and-Extend |
 | Medium (1K-10K bp) | Smith-Waterman |
 | Short (<1K bp) | Needleman-Wunsch or Smith-Waterman |
-| Highly similar | BWT + FM-Index or Seed-and-Extend |
+| Highly similar | BWT + FM-Index, Seed-and-Extend, or WFA |
 | Divergent | Smith-Waterman |
+| Indel-prone (short reads) | Strobemers |
 
 ## Performance Characteristics
 
@@ -316,25 +606,53 @@ For aligning two sequences of length n:
 
 | Algorithm | n=100 | n=1,000 | n=10,000 | n=100,000 |
 |-----------|-------|---------|----------|-----------|
-| Needleman-Wunsch | <1ms | 10ms | 1s | 100s |
-| Smith-Waterman | <1ms | 10ms | 1s | 100s |
-| Seed-and-Extend | <1ms | 1ms | 10ms | 100ms |
+| Needleman-Wunsch / Gotoh affine | <1ms | 10ms | 1s | 100s |
+| Smith-Waterman (linear/affine) | <1ms | 10ms | 1s | 100s |
+| Myers' Bit-Vector | <1ms | <1ms | ~1ms | ~10ms |
+| Wavefront Alignment (WFA)* | <1ms | <1ms | ~1-10ms | ~10-100ms |
+| Seed-and-Extend / Minimizer+Chaining | <1ms | 1ms | 10ms | 100ms |
 | FM-Index (search) | <1ms | <1ms | <1ms | <1ms |
 
-*Note: FM-Index construction is O(n log n), but search is O(m) independent of reference size*
+*Note: FM-Index construction is O(n log n), but search is O(m) independent
+of reference size. WFA's running time scales with the optimal alignment
+score s, not n directly — the figures above assume s stays small (highly
+similar sequences); for divergent sequences WFA approaches O(n^2), same as
+classical DP.*
 
 ## References and Further Reading
 
-1. Needleman, S.B. & Wunsch, C.D. (1970). "A general method applicable to the search for similarities in the amino acid sequence of two proteins". Journal of Molecular Biology.
+See [SWOT_ANALYSIS.md](SWOT_ANALYSIS.md) for the complete, DOI-linked
+bibliography of all 44 algorithms surveyed for this thesis (including SIMD
+libraries, production aligners, GPU/hardware accelerators, and theoretical
+lower bounds). Core references for the algorithms implemented in this
+repository:
 
-2. Smith, T.F. & Waterman, M.S. (1981). "Identification of common molecular subsequences". Journal of Molecular Biology.
+1. Needleman, S.B. & Wunsch, C.D. (1970). "A general method applicable to the search for similarities in the amino acid sequence of two proteins". Journal of Molecular Biology. https://doi.org/10.1016/0022-2836(70)90057-4
 
-3. Altschul, S.F. et al. (1990). "Basic local alignment search tool (BLAST)". Journal of Molecular Biology.
+2. Gotoh, O. (1982). "An improved algorithm for matching biological sequences". Journal of Molecular Biology. https://doi.org/10.1016/0022-2836(82)90398-9
 
-4. Burrows, M. & Wheeler, D.J. (1994). "A block-sorting lossless data compression algorithm". Technical Report 124, Digital Equipment Corporation.
+3. Smith, T.F. & Waterman, M.S. (1981). "Identification of common molecular subsequences". Journal of Molecular Biology. https://doi.org/10.1016/0022-2836(81)90087-5
 
-5. Ferragina, P. & Manzini, G. (2000). "Opportunistic data structures with applications". Proceedings of FOCS.
+4. Hirschberg, D.S. (1975). "A linear space algorithm for computing maximal common subsequences". Communications of the ACM. https://doi.org/10.1145/360825.360861
 
-6. Li, H. & Durbin, R. (2009). "Fast and accurate short read alignment with Burrows-Wheeler transform". Bioinformatics.
+5. Myers, G. (1999). "A fast bit-vector algorithm for approximate string matching based on dynamic programming". Journal of the ACM. https://doi.org/10.1145/316542.316550
 
-7. Langmead, B. et al. (2009). "Ultrafast and memory-efficient alignment of short DNA sequences to the human genome". Genome Biology.
+6. Marco-Sola, S. et al. (2021). "Fast gap-affine pairwise alignment using the wavefront algorithm". Bioinformatics. https://doi.org/10.1093/bioinformatics/btaa777
+
+7. Roberts, M. et al. (2004). "Reducing storage requirements for biological sequence comparison". Bioinformatics. https://doi.org/10.1093/bioinformatics/bth408
+
+8. Li, H. (2018). "Minimap2: pairwise alignment for nucleotide sequences". Bioinformatics. https://doi.org/10.1093/bioinformatics/bty191
+
+9. Sahlin, K. (2021/2022). "Effective sequence similarity detection with strobemers" (Genome Research) / "Strobealign" (Genome Biology). https://doi.org/10.1101/gr.275648.121 / https://doi.org/10.1186/s13059-022-02831-7
+
+10. Jain, C. et al. (2018). "A fast approximate algorithm for mapping long reads to large reference databases". Journal of Computational Biology. https://doi.org/10.1089/cmb.2018.0036
+
+11. Altschul, S.F. et al. (1990). "Basic local alignment search tool (BLAST)". Journal of Molecular Biology. https://doi.org/10.1016/S0022-2836(05)80360-2
+
+12. Burrows, M. & Wheeler, D.J. (1994). "A block-sorting lossless data compression algorithm". Technical Report 124, Digital Equipment Corporation.
+
+13. Ferragina, P. & Manzini, G. (2000). "Opportunistic data structures with applications". Proceedings of FOCS. https://doi.org/10.1109/SFCS.2000.892127
+
+14. Li, H. & Durbin, R. (2009). "Fast and accurate short read alignment with Burrows-Wheeler transform". Bioinformatics. https://doi.org/10.1093/bioinformatics/btp324
+
+15. Langmead, B. et al. (2009). "Ultrafast and memory-efficient alignment of short DNA sequences to the human genome". Genome Biology. https://doi.org/10.1186/gb-2009-10-3-r25
