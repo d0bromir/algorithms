@@ -7,8 +7,15 @@ exact dynamic programming through the newest provably high-performance and
 hardware-accelerated methods. It was compiled to support a PhD thesis
 literature review and cross-checked against two source documents
 (`Алгоритми зa alignment.docx`, `Статии зa alignment.docx`) plus a
-dedicated literature search (Sept. 2026) to confirm no major algorithm
-family was missing.
+dedicated literature search (Sept. 2026). A follow-up audit (Sept. 2026,
+see [RESEARCH_ROADMAP.md](RESEARCH_ROADMAP.md)) found that the first
+version had omitted several important recent methods and contained a
+number of factual errors; the omissions are now covered in
+[section K](#k-recent-and-previously-omitted-methods-20112026) and the
+errors are corrected in place. The review remains *selective*: it covers
+the major algorithm families for DNA read-to-reference alignment, not
+every published tool (RNA-seq splice-aware, protein homology search, and
+metagenomic classification are out of scope).
 
 Every entry gives the primary reference (with DOI where available), the
 canonical open-source repository, and — where a simplified sample exists in
@@ -23,7 +30,7 @@ walkthroughs of the algorithms that are implemented here.
 2. [Algorithm Inventory (Quick Reference)](#algorithm-inventory-quick-reference)
 3. [A. Classical Exact Dynamic Programming](#a-classical-exact-dynamic-programming)
 4. [B. Bit-Parallel / Bounded-Error Exact Algorithms](#b-bit-parallel--bounded-error-exact-algorithms)
-5. [C. Provably Near-Linear Exact Alignment (WFA family)](#c-provably-near-linear-exact-alignment-wfa-family)
+5. [C. Score-Parameterized Exact Alignment (WFA family)](#c-score-parameterized-exact-alignment-wfa-family)
 6. [D. SIMD-Vectorized Practical Aligners](#d-simd-vectorized-practical-aligners)
 7. [E. Seed-and-Extend / Sketching Heuristics](#e-seed-and-extend--sketching-heuristics)
 8. [F. Full-Text Indexing: BWT / FM-Index Family](#f-full-text-indexing-bwt--fm-index-family)
@@ -31,9 +38,10 @@ walkthroughs of the algorithms that are implemented here.
 10. [H. GPU-Accelerated Aligners](#h-gpu-accelerated-aligners)
 11. [I. Hardware Accelerators and Pre-Alignment Filters](#i-hardware-accelerators-and-pre-alignment-filters)
 12. [J. Theoretical Foundations and Limits](#j-theoretical-foundations-and-limits)
-13. [Cross-Cutting SWOT Summary](#cross-cutting-swot-summary)
-14. [Code Samples in This Repository](#code-samples-in-this-repository)
-15. [Full Bibliography](#full-bibliography)
+13. [K. Recent and Previously Omitted Methods (2011–2026)](#k-recent-and-previously-omitted-methods-20112026)
+14. [Cross-Cutting SWOT Summary](#cross-cutting-swot-summary)
+15. [Code Samples in This Repository](#code-samples-in-this-repository)
+16. [Full Bibliography](#full-bibliography)
 
 ---
 
@@ -55,8 +63,10 @@ source material but are now standard reference points in the field:
 - **Bit-parallel exact algorithms** (Myers 1999, Edlib) — provably
   O(n·⌈m/w⌉).
 - **The Wavefront Alignment algorithm** (Marco-Sola et al., 2021/2023) —
-  provably O(n·s + s²), the current state of the art for *exact*
-  gap-affine alignment of similar sequences.
+  O(n·s + s²) time, parameterized by the optimal score s; a leading
+  method for *exact* gap-affine alignment of similar sequences (A*PA2,
+  section K, is competitive or faster for exact *edit-distance*
+  alignment of long, divergent pairs).
 - **Learned-index seeding** (BWA-MEME, 2022) and **run-length BWT /
   r-index** (Gagie, Navarro & Prezza, 2020) — provably optimal-space exact
   indexing for repetitive collections (pangenomes).
@@ -80,12 +90,12 @@ source material but are now standard reference points in the field:
 | 6 | Ukkonen O(nd) | 1985 | Bounded-error exact | O(n·d) | citation only |
 | 7 | Myers bit-vector | 1999 | Bit-parallel exact | O(n·⌈m/w⌉) | ✅ |
 | 8 | Edlib | 2017 | Bit-parallel exact (library) | O(n·⌈m/w⌉) | citation only |
-| 9 | WFA / WFA2-lib | 2021/2023 | Near-linear exact (affine) | O(ns + s²) | ✅ |
+| 9 | WFA / WFA2-lib | 2021/2023 | Score-parameterized exact (affine) | O(ns + s²) | ✅ |
 | 10 | Farrar's Striped SW / SSW | 2007/2013 | SIMD exact | O(mn/P) | citation only |
 | 11 | Parasail | 2016 | SIMD exact (library) | O(mn/P) | citation only |
 | 12 | KSW2 (minimap2) | 2018 | SIMD banded exact/heuristic | O(mn/P), banded | citation only |
 | 13 | BLAST | 1990 | Seed-and-extend heuristic | O(1) lookup + O(k²) extend | ✅ |
-| 14 | Minimizers + chaining (minimap2-style) | 2004/2018 | Sketching + chaining | O(L) sketch, O(N log N) chain | ✅ |
+| 14 | Minimizers + chaining (minimap2-style) | 2004/2018 | Sketching + chaining | O(L) sketch; O(N·h) bounded-lookback chain (minimap2 default), O(N log N) exact RMQ chaining | ✅ |
 | 15 | MashMap / MinHash | 2018 | Sketch-based identity estimation | O(sketch) compare | ✅ |
 | 16 | Strobemers / strobealign | 2021/2022 | Indel-robust sketching | O(L) | ✅ |
 | 17 | Burrows-Wheeler Transform | 1994 | Full-text indexing | O(n log n) build | ✅ |
@@ -112,10 +122,30 @@ source material but are now standard reference points in the field:
 | 38 | Darwin (GACT/D-SOFT) | 2018 | Hardware (ASIC) accelerator | Constant-memory streaming alignment | citation only |
 | 39 | GenASM | 2020 | Hardware (ASIC) accelerator | Bitap-based ASM acceleration | citation only |
 | 40 | SneakySnake | 2020 | Pre-alignment filter (CPU/GPU/FPGA) | Reduces to single-net-routing | citation only |
-| 41 | GPU-accelerated GATK HaplotypeCaller | 2019 | GPU-accelerated variant calling | PairHMM on GPU | citation only |
-| 42 | GPU-accelerated BWA-MEM | 2024 | GPU aligner | BWA-MEM extension on GPU | citation only |
-| 43 | Minimap2 on GPU | 2023 | GPU aligner | Chaining/DP acceleration on GPU | citation only |
-| 44 | Backurs-Indyk SETH-hardness | 2015 | Theoretical lower bound | Rules out O(n^(2-δ)) exact edit distance | citation only (theory) |
+| 41 | GPU-accelerated GATK HaplotypeCaller | 2019 | GPU-accelerated variant calling | Semi-global SW with traceback on GPU | citation only |
+| 42 | GPU-accelerated BWA-MEM | 2023 | GPU aligner | Full BWA-MEM pipeline on GPU | citation only |
+| 43 | Minimap2 on GPU (mm2-ax, mm2-gb) | 2023/2024 | GPU aligner | Chaining/DP acceleration on GPU | citation only |
+| 44 | Backurs-Indyk SETH-hardness | 2015 | Theoretical lower bound | Rules out O(n^(2-δ)) exact edit distance (conditional on SETH) | citation only (theory) |
+| 45 | Diagonal transition (Myers O(ND); Landau-Vishkin) | 1986/1989 | Bounded-error exact | O((n+m)·d) | citation only |
+| 46 | Suzuki-Kasahara difference recurrence | 2018 | SIMD exact DP (KSW2 core) | O(mn/P), 8-bit lanes | citation only |
+| 47 | Optimum search schemes (bidirectional FM-index) | 2016/2018 | Lossless approximate FM search | Lossless for ≤k errors | citation only |
+| 48 | Syncmers / mod-minimizers / density bounds | 2021/2024 | Sampling-scheme theory | Density near lower bound | citation only |
+| 49 | Winnowmap / Winnowmap2 | 2020/2022 | Weighted-minimizer long-read mapper | Repeat-aware sampling | citation only |
+| 50 | mm2-fast | 2022 | SIMD (AVX-512) minimap2 | Same output, vectorized | citation only |
+| 51 | BWA-MEM2 ERT seeding | 2021 | Enumerated radix tree SMEM search | Faster exact SMEM seeding | citation only |
+| 52 | Block Aligner | 2023 | Adaptive-block SIMD DP | Adaptive band growth | citation only |
+| 53 | A*PA / A*PA2 | 2024 | Exact edit-distance alignment | A* + seed heuristic; near-linear in practice | citation only |
+| 54 | mapquik | 2023 | Minimizer-space long-read mapper | k-min-mer seeds, unique-only index | citation only |
+| 55 | BLEND | 2023 | Fuzzy (SimHash) seeding | Seeds tolerant to substitutions | citation only |
+| 56 | Strobealign multi-context seeds | 2026 | Short-read aligner | Multi-length strobemer seeds | citation only |
+| 57 | minibwa | 2026 (preprint) | Short/HiFi aligner | BWA-MEM seeding + minimap2 chaining/DP | citation only |
+| 58 | DRAGEN | 2024 | FPGA-accelerated clinical pipeline | Multigenome (graph) mapping + ML calling | citation only |
+| 59 | NVIDIA Parabricks | 2019– | GPU clinical pipeline | GPU BWA-MEM + GPU callers | citation only |
+| 60 | Minigraph / Minigraph-Cactus | 2020/2024 | Pangenome graph construction/mapping | Minimizer chaining on graphs | citation only |
+| 61 | vg Giraffe long-read | 2025 | Pangenome graph aligner | Haplotype-sampled graphs; short + long reads | citation only |
+| 62 | Move structure / MONI / SPUMONI / Movi | 2021–2025 | r-index-based pangenome query | O(r)-space MEM/matching statistics | citation only |
+| 63 | UNCALLED / RawHash2 | 2021/2024 | Raw-signal nanopore mapping | Maps before basecalling (adaptive sampling) | citation only |
+| 64 | Conditional lower bounds for graph alignment | 2019/2020 | Theory | OV/SETH-hardness; NP-hardness only with graph edits | citation only (theory) |
 
 ---
 
@@ -164,8 +194,8 @@ DOI: [10.1016/0022-2836(82)90398-9](https://doi.org/10.1016/0022-2836(82)90398-9
   the direct ancestor of every modern affine-gap aligner's DP core,
   including the banded extension step inside BWA-MEM/minimap2 and the
   wavefront recursion inside WFA.
-- **Threats:** For large or highly similar sequences, WFA computes the
-  identical optimum in O(ns+s²) rather than O(mn), making Gotoh's DP the
+- **Threats:** For highly similar sequences (small optimal score s), WFA
+  computes the identical optimum in O(ns+s²) rather than O(mn), making Gotoh's DP the
   right choice only for short sequences or when a full DP matrix
   (e.g., for downstream probabilistic decoding) is explicitly needed.
 
@@ -203,8 +233,9 @@ with local-alignment flooring/traceback-termination as in Smith & Waterman
   gap costs; the de facto standard scoring model for protein alignment
   (used with BLOSUM62/PAM250 substitution matrices).
 - **Weaknesses:** O(mn) time, 3x the memory of linear-gap Smith-Waterman.
-- **Opportunities:** Directly reused (verbatim recurrence) as the
-  extension kernel in BWA-MEM, Bowtie2, and MUMmer4.
+- **Opportunities:** Its recurrence (banded, with extension/clipping
+  rules and, in minimap2's KSW2, the Suzuki-Kasahara difference
+  formulation) is the extension kernel in BWA-MEM, Bowtie2 and minimap2.
 - **Threats:** Same scalability ceiling as plain Smith-Waterman; SIMD
   striping (SSW/Parasail) and banding are mandatory for production use.
 
@@ -222,11 +253,9 @@ DOI: [10.1145/360825.360861](https://doi.org/10.1145/360825.360861)
   divide-and-conquer on the midpoint row and two linear-space score passes
   (forward, backward); a landmark result showing that traceback pointers
   are not fundamentally necessary for exact alignment.
-- **Weaknesses:** Same O(mn) time as NW (the space saving does not speed
-  up computation, and typically costs a small constant-factor slowdown
-  from the repeated linear-space passes); recursion depth O(log m) is
-  fine, but real implementations must guard against worst-case recursion
-  overhead on adversarial inputs.
+- **Weaknesses:** Same O(mn) asymptotic time as NW, but roughly 2x the
+  cell evaluations (the recursive passes sum to ~2mn); recursion depth is
+  O(log m).
 - **Opportunities:** The divide-and-conquer-on-the-midpoint idea recurs
   directly in the "BiWFA" (bidirectional WFA) technique that reduces WFA's
   memory from O(s²) to O(s), and in any DP task that needs full traceback
@@ -245,6 +274,14 @@ DOI: [10.1145/360825.360861](https://doi.org/10.1145/360825.360861)
 **Citation:** Ukkonen, E. (1985). Algorithms for approximate string
 matching. *Information and Control*, 64(1-3), 100-118.
 DOI: [10.1016/S0019-9958(85)80046-2](https://doi.org/10.1016/S0019-9958(85)80046-2)
+Closely related and equally foundational: Myers, E. W. (1986). An O(ND)
+difference algorithm and its variations. *Algorithmica*, 1, 251-266.
+DOI: [10.1007/BF01840446](https://doi.org/10.1007/BF01840446); and
+Landau, G. M., & Vishkin, U. (1989). Fast parallel and serial approximate
+string matching. *Journal of Algorithms*, 10(2), 157-169.
+DOI: [10.1016/0196-6774(89)90010-2](https://doi.org/10.1016/0196-6774(89)90010-2).
+These "diagonal-transition" algorithms are the direct unit-cost
+predecessors of WFA, which generalizes them to gap-affine costs.
 
 - **Strengths:** First algorithm to compute edit distance in O(n·d) time
   and space, where d is the edit distance itself (not the sequence
@@ -258,10 +295,10 @@ DOI: [10.1016/S0019-9958(85)80046-2](https://doi.org/10.1016/S0019-9958(85)80046
   banded Smith-Waterman extension step used in BWA-MEM and minimap2, and
   the diagonal-indexed bookkeeping is a direct conceptual precursor to
   WFA's score-indexed wavefronts.
-- **Threats:** For the specific gap-affine, provably-optimal regime, WFA
-  (2021) dominates it — O(ns+s²) with greedy diagonal extension is
-  typically faster in practice and handles affine (not just linear) gap
-  costs natively.
+- **Threats:** For gap-affine scoring, WFA (2021) extends the same
+  diagonal-transition idea to affine costs and is typically faster in
+  practice. For unit-cost edit distance, bit-parallel banded DP (Edlib)
+  and A*PA2 are the practical competitors.
 
 ### 7. Myers' Bit-Vector Algorithm
 
@@ -283,12 +320,15 @@ DOI: [10.1145/316542.316550](https://doi.org/10.1145/316542.316550)
   than scalar DP; the technique is specific to edit-distance-like
   (Levenshtein) scoring and does not trivially generalize to arbitrary
   substitution matrices.
-- **Opportunities:** Forms the computational core of Edlib and is used as
-  the fast exact-extension kernel inside GenASM and several read-mapping
-  pipelines; trivially parallel across independent reads (embarrassingly
-  parallel at the read level, in addition to its internal bit-parallelism).
-- **Threats:** WFA provides an exact alternative with better asymptotic
-  scaling in the alignment score s for very similar sequences; for very
+- **Opportunities:** Forms the computational core of Edlib and of the
+  bit-parallel graph DP in GraphAligner. (GenASM is *not* built on the
+  Myers recurrence; it uses a modified Bitap/Wu-Manber algorithm from the
+  same bit-parallel family.) Trivially parallel across independent reads
+  (embarrassingly parallel at the read level, in addition to its internal
+  bit-parallelism).
+- **Threats:** WFA provides an exact alternative with better scaling in
+  the alignment score s for very similar sequences, and A*PA2 (2024)
+  combines Myers-style bit-parallel blocks with A* pruning; for very
   short exact k-mer matches, hash-based seeding (BLAST/minimizers) is
   faster still since it avoids DP altogether.
 
@@ -316,7 +356,7 @@ DOI: [10.1093/bioinformatics/btw753](https://doi.org/10.1093/bioinformatics/btw7
 
 ---
 
-## C. Provably Near-Linear Exact Alignment (WFA family)
+## C. Score-Parameterized Exact Alignment (WFA family)
 
 ### 9. Wavefront Alignment Algorithm (WFA) / WFA2-lib
 
@@ -324,33 +364,39 @@ DOI: [10.1093/bioinformatics/btw753](https://doi.org/10.1093/bioinformatics/btw7
 (2021). Fast gap-affine pairwise alignment using the wavefront algorithm.
 *Bioinformatics*, 37(4), 456-463.
 DOI: [10.1093/bioinformatics/btaa777](https://doi.org/10.1093/bioinformatics/btaa777)
-Follow-up (space-optimal, "BiWFA"): Eizenga, J., & Marco-Sola, S. et al.
-(2023). Optimal gap-affine alignment in O(s) space. *Bioinformatics*,
-39(2), btad074. DOI: [10.1093/bioinformatics/btad074](https://doi.org/10.1093/bioinformatics/btad074)
+Follow-up (space-optimal, "BiWFA"): Marco-Sola, S., Eizenga, J. M.,
+Guarracino, A., Paten, B., Garrison, E., & Moreto, M. (2023). Optimal
+gap-affine alignment in O(s) space. *Bioinformatics*, 39(2), btad074.
+DOI: [10.1093/bioinformatics/btad074](https://doi.org/10.1093/bioinformatics/btad074)
 **Repo (paper's own):** [github.com/smarco/WFA2-lib](https://github.com/smarco/WFA2-lib)
 **Repo (this repository's simplified sample):**
 [`python/wavefront_alignment.py`](python/wavefront_alignment.py),
 [`cpp/wavefront_alignment.cpp`](cpp/wavefront_alignment.cpp)
 
-- **Strengths:** The current provably-optimal state of the art for exact
-  gap-affine global alignment: O(ns+s²) time, where s is the optimal
-  alignment score — near-linear whenever the sequences are similar (small
-  s), which is exactly the common case for long-read-to-reference and
-  contig-to-contig alignment. Free "greedy" extension through exact
+- **Strengths:** A leading exact method for gap-affine global alignment:
+  O(ns+s²) time, where s is the optimal alignment cost with fixed
+  penalties. Runtime depends on s rather than on m·n, so it is very fast
+  when s is small. Free "greedy" extension through exact
   matches means the wavefronts snap forward through long identical runs at
   no cost, and increasing-score enumeration guarantees the first wavefront
   to reach the target cell is optimal (no wasted work on suboptimal
   scores).
-- **Weaknesses:** O(s²) memory in the straightforward formulation (this
-  repository's sample); the BiWFA variant fixes this to O(s) via
-  Hirschberg-style divide-and-conquer, at a roughly 2x runtime cost.
-  Degrades toward O(n²) when sequences are highly dissimilar (large s),
-  same failure mode as Ukkonen's algorithm.
-- **Opportunities:** Actively displacing SIMD-striped Smith-Waterman as
-  the default exact aligner in new tools (e.g., adopted inside
-  minimap2/vg pipelines and specialized long-read polishers); the GPU
-  port (WFA-GPU, 2023) and further vectorization are active research
-  directions.
+- **Weaknesses:** "Near-linear" holds only for *bounded* s. At a fixed
+  per-base error rate e (e.g., 1-5 % for ONT R10.4.1), s grows as Θ(e·n),
+  so time is Θ(e·n²). That is a large constant-factor saving over O(mn),
+  but still quadratic in n. O(s²) memory in the straightforward formulation (this
+  repository's sample); BiWFA reduces memory to O(s) via
+  Hirschberg-style bidirectional divide-and-conquer with the same
+  asymptotic time, and it is often competitive in wall-clock time because it
+  is more cache-friendly. The fast variants used in practice
+  (WFA-adaptive, X-drop/Z-drop wavefront pruning) give up the exactness
+  guarantee. WFA's speed advantage over banded SIMD DP shrinks in
+  tandem repeats and low-complexity regions.
+- **Opportunities:** Adopted as the base-level aligner in wfmash, PGGB
+  and parts of vg (long-read Giraffe extension), and as a library
+  (WFA2-lib) in several long-read tools. Note: minimap2 does **not** use
+  WFA; its DP core is KSW2. The GPU port (WFA-GPU, 2023) and further
+  vectorization are active research directions.
 - **Threats:** For truly divergent sequence pairs, seed-and-extend /
   sketching methods that never attempt full exact alignment remain faster
   in absolute terms; WFA's guarantees are about *exactness*, not about
@@ -413,6 +459,12 @@ semi-global, and local pairwise sequence alignments. *BMC Bioinformatics*,
 alignment for nucleotide sequences. *Bioinformatics*, 34(18), 3094-3100.
 DOI: [10.1093/bioinformatics/bty191](https://doi.org/10.1093/bioinformatics/bty191)
 **Repo:** [github.com/lh3/minimap2](https://github.com/lh3/minimap2) (`ksw2*.c`)
+**Underlying DP formulation:** Suzuki, H., & Kasahara, M. (2018).
+Introducing difference recurrence relations for faster semi-global
+alignment of long sequences. *BMC Bioinformatics*, 19(Suppl 1), 45.
+DOI: [10.1186/s12859-018-2014-8](https://doi.org/10.1186/s12859-018-2014-8)
+(storing score *differences* in 8-bit lanes doubles SIMD width versus
+16-bit absolute scores).
 
 - **Strengths:** Banded, SIMD-vectorized affine-gap DP with an early-
   termination heuristic ("Z-drop") that abandons alignment extensions
@@ -429,7 +481,8 @@ DOI: [10.1093/bioinformatics/bty191](https://doi.org/10.1093/bioinformatics/bty1
   minimap2 itself.
 - **Threats:** As WFA/BiWFA mature and gain adaptive banding/pruning of
   their own, the performance gap that justified KSW2's heuristic
-  shortcuts narrows.
+  shortcuts narrows. Block Aligner (2023) makes band growth adaptive
+  instead of fixed.
 
 ---
 
@@ -477,11 +530,16 @@ original tool: [github.com/lh3/minimap2](https://github.com/lh3/minimap2)
   substring of length >= w+k-1 between two sequences shares at least one
   sampled k-mer, while indexing only ~2/(w+1) of all k-mers — an
   order-of-magnitude memory reduction with a formal coverage guarantee, not
-  just an empirical one. Co-linear chaining then finds the best-supported
-  consistent path through the resulting seed matches in O(N log N) via
-  sparse dynamic programming (Eppstein et al., 1992 give the general
-  technique), letting the expensive base-level DP run only on the small
-  region(s) the chain identifies.
+  just an empirical one. The 2/(w+1) density is the expected value for a
+  *random* ordering; newer schemes (mod-minimizers, double-decycling,
+  GreedyMini) come close to proven lower bounds. Co-linear chaining then
+  finds a best-supported consistent path through the seed matches.
+  Exact chaining with linear or concave gap costs runs in O(N log N) via
+  RMQ-based sparse DP (Eppstein et al., 1992; Abouelhoda & Ohlebusch,
+  2005; Jain et al., 2022). minimap2's default chaining is a *heuristic*
+  O(N·h) DP with bounded look-back (h ≈ 50 predecessors); recent versions
+  add an RMQ-based mode. Either way, the expensive base-level DP then runs
+  only on the region(s) the chain identifies.
 - **Weaknesses:** Minimizer selection can still cluster unevenly in
   low-complexity or highly repetitive regions, producing seed "storms"
   that slow chaining; chaining alone does not resolve fine-grained
@@ -489,11 +547,13 @@ original tool: [github.com/lh3/minimap2](https://github.com/lh3/minimap2)
   step.
 - **Opportunities:** The sketch-then-chain-then-extend pipeline is now the
   standard architecture for long-read aligners (minimap2, GraphAligner)
-  and is being actively extended to pangenome graphs (vg giraffe) and
-  learned/weighted minimizer selection (Winnowmap).
-- **Threats:** Strobemers (below) are explicitly designed to fix
-  minimizers' main weakness — brittleness under indels — and are
-  displacing plain minimizers in the newest short-read aligners.
+  and is being actively extended to pangenome graphs (minigraph, vg
+  Giraffe), to *weighted* (frequency-aware, not learned) minimizer
+  selection (Winnowmap), and to minimizer-space seeds (mapquik).
+- **Threats:** Strobemers (below) are designed to fix a main weakness of
+  fixed-k seeds, brittleness under indels. Strobealign shows this works
+  for short reads, but minimizer/SMEM-based tools (BWA-MEM2, minimap2,
+  minibwa) are still the most widely used.
 
 ### 15. MashMap / MinHash-Based Mapping and Identity Estimation
 
@@ -545,9 +605,12 @@ original tool: [github.com/ksahlin/strobealign](https://github.com/ksahlin/strob
   (hash-minimizing) rule rather than a fixed offset, so the resulting
   seed tends to reappear even when an indel falls between the strobes —
   directly fixing fixed-k-mer/minimizer brittleness under insertions and
-  deletions; empirically several times faster than BWA-MEM/Bowtie2/
-  minimap2 at equal-or-better accuracy for short and moderately long
-  reads (150 nt+).
+  deletions. In the authors' benchmarks it is several times faster than
+  BWA-MEM/Bowtie2 and faster than minimap2 on 100-500 nt reads at
+  comparable accuracy. The 2026 multi-context-seed (MCS) version
+  (Tolstoganov et al., *Genome Biology*) closed the earlier accuracy gap
+  at ≤150 nt. Independent third-party validation on clinical variant
+  calling is still limited.
 - **Weaknesses:** Seed construction is more expensive per position than a
   plain k-mer hash (a small window search per strobe); benefits are most
   pronounced at read lengths where fixed k-mers start to suffer from
@@ -596,23 +659,31 @@ DOI: [10.1109/SFCS.2000.892127](https://doi.org/10.1109/SFCS.2000.892127)
 **Repo:** [`python/bwt_fm_index.py`](python/bwt_fm_index.py),
 [`cpp/bwt_fm_index.cpp`](cpp/bwt_fm_index.cpp) (this repository)
 
-- **Strengths:** Backward search finds all occurrences of an m-character
-  pattern in O(m) time, *independent of reference/text size* — the
+- **Strengths:** Backward search *counts* all occurrences of an
+  m-character pattern in O(m) rank operations (O(1) each for a constant
+  alphabet), *independent of reference/text size*; *locating* them costs
+  an additional O(occ · s_SA) with a suffix-array sample rate s_SA — the
   defining property that makes whole-genome exact search feasible;
   compressible to ~2-4 bits per base, reducing a human-genome index from
   tens of gigabytes to a few gigabytes.
 - **Weaknesses:** Exact-match search only; approximate search requires
   backtracking extensions (as in BWA) whose worst-case cost grows sharply
-  with the number of allowed mismatches.
+  with the number of allowed mismatches. Bidirectional FM-indexes with
+  optimum *search schemes* (Kucherov et al., 2016; Kianfar et al., 2018;
+  Columba, Renders et al.) make ≤k-error search lossless and much
+  cheaper. Random-access rank queries are cache-unfriendly, and in
+  BWA-MEM2 profiles seeding is often dominated by memory latency.
 - **Opportunities:** The core indexing structure of Bowtie, BWA, and
   (hierarchically) HISAT2; still the standard choice whenever an index
   must be built once and queried many times against unpredictable
   patterns.
-- **Threats:** Learned-index seeding (BWA-MEME) accelerates the search
-  step itself by 3x+ using a machine-learned model of the suffix-array
-  order in place of (or alongside) the classical rank/select structures,
-  without sacrificing exactness — a genuine algorithmic improvement on
-  the same asymptotic bound.
+- **Threats:** Learned-index seeding (BWA-MEME) speeds up SMEM search
+  (up to ~3.45x in seeding throughput) by replacing FM-index backward
+  search with a suffix array plus a learned position predictor, followed
+  by a bounded "last-mile" search. The last-mile step keeps results
+  exact, but the index needs far more memory (tens of GB up to >100 GB,
+  depending on mode). Enumerated radix trees (ERT) provide another
+  exact-seeding speedup with a different memory trade-off.
 
 ### 19. SA-IS (Linear-Time Suffix Array Construction)
 
@@ -723,16 +794,19 @@ DOI: [10.1093/bioinformatics/btac137](https://doi.org/10.1093/bioinformatics/bta
 - **Strengths:** BWA-MEM's maximal-exact-match (MEM) seeding + chaining +
   banded-SW-extension architecture, using a quality-aware scoring model,
   became the de facto standard variant-calling aligner; BWA-MEM2 is a
-  drop-in, bit-identical-output re-implementation that is 1.3-3.1x faster
-  via SIMD and cache-aware data layout; BWA-MEME further accelerates the
-  seeding bottleneck 3.45x over BWA-MEM2 by replacing part of the FM-index
-  search with a *learned index* (a small neural/regression model
-  predicting suffix-array rank), while provably preserving identical SAM
-  output.
+  drop-in re-implementation with output identical to BWA-MEM that is
+  1.3-3.1x faster via SIMD and cache-aware data layout; BWA-MEME further
+  accelerates seeding (up to 3.45x seeding throughput, ~1.4x end-to-end,
+  per the authors) by replacing FM-index search with a suffix array plus
+  a *learned index* (a model predicting suffix-array position) followed by
+  a bounded exact search. This makes its output identical to BWA-MEM2 by
+  construction (and empirically verified), not by a formal proof about
+  the learned model.
 - **Weaknesses:** The full pipeline (seed, chain, banded-extend, quality
   scoring) is algorithmically complex, with many tuned heuristic
-  parameters; BWA-MEME's learned-index component needs a
-  reference-specific training pass before first use.
+  parameters; BWA-MEME's learned index needs a reference-specific
+  training pass and a much larger memory footprint (roughly 38-118 GB
+  depending on mode) than BWA-MEM2's FM-index.
 - **Opportunities:** The learned-index technique that BWA-MEME
   demonstrates is a template for accelerating other classical exact-search
   structures throughout bioinformatics (a live, actively-researched area
@@ -740,7 +814,11 @@ DOI: [10.1093/bioinformatics/btac137](https://doi.org/10.1093/bioinformatics/bta
 - **Threats:** Strobealign reports higher throughput than BWA-MEM2 at
   comparable accuracy for many short-read workloads by replacing MEM
   seeding with strobemers altogether, rather than accelerating MEM
-  seeding itself.
+  seeding itself. minibwa (Li & Homer, 2026 preprint) keeps BWA-MEM's
+  variable-length seeding but uses minimap2-style chaining/DP, and
+  reports >2x speed over BWA-MEM2 at comparable accuracy. Commercial
+  re-implementations (DRAGEN on FPGA, Parabricks on GPU, Sentieon on CPU)
+  dominate clinical production.
 
 ### 27. HISAT2
 
@@ -798,12 +876,18 @@ DOI: [10.1186/s13059-020-02157-2](https://doi.org/10.1186/s13059-020-02157-2)
 
 - **Strengths:** Aligns long reads directly to a genome *graph* (not a
   linear reference) using seed-and-extend with a bit-parallel banded DP
-  generalized to graph topology; 13x faster and 3x less memory than prior
-  graph aligners at publication.
-- **Weaknesses:** Graph alignment is inherently harder than linear
-  alignment (the underlying problem is NP-hard for general graphs;
-  practical tools rely on structural restrictions/heuristics); accuracy
-  is sensitive to graph construction quality.
+  generalized to graph topology; substantially faster and lighter on
+  memory than the graph aligners available at publication (see the paper
+  for dataset-specific figures).
+- **Weaknesses:** Graph alignment is harder than linear alignment, but
+  **not** NP-hard in the setting aligners use. Aligning a sequence to a
+  (possibly cyclic) graph with edits only in the sequence is solvable in
+  O(|E|·m) time (Navarro, 2000). It becomes NP-hard only if edits are
+  also allowed in the graph (Jain et al., 2020). Even exact string
+  matching in graphs has no O(|E|^(1-ε)·m) or O(|E|·m^(1-ε)) algorithm
+  unless SETH/OV fails (Equi et al., 2019). So practical tools rely on
+  seeding heuristics and banding, and accuracy is sensitive to graph
+  construction quality.
 - **Opportunities:** Central to pangenome-based variant calling,
   assembly error correction, and genotyping workflows as reference
   pangenomes replace single linear references.
@@ -831,12 +915,17 @@ abg8871. DOI: [10.1126/science.abg8871](https://doi.org/10.1126/science.abg8871)
   sampled indexes; graph construction and index-building are heavier
   operations than for a linear FM-index.
 - **Opportunities:** The reference architecture for large national/
-  biobank-scale pangenome projects; ongoing work on haplotype sampling
-  strategies and long-read support (vg giraffe originally targeted short
-  reads).
-- **Threats:** GraphAligner remains preferable for long, noisy reads and
-  graphs without rich haplotype panels; simpler linear-reference tools
-  remain adequate (and faster to set up) when variant density is low.
+  biobank-scale pangenome projects. Haplotype sampling (Sirén et al.,
+  2024) builds a personalized subgraph per sample. The 2025 long-read
+  Giraffe maps both short and long reads to HPRC graphs at speeds
+  comparable to linear mappers, and more than an order of magnitude
+  faster than GraphAligner.
+- **Threats:** Clinical pipelines and truth sets (GIAB, ClinVar
+  coordinates) are still anchored to linear GRCh38, so graph mapping adds
+  a projection step; DRAGEN's multigenome mapping delivers some of the
+  same benefit inside a validated clinical product. Simpler
+  linear-reference tools remain adequate (and faster to set up) when
+  variant density is low.
 
 ---
 
@@ -859,8 +948,9 @@ Improved BarraCUDA. [arXiv:1505.07855](https://arxiv.org/abs/1505.07855)
 - **Strengths:** One of the earliest GPU ports of BWA-style FM-index
   search, demonstrating that short-read alignment throughput scales well
   with GPU parallelism.
-- **Weaknesses:** Ungapped/limited-gap alignment relative to contemporary
-  CPU tools; aging codebase relative to modern GPU architectures.
+- **Weaknesses:** A port of BWA-backtrack (`bwa aln`), so it inherits
+  that algorithm's limited-gap, short-read-only design; aging codebase
+  relative to modern GPU architectures.
 - **Opportunities:** Established the seed-search-on-GPU pattern later
   refined by SOAP3-dp, GASAL2, and NVBIO.
 - **Threats:** Superseded by later, more feature-complete GPU aligners
@@ -870,8 +960,8 @@ Improved BarraCUDA. [arXiv:1505.07855](https://arxiv.org/abs/1505.07855)
 ### 32. SOAP3-dp
 
 **Citation:** Luo, R., Wong, T., Zhu, J., Liu, C.-M., Zhu, X., Wu, E.,
-Lee, L.-K., Lin, H., Zhu, W., Cheung, D. W., Ting, H.-F., Yiu, S.-M., Yu,
-C., Li, Y., Li, R., & Lam, T.-W. (2013). SOAP3-dp: fast, accurate and
+Lee, L.-K., Lin, H., Zhu, W., Cheung, D. W., Ting, H.-F., Yiu, S.-M.,
+Peng, S., Yu, C., Li, Y., Li, R., & Lam, T.-W. (2013). SOAP3-dp: fast, accurate and
 sensitive GPU-based short read aligner. *PLOS ONE*, 8(5), e65632.
 DOI: [10.1371/journal.pone.0065632](https://doi.org/10.1371/journal.pone.0065632)
 **Repo:** [github.com/aquaskyline/SOAP3-dp](https://github.com/aquaskyline/SOAP3-dp)
@@ -897,9 +987,9 @@ DOI: [10.1186/1471-2164-15-969](https://doi.org/10.1186/1471-2164-15-969)
 
 - **Strengths:** Specifically targets divergent (higher-mismatch-rate)
   short reads, a regime where exact-match seeding underperforms.
-- **Weaknesses:** No public source-code release found at time of
-  writing, limiting reproducibility/adoption; narrower community uptake
-  than actively maintained alternatives.
+- **Weaknesses:** Distributed only from the authors' institutional web
+  page (no maintained public repository found), limiting reproducibility;
+  narrower community uptake than actively maintained alternatives.
 - **Opportunities:** The maximum-scoring-subsequence formulation is a
   reusable idea for other divergence-tolerant mapping tasks.
 - **Threats:** Superseded in practice by strobemer- and WFA-based
@@ -908,8 +998,8 @@ DOI: [10.1186/1471-2164-15-969](https://doi.org/10.1186/1471-2164-15-969)
 
 ### 34. GASAL2
 
-**Citation:** Ahmed, N., Lévy, J., Ren, S., Bertels, K., Al-Ars, Z., &
-Mushtaq, H. (2019). GASAL2: a GPU accelerated sequence alignment library
+**Citation:** Ahmed, N., Lévy, J., Ren, S., Mushtaq, H., Bertels, K., &
+Al-Ars, Z. (2019). GASAL2: a GPU accelerated sequence alignment library
 for high-throughput NGS data. *BMC Bioinformatics*, 20, 520.
 DOI: [10.1186/s12859-019-3086-9](https://doi.org/10.1186/s12859-019-3086-9)
 **Repo:** [github.com/nahmedraja/GASAL2](https://github.com/nahmedraja/GASAL2)
@@ -924,7 +1014,7 @@ DOI: [10.1186/s12859-019-3086-9](https://doi.org/10.1186/s12859-019-3086-9)
 - **Opportunities:** A natural target for integrating WFA-style
   algorithms as an additional GPU-batched mode alongside classical
   gap-affine DP.
-- **Threats:** WFA-GPU offers a provably-exact, near-linear alternative
+- **Threats:** WFA-GPU offers an exact, score-parameterized alternative
   for the specific similar-sequence regime GASAL2's users often operate
   in.
 
@@ -950,14 +1040,15 @@ server). [developer.nvidia.com/nvbio](https://developer.nvidia.com/nvbio)
 
 ### 36. WFA-GPU
 
-**Citation:** Marco-Sola, S., et al. (2023). WFA-GPU: gap-affine
+**Citation:** Aguado-Puig, Q., Doblas, M., Matzoros, C., Espinosa, A.,
+Moure, J. C., Marco-Sola, S., & Moreto, M. (2023). WFA-GPU: gap-affine
 pairwise read-alignment using GPUs. *Bioinformatics*, 39(12), btad701.
 DOI: [10.1093/bioinformatics/btad701](https://doi.org/10.1093/bioinformatics/btad701)
 **Repo:** [github.com/quim0/WFA-GPU](https://github.com/quim0/WFA-GPU)
 
-- **Strengths:** Brings WFA's provable O(ns+s²) exactness and near-linear
-  scaling to GPU, combining an asymptotic algorithmic advantage with
-  hardware parallelism rather than choosing one or the other.
+- **Strengths:** Brings WFA's exact O(ns+s²) algorithm to GPU,
+  combining a score-parameterized algorithmic advantage with hardware
+  parallelism rather than choosing one or the other.
 - **Weaknesses:** GPU memory management for the wavefront data structures
   (which grow with s, not with a fixed tile size) is more complex than
   for classical banded/tiled DP on GPU.
@@ -971,12 +1062,15 @@ DOI: [10.1093/bioinformatics/btad701](https://doi.org/10.1093/bioinformatics/bta
 
 **Citation:** Müller, A., Schmidt, B., Membarth, R., Leißa, R., & Hack, S.
 (2022). AnySeq/GPU: a novel approach for faster sequence alignment on
-GPUs. [arXiv:2205.07610](https://arxiv.org/abs/2205.07610)
+GPUs. In *Proceedings of the 36th ACM International Conference on
+Supercomputing (ICS '22)*. DOI: [10.1145/3524059.3532376](https://doi.org/10.1145/3524059.3532376);
+preprint [arXiv:2205.07610](https://arxiv.org/abs/2205.07610)
 
 - **Strengths:** A general, warp-parallel dynamic-programming framework
-  (not tied to one scoring scheme) explicitly designed to run efficiently
-  on modern GPU architectures including tensor-core-equipped hardware
-  (e.g., A100), broadening applicability beyond a single aligner.
+  (not tied to one scoring scheme) built with partial evaluation (AnyDSL)
+  so one generic description compiles to efficient GPU kernels. It relies
+  on warp shuffles and register-level tiling, not tensor cores, and
+  reports throughput close to hardware peak on recent NVIDIA GPUs.
 - **Weaknesses:** As a framework rather than an end-to-end tool, still
   needs integration work to become a drop-in replacement inside existing
   pipelines.
@@ -1002,11 +1096,13 @@ Architectural Support for Programming Languages and Operating Systems
 - **Strengths:** A hardware/algorithm co-design pairing a novel
   constant-memory alignment algorithm (GACT: Genome Alignment using
   Constant memory Traceback) with a hardware-accelerated filtering stage
-  (D-SOFT); reports up to 15,000x speedup and >39,000x energy efficiency
-  over software for long-read assembly/alignment.
+  (D-SOFT); reports up to 15,000x speedup over software for long-read
+  reference-guided assembly (headline figure from the paper's title;
+  baseline-specific).
 - **Weaknesses:** Requires custom hardware (ASIC/FPGA) — not usable on
-  commodity infrastructure without that investment; GACT's constant-memory
-  property trades off some flexibility in traceback compared to full DP.
+  commodity infrastructure without that investment; GACT is a *tiled
+  heuristic*: optimality holds within each tile but is not guaranteed
+  globally.
 - **Opportunities:** Demonstrates the ceiling of what hardware/algorithm
   co-design can achieve, motivating continued ASIC/FPGA research (GenASM,
   SeGraM) rather than pure-software optimization alone.
@@ -1054,8 +1150,10 @@ pre-alignment filter for CPUs, GPUs, and FPGAs. *Bioinformatics*, 36(22-23),
   problem to the single-net-routing (SNR) problem from VLSI chip design,
   solving it quickly enough to reject the vast majority of non-matching
   candidate alignments *before* any expensive DP is run; portable across
-  CPU, GPU, and FPGA with reported speedups up to 979x for long
-  sequences.
+  CPU, GPU, and FPGA. The authors report large speedups over running
+  full alignment on every candidate; the size depends on platform,
+  sequence length and edit threshold, so treat the headline numbers as
+  baseline-specific.
 - **Weaknesses:** A filter, not an aligner — must be paired with a
   downstream exact/heuristic aligner for the candidates it does not
   reject; filtering accuracy/threshold tuning affects the false-negative
@@ -1069,22 +1167,28 @@ pre-alignment filter for CPUs, GPUs, and FPGAs. *Bioinformatics*, 36(22-23),
   pre-filtering stage decreases for some pipelines, though it remains
   valuable at the largest (population-scale) data volumes.
 
-### 41. GPU-Accelerated GATK HaplotypeCaller (PairHMM on GPU)
+### 41. GPU-Accelerated GATK HaplotypeCaller (Smith-Waterman with Traceback on GPU)
 
-**Citation:** Authors of GPU acceleration for GATK HaplotypeCaller (2019).
-GPU-accelerated sequence alignment with traceback for GATK
-HaplotypeCaller. *BMC Genomics*, 20, 184.
+**Citation:** Ren, S., Ahmed, N., Bertels, K., & Al-Ars, Z. (2019). GPU
+accelerated sequence alignment with traceback for GATK HaplotypeCaller.
+*BMC Genomics*, 20(Suppl 2), 184.
 DOI: [10.1186/s12864-019-5468-9](https://doi.org/10.1186/s12864-019-5468-9)
+(The same group's earlier work accelerated the *PairHMM* forward
+algorithm on GPU; this paper targets the semi-global SW alignment step.
+The previous version of this entry confused the two.)
 
-- **Strengths:** Accelerates the PairHMM forward algorithm — the
-  probabilistic-alignment step at the core of GATK's variant-calling
-  likelihood computation, not a discrete-score DP — showing that
-  probabilistic (not just deterministic) alignment methods benefit from
-  GPU offload as well.
+- **Strengths:** Accelerates the semi-global Smith-Waterman alignment
+  *with traceback* that HaplotypeCaller runs when it realigns reads and
+  haplotypes to the reference. Traceback has historically been hard to
+  run efficiently on GPUs because of irregular memory access. The kernel
+  is reported up to 80x (synthetic) and 14x (real data) faster than
+  its CPU counterpart.
 - **Weaknesses:** Tied specifically to GATK's HaplotypeCaller workflow
-  rather than being a general-purpose alignment tool.
-- **Opportunities:** A template for accelerating other HMM/probabilistic
-  genomics computations (e.g., base-calling models) on GPU.
+  rather than being a general-purpose alignment tool; kernel-level
+  speedups translate into much smaller end-to-end gains (Amdahl's law).
+- **Opportunities:** Shows that traceback, not only score computation,
+  can be moved to the GPU; relevant for any GPU aligner that must emit
+  CIGAR strings.
 - **Threats:** NVIDIA's own Clara Parabricks suite now offers an
   officially maintained GPU-accelerated GATK-compatible pipeline,
   somewhat superseding bespoke academic implementations for production
@@ -1092,21 +1196,23 @@ DOI: [10.1186/s12864-019-5468-9](https://doi.org/10.1186/s12864-019-5468-9)
 
 ### 42. GPU-Accelerated BWA-MEM
 
-**Citation:** Pham, M., Tu, Y., & Lv, X. (2024). Accelerating BWA-MEM read
-mapping on GPUs. In *Proceedings of the 37th International Conference on
-Supercomputing (ICS)*. DOI: [10.1145/3577193.3593703](https://doi.org/10.1145/3577193.3593703)
+**Citation:** Pham, M., Tu, Y., & Lv, X. (2023). Accelerating BWA-MEM read
+mapping on GPUs. In *Proceedings of the 37th ACM International Conference on
+Supercomputing (ICS '23)*. DOI: [10.1145/3577193.3593703](https://doi.org/10.1145/3577193.3593703)
 
-- **Strengths:** Targets the specific extension (banded Smith-Waterman)
-  bottleneck of BWA-MEM with GPU batching, keeping the rest of the
-  well-validated BWA-MEM pipeline (seeding, chaining, scoring) unchanged.
+- **Strengths:** Ports the BWA-MEM pipeline (seeding, chaining and
+  banded Smith-Waterman extension) to the GPU and tackles the
+  GPU-specific problems it raises (warp divergence, irregular memory
+  access), aiming to keep BWA-MEM's output behaviour.
 - **Weaknesses:** As with other GPU DP offload work, benefits depend on
   large batch sizes to amortize host-device transfer overhead.
 - **Opportunities:** A relatively low-risk way to speed up an
   already-trusted, widely-deployed pipeline without changing its output
   semantics.
-- **Threats:** BWA-MEM2 (pure CPU/SIMD) and BWA-MEME (learned index)
-  already substantially close the gap this work targets, on hardware
-  most labs already have.
+- **Threats:** BWA-MEM2 (pure CPU/SIMD), BWA-MEME (learned index) and
+  minibwa already substantially close the gap this work targets, on
+  hardware most labs already have; in production, NVIDIA Parabricks
+  `fq2bam` occupies the GPU BWA-MEM niche.
 
 ### 43. Minimap2 on GPU
 
@@ -1114,6 +1220,13 @@ Supercomputing (ICS)*. DOI: [10.1145/3577193.3593703](https://doi.org/10.1145/35
 & Narayanasamy, S. (2023). Accelerating Minimap2 for accurate long read
 alignment on GPUs. *Journal of Biotechnology and Biomedicine*, 6(1).
 DOI: [10.26502/jbb.2642-91280067](https://doi.org/10.26502/jbb.2642-91280067)
+(the "mm2-ax" work). Follow-up: Dong, J., Liu, X., Sadasivan, H., Sitaraman,
+S., & Narayanasamy, S. (2024). mm2-gb: GPU accelerated minimap2 for long
+read DNA mapping. In *Proc. ACM BCB 2024*.
+DOI: [10.1145/3698587.3701366](https://doi.org/10.1145/3698587.3701366)
+(2.57-5.33x chaining speedup on 10-100 kb ONT reads on an AMD MI210
+versus mm2-fast on 32 AVX-512 cores). Related: minimap2-fpga (Sci. Rep.,
+2023) accelerates chaining on FPGA.
 
 - **Strengths:** Targets minimap2's chaining and DP-extension stages for
   GPU acceleration while preserving its minimizer-based seeding
@@ -1155,15 +1268,27 @@ computed in strongly subquadratic time (unless SETH is false). In
   exactness for a heuristic/approximate/probabilistic guarantee instead.
 - **Weaknesses (as a guide to practice):** A worst-case lower bound says
   nothing about the common case; it does not preclude algorithms like WFA
-  that are fast *whenever inputs are not adversarial* — which real
-  genomic data essentially never is.
+  or A*PA that are fast when the relevant parameter (score, divergence)
+  is small. Real genomes are not adversarial, but they do contain
+  *adversarial-like* regions (tandem repeats, segmental duplications,
+  low-complexity sequence) that cause seed floods, ambiguous mappings and
+  worst-case DP. Clinically important loci (e.g., repeat-expansion genes,
+  SMN1/SMN2, CYP2D6, HLA) cluster in exactly these regions. The bound
+  also does not rule out log-factor gains (Masek & Paterson's 1980
+  O(n²/log n) Four-Russians method) or near-linear *approximation* of edit
+  distance to a constant factor (Andoni & Nosatzki, FOCS 2020). Related
+  SETH-hardness results cover LCS and DTW (Abboud, Backurs & Vassilevska
+  Williams, 2015; Bringmann & Künnemann, 2015) and matching in graphs
+  (Equi et al., 2019).
 - **Opportunities:** Motivates precisely the "provably high-performance"
   framing of this thesis: since worst-case sub-quadratic exact alignment
   is (conditionally) impossible, provable guarantees in this field
   necessarily take the form of *parameterized* complexity (WFA's O(ns+s²),
-  Ukkonen's O(nd), r-index's O(r) space) or *approximation/estimation*
-  guarantees (MinHash's unbiased Jaccard estimator), rather than
-  unconditional worst-case speedups.
+  Ukkonen's O(nd), r-index's O(r) space), *lossless-filter* guarantees
+  (pigeonhole/search-scheme filters that provably find every hit within
+  k errors), or *approximation/estimation* guarantees (MinHash's
+  unbiased Jaccard estimator), rather than unconditional worst-case
+  speedups.
 - **Threats/limits:** Conditional on SETH, a widely believed but unproven
   hypothesis; a SETH-refuting breakthrough (thought unlikely by most
   complexity theorists) would reopen the question of a genuinely
@@ -1171,52 +1296,315 @@ computed in strongly subquadratic time (unless SETH is false). In
 
 ---
 
+## K. Recent and Previously Omitted Methods (2011–2026)
+
+*(Added by the Sept. 2026 audit. Entries are shorter than A–J; each gives
+the claim that matters for this thesis and the main caveat. Numbers are
+the authors' own unless stated, measured on their hardware and baselines.)*
+
+### K.1 Exact and near-exact pairwise alignment
+
+- **A\*PA / A\*PA2** — Groot Koerkamp, R., & Ivanov, P. (2024). Exact
+  global alignment using A* with chaining seed heuristic and match
+  pruning. *Bioinformatics*, 40(3), btae032.
+  DOI: [10.1093/bioinformatics/btae032](https://doi.org/10.1093/bioinformatics/btae032);
+  Groot Koerkamp, R. (2024). A*PA2: up to 19x faster exact global
+  alignment. *WABI 2024*, LIPIcs 312, 17.
+  DOI: [10.4230/LIPIcs.WABI.2024.17](https://doi.org/10.4230/LIPIcs.WABI.2024.17).
+  Exact edit-distance alignment that combines A* search, a
+  seed-based admissible heuristic, and Myers bit-parallel blocks in SIMD.
+  It is reported competitive with or faster than *approximate* methods on
+  all tested datasets, and it is the main exact competitor to (Bi)WFA for
+  long, divergent pairs. *Caveat:* unit-cost edit distance only; no
+  affine gaps yet.
+- **Block Aligner** — Liu, D., & Steinegger, M. (2023). Block Aligner:
+  an adaptive SIMD-accelerated aligner for sequences and
+  position-specific scoring matrices. *Bioinformatics*, 39(8), btad487.
+  DOI: [10.1093/bioinformatics/btad487](https://doi.org/10.1093/bioinformatics/btad487).
+  Computes the DP in blocks that *grow or shift adaptively* depending on
+  where the score is changing. This is the clearest published example
+  of data-adaptive alignment effort and a direct building block for the
+  adaptive aligner proposed in [RESEARCH_ROADMAP.md](RESEARCH_ROADMAP.md).
+  *Caveat:* heuristic; optimality is not guaranteed when the path leaves
+  the block.
+- **TALCO** — Walia, S., et al. (2024). TALCO: tiling genome sequence
+  alignment using convergence of traceback pointers. *HPCA 2024*.
+  DOI: [10.1109/HPCA57654.2024.00044](https://doi.org/10.1109/HPCA57654.2024.00044).
+  Uses traceback-pointer convergence to achieve tiled, bounded-memory
+  alignment with the same results as untiled X-drop alignment; targets
+  hardware/long-read use.
+- **FILTR (compiled DP recurrences)** — Vinaithirthan, B., Sundram, S.,
+  Goenka, S., & Kjolstad, F. (2026). Compiling bioinformatics
+  recurrences. [arXiv:2607.06225](https://arxiv.org/abs/2607.06225).
+  A DSL and compiler that separates the DP recurrence from its pruning
+  and scheduling strategy; reports 0.95-30x versus hand-tuned alignment
+  libraries. Relevant as a way to generate the many kernels an adaptive
+  aligner needs. *Caveat:* very recent preprint.
+
+### K.2 Seeding, sampling and indexing
+
+- **Syncmers, mod-minimizers and density lower bounds** — Edgar, R.
+  (2021). Syncmers are more sensitive than minimizers for selecting
+  conserved k-mers in biological sequences. *PeerJ*, 9, e10805.
+  DOI: [10.7717/peerj.10805](https://doi.org/10.7717/peerj.10805);
+  Groot Koerkamp, R., & Pibiri, G. E. (2024). The mod-minimizer: a
+  simple and efficient sampling algorithm for long k-mers. *WABI 2024*.
+  DOI: [10.4230/LIPIcs.WABI.2024.11](https://doi.org/10.4230/LIPIcs.WABI.2024.11);
+  Kille, B., Groot Koerkamp, R., et al. (2024). A near-tight lower
+  bound on the density of forward sampling schemes. *Bioinformatics*,
+  41(1), btae736. DOI: [10.1093/bioinformatics/btae736](https://doi.org/10.1093/bioinformatics/btae736).
+  Together these supersede "random minimizer = 2/(w+1)" as the
+  theoretical reference point for sampling-based seeding.
+- **Optimum search schemes (bidirectional FM-index)** — Kucherov, G.,
+  Salikhov, K., & Tsur, D. (2016). Approximate string matching using a
+  bidirectional index. *Theoretical Computer Science*, 638, 145-158.
+  DOI: [10.1016/j.tcs.2015.10.043](https://doi.org/10.1016/j.tcs.2015.10.043);
+  Kianfar, K., Pockrandt, C., Torkamandi, B., Luo, H., & Reinert, K.
+  (2018). Optimum search schemes for approximate string matching using
+  bidirectional FM-index. [arXiv:1711.02035](https://arxiv.org/abs/1711.02035).
+  *Lossless* search for all occurrences within k errors, with an
+  optimized enumeration order. This is the rigorous basis for the
+  certified fast path proposed in the roadmap.
+- **BWA-MEM2 ERT seeding** — Subramaniyan, A., Wadden, J., Goliya, K.,
+  Ozog, N., Wu, X., Narayanasamy, S., Blaauw, D., & Das, R. (2021).
+  Accelerated seeding for genome sequence alignment with enumerated
+  radix trees. *ISCA 2021*.
+  DOI: [10.1109/ISCA52012.2021.00038](https://doi.org/10.1109/ISCA52012.2021.00038).
+  Replaces FM-index SMEM search with a k-mer-indexed radix tree; roughly
+  2x faster seeding for a larger index.
+- **BLEND** — Firtina, C., Park, J., Alser, M., Kim, J. S., Cali, D. S.,
+  Shahroodi, T., Ghiasi, N. M., Singh, G., Kanellopoulos, K., Alkan, C.,
+  & Mutlu, O. (2023). BLEND: a fast, memory-efficient and accurate
+  mechanism to find fuzzy seed matches in genome analysis. *NAR Genomics
+  and Bioinformatics*, 5(1), lqad004.
+  DOI: [10.1093/nargab/lqad004](https://doi.org/10.1093/nargab/lqad004).
+  SimHash-based seeds that also match when the sequences differ by
+  substitutions; integrated into minimap2 as a proof of concept.
+- **Move structure / MONI / SPUMONI 2 / Movi** — Nishimoto, T., &
+  Tabei, Y. (2021). Optimal-time queries on BWT-runs compressed indexes.
+  *ICALP 2021*. DOI: [10.4230/LIPIcs.ICALP.2021.101](https://doi.org/10.4230/LIPIcs.ICALP.2021.101);
+  Rossi, M., Oliva, M., Langmead, B., Gagie, T., & Boucher, C. (2022).
+  MONI: a pangenomic index for finding maximal exact matches. *Journal
+  of Computational Biology*, 29(2), 169-187.
+  DOI: [10.1089/cmb.2021.0290](https://doi.org/10.1089/cmb.2021.0290);
+  Ahmed, O. Y., Rossi, M., Gagie, T., Boucher, C., & Langmead, B. (2023).
+  SPUMONI 2: improved classification using a pangenome index of
+  minimizer digests. *Genome Biology*, 24, 122.
+  DOI: [10.1186/s13059-023-02958-1](https://doi.org/10.1186/s13059-023-02958-1);
+  Zakeri, M., Brown, N. K., Ahmed, O. Y., Gagie, T., & Langmead, B.
+  (2024). Movi: a fast and cache-efficient full-text pangenome index.
+  *iScience*, 27(12), 111464.
+  DOI: [10.1016/j.isci.2024.111464](https://doi.org/10.1016/j.isci.2024.111464).
+  These make r-index-style O(r) indexing practical: cache-friendly
+  matching statistics and MEMs over hundreds of genomes, fast enough
+  for nanopore adaptive sampling.
+
+### K.3 Complete short- and long-read mappers
+
+- **minibwa** — Li, H., & Homer, N. (2026). Fast genomic read alignment
+  with minibwa. [arXiv:2606.15357](https://arxiv.org/abs/2606.15357);
+  [github.com/lh3/minibwa](https://github.com/lh3/minibwa). Combines
+  BWA-MEM's variable-length (SMEM) seeding with minimap2's chaining and
+  base-level alignment, plus prefetching and heuristics that skip
+  unnecessary mate rescue and reduce effort in highly repetitive regions.
+  Reported ~4x faster than BWA-MEM and >2x faster than BWA-MEM2 at
+  comparable accuracy. It also maps accurate long reads and bisulfite data. **This is
+  the most important short-read omission from the original review.**
+  It is the strongest CPU baseline any new short-read aligner must beat.
+  *Caveat:* preprint (June 2026); independent benchmarks pending.
+- **Strobealign with multi-context seeds (MCS)** — Tolstoganov, I.,
+  Martin, M., Buchin, K., & Sahlin, K. (2026). Multi-context seeds
+  enable fast and high-accuracy read mapping. *Genome Biology*.
+  DOI: [10.1186/s13059-026-04017-x](https://doi.org/10.1186/s13059-026-04017-x).
+  Stores seeds of several lengths in one index so that both full and
+  partial strobe matches are found. It improves accuracy at ≤150 nt
+  with little runtime or memory cost and now matches or exceeds
+  minimap2's accuracy while staying substantially faster.
+- **mapquik** — Ekim, B., Sahlin, K., Medvedev, P., Berger, B., &
+  Chikhi, R. (2023). Efficient mapping of accurate long reads in
+  minimizer space with mapquik. *Genome Research*, 33(7), 1188-1197.
+  DOI: [10.1101/gr.277679.123](https://doi.org/10.1101/gr.277679.123).
+  Seeds are k *consecutive minimizers* (k-min-mers), and only
+  reference-unique k-min-mers are indexed. Reported ~30x faster than
+  minimap2 on human HiFi reads. *Caveat:* designed for low-divergence
+  (HiFi / Q20+) reads; unique-only indexing gives up sensitivity in
+  repeats, so it is a fast path rather than a complete mapper.
+- **mm2-fast** — Kalikar, S., Jain, C., Vasimuddin, M., & Misra, S.
+  (2022). Accelerating minimap2 for long-read sequencing applications on
+  modern CPUs. *Nature Computational Science*, 2, 78-83.
+  DOI: [10.1038/s43588-022-00201-8](https://doi.org/10.1038/s43588-022-00201-8).
+  AVX-512 vectorization of minimap2's seeding, chaining and DP, with
+  identical output; ~1.6-1.8x faster.
+- **Winnowmap / Winnowmap2** — Jain, C., Rhie, A., Zhang, H., Chu, C.,
+  Walenz, B. P., Koren, S., & Phillippy, A. M. (2020). Weighted
+  minimizer sampling improves long read mapping. *Bioinformatics*,
+  36(Suppl 1), i111-i118. DOI: [10.1093/bioinformatics/btaa435](https://doi.org/10.1093/bioinformatics/btaa435);
+  Jain, C., et al. (2022). Long-read mapping to repetitive reference
+  sequences using Winnowmap2. *Nature Methods*, 19, 705-710.
+  DOI: [10.1038/s41592-022-01457-8](https://doi.org/10.1038/s41592-022-01457-8).
+  Down-weights frequent k-mers, which improves mapping in repeats and
+  centromeres (T2T era).
+- **Chaining with provable guarantees** — Jain, C., Gibney, D., &
+  Thankachan, S. V. (2022). Algorithms for colinear chaining with
+  overlaps and gap costs. *Journal of Computational Biology*, 29(11),
+  1237-1251. DOI: [10.1089/cmb.2022.0266](https://doi.org/10.1089/cmb.2022.0266).
+  Exact chaining with gap costs in polylogarithmic overhead per anchor,
+  with proofs of equivalence to alignment-based objectives. This is a
+  principled replacement for minimap2's bounded-look-back heuristic.
+- **Minigraph / Minigraph-Cactus** — Li, H., Feng, X., & Chu, C. (2020).
+  The design and construction of reference pangenome graphs with
+  minigraph. *Genome Biology*, 21, 265.
+  DOI: [10.1186/s13059-020-02168-z](https://doi.org/10.1186/s13059-020-02168-z);
+  Hickey, G., et al. (2024). Pangenome graph construction from genome
+  alignments with Minigraph-Cactus. *Nature Biotechnology*, 42, 663-673.
+  DOI: [10.1038/s41587-023-01793-w](https://doi.org/10.1038/s41587-023-01793-w).
+  Used to build the HPRC pangenome graphs that Giraffe maps to.
+- **vg Giraffe for long reads (2025)** — Chang, X., et al. (2025). Rapid,
+  accurate long- and short-read mapping to large pangenome graphs with
+  vg Giraffe.
+  [bioRxiv 10.1101/2025.09.29.678807](https://doi.org/10.1101/2025.09.29.678807).
+  Maps short and long reads to haplotype-sampled HPRC graphs at speeds
+  comparable to linear mappers, and more than 10x faster than
+  GraphAligner. Sirén, J., et al. (2024). Personalized pangenome
+  references. *Nature Methods*, 21, 2017-2023.
+  DOI: [10.1038/s41592-024-02407-2](https://doi.org/10.1038/s41592-024-02407-2).
+
+### K.4 Clinical production pipelines (the real competitors)
+
+- **Illumina DRAGEN** — Behera, S., Catreux, S., Rossi, M., et al.
+  (2024/2025). Comprehensive genome analysis and variant detection at
+  scale using DRAGEN. *Nature Biotechnology*, 43, 1177-1191.
+  DOI: [10.1038/s41587-024-02382-1](https://doi.org/10.1038/s41587-024-02382-1).
+  FPGA-accelerated mapping to a *multigenome (pangenome) reference*,
+  plus ML-based variant calling and specialized callers for medically
+  relevant genes. About 30 min from raw reads to variants per 30x
+  genome, evaluated on 3,202 1000 Genomes samples. **Omitting DRAGEN
+  was the largest gap in the original review:** it is the de facto
+  clinical standard for Illumina data, and any claim of "faster in
+  clinical cases" must be measured against it.
+- **NVIDIA Clara Parabricks** — GPU re-implementation of BWA-MEM
+  (`fq2bam`: mapping + sorting + duplicate marking) and of GATK/DeepVariant
+  callers, with output designed to match the CPU tools. It is the main
+  GPU baseline. (Product documentation; no single peer-reviewed
+  methods paper; cite the software version used.)
+- **Sentieon DNAseq** — Freed, D., Aldana, R., Weber, J. A., & Edwards,
+  J. S. (2017). The Sentieon Genomics Tools: a fast and accurate solution
+  to variant calling from next-generation sequence data. [bioRxiv
+  10.1101/115717](https://doi.org/10.1101/115717). Optimized CPU
+  re-implementation of BWA-MEM and GATK-equivalent algorithms; widely
+  used in clinical labs.
+- **ONT production stack** — Dorado basecaller (R10.4.1, v5 models)
+  with integrated minimap2 alignment (`lr:hq` preset recommended for
+  Q20+ data since 2025), and the `wf-human-variation` workflow (Clair3,
+  Sniffles2, Straglr, modkit). This is the long-read clinical baseline.
+
+### K.5 Raw-signal and real-time mapping (ONT)
+
+- **UNCALLED** — Kovaka, S., Fan, Y., Ni, B., Timp, W., & Schatz, M. C.
+  (2021). Targeted nanopore sequencing by real-time mapping of raw
+  electrical signal with UNCALLED. *Nature Biotechnology*, 39, 431-441.
+  DOI: [10.1038/s41587-020-0731-9](https://doi.org/10.1038/s41587-020-0731-9).
+- **RawHash / RawHash2** — Firtina, C., Soysal, M., Lindegger, J., &
+  Mutlu, O. (2024). RawHash2: mapping raw nanopore signals using
+  hash-based seeding and adaptive quantization. *Bioinformatics*, 40(8),
+  btae478. DOI: [10.1093/bioinformatics/btae478](https://doi.org/10.1093/bioinformatics/btae478).
+  These map *before* basecalling, so a read can be ejected during
+  sequencing (adaptive sampling, e.g. for targeted clinical panels).
+  This is a different speed metric (decision latency per read), not
+  throughput.
+
+### K.6 Graph-alignment theory (corrects the NP-hardness claim)
+
+- Navarro, G. (2000). Improved approximate pattern matching on
+  hypertext. *Theoretical Computer Science*, 237(1-2), 455-463.
+  DOI: [10.1016/S0304-3975(99)00333-3](https://doi.org/10.1016/S0304-3975(99)00333-3)
+  — O(|E|·m) sequence-to-graph alignment.
+- Jain, C., Zhang, H., Gao, Y., & Aluru, S. (2020). On the complexity of
+  sequence-to-graph alignment. *Journal of Computational Biology*, 27(4),
+  640-654. DOI: [10.1089/cmb.2019.0066](https://doi.org/10.1089/cmb.2019.0066)
+  — NP-hard only when edits are allowed in the graph.
+- Equi, M., Grossi, R., Mäkinen, V., & Tomescu, A. I. (2019). On the
+  complexity of string matching for graphs. *ICALP 2019*.
+  DOI: [10.4230/LIPIcs.ICALP.2019.55](https://doi.org/10.4230/LIPIcs.ICALP.2019.55)
+  — OV/SETH-conditional quadratic lower bound, even for exact matching.
+
+---
+
 ## Cross-Cutting SWOT Summary
 
-Aggregating across all 44 entries above, the field-level SWOT picture for
-sequence-alignment algorithms as of 2026 is:
+Aggregating across the entries above (A–K), the field-level SWOT picture
+for DNA read alignment as of September 2026 is:
 
 **Strengths of the field as a whole**
 - A mature stack of *provably correct* building blocks (DP recurrences,
   BWT/FM-index, MinHash estimators) with decades of validation.
-- Increasing convergence on architectures (sketch -> chain -> extend) that
-  combine formal guarantees at the sketching/indexing layer with
-  practical heuristics at the extension layer.
-- A genuinely new provably-efficient primitive (WFA) that changes the
-  default choice for exact alignment for the first time in ~40 years.
+- Convergence on the seed → chain → extend architecture. Formal
+  guarantees are available at the indexing layer (FM-index, r-index,
+  minimizer window guarantee, lossless search schemes) and at the
+  base-level alignment layer (Gotoh, WFA, A*PA). The *seed filtering and
+  chaining* layer in between is almost always heuristic, and it is where
+  most mapping errors originate.
+- Exact score-parameterized aligners (WFA/BiWFA for affine costs,
+  A*PA2 for edit distance) are now fast enough to replace heuristic
+  banded DP in many settings. This extends the diagonal-transition idea
+  (Ukkonen 1985, Myers 1986) rather than replacing 40 years of practice.
 
 **Weaknesses of the field as a whole**
 - Nearly all "extreme" speedups (GPU, ASIC/FPGA) require specialized
   hardware and bespoke engineering, fragmenting the tooling landscape.
 - Heuristic seeding (minimizers, strobemers, MinHash) sacrifices
-  worst-case guarantees for average-case speed — acceptable for
-  well-characterized genomes, riskier for novel/highly divergent or
-  adversarial-like data.
-- Pangenome/graph alignment (GraphAligner, vg) remains algorithmically
-  harder (graph alignment is NP-hard in general) and less mature than
-  linear-reference alignment.
+  worst-case guarantees for average-case speed. That is acceptable for
+  most of the genome, but it breaks down in exactly the repetitive and
+  low-complexity regions where many clinically important genes lie.
+- Published speedups are mostly *component-level* (seeding kernel, DP
+  kernel) and measured on the authors' own hardware and data.
+  End-to-end, clinically relevant comparisons (FASTQ → VCF, with GIAB
+  accuracy, on matched hardware) are rare. This is the gap a PhD
+  contribution can fill credibly.
+- Pangenome/graph alignment is less mature than linear-reference
+  alignment. The reason is conditional quadratic lower bounds and
+  tooling and coordinate-system complexity, not NP-hardness (graph
+  alignment with edits only in the query is polynomial; see K.6).
 
 **Opportunities**
-- Learned-index techniques (BWA-MEME) are an early, promising bridge
-  between classical exact data structures and machine learning — an
-  actively growing research direction.
-- WFA-GPU and AnySeq/GPU suggest that *provable* near-linear algorithms
-  and hardware acceleration are not mutually exclusive, and combining
-  them is still underexplored.
-- Run-length/compressed indexing (r-index) is well-positioned for the
-  shift from single linear references to large pangenome collections.
+- *Adaptive* alignment effort: Block Aligner, minibwa's repeat-aware
+  effort reduction, strobealign's read-length-dependent parameters and
+  DRAGEN's tiered design show that spending effort only where the data
+  needs it is the main remaining lever. No published tool yet makes this
+  a formal, cost-model-driven policy across the whole pipeline (see
+  [RESEARCH_ROADMAP.md](RESEARCH_ROADMAP.md)).
+- Learned-index techniques (BWA-MEME) connect classical exact data
+  structures with ML while keeping outputs exact; their memory cost is
+  the open problem.
+- Pairing exact score-parameterized algorithms with hardware (WFA-GPU,
+  A*PA2's SIMD blocks) is still underexplored.
+- r-index/move-structure indexing (MONI, Movi) and haplotype-sampled
+  graphs (Giraffe) are well positioned for the move from single linear
+  references to HPRC-scale pangenomes.
+- The newest platforms (Illumina NovaSeq X with XLEAP-SBS chemistry;
+  ONT R10.4.1 with v5 basecalling at Q20+; PacBio HiFi) produce reads
+  much more accurate than those most tools were tuned for. That makes
+  error-bounded "certified fast paths" newly practical for a large
+  fraction of reads.
 
 **Threats**
-- SETH-hardness (Backurs & Indyk, 2015) means no unconditional
-  breakthrough to sub-quadratic *exact, worst-case* alignment should be
-  expected; all future gains will come from exploiting structure
-  (similarity, repetitiveness, hardware parallelism) rather than a new
-  universally-faster algorithm.
+- SETH-hardness (Backurs & Indyk, 2015) means no sub-quadratic *exact,
+  worst-case* algorithm should be expected (barring a complexity-theory
+  breakthrough). Gains will most likely come from exploiting structure
+  (similarity, repetitiveness, read accuracy, hardware parallelism) rather
+  than a universally faster algorithm.
+- Amdahl's law: in a clinical FASTQ → VCF pipeline, alignment is only
+  part of wall time. Sorting, duplicate marking, BAM/CRAM compression,
+  I/O and variant calling take the rest. A 2x faster aligner can yield
+  a much smaller end-to-end gain.
+- Incumbent clinical pipelines (DRAGEN, Parabricks, Sentieon) are fast,
+  validated and regulated, so a new method must be *non-inferior in
+  accuracy* and not just faster to be clinically relevant.
 - Hardware-specific accelerators risk obsolescence as GPU/ASIC
   architectures evolve faster than the tooling built for them (as seen
   with NVBIO's slowed development relative to newer libraries).
 - Fragmentation across many narrowly-scoped tools (this document lists
-  over 40) creates real integration and maintenance burden for
+  over 60) creates real integration and maintenance burden for
   production genomics pipelines.
 
 ---
@@ -1274,10 +1662,6 @@ Corporation.
 Daily, J. (2016). Parasail: SIMD C library for global, semi-global, and
 local pairwise sequence alignments. *BMC Bioinformatics*, 17, 81.
 https://doi.org/10.1186/s12859-016-0930-z
-
-Eizenga, J., Marco-Sola, S., et al. (2023). Optimal gap-affine alignment
-in O(s) space. *Bioinformatics*, 39(2), btad074.
-https://doi.org/10.1093/bioinformatics/btad074
 
 Farrar, M. (2007). Striped Smith-Waterman speeds database searches six
 times over other SIMD implementations. *Bioinformatics*, 23(2), 156-161.
@@ -1340,8 +1724,8 @@ Li, H. (2018). Minimap2: pairwise alignment for nucleotide sequences.
 *Bioinformatics*, 34(18), 3094-3100. https://doi.org/10.1093/bioinformatics/bty191
 
 Luo, R., Wong, T., Zhu, J., Liu, C.-M., Zhu, X., Wu, E., Lee, L.-K., Lin,
-H., Zhu, W., Cheung, D. W., Ting, H.-F., Yiu, S.-M., Yu, C., Li, Y., Li,
-R., & Lam, T.-W. (2013). SOAP3-dp: fast, accurate and sensitive GPU-based
+H., Zhu, W., Cheung, D. W., Ting, H.-F., Yiu, S.-M., Peng, S., Yu, C., Li,
+Y., Li, R., & Lam, T.-W. (2013). SOAP3-dp: fast, accurate and sensitive GPU-based
 short read aligner. *PLOS ONE*, 8(5), e65632.
 https://doi.org/10.1371/journal.pone.0065632
 
@@ -1349,13 +1733,14 @@ Marco-Sola, S., Moure, J. C., Moreto, M., & Espinosa, A. (2021). Fast
 gap-affine pairwise alignment using the wavefront algorithm.
 *Bioinformatics*, 37(4), 456-463. https://doi.org/10.1093/bioinformatics/btaa777
 
-Marco-Sola, S., et al. (2023). WFA-GPU: gap-affine pairwise
-read-alignment using GPUs. *Bioinformatics*, 39(12), btad701.
-https://doi.org/10.1093/bioinformatics/btad701
+Marco-Sola, S., Eizenga, J. M., Guarracino, A., Paten, B., Garrison, E.,
+& Moreto, M. (2023). Optimal gap-affine alignment in O(s) space.
+*Bioinformatics*, 39(2), btad074. https://doi.org/10.1093/bioinformatics/btad074
 
 Müller, A., Schmidt, B., Membarth, R., Leißa, R., & Hack, S. (2022).
-AnySeq/GPU: a novel approach for faster sequence alignment on GPUs.
-arXiv:2205.07610. https://arxiv.org/abs/2205.07610
+AnySeq/GPU: a novel approach for faster sequence alignment on GPUs. In
+*Proceedings of the 36th ACM International Conference on Supercomputing
+(ICS '22)*, 1-11. https://doi.org/10.1145/3524059.3532376
 
 Myers, G. (1999). A fast bit-vector algorithm for approximate string
 matching based on dynamic programming. *Journal of the ACM*, 46(3),
@@ -1375,9 +1760,9 @@ H., Koren, S., & Phillippy, A. M. (2016). Mash: fast genome and
 metagenome distance estimation using MinHash. *Genome Biology*, 17, 132.
 https://doi.org/10.1186/s13059-016-0997-x
 
-Pham, M., Tu, Y., & Lv, X. (2024). Accelerating BWA-MEM read mapping on
-GPUs. In *Proceedings of the 37th International Conference on
-Supercomputing (ICS)*. https://doi.org/10.1145/3577193.3593703
+Pham, M., Tu, Y., & Lv, X. (2023). Accelerating BWA-MEM read mapping on
+GPUs. In *Proceedings of the 37th ACM International Conference on
+Supercomputing (ICS '23)*. https://doi.org/10.1145/3577193.3593703
 
 Rautiainen, M., & Marschall, T. (2020). GraphAligner: rapid and versatile
 sequence-to-graph alignment. *Genome Biology*, 21, 253.
@@ -1438,9 +1823,39 @@ Zhao, M., Lee, W. P., Garrison, E., & Marth, G. T. (2013). SSW library: an
 SIMD Smith-Waterman C/C++ library for use in genomic applications. *PLOS
 ONE*, 8(12), e82138. https://doi.org/10.1371/journal.pone.0082138
 
-GPU-accelerated sequence alignment with traceback for GATK
-HaplotypeCaller (2019). *BMC Genomics*, 20, 184.
-https://doi.org/10.1186/s12864-019-5468-9
+Ren, S., Ahmed, N., Bertels, K., & Al-Ars, Z. (2019). GPU accelerated
+sequence alignment with traceback for GATK HaplotypeCaller. *BMC
+Genomics*, 20(Suppl 2), 184. https://doi.org/10.1186/s12864-019-5468-9
+
+Aguado-Puig, Q., Doblas, M., Matzoros, C., Espinosa, A., Moure, J. C.,
+Marco-Sola, S., & Moreto, M. (2023). WFA-GPU: gap-affine pairwise
+read-alignment using GPUs. *Bioinformatics*, 39(12), btad701.
+https://doi.org/10.1093/bioinformatics/btad701
+
+Myers, E. W. (1986). An O(ND) difference algorithm and its variations.
+*Algorithmica*, 1, 251-266. https://doi.org/10.1007/BF01840446
+
+Landau, G. M., & Vishkin, U. (1989). Fast parallel and serial approximate
+string matching. *Journal of Algorithms*, 10(2), 157-169.
+https://doi.org/10.1016/0196-6774(89)90010-2
+
+Suzuki, H., & Kasahara, M. (2018). Introducing difference recurrence
+relations for faster semi-global alignment of long sequences. *BMC
+Bioinformatics*, 19(Suppl 1), 45. https://doi.org/10.1186/s12859-018-2014-8
+
+Dong, J., Liu, X., Sadasivan, H., Sitaraman, S., & Narayanasamy, S. (2024).
+mm2-gb: GPU accelerated minimap2 for long read DNA mapping. In *Proc. ACM
+BCB 2024*. https://doi.org/10.1145/3698587.3701366
+
+*References for the methods added in section K (A*PA/A*PA2, Block
+Aligner, TALCO, FILTR, syncmers, mod-minimizers, density lower bound,
+search schemes, ERT, BLEND, move structure, MONI, SPUMONI 2, Movi,
+minibwa, strobealign-MCS, mapquik, mm2-fast, Winnowmap/Winnowmap2,
+colinear chaining with gap costs, minigraph, Minigraph-Cactus, Giraffe
+long-read, personalized pangenomes, DRAGEN, Sentieon, UNCALLED, RawHash2,
+Navarro 2000, Jain et al. 2020, Equi et al. 2019) are given in full, with
+DOIs, inline in that section. All DOIs in this document were checked
+against Crossref/doi.org in September 2026.*
 
 Alser, M., Shahroodi, T., Gómez-Luna, J., Alkan, C., & Mutlu, O. (2020).
 SneakySnake: a fast and accurate universal genome pre-alignment filter
