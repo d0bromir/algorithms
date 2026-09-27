@@ -2,6 +2,10 @@
 
 Python and C++ implementations of common bioinformatics algorithms for sequence alignment and genome analysis.
 
+These are educational primitives, not validated clinical read mappers. The
+literature review is selective, not a demonstrated complete survey. No
+end-to-end benchmark or clinical superiority result is established here.
+
 ## Overview
 
 This repository contains implementations of algorithms used for alignment of sequencing reads (FASTQ) to a reference genome (FASTA):
@@ -13,7 +17,7 @@ This repository contains implementations of algorithms used for alignment of seq
    - Smith-Waterman with Affine Gap Penalties (biologically realistic gaps)
    - Hirschberg's algorithm (linear-space global alignment)
 
-2. **Bit-Parallel / Near-Linear Exact Alignment** – The newest provably fast exact methods
+2. **Bit-Parallel / Score-Parameterized Exact Alignment**
    - Myers' bit-vector algorithm (O(n·⌈m/w⌉) edit distance)
    - Wavefront Alignment (WFA) – O(n·s + s²) exact gap-affine alignment
 
@@ -27,7 +31,7 @@ This repository contains implementations of algorithms used for alignment of seq
    - Exact backward search via FM-index
    - Memory-efficient pattern matching
 
-A full literature review and SWOT analysis of these and ~35 additional
+A selective literature review and SWOT analysis of these and additional
 algorithms (SIMD libraries, production aligners, GPU/hardware accelerators,
 and theoretical lower bounds) is in [SWOT_ANALYSIS.md](SWOT_ANALYSIS.md).
 
@@ -169,8 +173,8 @@ g++ -std=c++17 -o nw_affine cpp/needleman_wunsch_affine.cpp
 
 Packs an entire DP column into machine words so a whole column update
 becomes a handful of bitwise operations, giving O(n) time for patterns up to
-the machine word size. Underlies the `edlib` library and the extension
-kernels inside BWA-MEM/GenASM.
+the machine word size. Underlies the `edlib` library; BWA-MEM uses affine-gap
+DP, while GenASM is based on modified Bitap, not this Myers recurrence.
 
 - **Time Complexity:** O(n · ⌈m/w⌉) — O(n) for patterns ≤ word size w
 - **Space Complexity:** O(σ) for the character bitmask table, O(1) state
@@ -192,12 +196,14 @@ g++ -std=c++17 -o myers cpp/myers_bitvector.cpp
 
 ### 4. Wavefront Alignment (WFA)
 
-A provably-optimal, near-linear-time exact algorithm for gap-affine global
-alignment: O(n·s + s²) time, where `s` is the optimal alignment score — a
-fundamentally different (and typically much faster) complexity regime than
-Needleman-Wunsch/Gotoh's O(mn) whenever the sequences are similar.
+A score-parameterized exact algorithm for gap-affine global alignment:
+O(n·s + s²) time, where `s` is the optimal alignment cost with fixed
+penalties. This is linear in length for bounded `s`, but remains quadratic
+when `s` grows proportionally to length, even at a low fixed error rate.
+Exactness requires compatible scoring/boundaries and no heuristic pruning;
+it does not guarantee the correct genomic mapping location.
 
-- **Time Complexity:** O(n·s + s²) — near-linear for similar sequences
+- **Time Complexity:** O(n·s + s²), plus input scanning at score zero
 - **Space Complexity:** O(s²) in this simplified version (O(s) in the
   BiWFA variant of the original library)
 - **Use Case:** Exact alignment of long, highly similar sequences (long
@@ -221,10 +227,11 @@ g++ -std=c++17 -o wfa cpp/wavefront_alignment.cpp
 
 Indexes only a sparse, deterministic subset of k-mers (minimizers), then
 chains matching seeds with a sparse O(N log N) dynamic program to find
-candidate alignment regions — the architecture behind minimap2, HISAT2, and
-GraphAligner.
+candidate alignment regions — the architecture behind minimap2, minigraph,
+GraphAligner and vg Giraffe.
 
-- **Time Complexity:** O(L) sketching, O(N log N) chaining (O(N²) in this
+- **Time Complexity:** O(L) sketching; chaining O(N log N) exact
+  (RMQ-based) or O(N·h) heuristic as in minimap2's default (O(N²) in this
   simplified reference implementation)
 - **Space Complexity:** O(L / w) for the minimizer index
 - **Use Case:** Long-read / whole-genome seeding, matching
@@ -367,16 +374,19 @@ g++ -std=c++17 -o bwt cpp/bwt_fm_index.cpp && ./bwt
 | Smith-Waterman (Affine) | DP | Slow | High | Optimal | Proteins, realistic gap modeling |
 | Hirschberg | DP (linear-space) | Slow | Low | Optimal | Long sequences, memory-limited global alignment |
 | Myers' Bit-Vector | Bit-parallel exact | Very Fast | Low | Exact | Short-to-medium patterns, edit distance |
-| Wavefront Alignment (WFA) | Near-linear exact | Fast* | Medium | Optimal | Long, similar sequences (*fast when score s is small) |
+| Wavefront Alignment (WFA) | Score-parameterized exact | Fast* | Medium | Optimal | Long, similar sequences (*fast when score s is small) |
 | Minimizer + Chaining | Sketching + heuristic | Very Fast | Low | Approximate | Long-read / whole-genome seeding |
 | Strobemers + MinHash | Sketching + heuristic | Very Fast | Low | Approximate | Indel-robust seeding, identity estimation |
 | Seed-and-Extend | Heuristic | Fast | Medium | Approximate | Medium sequences, BLAST-like |
 | BWT + FM-index | Exact | Very Fast | Low | Exact | Large genomes, read alignment |
 
 A full literature review with Strengths/Weaknesses/Opportunities/Threats for
-each of these plus ~35 additional algorithms (SIMD libraries, production
-aligners such as Bowtie/BWA-MEM2/minimap2/vg, GPU aligners, and hardware
-accelerators) is in [SWOT_ANALYSIS.md](SWOT_ANALYSIS.md).
+each of these plus ~50 additional algorithms and tools (SIMD libraries,
+production aligners such as Bowtie/BWA-MEM2/minibwa/strobealign/minimap2/vg,
+clinical pipelines such as DRAGEN/Parabricks, GPU aligners, and hardware
+accelerators) is in [SWOT_ANALYSIS.md](SWOT_ANALYSIS.md). Future research
+directions, a proposed adaptive aligner, and a clinical benchmarking
+protocol are in [RESEARCH_ROADMAP.md](RESEARCH_ROADMAP.md).
 
 ## Applications
 
@@ -388,7 +398,7 @@ accelerators) is in [SWOT_ANALYSIS.md](SWOT_ANALYSIS.md).
 ## References
 
 See [SWOT_ANALYSIS.md](SWOT_ANALYSIS.md) for the complete, DOI-linked
-bibliography (44 algorithms/papers). Core references for algorithms
+bibliography (60+ algorithms/papers, DOIs verified Sept. 2026). Core references for algorithms
 implemented in this repository:
 
 - Needleman, S. B., & Wunsch, C. D. (1970). A general method applicable to the search for similarities in the amino acid sequence of two proteins. https://doi.org/10.1016/0022-2836(70)90057-4

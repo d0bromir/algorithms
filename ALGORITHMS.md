@@ -244,7 +244,9 @@ high-throughput aligners (see [SWOT_ANALYSIS.md](SWOT_ANALYSIS.md), section B).
 ### Use Cases
 - Fast exact edit-distance computation for short-to-medium sequences
   (adapter/primer trimming, k-mer-length exact/near-exact matching)
-- The extension kernel inside bit-parallel hardware accelerators (GenASM)
+- The core of Edlib and of GraphAligner's bit-parallel graph DP (note:
+  the GenASM accelerator uses the related Bitap/Wu-Manber algorithm, not
+  this Myers recurrence)
 
 ### Reference
 Myers, G. (1999). A fast bit-vector algorithm for approximate string
@@ -259,7 +261,7 @@ brute-force Levenshtein distance over 2000+ random trials.
 ## 4. Wavefront Alignment (WFA)
 
 ### Overview
-WFA (Marco-Sola et al., 2021) is an exact, provably-optimal gap-affine
+WFA (Marco-Sola et al., 2021) is an exact (optimal) gap-affine
 alignment algorithm indexed by *score* rather than by sequence position.
 For each candidate score s = 0, 1, 2, ..., it tracks, per diagonal
 k = j - i, the furthest-reaching offset reachable with exactly that score —
@@ -268,10 +270,12 @@ extension"), so a wavefront snaps forward through long identical runs at no
 cost. Because scores are explored in increasing order, the algorithm
 terminates the instant a wavefront reaches the bottom-right corner,
 guaranteeing the score found is optimal. This gives O(n*s + s^2) time,
-where s is the optimal alignment score — near-linear whenever the sequences
-are similar (small s), a fundamentally different complexity regime from
-Needleman-Wunsch/Gotoh's O(mn), which is oblivious to how similar the
-inputs actually are.
+where s is the optimal alignment score. The running time is linear in n
+only while s stays bounded. At a fixed per-base error rate e, s grows as
+Θ(e·n), so the time is Θ(e·n²): a large constant-factor gain over
+Needleman-Wunsch/Gotoh's O(mn) for similar sequences, but still quadratic.
+WFA generalizes the unit-cost diagonal-transition algorithms of Ukkonen
+(1985), Myers (1986) and Landau-Vishkin (1989) to affine gaps.
 
 ### Algorithm Steps
 1. **Initialize** wavefront 0 at diagonal 0, extended greedily through any
@@ -297,7 +301,8 @@ inputs actually are.
   elsewhere in this repository)
 
 ### Time and Space Complexity
-- Time: O(n*s + s^2) — near-linear for similar sequences (small s)
+- Time: O(n*s + s^2) — linear in n for bounded s; Θ(e·n²) at a fixed
+  error rate e
 - Space: O(s^2) in this straightforward implementation (the "BiWFA"
   variant in WFA2-lib reduces this to O(s) via Hirschberg-style
   divide-and-conquer — see section 5's linear-space discussion)
@@ -339,8 +344,11 @@ ever passed to base-level DP, which is what lets tools like minimap2 (Li,
    reference index, in O(1) expected time per minimizer.
 3. **Co-linear Chaining** - find the highest-scoring subsequence of seeds
    with jointly increasing query and reference coordinates (bounded gap
-   between consecutive seeds), via sparse dynamic programming — O(N log N)
-   with a Fenwick-tree-backed implementation (as in minimap2 itself); this
+   between consecutive seeds), via sparse dynamic programming. Exact
+   chaining runs in O(N log N) with range-maximum-query structures
+   (Eppstein et al., 1992; Abouelhoda & Ohlebusch, 2005). minimap2's
+   default is a heuristic O(N·h) DP that looks back at most h (≈50)
+   predecessors, and recent versions add an RMQ-based mode. This
    repository's reference implementation uses an O(N^2) DP for clarity.
 
 ### Parameters
@@ -350,12 +358,14 @@ ever passed to base-level DP, which is what lets tools like minimap2 (Li,
 
 ### Time and Space Complexity
 - Sketching: O(L) for a sequence of length L
-- Chaining: O(N log N) for N seeds (production), O(N^2) (this repository's
-  reference implementation)
+- Chaining: O(N·h) heuristic (minimap2 default) or O(N log N) exact
+  (RMQ-based) for N seeds; O(N^2) in this repository's reference
+  implementation
 
 ### Use Cases
-- Long-read-to-genome and genome-to-genome seeding (minimap2, HISAT2,
-  GraphAligner all use variants of this architecture)
+- Long-read-to-genome and genome-to-genome seeding (minimap2, minigraph,
+  GraphAligner and vg Giraffe use variants of this architecture; HISAT2
+  is FM-index-based, not minimizer-based)
 - Any setting where full FM-index-based exact search is too memory-hungry
   or too slow for the read lengths/error rates involved
 
@@ -411,7 +421,8 @@ O(sketch-size) set comparison.
 
 ### Use Cases
 - Indel-robust short-read seeding (strobealign reports higher throughput
-  than BWA-MEM2/minimap2 at comparable-or-better accuracy for reads >= 150nt)
+  than BWA-MEM2 at comparable accuracy; with multi-context seeds (2026) it
+  also matches or exceeds minimap2's accuracy at ≤150 nt, per the authors)
 - Fast pre-filtering / identity triage before committing to full alignment
   (MashMap, Mash) — e.g., clustering long reads against huge reference
   databases
@@ -582,7 +593,7 @@ Are sequences very similar (>95% identity)?
 | SNP calling | BWT + FM-Index | Align millions of reads |
 | Sequences with indels | Smith-Waterman/NW (Affine), or Strobemers | Better models clustered gaps / survives indels in seeds |
 | Exact edit distance, short-medium patterns | Myers' Bit-Vector | O(n) per query, minimal memory |
-| Long, highly similar sequences | Wavefront Alignment (WFA) | Provably near-linear exact alignment |
+| Long, highly similar sequences | Wavefront Alignment (WFA) | Exact; runtime scales with score s, not m·n |
 | Fast similarity/identity triage | MinHash (strobemer_mapping.py) | O(sketch) comparison, no alignment needed |
 
 ### By Sequence Properties
@@ -622,7 +633,7 @@ classical DP.*
 ## References and Further Reading
 
 See [SWOT_ANALYSIS.md](SWOT_ANALYSIS.md) for the complete, DOI-linked
-bibliography of all 44 algorithms surveyed for this thesis (including SIMD
+bibliography of the 60+ algorithms and tools surveyed for this thesis (including SIMD
 libraries, production aligners, GPU/hardware accelerators, and theoretical
 lower bounds). Core references for the algorithms implemented in this
 repository:
