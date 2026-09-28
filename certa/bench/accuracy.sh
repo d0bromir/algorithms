@@ -15,6 +15,7 @@ n=$(( $(wc -l < "$reads") / 4 ))
 "$BIN/strobealign" -t "$T" --use-index "$idx/ref.fa" "$reads" > "$out/strobealign.sam" 2> "$out/strobealign.log"
 "$BIN/minimap2" -ax sr -t "$T" "$idx/minimap2.sr.mmi" "$reads" > "$out/minimap2.sam" 2> "$out/minimap2.log"
 "$BIN/bowtie2" -p "$T" -x "$idx/bowtie2" -U "$reads" > "$out/bowtie2.sam" 2> "$out/bowtie2.log"
-python3 "$here/compare_sam.py" --reads "$n" --certa "$out/certa.sam" \
+[[ -f "$idx/ref.fa.fai" ]] || "$BIN/samtools" faidx "$idx/ref.fa"
+python3 "$here/compare_sam.py" --reads "$n" --certa "$out/certa.sam" --fasta "$idx/ref.fa" \
   bwa-mem2="$out/bwa-mem2.sam" minibwa="$out/minibwa.sam" strobealign="$out/strobealign.sam" \
   minimap2="$out/minimap2.sam" bowtie2="$out/bowtie2.sam" | tee "$out/accuracy.txt"
