@@ -73,15 +73,21 @@ default. Use `CUDA_ARCHS=80 scripts/build.sh` for A100 only, or
 
 ### On galaxy and a2
 
+galaxy is ARM64 (aarch64, 128 cores) with 2× A100 80GB, CUDA and CMake.
+a2 is x86-64 (64 cores) with no GPU driver, no CMake and no zlib headers.
+There, `build.sh` compiles directly with g++, and gzip input is disabled.
+
 ```bash
 ssh galaxy   # or a2
 git clone https://github.com/d0bromir/algorithms.git && cd algorithms/certa
-scripts/build.sh
-scripts/demo.sh 50000000 2000000   # synthetic 50 Mbp genome, 2 M reads; CPU, plus GPU if present
+scripts/build.sh                   # on galaxy: CUDA_ARCHS=80 scripts/build.sh
+THREADS=64 DEVICE=1 scripts/demo.sh 50000000 2000000
 ```
 
 On a GPU host, `demo.sh` runs the CPU and GPU back-ends on the same reads
-and fails if their outputs differ.
+and fails if their outputs differ. On galaxy, `DEVICE=1` selects the second
+A100; check `nvidia-smi` first, because the GPUs are shared (ollama
+servers were resident on both in September 2026).
 
 ## Run on real data
 
@@ -115,7 +121,27 @@ Parameters:
 | `--cap` | 32 | max hits enumerated per part (≤ 32) |
 | `--batch` | 200 000 CPU / 1 000 000 GPU | reads per batch |
 
-## Results so far (local development machine only)
+## Results so far (synthetic data)
+
+### Lab hosts (September 2026)
+
+Synthetic 50 Mbp genome, 2 M × 150 bp reads, k = 2, same inputs on every host.
+
+| Host / back-end | Map step | End to end | Certified |
+|---|---|---|---|
+| a2: x86-64 CPU, 64 of 64 cores (GCC 13, built without CMake) | 2.28 M reads/s | 4.3 s | 94.83 % |
+| galaxy: ARM64 CPU, 64 of 128 cores (GCC 15) | 3.38 M reads/s | 3.5 s | 94.83 % |
+| galaxy: NVIDIA A100 80GB PCIe (CUDA 13.1, sm_80) | 8.85 M reads/s | 3.2 s | 94.83 % |
+
+- **Identical output on every back-end.** The SAM and uncertified-FASTQ
+  checksums match across a2 (x86-64), galaxy's ARM64 CPU and the A100.
+- **The certificate test passes on both hosts.**
+- **Parsing now dominates.** End-to-end time is dominated by
+  single-threaded FASTQ parsing and encoding (~2.3–2.5 s of the totals
+  above), not by mapping. A parallel parser is therefore the next
+  speed-up (Amdahl's law).
+
+### Development machine
 
 | Setting | Result |
 |---|---|
@@ -127,11 +153,11 @@ Parameters:
 | GPU, RTX 3050 Laptop (sm_86) | 1.57 M reads/s (map step, including transfers); output byte-identical to CPU |
 | Kernel resources (sm_80) | 48 registers, 27 KB stack/thread (≈6 GB local-memory reservation on an A100) |
 
-These are synthetic-data numbers on a laptop. They show that the mechanics
-work and that CPU and GPU give identical output. They are **not**
-evidence about real genomes, where repeat content, error profiles and
-the variant spectrum differ. Not yet run: galaxy/a2, ARM64 hardware (CI
-covers it via GitHub's ARM runners), A100, GRCh38, real FASTQ.
+These are synthetic-data numbers. They show that the mechanics work, that
+the certificate holds, and that all back-ends give identical output. They
+are **not** evidence about real genomes, where repeat content, error
+profiles and the variant spectrum differ. Not yet run: GRCh38, real
+NovaSeq X FASTQ (the Aim 1 measurement).
 
 ## Layout
 
@@ -159,6 +185,8 @@ scripts/               build.sh, demo.sh
   path are the obvious optimizations.
 - **Clusters wider than 48 diagonals** (long tandem repeats) are left
   uncertified instead of being split.
+- **FASTQ input is parsed on one thread**, which is now the end-to-end
+  bottleneck. Parse (and gunzip) in parallel and overlap it with mapping.
 - **Fallback merge:** combine the certified SAM with the fallback
   aligner's output (e.g., `samtools merge` + sort) in one fused pipeline
   (roadmap §2.6).

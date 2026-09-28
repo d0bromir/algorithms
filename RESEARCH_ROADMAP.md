@@ -370,8 +370,11 @@ ARM64) and CUDA (A100 target), with one shared per-read core.
   and determinism. The GPU output is byte-identical to the CPU output.
 - **Synthetic data:** on a 20 Mbp genome with repeats and 150 bp reads,
   95.7 % of reads are certified at k = 2.
-- **Next step:** run the same measurement on real NovaSeq X GIAB data on
-  the lab hosts (galaxy, a2) to produce Aim 1's go/no-go number.
+- **Lab hosts:** the prototype runs on galaxy (ARM64 CPU and A100) and
+  a2 (x86-64). Outputs are byte-identical across all three back-ends; on
+  synthetic data the map step reaches 8.85 M reads/s on the A100.
+- **Next step:** run the same measurement on real NovaSeq X GIAB data to
+  produce Aim 1's go/no-go number.
 
 ---
 
