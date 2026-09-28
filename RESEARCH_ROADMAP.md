@@ -90,9 +90,9 @@ wrong or incomplete, and were rewritten:
 
 **Verification performed.** All 79 DOIs in `SWOT_ANALYSIS.md` were
 resolved against Crossref/doi.org (Sept. 2026), and title, first author
-and year were checked. The Python test suite passes (run with
-`PYTHONIOENCODING=utf-8` on Windows, because the test script prints
-✓/✗ symbols that fail on the cp1252 console).
+and year were checked. The Python test suite passes. (It used to
+crash on Windows cp1252 consoles when printing ✓/✗; it now switches
+stdout to UTF-8.)
 
 ---
 
@@ -359,6 +359,19 @@ Key points:
 | **2. Short-read engine** | S0–S2 + fused sort/markdup; certificate proofs; differential tests | Non-inferior accuracy on GIAB HG002 (pilot) |
 | **3. Long-read engine** | L0–L2 with a WFA gap router; routing lower-bound proof | ≥1.5x faster than minimap2 `lr:hq` on the pilot at non-inferior accuracy |
 | **4. Benchmark** | Pre-registered protocol (Part 4), full run, open data and containers | Pre-registered hypotheses tested as stated, whatever the outcome |
+
+### 3.9 Prototype status (September 2026)
+
+Tiers S0/S1 are prototyped in [`certa/`](certa/README.md) for CPU (x86-64,
+ARM64) and CUDA (A100 target), with one shared per-read core.
+
+- **Correctness:** a brute-force oracle test (Sellers DP over the whole
+  reference) passes for soundness, optimality, losslessness, uniqueness
+  and determinism. The GPU output is byte-identical to the CPU output.
+- **Synthetic data:** on a 20 Mbp genome with repeats and 150 bp reads,
+  95.7 % of reads are certified at k = 2.
+- **Next step:** run the same measurement on real NovaSeq X GIAB data on
+  the lab hosts (galaxy, a2) to produce Aim 1's go/no-go number.
 
 ---
 

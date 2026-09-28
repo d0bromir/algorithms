@@ -386,7 +386,9 @@ production aligners such as Bowtie/BWA-MEM2/minibwa/strobealign/minimap2/vg,
 clinical pipelines such as DRAGEN/Parabricks, GPU aligners, and hardware
 accelerators) is in [SWOT_ANALYSIS.md](SWOT_ANALYSIS.md). Future research
 directions, a proposed adaptive aligner, and a clinical benchmarking
-protocol are in [RESEARCH_ROADMAP.md](RESEARCH_ROADMAP.md).
+protocol are in [RESEARCH_ROADMAP.md](RESEARCH_ROADMAP.md). A prototype of
+that aligner's certified short-read fast path (C++17 for x86-64/ARM64, plus
+CUDA) is in [certa/](certa/README.md).
 
 ## Applications
 

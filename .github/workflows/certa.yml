@@ -1,0 +1,42 @@
+name: certa
+
+on:
+  push:
+    paths: ["certa/**", ".github/workflows/certa.yml"]
+  pull_request:
+    paths: ["certa/**", ".github/workflows/certa.yml"]
+
+jobs:
+  cpu:
+    # Native x86-64 and ARM64 (Neoverse) runners: build, brute-force
+    # certificate test over several seeds, and a small end-to-end demo.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake zlib1g-dev
+      - name: Build and test
+        run: CERTA_CUDA=OFF BUILD_DIR=certa/build bash certa/scripts/build.sh
+      - name: Certificate test, more seeds
+        run: for s in 11 12 13 14 15; do certa/build/test_certa $s; done
+      - name: End-to-end demo
+        run: BUILD_DIR=certa/build WORK=demo bash certa/scripts/demo.sh 5000000 100000
+
+  cuda-compile:
+    # No GPU on hosted runners: this only checks that the CUDA back-end
+    # compiles for A100 (sm_80) and Ampere consumer GPUs (sm_86).
+    runs-on: ubuntu-24.04
+    container: nvidia/cuda:12.4.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: apt-get update && apt-get install -y cmake g++ zlib1g-dev
+      - name: Build
+        run: |
+          cmake -S certa -B build -DCERTA_CUDA=ON -DCERTA_CUDA_ARCHS="80;86" -DCERTA_NATIVE=OFF
+          cmake --build build -j"$(nproc)"
+          ./build/certa 2>&1 | grep "GPU support compiled in: yes"

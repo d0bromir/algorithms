@@ -7,6 +7,10 @@ These tests verify that the basic functionality works correctly.
 import sys
 import os
 
+# The ✓/✗ markers need UTF-8; Windows consoles default to cp1252.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'python'))
 
