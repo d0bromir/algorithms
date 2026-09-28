@@ -28,8 +28,9 @@ struct FastqRecord {
   std::string name, seq, qual;  // name without '@' and without comment
 };
 
-// Reads up to `max_records` records; returns the number read.
+// Reads up to `max_records` records; returns the number read. Line splitting
+// is serial; building the records is spread over `threads` threads.
 size_t read_fastq_batch(LineReader& in, std::vector<FastqRecord>& out,
-                        size_t max_records);
+                        size_t max_records, int threads = 1);
 
 }  // namespace certa

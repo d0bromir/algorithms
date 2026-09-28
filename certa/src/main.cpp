@@ -3,7 +3,7 @@
 //   certa index ref.fa -o ref.cidx [-q 22] [-s 8] [-t threads]
 //   certa map ref.cidx reads.fq[.gz] [-k 2] [--cap 32] [-t threads]
 //             [--gpu [--device 0]] [-o out.sam] [-u uncertified.fq]
-//             [--stats stats.json] [--batch N]
+//             [--stats stats.json] [--batch N] [--io-threads N]
 //
 // Certified reads are written to SAM. All other reads are written unchanged
 // to the uncertified FASTQ, for a full aligner (minibwa, BWA-MEM2, ...).
@@ -173,7 +173,7 @@ int cmd_map(const Args& a) {
   if (a.pos.size() != 2)
     throw std::runtime_error(
         "usage: certa map ref.cidx reads.fq[.gz] [-k 2] [--cap 32] [-t N] [--gpu] "
-        "[--device 0] [-o out.sam] [-u uncertified.fq] [--stats s.json] [--batch N]");
+        "[--device 0] [-o out.sam] [-u uncertified.fq] [--stats s.json] [--batch N] [--io-threads N]");
   Params p;
   p.k = a.geti("-k", 2);
   p.cap = a.geti("--cap", 32);
@@ -181,6 +181,8 @@ int cmd_map(const Args& a) {
   if (p.cap < 1 || p.cap > CAP_MAX) throw std::runtime_error("--cap must be in [1, 32]");
   const bool gpu = a.has("--gpu");
   const int threads = a.geti("-t", default_threads());
+  // Threads that parse and encode the next batch while the current one maps.
+  const int io_threads = a.geti("--io-threads", std::max(1, std::min(16, threads / 4)));
   const size_t batch_size = static_cast<size_t>(a.geti("--batch", gpu ? 1000000 : 200000));
 
   auto t_all = Clock::now();
@@ -224,8 +226,8 @@ int cmd_map(const Args& a) {
   auto load = [&](int slot) {
     try {
       auto t = Clock::now();
-      read_fastq_batch(in, recs_buf[slot], batch_size);
-      encode_batch(recs_buf[slot], batch_buf[slot]);
+      read_fastq_batch(in, recs_buf[slot], batch_size, io_threads);
+      encode_batch(recs_buf[slot], batch_buf[slot], io_threads);
       t_io += secs(t);
     } catch (...) {
       recs_buf[slot].clear();
@@ -339,7 +341,7 @@ int main(int argc, char** argv) {
                    "certa 0.1 - certified short-read fast path (prototype)\n"
                    "  certa index ref.fa -o ref.cidx [-q 22] [-s 8] [-t N]\n"
                    "  certa map ref.cidx reads.fq[.gz] [-k 2] [--cap 32] [-t N] [--gpu] [--device 0]\n"
-                   "            [-o out.sam] [-u uncertified.fq] [--stats s.json] [--batch N]\n"
+                   "            [-o out.sam] [-u uncertified.fq] [--stats s.json] [--batch N] [--io-threads N]\n"
                    "GPU support compiled in: %s\n",
                    GpuMapper::compiled_in() ? "yes" : "no");
       return 1;
