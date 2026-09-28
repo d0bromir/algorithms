@@ -14,6 +14,9 @@ class LineReader {
   LineReader& operator=(const LineReader&) = delete;
   // Reads one line without the trailing newline; false at end of file.
   bool getline(std::string& line);
+  // Appends one line plus '\n' to `out`; returns the line length, or -1 at
+  // end of file.
+  long append_line(std::string& out);
 
  private:
   bool fill();

@@ -53,6 +53,29 @@ bool LineReader::fill() {
   return n > 0;
 }
 
+long LineReader::append_line(std::string& out) {
+  for (;;) {
+    char* start = buf_.data() + beg_;
+    char* nl = static_cast<char*>(std::memchr(start, '\n', end_ - beg_));
+    size_t len;
+    if (nl) {
+      len = static_cast<size_t>(nl - start);
+      beg_ += len + 1;
+    } else if (!fill()) {  // fill() may move or reallocate the buffer
+      if (beg_ == end_) return -1;
+      start = buf_.data() + beg_;
+      len = end_ - beg_;
+      beg_ = end_;
+    } else {
+      continue;
+    }
+    if (len > 0 && start[len - 1] == '\r') --len;
+    out.append(start, len);
+    out.push_back('\n');
+    return static_cast<long>(len);
+  }
+}
+
 bool LineReader::getline(std::string& line) {
   for (;;) {
     char* start = buf_.data() + beg_;
@@ -101,16 +124,19 @@ void parse_record(const char* p, const char* end, FastqRecord& r) {
 size_t read_fastq_batch(LineReader& in, std::vector<FastqRecord>& out,
                         size_t max_records, int threads) {
   // Serial part: slice whole records into one block (no per-record allocation).
-  std::string block, line;
+  std::string block;
   std::vector<size_t> starts;
-  block.reserve(max_records * 64);
+  block.reserve(max_records * 400);  // ~2 x 150 bp + name, typical short reads
+  starts.reserve(max_records + 1);
   while (starts.size() < max_records) {
     size_t start = block.size();
     int n = 0;
-    while (n < 4 && in.getline(line)) {
-      if (n == 0 && line.empty()) continue;  // tolerate blank lines between records
-      block.append(line);
-      block.push_back('\n');
+    long len;
+    while (n < 4 && (len = in.append_line(block)) >= 0) {
+      if (n == 0 && len == 0) {  // tolerate blank lines between records
+        block.resize(start);
+        continue;
+      }
       ++n;
     }
     if (n == 0) break;

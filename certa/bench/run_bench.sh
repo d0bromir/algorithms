@@ -10,8 +10,8 @@ set -euo pipefail
 idx="$1"; reads="$2"; out="$3"
 T="${THREADS:-64}"; REPS="${REPS:-3}"; FALLBACK="${FALLBACK:-minibwa}"
 BIN="${BIN:-$HOME/micromamba/envs/certa-bench/bin}"
-TOOLS="${TOOLS:-certa certa+fallback minibwa strobealign bwa-mem2 minimap2 bowtie2}"
-[[ -n "${GPU_DEVICE:-}" ]] && TOOLS="$TOOLS certa-gpu certa-gpu+fallback"
+TOOLS="${TOOLS:-certa certa+fallback certa-pipe minibwa strobealign bwa-mem2 minimap2 bowtie2}"
+[[ -n "${GPU_DEVICE:-}" ]] && TOOLS="$TOOLS certa-gpu certa-gpu+fallback certa-gpu-pipe"
 mkdir -p "$out"
 tsv="$out/timings.tsv"
 [[ -s "$tsv" ]] || printf "host\ttool\trep\treads\twall_s\tuser_s\tsys_s\tmax_rss_kb\n" > "$tsv"
@@ -21,6 +21,10 @@ cmd_for() {  # tool, reads file -> command array in CMD
   case "$1" in
     certa)       CMD=("$CERTA" map "$idx/grch38.cidx" "$2" -t "$T" -o /dev/null -u "$out/uncertified.fq" --stats "$out/certa.stats.json") ;;
     certa-gpu)   CMD=("$CERTA" map "$idx/grch38.cidx" "$2" -t "$T" --gpu --device "$GPU_DEVICE" -o /dev/null -u "$out/uncertified.fq" --stats "$out/certa-gpu.stats.json") ;;
+    # Concurrent: uncertified reads stream through a pipe into the fallback,
+    # which maps them while CERTA is still certifying. CPU: T/2 + T/2 threads.
+    certa-pipe)  CMD=(bash -c "set -o pipefail; '$CERTA' map '$idx/grch38.cidx' '$2' -t $((T / 2)) -o /dev/null -u /dev/stdout | '$BIN/$FALLBACK' map -t $((T / 2)) '$idx/$FALLBACK' /dev/stdin") ;;
+    certa-gpu-pipe) CMD=(bash -c "set -o pipefail; '$CERTA' map '$idx/grch38.cidx' '$2' -t $T --gpu --device $GPU_DEVICE -o /dev/null -u /dev/stdout | '$BIN/$FALLBACK' map -t $T '$idx/$FALLBACK' /dev/stdin") ;;
     minibwa)     CMD=("$BIN/minibwa" map -t "$T" "$idx/minibwa" "$2") ;;
     strobealign) CMD=("$BIN/strobealign" -t "$T" --use-index "$idx/ref.fa" "$2") ;;
     bwa-mem2)    CMD=("$BIN/bwa-mem2" mem -t "$T" "$idx/bwa-mem2" "$2") ;;
