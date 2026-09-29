@@ -1,7 +1,7 @@
 // certa: prototype of the certified short-read fast path.
 //
 //   certa index ref.fa -o ref.cidx [-q 22] [-s 8] [-t threads]
-//   certa map ref.cidx reads.fq[.gz] [-k 2] [--cap 32] [-t threads]
+//   certa map ref.cidx reads.fq[.gz] [-k 4] [--budget 256] [-t threads]
 //             [--gpu [--device 0]] [-o out.sam] [-u uncertified.fq]
 //             [--stats stats.json] [--batch N] [--io-threads N]
 //
@@ -37,13 +37,13 @@ const char* const kReasonNames[kNumReasons] = {
     "cluster_too_wide", "cross_contig"};
 
 struct Stats {
-  uint64_t reads = 0, bases = 0, certified = 0, s0 = 0, s1 = 0, ties = 0;
+  uint64_t reads = 0, bases = 0, certified = 0, s0 = 0, s1 = 0, sr = 0, ties = 0;
   uint64_t reason[kNumReasons] = {};
   uint64_t by_radius[KMAX + 2] = {};  // certified reads per radius R
   uint64_t by_d1[KMAX + 1] = {};
   void add(const Stats& o) {
     reads += o.reads; bases += o.bases; certified += o.certified;
-    s0 += o.s0; s1 += o.s1; ties += o.ties;
+    s0 += o.s0; s1 += o.s1; sr += o.sr; ties += o.ties;
     for (int i = 0; i < kNumReasons; ++i) reason[i] += o.reason[i];
     for (int i = 0; i < KMAX + 2; ++i) by_radius[i] += o.by_radius[i];
     for (int i = 0; i < KMAX + 1; ++i) by_d1[i] += o.by_d1[i];
@@ -111,8 +111,9 @@ int emit(const Result& r0, const FastqRecord& rec, const Reference& ref,
   } else {
     sam += rec.seq; sam += '\t'; sam += rec.qual;
   }
-  std::snprintf(buf, sizeof buf, "\tNM:i:%d\tXT:Z:S%d\tXR:i:%d\tXD:i:%d\tXB:i:%d\n",
-                r.d1, r.tier, r.radius, r.d2, r.n_best);
+  static const char* const kTierNames[] = {"S0", "S1", "SR"};
+  std::snprintf(buf, sizeof buf, "\tNM:i:%d\tXT:Z:%s\tXR:i:%d\tXD:i:%d\tXB:i:%d\n",
+                r.d1, kTierNames[r.tier], r.radius, r.d2, r.n_best);
   sam += buf;
   return kOk;
 }
@@ -172,13 +173,13 @@ int cmd_index(const Args& a) {
 int cmd_map(const Args& a) {
   if (a.pos.size() != 2)
     throw std::runtime_error(
-        "usage: certa map ref.cidx reads.fq[.gz] [-k 2] [--cap 32] [-t N] [--gpu] "
+        "usage: certa map ref.cidx reads.fq[.gz] [-k 4] [--budget 256] [-t N] [--gpu] "
         "[--device 0] [-o out.sam] [-u uncertified.fq] [--stats s.json] [--batch N] [--io-threads N]");
   Params p;
-  p.k = a.geti("-k", 2);
-  p.cap = a.geti("--cap", 32);
+  p.k = a.geti("-k", 4);
+  p.budget = a.geti("--budget", a.geti("--cap", 256));  // --cap: the v0.1 name
   if (p.k < 0 || p.k > KMAX) throw std::runtime_error("-k must be in [0, 5]");
-  if (p.cap < 1 || p.cap > CAP_MAX) throw std::runtime_error("--cap must be in [1, 32]");
+  if (p.budget < 1 || p.budget > BUDGET_MAX) throw std::runtime_error("--budget must be in [1, 256]");
   const bool gpu = a.has("--gpu");
   const int threads = a.geti("-t", default_threads());
   // Threads that parse and encode the next batch while the current one maps.
@@ -192,8 +193,8 @@ int cmd_map(const Args& a) {
   const double t_load = secs(t_all);
   std::fprintf(stderr, "[map] index %s: q=%d s=%d, %llu entries, loaded in %.1f s\n",
                a.pos[0].c_str(), ix.q, ix.s, static_cast<unsigned long long>(ix.keys.size()), t_load);
-  std::fprintf(stderr, "[map] k=%d cap=%d: reads shorter than %d bases cannot be certified\n",
-               p.k, p.cap, min_read_length(p.k, ix.q, ix.s));
+  std::fprintf(stderr, "[map] k=%d budget=%d: parts are >= %d bases; radius R needs R+1 parts\n",
+               p.k, p.budget, min_read_length(ix.q, ix.s));
   const IndexView view = ix.view(ref);
 
   std::unique_ptr<GpuMapper> gm;
@@ -213,8 +214,8 @@ int cmd_map(const Args& a) {
   for (size_t c = 0; c < ref.names.size(); ++c)
     std::fprintf(sam, "@SQ\tSN:%s\tLN:%llu\n", ref.names[c].c_str(),
                  static_cast<unsigned long long>(ref.lengths[c]));
-  std::fprintf(sam, "@PG\tID:certa\tPN:certa\tVN:0.1\tCL:certa map -k %d --cap %d%s\n",
-               p.k, p.cap, gpu ? " --gpu" : "");
+  std::fprintf(sam, "@PG\tID:certa\tPN:certa\tVN:0.4\tCL:certa map -k %d --budget %d%s\n",
+               p.k, p.budget, gpu ? " --gpu" : "");
 
   // Double buffering: a reader thread parses and encodes batch n+1 while
   // batch n is mapped and written, so input parsing overlaps with mapping.
@@ -264,9 +265,9 @@ int cmd_map(const Args& a) {
           ++s.reason[reason];
           if (reason == kOk) {
             ++s.certified;
-            ++(res[i].tier == 0 ? s.s0 : s.s1);
+            ++(res[i].tier == kTierS0 ? s.s0 : res[i].tier == kTierS1 ? s.s1 : s.sr);
             s.ties += res[i].n_best > 1;
-            ++s.by_radius[res[i].radius];
+            if (res[i].radius >= 0) ++s.by_radius[res[i].radius];
             ++s.by_d1[res[i].d1];
           }
         }
@@ -291,10 +292,10 @@ int cmd_map(const Args& a) {
 
   auto pct = [&](uint64_t x) { return total.reads ? 100.0 * x / total.reads : 0.0; };
   std::fprintf(stderr,
-               "[map] %llu reads: certified %.2f%% (S0 exact %.2f%%, S1 <=k %.2f%%), "
-               "ties %.2f%%\n",
+               "[map] %llu reads: certified %.2f%% (S0 exact %.2f%%, S1 <=R edits %.2f%%, "
+               "SR repeat %.2f%%), ties %.2f%%\n",
                static_cast<unsigned long long>(total.reads), pct(total.certified),
-               pct(total.s0), pct(total.s1), pct(total.ties));
+               pct(total.s0), pct(total.s1), pct(total.sr), pct(total.ties));
   for (int i = 1; i < kNumReasons; ++i)
     std::fprintf(stderr, "[map]   uncertified/%s: %.2f%%\n", kReasonNames[i], pct(total.reason[i]));
   std::fprintf(stderr,
@@ -309,11 +310,12 @@ int cmd_map(const Args& a) {
     if (!js) throw std::runtime_error("cannot open stats output");
     std::fprintf(js, "{\n  \"mode\": \"%s\",\n  \"device\": \"%s\",\n  \"threads\": %d,\n",
                  gpu ? "gpu" : "cpu", gm ? gm->device_name().c_str() : "", threads);
-    std::fprintf(js, "  \"k\": %d, \"cap\": %d, \"q\": %d, \"s\": %d,\n", p.k, p.cap, ix.q, ix.s);
-    std::fprintf(js, "  \"reads\": %llu, \"bases\": %llu, \"certified\": %llu, \"s0\": %llu, \"s1\": %llu, \"ties\": %llu,\n",
+    std::fprintf(js, "  \"k\": %d, \"budget\": %d, \"q\": %d, \"s\": %d,\n", p.k, p.budget, ix.q, ix.s);
+    std::fprintf(js, "  \"reads\": %llu, \"bases\": %llu, \"certified\": %llu, \"s0\": %llu, \"s1\": %llu, \"sr\": %llu, \"ties\": %llu,\n",
                  static_cast<unsigned long long>(total.reads), static_cast<unsigned long long>(total.bases),
                  static_cast<unsigned long long>(total.certified), static_cast<unsigned long long>(total.s0),
-                 static_cast<unsigned long long>(total.s1), static_cast<unsigned long long>(total.ties));
+                 static_cast<unsigned long long>(total.s1), static_cast<unsigned long long>(total.sr),
+                 static_cast<unsigned long long>(total.ties));
     std::fprintf(js, "  \"uncertified\": {");
     for (int i = 1; i < kNumReasons; ++i)
       std::fprintf(js, "%s\"%s\": %llu", i > 1 ? ", " : "", kReasonNames[i],
@@ -340,7 +342,7 @@ int main(int argc, char** argv) {
       std::fprintf(stderr,
                    "certa 0.1 - certified short-read fast path (prototype)\n"
                    "  certa index ref.fa -o ref.cidx [-q 22] [-s 8] [-t N]\n"
-                   "  certa map ref.cidx reads.fq[.gz] [-k 2] [--cap 32] [-t N] [--gpu] [--device 0]\n"
+                   "  certa map ref.cidx reads.fq[.gz] [-k 4] [--budget 256] [-t N] [--gpu] [--device 0]\n"
                    "            [-o out.sam] [-u uncertified.fq] [--stats s.json] [--batch N] [--io-threads N]\n"
                    "GPU support compiled in: %s\n",
                    GpuMapper::compiled_in() ? "yes" : "no");

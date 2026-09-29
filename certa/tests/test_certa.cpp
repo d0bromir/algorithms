@@ -102,6 +102,17 @@ Reference make_reference(std::mt19937_64& g) {
   for (int r = 0; r < 30; ++r)
     std::copy(unit.begin(), unit.end(), c1.begin() + 75000 + r * 37);
   std::fill(c1.begin() + 60000, c1.begin() + 60100, 4);  // N run
+  // High-copy exact repeat (Alu-like): 40 copies in chr1, 10 in chr2, with a
+  // few diverged copies, so budgets overflow and tier SR is exercised.
+  std::vector<uint8_t> elem = random_seq(g, 300);
+  for (int r = 0; r < 40; ++r) {
+    std::vector<uint8_t> e = elem;
+    if (r % 7 == 3) mutate(g, e, 2);
+    e.resize(300, 0);  // a deletion may have shortened it
+    std::copy(e.begin(), e.end(), c1.begin() + 60200 + r * 350);
+  }
+  for (int r = 0; r < 10; ++r)
+    std::copy(elem.begin(), elem.end(), c2.begin() + 20000 + r * 350);
   Reference ref;
   ref.seq.assign(kContigPad, 4);
   const std::vector<uint8_t>* cs[2] = {&c1, &c2};
@@ -147,7 +158,7 @@ int main(int argc, char** argv) {
   // tandem repeat and near the N run; with 0..7 edits; plus random reads.
   struct Sim { std::vector<uint8_t> seq; int edits; };
   std::vector<Sim> reads;
-  const int64_t anchors[] = {-1, -1, -1, 10000, 30000, 50000, 75000, 59900};
+  const int64_t anchors[] = {-1, -1, -1, 10000, 30000, 50000, 75000, 59900, 60250, 66000};
   for (int n = 0; n < 480; ++n) {
     int L = (n % 4 == 0) ? 110 : 150;
     std::vector<uint8_t> s;
@@ -157,7 +168,7 @@ int main(int argc, char** argv) {
       edits = -1;
     } else {
       int c = static_cast<int>(g() % 2);
-      int64_t a = anchors[g() % 8];
+      int64_t a = anchors[g() % 10];
       int64_t start = a >= 0 && c == 0 ? a + static_cast<int64_t>(g() % 1500)
                                        : static_cast<int64_t>(g() % (ref.lengths[c] - L - 20));
       start += static_cast<int64_t>(ref.offsets[c]);
@@ -186,12 +197,12 @@ int main(int argc, char** argv) {
     batch.hashes.push_back(i * 0x9E3779B97F4A7C15ULL);
   }
 
-  const Params configs[] = {{2, 32}, {3, 32}, {5, 32}, {3, 4}, {2, 1}};
+  const Params configs[] = {{2, 256}, {3, 256}, {5, 256}, {4, 64}, {4, 16}, {3, 4}, {2, 1}};
   for (const Params& p : configs) {
     std::vector<Result> res, res1;
     map_cpu(view, p, batch, res, 4);
     map_cpu(view, p, batch, res1, 1);
-    int certified = 0, easy = 0, easy_cert = 0;
+    int certified = 0, easy = 0, easy_cert = 0, sr = 0;
     int reasons[kNumReasons] = {};
     for (size_t i = 0; i < reads.size(); ++i) {
       const Result& r = res[i];
@@ -204,14 +215,21 @@ int main(int argc, char** argv) {
         easy_cert += r.certified;
       }
       if (r.reason == kNotFound)
-        CHECK(omin > r.radius, "k=%d cap=%d read %zu: lossless violated, oracle %d <= R %d",
-              p.k, p.cap, i, omin, r.radius);
+        CHECK(omin > r.radius, "k=%d budget=%d read %zu: lossless violated, oracle %d <= R %d",
+              p.k, p.budget, i, omin, r.radius);
       if (!r.certified) continue;
       ++certified;
       CHECK(rescore(view, r, reads[i].seq) == r.d1,
             "k=%d read %zu: CIGAR rescores to %d, reported %d", p.k, i,
             rescore(view, r, reads[i].seq), r.d1);
-      CHECK(r.d1 == omin, "k=%d cap=%d read %zu: d1 %d != oracle %d", p.k, p.cap, i, r.d1, omin);
+      CHECK(r.d1 == omin, "k=%d budget=%d read %zu: d1 %d != oracle %d", p.k, p.budget, i, r.d1, omin);
+      if (r.tier == kTierSR) {  // must be backed by >= 2 distinct exact loci
+        ++sr;
+        int exact = 0;
+        for (auto& h : truth[i]) exact += h.dist == 0;
+        CHECK(exact >= 2, "k=%d budget=%d read %zu: SR claims a repeat, oracle has %d exact loci",
+              p.k, p.budget, i, exact);
+      }
       if (r.n_best == 1 && r.d2 < 0) {
         int64_t span = 0;
         for (int c = 0; c < r.n_cigar; ++c)
@@ -226,9 +244,9 @@ int main(int argc, char** argv) {
       }
     }
     std::fprintf(stderr,
-                 "k=%d cap=%-2d certified %3d/%zu; reads with <=k edits certified %d/%d; "
+                 "k=%d budget=%-3d certified %3d/%zu (SR %d); reads with <=k edits certified %d/%d; "
                  "uncertified: length %d, radius<0 %d, not-found %d, wide %d\n",
-                 p.k, p.cap, certified, reads.size(), easy_cert, easy, reasons[kBadLength],
+                 p.k, p.budget, certified, reads.size(), sr, easy_cert, easy, reasons[kBadLength],
                  reasons[kRadiusNegative], reasons[kNotFound], reasons[kClusterTooWide]);
   }
   if (failures) {
