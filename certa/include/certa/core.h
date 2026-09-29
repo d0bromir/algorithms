@@ -77,6 +77,7 @@ struct IndexView {
 struct Params {
   int k;       // maximum certified radius sought (at most k + 1 parts used)
   int budget;  // max hits enumerated per strand
+  int reverse_order = 0;  // testing only: verify clusters least-supported first
 };
 
 struct Result {
@@ -100,7 +101,8 @@ struct Cluster {
   int64_t lo;       // lowest diagonal (reference start) in band
   uint8_t width;    // number of diagonals in band
   uint8_t strand;
-  int8_t dist;      // banded edit distance, or > radius if none within radius
+  int8_t dist;      // exact distance, or radius + 1 if it cannot beat the best two
+  uint16_t beg, end;  // member diagonals: ws.cand[strand][beg, end)
 };
 
 struct Workspace {
@@ -111,6 +113,7 @@ struct Workspace {
   int64_t cand[2][MAX_CAND];
   int ncand[2];
   Cluster clusters[MAX_CLUST];
+  uint16_t corder[MAX_CLUST];  // evaluation order of clusters
   int row_a[BMAX], row_b[BMAX];
   uint8_t tb[(LMAX + 1) * BMAX];
 };
@@ -384,7 +387,7 @@ CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
   enumerate_parts(ix, L, P, m, ws, 0);
   enumerate_parts(ix, L, P, m, ws, 1);
 
-  // Cluster sorted diagonals whose bands overlap, then verify each cluster.
+  // Cluster sorted diagonals whose bands overlap.
   const int pad = 2 * R;  // indels shift the start diagonal by <= R
   int nclust = 0;
   for (int st = 0; st < 2; ++st) {
@@ -402,29 +405,65 @@ CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
       cl.lo = dmin - pad;
       cl.width = (uint8_t)width;
       cl.strand = (uint8_t)st;
-      int d = band_distance(ix, ws.seq[st], L, cl.lo, cl.width, R, ws.row_a,
-                            ws.row_b);
-      cl.dist = (int8_t)(d > R ? R + 1 : d);
+      cl.beg = (uint16_t)i;
+      cl.end = (uint16_t)j;
       i = j;
     }
   }
   r.n_clusters = (uint16_t)nclust;
 
-  int d1 = R + 1, n_best = 0;
-  for (int x = 0; x < nclust; ++x) {
-    if (ws.clusters[x].dist < d1) { d1 = ws.clusters[x].dist; n_best = 1; }
-    else if (ws.clusters[x].dist == d1) ++n_best;
-  }
-  if (d1 > R) { r.reason = kNotFound; return; }
-  int d2 = -1;
-  if (n_best > 1) {
-    d2 = d1;
-  } else {
-    for (int x = 0; x < nclust; ++x) {
-      int d = ws.clusters[x].dist;
-      if (d > d1 && d <= R && (d2 < 0 || d < d2)) d2 = d;
+  // Verify clusters, best-supported first, tracking the two smallest
+  // distances b1 <= b2. Only a distance below b2 can change (b1, b2), so each
+  // cluster is evaluated with limit b2 - 1: d1 = b1 is exact, and when b1 < b2
+  // the second-best distance b2 (<= R) is exact too. Once two loci tie at b1,
+  // the rest are skipped and n_best becomes a lower bound (MAPQ 0 either way).
+  // A Hamming check at the member diagonals gives an upper bound first, so
+  // exact matches never reach the DP.
+  for (int x = 0; x < nclust; ++x) ws.corder[x] = (uint16_t)x;
+  for (int x = 1; x < nclust; ++x) {  // stable sort by member count, descending
+    uint16_t v = ws.corder[x];
+    int sv = ws.clusters[v].end - ws.clusters[v].beg, y = x - 1;
+    while (y >= 0 && ws.clusters[ws.corder[y]].end - ws.clusters[ws.corder[y]].beg < sv) {
+      ws.corder[y + 1] = ws.corder[y];
+      --y;
     }
+    ws.corder[y + 1] = v;
   }
+  if (p.reverse_order)  // results must not depend on the order (tested)
+    for (int x = 0, y = nclust - 1; x < y; ++x, --y) {
+      uint16_t t = ws.corder[x];
+      ws.corder[x] = ws.corder[y];
+      ws.corder[y] = t;
+    }
+  int b1 = R + 1, b2 = R + 1;
+  for (int x = 0; x < nclust; ++x) {
+    Cluster& cl = ws.clusters[ws.corder[x]];
+    cl.dist = (int8_t)(R + 1);  // "cannot improve (b1, b2)"
+    const int limit = b2 - 1;
+    if (limit < 0) continue;
+    const uint8_t* rd = ws.seq[cl.strand];
+    int u = limit + 1;  // Hamming upper bound, only tracked below limit + 1
+    for (int e = cl.beg; e < cl.end && u > 0; ++e) {
+      int h = hamming(ix, rd, L, ws.cand[cl.strand][e], u - 1);
+      if (h < u) u = h;
+    }
+    int d;
+    if (u == 0) {
+      d = 0;
+    } else {
+      const int lim = u <= limit ? u : limit;
+      d = band_distance(ix, rd, L, cl.lo, cl.width, lim, ws.row_a, ws.row_b);
+      if (d > lim) continue;  // distance >= b2: irrelevant
+    }
+    cl.dist = (int8_t)d;
+    if (d < b1) { b2 = b1; b1 = d; } else if (d < b2) { b2 = d; }
+  }
+
+  const int d1 = b1;
+  if (d1 > R) { r.reason = kNotFound; return; }
+  int n_best = 0;
+  for (int x = 0; x < nclust; ++x) n_best += ws.clusters[x].dist == d1;
+  const int d2 = n_best > 1 ? d1 : (b2 <= R ? b2 : -1);
   // Deterministic, name-seeded choice among tied loci.
   int pick = (int)(name_hash % (uint64_t)n_best), chosen = -1;
   for (int x = 0; x < nclust; ++x)

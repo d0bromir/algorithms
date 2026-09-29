@@ -199,14 +199,27 @@ int main(int argc, char** argv) {
 
   const Params configs[] = {{2, 256}, {3, 256}, {5, 256}, {4, 64}, {4, 16}, {3, 4}, {2, 1}};
   for (const Params& p : configs) {
-    std::vector<Result> res, res1;
+    std::vector<Result> res, res1, resrev;
     map_cpu(view, p, batch, res, 4);
     map_cpu(view, p, batch, res1, 1);
+    Params prev = p;
+    prev.reverse_order = 1;
+    map_cpu(view, prev, batch, resrev, 4);
     int certified = 0, easy = 0, easy_cert = 0, sr = 0;
     int reasons[kNumReasons] = {};
     for (size_t i = 0; i < reads.size(); ++i) {
       const Result& r = res[i];
       CHECK(std::memcmp(&r, &res1[i], sizeof r) == 0, "read %zu differs between 1 and 4 threads", i);
+      // Metamorphic: verifying clusters in reverse order must give the same
+      // certificate (d1; d2 whenever the best locus is unique).
+      const Result& rv = resrev[i];
+      CHECK(r.certified == rv.certified && r.d1 == rv.d1 && r.radius == rv.radius,
+            "k=%d budget=%d read %zu: order-dependent d1 (%d vs %d)", p.k, p.budget, i, r.d1, rv.d1);
+      if (r.certified && r.n_best == 1 && rv.n_best == 1)
+        CHECK(r.d2 == rv.d2, "k=%d budget=%d read %zu: order-dependent d2 (%d vs %d)",
+              p.k, p.budget, i, r.d2, rv.d2);
+      CHECK((r.n_best > 1) == (rv.n_best > 1), "k=%d budget=%d read %zu: order-dependent tie",
+            p.k, p.budget, i);
       ++reasons[r.reason];
       int omin = 99;
       for (auto& h : truth[i]) omin = std::min(omin, h.dist);
