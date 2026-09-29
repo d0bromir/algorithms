@@ -1,0 +1,24 @@
+reference: bwa-mem2; 2000000 reads; 1995387 mapped; 1787787 with MAPQ >= 30
+
+tool            mapped %   agree %   agree % (ref MAPQ>=30)
+bwa-mem2          99.769    99.769                  100.000
+minibwa           99.743    94.477                   99.955
+strobealign       99.915    93.974                   99.862
+minimap2          99.523    93.954                   99.814
+bowtie2           98.583    93.602                   99.662
+
+CERTA certified reads: 1673143 (83.66% of input)
+tier  MAPQ      reads  agree with ref %  ref MAPQ>=30 %
+S0      60    1114511           100.000          99.911
+S0      40     134280           100.000          94.515
+S0      20     108064            99.999          86.058
+S0       0      37844            35.575           0.000
+S1      40     192891            99.998          99.101
+S1      20      75176            99.944          92.988
+S1       0      10377            33.883           0.000
+
+certificate check: 1672120 certified reads with an unclipped bwa-mem2 alignment; 3 where bwa-mem2 reports fewer edits than CERTA's certified minimum
+  SRR37356339.2158830: CERTA 16:88366795- NM=1  bwa-mem2 16:88366795- NM=0  -> explained: 1 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR37356339.8130169: CERTA 22:16324964+ NM=1  bwa-mem2 22:16324964+ NM=0  -> explained: 1 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR37356339.34120053: CERTA 10:39245235+ NM=1  bwa-mem2 10:39245235+ NM=0  -> explained: 1 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+unexplained violations: 0

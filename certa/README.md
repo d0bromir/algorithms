@@ -121,6 +121,21 @@ Parameters:
 | `--cap` | 32 | max hits enumerated per part (≤ 32) |
 | `--batch` | 200 000 CPU / 1 000 000 GPU | reads per batch |
 
+## Results on real data: GIAB HG002, NovaSeq X
+
+Full details, raw timings and caveats are in [bench/RESULTS.md](bench/RESULTS.md).
+
+- **Certified fraction:** 83.4 % of all 444.5 M reads are certified at
+  k = 2 (68.7 % exact).
+- **Certificate check:** no unexplained violation among 1.67 M certified
+  reads checked against BWA-MEM2. The 3 flagged cases are reference `N`s
+  that BWA indexes as random bases.
+- **Complete mapping, galaxy:** CERTA on the A100, streaming uncertified
+  reads into minibwa, takes 24.4 s vs 26.5 s for minibwa (1.08×) with 23 %
+  less CPU time. It beats strobealign, minimap2, BWA-MEM2 and bowtie2.
+- **Complete mapping, CPU only:** CERTA + fallback is slower than minibwa.
+  The 17 % of reads that cannot be certified cost ~70 % of minibwa's time.
+
 ## Results so far (synthetic data)
 
 ### Lab hosts (September 2026)

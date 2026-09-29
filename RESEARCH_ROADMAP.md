@@ -373,8 +373,20 @@ ARM64) and CUDA (A100 target), with one shared per-read core.
 - **Lab hosts:** the prototype runs on galaxy (ARM64 CPU and A100) and
   a2 (x86-64). Outputs are byte-identical across all three back-ends; on
   synthetic data the map step reaches 8.85 M reads/s on the A100.
-- **Next step:** run the same measurement on real NovaSeq X GIAB data to
-  produce Aim 1's go/no-go number.
+- **Real data (GIAB HG002, NovaSeq X, single-end; see
+  [certa/bench/RESULTS.md](certa/bench/RESULTS.md)):**
+  - **Certified fraction:** 83.4 % of 444.5 M reads (k = 2), above the
+    60 % criterion.
+  - **Certificate:** no unexplained violation among 1.67 M reads checked
+    against BWA-MEM2.
+  - **Speed:** it is *not* a large speed-up. Only the concurrent GPU + CPU
+    configuration beats minibwa, and only by 1.08×. The uncertified 17 % of
+    reads carry ~70 % of minibwa's cost.
+- **Revised Aim 1 criterion:** judge the fast path by the *share of the
+  best competitor's cost on certifiable reads*, not by the share of reads.
+  On this evidence the thesis should shift weight to the hard reads (Aim 2
+  S2/S3 fallback, paired-end), to heterogeneous GPU + CPU scheduling, and
+  to the certificate as a correctness guarantee.
 
 ---
 
