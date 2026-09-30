@@ -176,10 +176,16 @@ int cmd_map(const Args& a) {
         "usage: certa map ref.cidx reads.fq[.gz] [-k 4] [--budget 256] [-t N] [--gpu] "
         "[--device 0] [-o out.sam] [-u uncertified.fq] [--stats s.json] [--batch N] [--io-threads N]");
   Params p;
-  p.k = a.geti("-k", 4);
-  p.budget = a.geti("--budget", a.geti("--cap", 256));  // --cap: the v0.1 name
+  p.k = a.geti("-k", 5);
+  p.budget = a.geti("--budget", a.geti("--cap", 16));  // --cap: the v0.1 name
   if (p.k < 0 || p.k > KMAX) throw std::runtime_error("-k must be in [0, 5]");
   if (p.budget < 1 || p.budget > BUDGET_MAX) throw std::runtime_error("--budget must be in [1, 256]");
+  // Escalation: reads that fail because the budget limited how many parts
+  // they could search are re-run with this budget (0 disables).
+  Params p2 = p;
+  p2.budget = a.geti("--budget2", 256);
+  if (p2.budget != 0 && (p2.budget <= p.budget || p2.budget > BUDGET_MAX))
+    throw std::runtime_error("--budget2 must be 0 or in (budget, 256]");
   const bool gpu = a.has("--gpu");
   const int threads = a.geti("-t", default_threads());
   // Threads that parse and encode the next batch while the current one maps.
@@ -224,6 +230,7 @@ int cmd_map(const Args& a) {
   ReadBatch batch_buf[2];
   std::exception_ptr read_error;
   double t_io = 0, t_wait = 0, t_map = 0, t_out = 0;
+  uint64_t escalated = 0;  // reads re-run with --budget2
   auto load = [&](int slot) {
     try {
       auto t = Clock::now();
@@ -246,6 +253,37 @@ int cmd_map(const Args& a) {
     auto t = Clock::now();
     if (gm) gm->map(p, batch, res);
     else map_cpu(view, p, batch, res, threads);
+    if (p2.budget) {
+      // Pass 2 on a compacted batch: uncertified reads that searched fewer
+      // parts than they have (up to k + 1). Their results equal a single
+      // pass with the larger budget; certified reads keep pass-1 results.
+      std::vector<size_t> redo;
+      for (size_t i = 0; i < res.size(); ++i) {
+        const Result& r = res[i];
+        const int want = r.parts < p.k + 1 ? r.parts : p.k + 1;
+        if (!r.certified && (r.reason == kRadiusNegative || r.reason == kNotFound) && r.used < want)
+          redo.push_back(i);
+      }
+      if (!redo.empty()) {
+        ReadBatch sub;
+        sub.offs.resize(redo.size());
+        sub.lens.resize(redo.size());
+        sub.hashes.resize(redo.size());
+        for (size_t x = 0; x < redo.size(); ++x) {
+          const size_t i = redo[x];
+          sub.offs[x] = sub.codes.size();
+          sub.lens[x] = batch.lens[i];
+          sub.hashes[x] = batch.hashes[i];
+          sub.codes.insert(sub.codes.end(), batch.codes.begin() + batch.offs[i],
+                           batch.codes.begin() + batch.offs[i] + batch.lens[i]);
+        }
+        std::vector<Result> res2;
+        if (gm) gm->map(p2, sub, res2);
+        else map_cpu(view, p2, sub, res2, threads);
+        for (size_t x = 0; x < redo.size(); ++x) res[redo[x]] = res2[x];
+        escalated += redo.size();
+      }
+    }
     t_map += secs(t);
 
     // Format in parallel over contiguous slices, then write in input order.
@@ -298,6 +336,7 @@ int cmd_map(const Args& a) {
                pct(total.s0), pct(total.s1), pct(total.sr), pct(total.ties));
   for (int i = 1; i < kNumReasons; ++i)
     std::fprintf(stderr, "[map]   uncertified/%s: %.2f%%\n", kReasonNames[i], pct(total.reason[i]));
+  std::fprintf(stderr, "[map] escalated to budget %d: %.2f%% of reads\n", p2.budget, pct(escalated));
   std::fprintf(stderr,
                "[map] time: load %.2f s, upload %.2f s, read+encode %.2f s (overlapped; "
                "waited %.2f s), map %.2f s (%.0f reads/s), output %.2f s, total %.2f s "
@@ -310,7 +349,8 @@ int cmd_map(const Args& a) {
     if (!js) throw std::runtime_error("cannot open stats output");
     std::fprintf(js, "{\n  \"mode\": \"%s\",\n  \"device\": \"%s\",\n  \"threads\": %d,\n",
                  gpu ? "gpu" : "cpu", gm ? gm->device_name().c_str() : "", threads);
-    std::fprintf(js, "  \"k\": %d, \"budget\": %d, \"q\": %d, \"s\": %d,\n", p.k, p.budget, ix.q, ix.s);
+    std::fprintf(js, "  \"k\": %d, \"budget\": %d, \"budget2\": %d, \"escalated\": %llu, \"q\": %d, \"s\": %d,\n",
+                 p.k, p.budget, p2.budget, static_cast<unsigned long long>(escalated), ix.q, ix.s);
     std::fprintf(js, "  \"reads\": %llu, \"bases\": %llu, \"certified\": %llu, \"s0\": %llu, \"s1\": %llu, \"sr\": %llu, \"ties\": %llu,\n",
                  static_cast<unsigned long long>(total.reads), static_cast<unsigned long long>(total.bases),
                  static_cast<unsigned long long>(total.certified), static_cast<unsigned long long>(total.s0),
