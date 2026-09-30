@@ -282,6 +282,14 @@ int cmd_map(const Args& a) {
   wait_for_gpu();
   for (int cur = 0; !recs_buf[cur].empty(); cur ^= 1) {
     std::thread prefetch(load, cur ^ 1);
+    // Join the reader even if mapping throws, so the error is reported
+    // instead of std::terminate on a joinable thread.
+    struct Joiner {
+      std::thread& t;
+      ~Joiner() {
+        if (t.joinable()) t.join();
+      }
+    } joiner{prefetch};
     const std::vector<FastqRecord>& recs = recs_buf[cur];
     const ReadBatch& batch = batch_buf[cur];
 
