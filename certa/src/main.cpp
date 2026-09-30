@@ -203,7 +203,11 @@ int cmd_map(const Args& a) {
     throw std::runtime_error("--budget2 must be 0 or in [budget, 256]");
   if (p2.budget == 0) p2.budget = p.budget;
   p.s2_limit = 0;
-  const bool second_pass = p2.budget > p.budget || p2.s2_limit > 0;
+  // Pass 1 also uses a smaller radius (--k1): wide bands for R up to k are
+  // only needed by the few reads pass 1 cannot certify.
+  p.k = std::min(p2.k, a.geti("--k1", 2));
+  if (p.k < 0) throw std::runtime_error("--k1 must be >= 0");
+  const bool second_pass = p2.budget > p.budget || p2.s2_limit > 0 || p2.k > p.k;
   const bool gpu = a.has("--gpu");
   const int threads = a.geti("-t", default_threads());
   // Threads that parse and encode the next batch while the current one maps.
@@ -217,8 +221,9 @@ int cmd_map(const Args& a) {
   const double t_load = secs(t_all);
   std::fprintf(stderr, "[map] index %s: q=%d s=%d, %llu entries, loaded in %.1f s\n",
                a.pos[0].c_str(), ix.q, ix.s, static_cast<unsigned long long>(ix.keys.size()), t_load);
-  std::fprintf(stderr, "[map] k=%d budget=%d: parts are >= %d bases; radius R needs R+1 parts\n",
-               p.k, p.budget, min_read_length(ix.q, ix.s));
+  std::fprintf(stderr,
+               "[map] pass 1: k=%d budget=%d; pass 2: k=%d budget=%d S2<=%d; parts are >= %d bases\n",
+               p.k, p.budget, p2.k, p2.budget, p2.s2_limit, min_read_length(ix.q, ix.s));
   const IndexView view = ix.view(ref);
 
   // Open input and outputs first, so a failure cannot leave the upload
@@ -236,8 +241,8 @@ int cmd_map(const Args& a) {
   for (size_t c = 0; c < ref.names.size(); ++c)
     std::fprintf(sam, "@SQ\tSN:%s\tLN:%llu\n", ref.names[c].c_str(),
                  static_cast<unsigned long long>(ref.lengths[c]));
-  std::fprintf(sam, "@PG\tID:certa\tPN:certa\tVN:0.5\tCL:certa map -k %d --budget %d --budget2 %d --s2 %d%s\n",
-               p.k, p.budget, p2.budget, p2.s2_limit, gpu ? " --gpu" : "");
+  std::fprintf(sam, "@PG\tID:certa\tPN:certa\tVN:0.5\tCL:certa map -k %d --k1 %d --budget %d --budget2 %d --s2 %d%s\n",
+               p2.k, p.k, p.budget, p2.budget, p2.s2_limit, gpu ? " --gpu" : "");
 
   // The GPU upload runs in the background, overlapped with reading the
   // first batch; the first map call waits for it.
@@ -401,8 +406,8 @@ int cmd_map(const Args& a) {
     if (!js) throw std::runtime_error("cannot open stats output");
     std::fprintf(js, "{\n  \"mode\": \"%s\",\n  \"device\": \"%s\",\n  \"threads\": %d,\n",
                  gpu ? "gpu" : "cpu", gm ? gm->device_name().c_str() : "", threads);
-    std::fprintf(js, "  \"k\": %d, \"budget\": %d, \"budget2\": %d, \"escalated\": %llu, \"q\": %d, \"s\": %d,\n",
-                 p.k, p.budget, p2.budget, static_cast<unsigned long long>(escalated), ix.q, ix.s);
+    std::fprintf(js, "  \"k\": %d, \"k1\": %d, \"budget\": %d, \"budget2\": %d, \"second_pass\": %llu, \"q\": %d, \"s\": %d,\n",
+                 p2.k, p.k, p.budget, p2.budget, static_cast<unsigned long long>(escalated), ix.q, ix.s);
     std::fprintf(js, "  \"reads\": %llu, \"bases\": %llu, \"certified\": %llu, \"s0\": %llu, \"s1\": %llu, \"sr\": %llu, \"s2\": %llu, \"s2_limit\": %d, \"ties\": %llu,\n",
                  static_cast<unsigned long long>(total.reads), static_cast<unsigned long long>(total.bases),
                  static_cast<unsigned long long>(total.certified), static_cast<unsigned long long>(total.s0),
