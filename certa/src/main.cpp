@@ -77,12 +77,22 @@ int mapq_of(const Result& r, int L) {
     return q;
   }
   // Certified: the second locus is exact within R, or beyond R the best other
-  // candidate found (d2x), as bwa-mem uses its suboptimal hit; no second: 60.
-  // bwa-mem compares affine scores, so use them when available.
-  if (r.sub_score != kNoSub && r.score > 0) {
-    if (r.sub_score >= r.score) return 0;
-    const int q = static_cast<int>(30.0 * (1.0 - static_cast<double>(r.sub_score) / r.score) *
-                                       std::log(static_cast<double>(L)) + 0.499);
+  // candidate found (d2x), as bwa-mem uses its suboptimal hit. MAPQ follows
+  // bwa-mem's default single-end formula (mem_approx_mapq_se with
+  // mapQ_coef_len = 50) on affine scores, with sub = 19 (min_seed_len x a)
+  // when no second locus was found.
+  if (r.score > 0) {
+    int sub = r.sub_score != kNoSub ? r.sub_score : 19;
+    if (sub < 19) sub = 19;
+    if (sub >= r.score) return 0;
+    const double l = L, identity = 1.0 - (l * kMatch - r.score) / (kMatch + kMismatch) / l;
+    double t = l < 50 ? 1.0 : std::log(50.0) / std::log(l);
+    t *= identity * identity;
+    int q = static_cast<int>(6.02 * (r.score - sub) / kMatch * t * t + 0.499);
+    // bwa subtracts 4.343 ln(sub_n + 1) for near-optimal alternative hits;
+    // lower bound: one when the second locus is within one edit of the best.
+    const int second = r.d2 >= 0 ? r.d2 : r.d2x;
+    if (second >= 0 && second <= r.d1 + 1) q -= static_cast<int>(4.343 * std::log(2.0) + 0.499);
     return std::max(0, std::min(60, q));
   }
   const int second = r.d2 >= 0 ? r.d2 : r.d2x;
