@@ -76,8 +76,15 @@ int mapq_of(const Result& r, int L) {
     if (r.n_clusters > S2_TOP) q = std::min(q, 10);
     return q;
   }
-  // Certified: d2 is exact within R; beyond R use the best other candidate
-  // found (d2x) like bwa-mem uses its suboptimal hit, else no second (60).
+  // Certified: the second locus is exact within R, or beyond R the best other
+  // candidate found (d2x), as bwa-mem uses its suboptimal hit; no second: 60.
+  // bwa-mem compares affine scores, so use them when available.
+  if (r.sub_score != kNoSub && r.score > 0) {
+    if (r.sub_score >= r.score) return 0;
+    const int q = static_cast<int>(30.0 * (1.0 - static_cast<double>(r.sub_score) / r.score) *
+                                       std::log(static_cast<double>(L)) + 0.499);
+    return std::max(0, std::min(60, q));
+  }
   const int second = r.d2 >= 0 ? r.d2 : r.d2x;
   return second >= 0 ? bwa_mapq(L, r.d1, second) : 60;
 }

@@ -73,6 +73,7 @@ constexpr uint32_t kOpM = 0, kOpI = 1, kOpD = 2, kOpS = 4;
 // Reported alignments use BWA-MEM's default affine scoring (the certificate
 // itself is about unit-cost edit distance and picks the locus).
 constexpr int kMatch = 1, kMismatch = 4, kGapOpen = 6, kGapExt = 1, kClip = 5;
+constexpr int16_t kNoSub = -32768;  // Result::sub_score when no other locus was found
 
 struct IndexView {
   const uint8_t* ref;     // concatenated reference, codes 0..3, 4 = N
@@ -110,6 +111,7 @@ struct Result {
   int8_t d1;                    // best (certified) edit distance
   uint8_t nm;                   // edits in the reported alignment (SAM NM)
   int16_t score;                // affine score of the reported alignment
+  int16_t sub_score;            // affine score of the best other locus found (MAPQ), or kNoSub
   int8_t d2;                    // second-best distance within R, -1 if none
   int8_t d2x;                   // MAPQ only: best other candidate beyond R, -1 if none
   uint16_t n_best;              // loci tied at d1 (a lower bound for SR)
@@ -587,11 +589,20 @@ CERTA_HD inline int align_best(const IndexView& ix, int L, int nclust, int d1,
   return n_best;
 }
 
+// MAPQ only: affine score of the read aligned in cluster `c`'s band.
+CERTA_HD inline int16_t cluster_score(const IndexView& ix, int L, const Cluster& c, Workspace& ws) {
+  Result tmp;
+  tmp.n_cigar = 0;
+  if (!affine_align(ix, ws.seq[c.strand], L, c.lo, c.width, ws, tmp)) return kNoSub;
+  return tmp.score;
+}
+
 // MAPQ only (not part of the certificate): the best distance, up to `limit`
-// edits, among candidate clusters other than the reported locus, or -1.
-// Evaluates the S2_TOP best-supported clusters; overwrites ws.clusters.
+// edits, among candidate clusters other than the reported locus, or -1; its
+// affine score goes to *sub. Evaluates the S2_TOP best-supported clusters;
+// overwrites ws.clusters.
 CERTA_HD inline int other_candidates(const IndexView& ix, int L, int limit, const Result& r,
-                                     Workspace& ws) {
+                                     Workspace& ws, int16_t* sub) {
   const int M = limit < S2_MAX ? limit : S2_MAX;
   const int nc = build_clusters(ws, 2 * M, true);
   for (int x = 0; x < nc; ++x) ws.corder[x] = (uint16_t)x;
@@ -604,16 +615,18 @@ CERTA_HD inline int other_candidates(const IndexView& ix, int L, int limit, cons
     }
     ws.corder[y + 1] = v;
   }
-  int best = M + 1, evaluated = 0;
+  int best = M + 1, evaluated = 0, best_c = -1;
   for (int x = 0; x < nc && evaluated < S2_TOP && best > 0; ++x) {
     const Cluster& cl = ws.clusters[ws.corder[x]];
     if (cl.strand == r.strand && r.ref_pos >= cl.lo - L && r.ref_pos <= cl.lo + cl.width + L)
       continue;  // the reported locus itself
     ++evaluated;
     const int d = band_distance(ix, ws.seq[cl.strand], L, cl.lo, cl.width, best - 1, ws.row_a, ws.row_b);
-    if (d < best) best = d;
+    if (d < best) { best = d; best_c = ws.corder[x]; }
   }
-  return best <= M ? best : -1;
+  if (best > M) return -1;
+  *sub = cluster_score(ix, L, ws.clusters[best_c], ws);
+  return best;
 }
 
 // Tier SR: sample hits of the rarest part on each strand; >= 2 distinct exact
@@ -665,6 +678,7 @@ CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
   r.ref_pos = -1; r.n_cigar = 0; r.certified = 0; r.tier = kTierS0; r.strand = 0;
   r.reason = kOk; r.radius = -1; r.d1 = -1; r.d2 = -1; r.n_best = 0;
   r.n_clusters = 0; r.parts = 0; r.used = 0; r.nm = 0; r.score = 0; r.d2x = -1;
+  r.sub_score = kNoSub;
 
   const int P = L <= LMAX ? part_count(L, ix.q, ix.s) : 0;
   if (P < 1) {
@@ -709,8 +723,13 @@ CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
       r.d1 = (int8_t)b1;
       r.d2 = (int8_t)(n_best > 1 ? b1 : (b2 <= R ? b2 : -1));
       r.n_best = (uint16_t)n_best;
-      if (n_best == 1 && r.d2 < 0 && p.mapq_limit > R)
-        r.d2x = (int8_t)other_candidates(ix, L, p.mapq_limit, r, ws);
+      if (n_best == 1 && r.d2 >= 0) {
+        // The certified second-best locus: its affine score, for MAPQ.
+        for (int x = 0; x < nclust; ++x)
+          if (ws.clusters[x].dist == r.d2) { r.sub_score = cluster_score(ix, L, ws.clusters[x], ws); break; }
+      } else if (n_best == 1 && p.mapq_limit > R) {
+        r.d2x = (int8_t)other_candidates(ix, L, p.mapq_limit, r, ws, &r.sub_score);
+      }
       return;
     }
   }
