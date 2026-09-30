@@ -9,6 +9,7 @@
 // to the uncertified FASTQ, for a full aligner (minibwa, BWA-MEM2, ...).
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -55,17 +56,30 @@ struct Stats {
 // the second-best distance is exact (or > R). S2: only candidates were
 // searched, so the scale is halved and capped at 40.
 int g_s2_limit = 0;
-int mapq_of(const Result& r) {
+// BWA-MEM's single-end MAPQ, 30 (1 - S2/S1) ln(L), with alignment scores
+// approximated from edit distances (each edit costs match + mismatch = 5).
+int bwa_mapq(int L, int d1, int d2) {
+  const double s1 = L * kMatch - d1 * (kMatch + kMismatch);
+  const double s2 = L * kMatch - d2 * (kMatch + kMismatch);
+  if (s1 <= 0 || s2 >= s1) return 0;
+  const int q = static_cast<int>(30.0 * (1.0 - s2 / s1) * std::log(static_cast<double>(L)) + 0.499);
+  return std::max(0, std::min(60, q));
+}
+
+int mapq_of(const Result& r, int L) {
   if (r.n_best > 1) return 0;
   if (r.tier == kTierS2) {
-    int second = r.d2 >= 0 ? r.d2 : g_s2_limit + 1;
+    // Second best: exact among the evaluated candidates, else at least D + 1.
+    int q = bwa_mapq(L, r.d1, r.d2 >= 0 ? r.d2 : g_s2_limit + 1);
     // Clusters beyond the S2_TOP best-supported ones were not evaluated, so
     // an unseen tie is possible: keep MAPQ below the usual caller cut-off.
-    const int cap = r.n_clusters > S2_TOP ? 10 : 40;
-    return std::min(cap, 10 * (second - r.d1));
+    if (r.n_clusters > S2_TOP) q = std::min(q, 10);
+    return q;
   }
-  int second = r.d2 >= 0 ? r.d2 : r.radius + 1;  // lower bound when unseen
-  return std::min(60, 20 * (second - r.d1));
+  // Certified: d2 is exact within R; beyond R use the best other candidate
+  // found (d2x) like bwa-mem uses its suboptimal hit, else no second (60).
+  const int second = r.d2 >= 0 ? r.d2 : r.d2x;
+  return second >= 0 ? bwa_mapq(L, r.d1, second) : 60;
 }
 
 char comp(char c) {
@@ -108,10 +122,11 @@ int emit(const Result& r0, const FastqRecord& rec, const Reference& ref,
   sam += buf;
   sam += ref.names[c];
   std::snprintf(buf, sizeof buf, "\t%lld\t%d\t",
-                static_cast<long long>(r.ref_pos - ref.offsets[c] + 1), mapq_of(r));
+                static_cast<long long>(r.ref_pos - ref.offsets[c] + 1),
+                mapq_of(r, static_cast<int>(rec.seq.size())));
   sam += buf;
   for (int i = 0; i < r.n_cigar; ++i) {
-    std::snprintf(buf, sizeof buf, "%u%c", r.cigar[i] >> 4, "MID"[r.cigar[i] & 0xF]);
+    std::snprintf(buf, sizeof buf, "%u%c", r.cigar[i] >> 4, "MIDNS"[r.cigar[i] & 0xF]);
     sam += buf;
   }
   sam += "\t*\t0\t0\t";
@@ -123,9 +138,12 @@ int emit(const Result& r0, const FastqRecord& rec, const Reference& ref,
     sam += rec.seq; sam += '\t'; sam += rec.qual;
   }
   static const char* const kTierNames[] = {"S0", "S1", "SR", "S2"};
-  std::snprintf(buf, sizeof buf, "\tNM:i:%d\tXT:Z:%s\tXR:i:%d\tXD:i:%d\tXB:i:%d\n",
-                r.d1, kTierNames[r.tier], r.radius, r.d2, r.n_best);
-  sam += buf;
+  // NM: edits in the reported (affine, possibly clipped) alignment.
+  // XE: the certified minimum end-to-end edit distance over the reference.
+  char tags[128];
+  std::snprintf(tags, sizeof tags, "\tNM:i:%d\tAS:i:%d\tXE:i:%d\tXT:Z:%s\tXR:i:%d\tXD:i:%d\tXB:i:%d\n",
+                r.nm, r.score, r.d1, kTierNames[r.tier], r.radius, r.d2, r.n_best);
+  sam += tags;
   return kOk;
 }
 
@@ -193,7 +211,10 @@ int cmd_map(const Args& a) {
   if (p.budget < 1 || p.budget > BUDGET_MAX) throw std::runtime_error("--budget must be in [1, 256]");
   // Escalation: reads that fail because the budget limited how many parts
   // they could search are re-run with this budget (0 disables).
-  p.s2_limit = a.geti("--s2", 8);
+  p.mapq_limit = a.geti("--mapq-limit", 8);  // MAPQ second-best estimate (0 = off)
+  // S2 is off by default: on synthetic truth most S2 placements with MAPQ >= 20
+  // were wrong, and on HG002 S2 reads were enriched at false-positive calls.
+  p.s2_limit = a.geti("--s2", 0);
   if (p.s2_limit < 0 || p.s2_limit > S2_MAX) throw std::runtime_error("--s2 must be in [0, 10]");
   g_s2_limit = p.s2_limit;
   // Pass 1 runs every read with the small budget and without S2 (uniform,

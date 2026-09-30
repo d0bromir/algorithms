@@ -52,7 +52,9 @@ def primary(path):
             clipped = any(op in "SH" for _, op in ops)
             nm = -1
             for tag in t[11].split("\t") if len(t) > 11 else []:
-                if tag.startswith("NM:i:"):
+                if tag.startswith("NM:i:") and nm < 0:
+                    nm = int(tag[5:])
+                elif tag.startswith("XE:i:"):  # CERTA: certified min edit distance
                     nm = int(tag[5:])
             tags = t[11] if len(t) > 11 else ""
             out[name] = (t[2], int(t[3]) - lead, "-" if flag & 16 else "+", int(t[4]), nm, clipped, tags)

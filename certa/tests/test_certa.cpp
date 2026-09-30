@@ -138,6 +138,7 @@ int rescore(const IndexView& ix, const Result& r, const std::vector<uint8_t>& fw
     for (uint32_t x = 0; x < len; ++x) {
       if (op == kOpM) d += sub_cost(rd[i++], ref_at(ix, j++));
       else if (op == kOpI) { ++i; ++d; }
+      else if (op == kOpS) { ++i; }  // soft clip: read base, no cost
       else { ++j; ++d; }
     }
   }
@@ -250,16 +251,21 @@ int main(int argc, char** argv) {
       if (r.certified == 2) {  // S2: sound, not below the optimum, nothing within R
         ++s2;
         CHECK(r.tier == kTierS2 && r.d1 <= p.s2_limit, "read %zu: bad S2 result", i);
-        CHECK(rescore(view, r, reads[i].seq) == r.d1, "S2 read %zu: CIGAR rescores to %d, reported %d",
-              i, rescore(view, r, reads[i].seq), r.d1);
+        CHECK(rescore(view, r, reads[i].seq) == r.nm, "S2 read %zu: CIGAR rescores to %d, NM %d",
+              i, rescore(view, r, reads[i].seq), r.nm);
         CHECK(omin > r.radius, "S2 read %zu: a locus within R=%d exists (oracle %d)", i, r.radius, omin);
         CHECK(r.d1 >= (omin <= KMAX ? omin : KMAX + 1), "S2 read %zu: d1 %d below oracle %d", i, r.d1, omin);
         continue;
       }
       ++certified;
-      CHECK(rescore(view, r, reads[i].seq) == r.d1,
-            "k=%d read %zu: CIGAR rescores to %d, reported %d", p.k, i,
-            rescore(view, r, reads[i].seq), r.d1);
+      // The reported alignment (affine, possibly clipped) must be what NM says;
+      // unclipped, it cannot have fewer edits than the certified minimum d1.
+      CHECK(rescore(view, r, reads[i].seq) == r.nm,
+            "k=%d read %zu: CIGAR rescores to %d, NM %d", p.k, i,
+            rescore(view, r, reads[i].seq), r.nm);
+      bool clipped = false;
+      for (int c = 0; c < r.n_cigar; ++c) clipped |= (r.cigar[c] & 0xF) == kOpS;
+      CHECK(clipped || r.nm >= r.d1, "read %zu: unclipped NM %d below certified d1 %d", i, r.nm, r.d1);
       CHECK(r.d1 == omin, "k=%d budget=%d read %zu: d1 %d != oracle %d", p.k, p.budget, i, r.d1, omin);
       if (r.tier == kTierSR) {  // must be backed by >= 2 distinct exact loci
         ++sr;
@@ -271,7 +277,7 @@ int main(int argc, char** argv) {
       if (r.n_best == 1 && r.d2 < 0) {
         int64_t span = 0;
         for (int c = 0; c < r.n_cigar; ++c)
-          if ((r.cigar[c] & 0xF) != kOpI) span += r.cigar[c] >> 4;
+          if ((r.cigar[c] & 0xF) == kOpM || (r.cigar[c] & 0xF) == kOpD) span += r.cigar[c] >> 4;
         const int64_t end = r.ref_pos + span - 1;
         for (auto& h : truth[i]) {
           if (h.dist > r.radius) continue;

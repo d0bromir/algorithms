@@ -44,7 +44,7 @@ constexpr int LMAX = 320;                       // max read length handled
 constexpr int BMAX = 48;                        // max band width (diagonals)
 constexpr int MAX_CAND = BUDGET_MAX;            // candidates per strand
 constexpr int MAX_CLUST = 2 * MAX_CAND;         // clusters over both strands
-constexpr int MAX_CIGAR = 2 * 10 + 2;           // up to S2_MAX edits
+constexpr int MAX_CIGAR = 32;                   // S2_MAX edits, clips, affine gaps
 constexpr int REP_SAMPLE = 64;                  // hits examined for tier SR
 constexpr int REP_KEEP = 8;                     // exact copies kept for tier SR
 constexpr int BIG = 1 << 20;
@@ -68,7 +68,11 @@ enum Reason : uint8_t {
 };
 
 // BAM CIGAR op codes.
-constexpr uint32_t kOpM = 0, kOpI = 1, kOpD = 2;
+constexpr uint32_t kOpM = 0, kOpI = 1, kOpD = 2, kOpS = 4;
+
+// Reported alignments use BWA-MEM's default affine scoring (the certificate
+// itself is about unit-cost edit distance and picks the locus).
+constexpr int kMatch = 1, kMismatch = 4, kGapOpen = 6, kGapExt = 1, kClip = 5;
 
 struct IndexView {
   const uint8_t* ref;     // concatenated reference, codes 0..3, 4 = N
@@ -89,6 +93,9 @@ struct Params {
   // Tier S2 (not certified): when no locus lies within the certified radius,
   // align the enumerated candidates with this larger edit limit (0 = off).
   int s2_limit = 0;
+  // For MAPQ only: when the second-best locus lies beyond the certified
+  // radius, estimate it among the other candidates up to this many edits.
+  int mapq_limit = 0;
 };
 
 struct Result {
@@ -100,8 +107,11 @@ struct Result {
   uint8_t strand;               // 0 forward, 1 reverse complement
   uint8_t reason;               // Reason when not certified
   int8_t radius;                // certified radius R (-1 for SR / uncertified)
-  int8_t d1;                    // best edit distance
+  int8_t d1;                    // best (certified) edit distance
+  uint8_t nm;                   // edits in the reported alignment (SAM NM)
+  int16_t score;                // affine score of the reported alignment
   int8_t d2;                    // second-best distance within R, -1 if none
+  int8_t d2x;                   // MAPQ only: best other candidate beyond R, -1 if none
   uint16_t n_best;              // loci tied at d1 (a lower bound for SR)
   uint16_t n_clusters;          // loci verified (diagnostic)
   uint8_t parts;                // parts the read was split into
@@ -126,6 +136,7 @@ struct Workspace {
   Cluster clusters[MAX_CLUST];
   uint16_t corder[MAX_CLUST];  // evaluation order of clusters
   int row_a[BMAX], row_b[BMAX];
+  int aff[4][BMAX];  // affine DP rows: H prev/cur, E prev/cur
   uint8_t tb[(LMAX + 1) * BMAX];
 };
 
@@ -428,6 +439,113 @@ CERTA_HD inline void evaluate_clusters(const IndexView& ix, int L, int nclust, i
   *pb2 = b2;
 }
 
+// Affine-optimal alignment of the read within diagonals [lo, lo + B) with
+// BWA-MEM's default scores (+1 / -4 / gap -6 - 1 per base / clip -5 per end),
+// reference ends free. Gotoh recurrences on the same band indexing as
+// band_distance: cell (i, b) aligns read base i-1 to reference i-1+lo+b.
+// Writes CIGAR (with soft clips), ref_pos, nm and score into `r`; returns
+// false (leaving `r` unchanged) if the CIGAR would not fit.
+CERTA_HD inline bool affine_align(const IndexView& ix, const uint8_t* rd, int L,
+                                  int64_t lo, int B, Workspace& ws, Result& r) {
+  const int NEG = -(1 << 20);
+  int* hp = ws.aff[0];
+  int* hc = ws.aff[1];
+  int* ep = ws.aff[2];
+  int* ec = ws.aff[3];
+  // tb bits: 0-1 H source (0 match/mismatch, 1 insertion E, 2 deletion F),
+  // 2 the diagonal step starts the alignment (read prefix clipped or none),
+  // 3 E extends E, 4 F extends F.
+  for (int b = 0; b < B; ++b) { hp[b] = 0; ep[b] = NEG; }
+  int best = NEG, best_i = 0, best_b = 0;
+  for (int i = 1; i <= L; ++i) {
+    const uint8_t c = rd[i - 1];
+    const int start = i == 1 ? 0 : -kClip;
+    int f = NEG;
+    for (int b = 0; b < B; ++b) {
+      uint8_t bits = 0;
+      int diag = hp[b];
+      if (start >= diag) { diag = start; bits |= 4; }
+      const int m = diag + (sub_cost(c, ref_at(ix, (int64_t)i - 1 + lo + b)) ? -kMismatch : kMatch);
+      int e = NEG;
+      if (b + 1 < B && i > 1) {  // no alignment may start with a gap
+        const int open = hp[b + 1] - kGapOpen - kGapExt, ext = ep[b + 1] - kGapExt;
+        e = open >= ext ? open : ext;
+        if (ext > open) bits |= 8;
+      }
+      int fo = NEG;
+      if (b > 0) {
+        const int open = hc[b - 1] - kGapOpen - kGapExt, ext = f - kGapExt;
+        fo = open >= ext ? open : ext;
+        if (ext > open) bits |= 16;
+      }
+      f = fo;
+      int h = m;
+      if (e > h) { h = e; bits = (uint8_t)((bits & ~3) | 1); }
+      if (f > h) { h = f; bits = (uint8_t)((bits & ~3) | 2); }
+      hc[b] = h;
+      ec[b] = e;
+      ws.tb[i * B + b] = bits;
+      if ((bits & 3) == 0) {  // an alignment may end after a match/mismatch
+        const int end = h - (i < L ? kClip : 0);
+        if (end > best) { best = end; best_i = i; best_b = b; }
+      }
+    }
+    int* t = hp; hp = hc; hc = t;
+    t = ep; ep = ec; ec = t;
+  }
+  if (best == NEG) return false;
+  // Traceback from (best_i, best_b) in state H.
+  uint32_t rev[MAX_CIGAR];
+  int nrev = 0, nm = 0, i = best_i, b = best_b, state = 0;  // 0 H, 1 E, 2 F
+  uint32_t run_op = 99, run_len = 0;
+  auto emit = [&](uint32_t op) -> bool {
+    if (op == run_op) { ++run_len; return true; }
+    if (run_len) {
+      if (nrev == MAX_CIGAR) return false;
+      rev[nrev++] = (run_len << 4) | run_op;
+    }
+    run_op = op;
+    run_len = 1;
+    return true;
+  };
+  int first_i = 0, first_b = 0;
+  for (;;) {
+    const uint8_t bits = ws.tb[i * B + b];
+    if (state == 0) state = bits & 3;
+    if (state == 0) {  // match or mismatch
+      if (!emit(kOpM)) return false;
+      nm += sub_cost(rd[i - 1], ref_at(ix, (int64_t)i - 1 + lo + b));
+      if (bits & 4) { first_i = i; first_b = b; break; }
+      --i;
+    } else if (state == 1) {  // insertion: read base without reference
+      if (!emit(kOpI)) return false;
+      ++nm;
+      state = (bits & 8) ? 1 : 0;
+      --i;
+      ++b;
+    } else {  // deletion: reference base without read
+      if (!emit(kOpD)) return false;
+      ++nm;
+      state = (bits & 16) ? 2 : 0;
+      --b;
+    }
+  }
+  if (run_len) {
+    if (nrev == MAX_CIGAR) return false;
+    rev[nrev++] = (run_len << 4) | run_op;
+  }
+  const int lead = first_i - 1, trail = L - best_i;
+  if (nrev + (lead > 0) + (trail > 0) > MAX_CIGAR) return false;
+  r.n_cigar = 0;
+  if (lead > 0) r.cigar[r.n_cigar++] = ((uint32_t)lead << 4) | kOpS;
+  for (int x = nrev - 1; x >= 0; --x) r.cigar[r.n_cigar++] = rev[x];
+  if (trail > 0) r.cigar[r.n_cigar++] = ((uint32_t)trail << 4) | kOpS;
+  r.ref_pos = (int64_t)first_i - 1 + lo + first_b;
+  r.nm = (uint8_t)nm;
+  r.score = (int16_t)best;
+  return true;
+}
+
 // Chooses among the clusters at distance d1 (deterministically, seeded by the
 // read name), aligns the read there and returns how many clusters tie.
 CERTA_HD inline int align_best(const IndexView& ix, int L, int nclust, int d1,
@@ -450,8 +568,52 @@ CERTA_HD inline int align_best(const IndexView& ix, int L, int nclust, int d1,
   } else {
     band_traceback(ix, rd, L, cl.lo, cl.width, ws, r);
   }
+  r.nm = (uint8_t)d1;
+  r.score = (int16_t)(L * kMatch - d1 * (kMatch + kMismatch));  // exact for ungapped
+  // Report the locus with BWA-MEM's affine scoring (clipping, gap placement),
+  // so callers see the same alignment representation as from bwa-mem. The
+  // locus and d1 (the certified quantity) do not change.
+  if (d1 > 0) {
+    Result tmp = r;
+    if (affine_align(ix, rd, L, cl.lo, cl.width, ws, tmp)) {
+      for (int x = 0; x < tmp.n_cigar; ++x) r.cigar[x] = tmp.cigar[x];
+      r.n_cigar = tmp.n_cigar;
+      r.ref_pos = tmp.ref_pos;
+      r.nm = tmp.nm;
+      r.score = tmp.score;
+    }
+  }
   r.strand = cl.strand;
   return n_best;
+}
+
+// MAPQ only (not part of the certificate): the best distance, up to `limit`
+// edits, among candidate clusters other than the reported locus, or -1.
+// Evaluates the S2_TOP best-supported clusters; overwrites ws.clusters.
+CERTA_HD inline int other_candidates(const IndexView& ix, int L, int limit, const Result& r,
+                                     Workspace& ws) {
+  const int M = limit < S2_MAX ? limit : S2_MAX;
+  const int nc = build_clusters(ws, 2 * M, true);
+  for (int x = 0; x < nc; ++x) ws.corder[x] = (uint16_t)x;
+  for (int x = 1; x < nc; ++x) {  // by member count, descending (stable)
+    uint16_t v = ws.corder[x];
+    int sv = ws.clusters[v].end - ws.clusters[v].beg, y = x - 1;
+    while (y >= 0 && ws.clusters[ws.corder[y]].end - ws.clusters[ws.corder[y]].beg < sv) {
+      ws.corder[y + 1] = ws.corder[y];
+      --y;
+    }
+    ws.corder[y + 1] = v;
+  }
+  int best = M + 1, evaluated = 0;
+  for (int x = 0; x < nc && evaluated < S2_TOP && best > 0; ++x) {
+    const Cluster& cl = ws.clusters[ws.corder[x]];
+    if (cl.strand == r.strand && r.ref_pos >= cl.lo - L && r.ref_pos <= cl.lo + cl.width + L)
+      continue;  // the reported locus itself
+    ++evaluated;
+    const int d = band_distance(ix, ws.seq[cl.strand], L, cl.lo, cl.width, best - 1, ws.row_a, ws.row_b);
+    if (d < best) best = d;
+  }
+  return best <= M ? best : -1;
 }
 
 // Tier SR: sample hits of the rarest part on each strand; >= 2 distinct exact
@@ -487,6 +649,8 @@ CERTA_HD inline bool certify_repeat(const IndexView& ix, int L, int P,
   r.tier = kTierSR;
   r.strand = strand[pick];
   r.d1 = 0;
+  r.nm = 0;
+  r.score = (int16_t)(L * kMatch);
   r.d2 = 0;
   r.n_best = (uint16_t)found;
   return true;
@@ -500,7 +664,7 @@ CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
                                   Result& r) {
   r.ref_pos = -1; r.n_cigar = 0; r.certified = 0; r.tier = kTierS0; r.strand = 0;
   r.reason = kOk; r.radius = -1; r.d1 = -1; r.d2 = -1; r.n_best = 0;
-  r.n_clusters = 0; r.parts = 0; r.used = 0;
+  r.n_clusters = 0; r.parts = 0; r.used = 0; r.nm = 0; r.score = 0; r.d2x = -1;
 
   const int P = L <= LMAX ? part_count(L, ix.q, ix.s) : 0;
   if (P < 1) {
@@ -545,6 +709,8 @@ CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
       r.d1 = (int8_t)b1;
       r.d2 = (int8_t)(n_best > 1 ? b1 : (b2 <= R ? b2 : -1));
       r.n_best = (uint16_t)n_best;
+      if (n_best == 1 && r.d2 < 0 && p.mapq_limit > R)
+        r.d2x = (int8_t)other_candidates(ix, L, p.mapq_limit, r, ws);
       return;
     }
   }
