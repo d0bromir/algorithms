@@ -203,15 +203,13 @@ int cmd_map(const Args& a) {
                p.k, p.budget, min_read_length(ix.q, ix.s));
   const IndexView view = ix.view(ref);
 
-  std::unique_ptr<GpuMapper> gm;
-  double t_upload = 0;
-  if (gpu) {
-    auto t = Clock::now();
-    gm.reset(new GpuMapper(ref, ix, a.geti("--device", 0)));
-    t_upload = secs(t);
-    std::fprintf(stderr, "[map] GPU %s, index uploaded in %.1f s\n", gm->device_name().c_str(), t_upload);
-  }
-
+  // Open input and outputs first, so a failure cannot leave the upload
+  // thread running. Uncompressed regular files are memory-mapped; gzip and
+  // pipes are streamed.
+  std::unique_ptr<MappedFastq> mapped;
+  std::unique_ptr<LineReader> stream;
+  if (MappedFastq::usable(a.pos[1])) mapped.reset(new MappedFastq(a.pos[1]));
+  else stream.reset(new LineReader(a.pos[1]));
   std::FILE* sam = a.has("-o") ? std::fopen(a.get("-o", "").c_str(), "wb") : stdout;
   if (!sam) throw std::runtime_error("cannot open SAM output");
   std::FILE* fq = a.has("-u") ? std::fopen(a.get("-u", "").c_str(), "wb") : nullptr;
@@ -223,9 +221,33 @@ int cmd_map(const Args& a) {
   std::fprintf(sam, "@PG\tID:certa\tPN:certa\tVN:0.4\tCL:certa map -k %d --budget %d%s\n",
                p.k, p.budget, gpu ? " --gpu" : "");
 
+  // The GPU upload runs in the background, overlapped with reading the
+  // first batch; the first map call waits for it.
+  std::unique_ptr<GpuMapper> gm;
+  double t_upload = 0;
+  std::exception_ptr upload_error;
+  std::thread uploader;
+  if (gpu) {
+    uploader = std::thread([&] {
+      try {
+        auto t = Clock::now();
+        gm.reset(new GpuMapper(ref, ix, a.geti("--device", 0)));
+        t_upload = secs(t);
+      } catch (...) {
+        upload_error = std::current_exception();
+      }
+    });
+  }
+  auto wait_for_gpu = [&] {
+    if (!uploader.joinable()) return;
+    uploader.join();
+    if (upload_error) std::rethrow_exception(upload_error);
+    std::fprintf(stderr, "[map] GPU %s, index uploaded in %.1f s (overlapped with input)\n",
+                 gm->device_name().c_str(), t_upload);
+  };
+
   // Double buffering: a reader thread parses and encodes batch n+1 while
   // batch n is mapped and written, so input parsing overlaps with mapping.
-  LineReader in(a.pos[1]);
   std::vector<FastqRecord> recs_buf[2];
   ReadBatch batch_buf[2];
   std::exception_ptr read_error;
@@ -234,7 +256,8 @@ int cmd_map(const Args& a) {
   auto load = [&](int slot) {
     try {
       auto t = Clock::now();
-      read_fastq_batch(in, recs_buf[slot], batch_size, io_threads);
+      if (mapped) mapped->next_batch(recs_buf[slot], batch_size, io_threads);
+      else read_fastq_batch(*stream, recs_buf[slot], batch_size, io_threads);
       encode_batch(recs_buf[slot], batch_buf[slot], io_threads);
       t_io += secs(t);
     } catch (...) {
@@ -245,6 +268,7 @@ int cmd_map(const Args& a) {
   std::vector<Result> res;
   Stats total;
   load(0);
+  wait_for_gpu();
   for (int cur = 0; !recs_buf[cur].empty(); cur ^= 1) {
     std::thread prefetch(load, cur ^ 1);
     const std::vector<FastqRecord>& recs = recs_buf[cur];

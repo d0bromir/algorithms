@@ -36,4 +36,21 @@ struct FastqRecord {
 size_t read_fastq_batch(LineReader& in, std::vector<FastqRecord>& out,
                         size_t max_records, int threads = 1);
 
+// Uncompressed FASTQ read in place from a memory mapping: one thread only
+// finds record boundaries (memchr); records are built on several threads.
+class MappedFastq {
+ public:
+  explicit MappedFastq(const std::string& path);
+  ~MappedFastq();
+  MappedFastq(const MappedFastq&) = delete;
+  MappedFastq& operator=(const MappedFastq&) = delete;
+  // True for a regular file that is not gzip-named (pipes and .gz use LineReader).
+  static bool usable(const std::string& path);
+  size_t next_batch(std::vector<FastqRecord>& out, size_t max_records, int threads);
+
+ private:
+  const char* base_ = nullptr;
+  size_t size_ = 0, pos_ = 0;
+};
+
 }  // namespace certa
