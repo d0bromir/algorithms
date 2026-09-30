@@ -53,6 +53,7 @@ constexpr int BIG = 1 << 20;
 // Result::certified = 2 and a conservative MAPQ.
 enum Tier : uint8_t { kTierS0 = 0, kTierS1 = 1, kTierSR = 2, kTierS2 = 3 };
 constexpr int S2_MAX = 10;  // largest --s2 edit limit (band must fit BMAX)
+constexpr int S2_TOP = 8;   // S2 evaluates only this many best-supported clusters
 static_assert(MAX_CIGAR >= 2 * S2_MAX + 1, "CIGAR buffer too small for S2");
 static_assert(4 * S2_MAX + 1 <= BMAX, "S2 band does not fit BMAX");
 
@@ -364,7 +365,8 @@ CERTA_HD inline int build_clusters(Workspace& ws, int pad, bool skip_wide) {
 // either way). A Hamming check at the member diagonals gives an upper bound
 // first, so exact matches never reach the DP. Cluster.dist is exact or cap + 1.
 CERTA_HD inline void evaluate_clusters(const IndexView& ix, int L, int nclust, int cap,
-                                       int reverse, Workspace& ws, int* pb1, int* pb2) {
+                                       int reverse, int max_eval, Workspace& ws, int* pb1,
+                                       int* pb2) {
   for (int x = 0; x < nclust; ++x) ws.corder[x] = (uint16_t)x;
   for (int x = 1; x < nclust; ++x) {  // stable sort by member count, descending
     uint16_t v = ws.corder[x];
@@ -384,9 +386,9 @@ CERTA_HD inline void evaluate_clusters(const IndexView& ix, int L, int nclust, i
   int b1 = cap + 1, b2 = cap + 1;
   for (int x = 0; x < nclust; ++x) {
     Cluster& cl = ws.clusters[ws.corder[x]];
-    cl.dist = (int8_t)(cap + 1);  // "cannot improve (b1, b2)"
+    cl.dist = (int8_t)(cap + 1);  // "cannot improve (b1, b2)", or not evaluated
     const int limit = b2 - 1;
-    if (limit < 0) continue;
+    if (limit < 0 || x >= max_eval) continue;
     const uint8_t* rd = ws.seq[cl.strand];
     int u = limit + 1;  // Hamming upper bound, only tracked below limit + 1
     for (int e = cl.beg; e < cl.end && u > 0; ++e) {
@@ -517,7 +519,7 @@ CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
   int b1 = R + 1, b2 = R + 1;
   if (nclust >= 0) {
     r.n_clusters = (uint16_t)nclust;
-    evaluate_clusters(ix, L, nclust, R, p.reverse_order, ws, &b1, &b2);
+    evaluate_clusters(ix, L, nclust, R, p.reverse_order, nclust, ws, &b1, &b2);  // all: certificate
     if (b1 <= R) {
       const int n_best = align_best(ix, L, nclust, b1, name_hash, ws, r);
       r.certified = 1;
@@ -536,7 +538,10 @@ CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
   if (D > R) {
     const int nc2 = build_clusters(ws, 2 * D, true);  // skips over-wide clusters
     int c1 = D + 1, c2 = D + 1;
-    evaluate_clusters(ix, L, nc2, D, p.reverse_order, ws, &c1, &c2);
+    // Heuristic: only the S2_TOP best-supported clusters, in a fixed order
+    // (S2 makes no exactness claim, so the order-independence test does not
+    // apply). The host caps MAPQ when clusters were left out.
+    evaluate_clusters(ix, L, nc2, D, 0, S2_TOP, ws, &c1, &c2);
     if (c1 <= D) {
       const int n_best = align_best(ix, L, nc2, c1, name_hash, ws, r);
       r.n_clusters = (uint16_t)nc2;

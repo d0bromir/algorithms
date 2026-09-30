@@ -59,7 +59,10 @@ int mapq_of(const Result& r) {
   if (r.n_best > 1) return 0;
   if (r.tier == kTierS2) {
     int second = r.d2 >= 0 ? r.d2 : g_s2_limit + 1;
-    return std::min(40, 10 * (second - r.d1));
+    // Clusters beyond the S2_TOP best-supported ones were not evaluated, so
+    // an unseen tie is possible: keep MAPQ below the usual caller cut-off.
+    const int cap = r.n_clusters > S2_TOP ? 10 : 40;
+    return std::min(cap, 10 * (second - r.d1));
   }
   int second = r.d2 >= 0 ? r.d2 : r.radius + 1;  // lower bound when unseen
   return std::min(60, 20 * (second - r.d1));
