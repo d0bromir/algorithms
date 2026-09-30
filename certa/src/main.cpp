@@ -193,10 +193,17 @@ int cmd_map(const Args& a) {
   p.s2_limit = a.geti("--s2", 8);
   if (p.s2_limit < 0 || p.s2_limit > S2_MAX) throw std::runtime_error("--s2 must be in [0, 10]");
   g_s2_limit = p.s2_limit;
+  // Pass 1 runs every read with the small budget and without S2 (uniform,
+  // fast GPU warps). Pass 2 re-runs only the reads pass 1 could not certify,
+  // as a compacted batch with --budget2 and S2, so the expensive work stays
+  // among hard reads. Each re-run read gets exactly its single-pass result.
   Params p2 = p;
   p2.budget = a.geti("--budget2", 256);
-  if (p2.budget != 0 && (p2.budget <= p.budget || p2.budget > BUDGET_MAX))
-    throw std::runtime_error("--budget2 must be 0 or in (budget, 256]");
+  if (p2.budget != 0 && (p2.budget < p.budget || p2.budget > BUDGET_MAX))
+    throw std::runtime_error("--budget2 must be 0 or in [budget, 256]");
+  if (p2.budget == 0) p2.budget = p.budget;
+  p.s2_limit = 0;
+  const bool second_pass = p2.budget > p.budget || p2.s2_limit > 0;
   const bool gpu = a.has("--gpu");
   const int threads = a.geti("-t", default_threads());
   // Threads that parse and encode the next batch while the current one maps.
@@ -229,8 +236,8 @@ int cmd_map(const Args& a) {
   for (size_t c = 0; c < ref.names.size(); ++c)
     std::fprintf(sam, "@SQ\tSN:%s\tLN:%llu\n", ref.names[c].c_str(),
                  static_cast<unsigned long long>(ref.lengths[c]));
-  std::fprintf(sam, "@PG\tID:certa\tPN:certa\tVN:0.4\tCL:certa map -k %d --budget %d%s\n",
-               p.k, p.budget, gpu ? " --gpu" : "");
+  std::fprintf(sam, "@PG\tID:certa\tPN:certa\tVN:0.5\tCL:certa map -k %d --budget %d --budget2 %d --s2 %d%s\n",
+               p.k, p.budget, p2.budget, p2.s2_limit, gpu ? " --gpu" : "");
 
   // The GPU upload runs in the background, overlapped with reading the
   // first batch; the first map call waits for it.
@@ -296,18 +303,13 @@ int cmd_map(const Args& a) {
     auto t = Clock::now();
     if (gm) gm->map(p, batch, res);
     else map_cpu(view, p, batch, res, threads);
-    if (p2.budget) {
-      // Pass 2 on a compacted batch: uncertified reads that searched fewer
-      // parts than they have (up to k + 1). Their results equal a single
-      // pass with the larger budget; certified reads keep pass-1 results.
+    if (second_pass) {
+      // Pass 2 on a compacted batch: every read pass 1 could not certify
+      // (except too-long/short reads). Certified reads keep pass-1 results.
       std::vector<size_t> redo;
       for (size_t i = 0; i < res.size(); ++i) {
         const Result& r = res[i];
-        const int want = r.parts < p.k + 1 ? r.parts : p.k + 1;
-        const bool failed = (r.certified == 0 && (r.reason == kRadiusNegative || r.reason == kNotFound)) ||
-                            r.certified == 2;  // S2 placements may certify with more parts
-        if (failed && r.used < want)
-          redo.push_back(i);
+        if (r.certified == 0 && r.reason != kBadLength) redo.push_back(i);
       }
       if (!redo.empty()) {
         ReadBatch sub;
@@ -384,8 +386,9 @@ int cmd_map(const Args& a) {
   for (int i = 1; i < kNumReasons; ++i)
     std::fprintf(stderr, "[map]   uncertified/%s: %.2f%%\n", kReasonNames[i], pct(total.reason[i]));
   std::fprintf(stderr, "[map] placed without certificate (S2, <= %d edits): %.2f%%; to fallback: %.2f%%\n",
-               p.s2_limit, pct(total.s2), pct(total.reads - total.certified - total.s2));
-  std::fprintf(stderr, "[map] escalated to budget %d: %.2f%% of reads\n", p2.budget, pct(escalated));
+               p2.s2_limit, pct(total.s2), pct(total.reads - total.certified - total.s2));
+  std::fprintf(stderr, "[map] second pass (budget %d, S2 <= %d): %.2f%% of reads\n", p2.budget,
+               p2.s2_limit, pct(escalated));
   std::fprintf(stderr,
                "[map] time: load %.2f s, upload %.2f s, read+encode %.2f s (overlapped; "
                "waited %.2f s), map %.2f s (%.0f reads/s), output %.2f s, total %.2f s "
@@ -404,7 +407,7 @@ int cmd_map(const Args& a) {
                  static_cast<unsigned long long>(total.reads), static_cast<unsigned long long>(total.bases),
                  static_cast<unsigned long long>(total.certified), static_cast<unsigned long long>(total.s0),
                  static_cast<unsigned long long>(total.s1), static_cast<unsigned long long>(total.sr),
-                 static_cast<unsigned long long>(total.s2), p.s2_limit,
+                 static_cast<unsigned long long>(total.s2), p2.s2_limit,
                  static_cast<unsigned long long>(total.ties));
     std::fprintf(js, "  \"uncertified\": {");
     for (int i = 1; i < kNumReasons; ++i)
