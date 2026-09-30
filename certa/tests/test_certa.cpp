@@ -197,7 +197,9 @@ int main(int argc, char** argv) {
     batch.hashes.push_back(i * 0x9E3779B97F4A7C15ULL);
   }
 
-  const Params configs[] = {{2, 256}, {3, 256}, {5, 256}, {4, 64}, {4, 16}, {3, 4}, {2, 1}};
+  // {k, budget, reverse_order, s2_limit}
+  const Params configs[] = {{2, 256}, {3, 256}, {5, 256}, {4, 64}, {4, 16}, {3, 4}, {2, 1},
+                            {3, 16, 0, 8}, {5, 256, 0, 10}, {2, 4, 0, 6}};
   for (const Params& p : configs) {
     std::vector<Result> res, res1, resrev;
     map_cpu(view, p, batch, res, 4);
@@ -205,7 +207,7 @@ int main(int argc, char** argv) {
     Params prev = p;
     prev.reverse_order = 1;
     map_cpu(view, prev, batch, resrev, 4);
-    int certified = 0, easy = 0, easy_cert = 0, sr = 0;
+    int certified = 0, easy = 0, easy_cert = 0, sr = 0, s2 = 0;
     int reasons[kNumReasons] = {};
     for (size_t i = 0; i < reads.size(); ++i) {
       const Result& r = res[i];
@@ -225,12 +227,21 @@ int main(int argc, char** argv) {
       for (auto& h : truth[i]) omin = std::min(omin, h.dist);
       if (reads[i].edits >= 0 && reads[i].edits <= p.k) {
         ++easy;
-        easy_cert += r.certified;
+        easy_cert += r.certified == 1;
       }
       if (r.reason == kNotFound)
         CHECK(omin > r.radius, "k=%d budget=%d read %zu: lossless violated, oracle %d <= R %d",
               p.k, p.budget, i, omin, r.radius);
       if (!r.certified) continue;
+      if (r.certified == 2) {  // S2: sound, not below the optimum, nothing within R
+        ++s2;
+        CHECK(r.tier == kTierS2 && r.d1 <= p.s2_limit, "read %zu: bad S2 result", i);
+        CHECK(rescore(view, r, reads[i].seq) == r.d1, "S2 read %zu: CIGAR rescores to %d, reported %d",
+              i, rescore(view, r, reads[i].seq), r.d1);
+        CHECK(omin > r.radius, "S2 read %zu: a locus within R=%d exists (oracle %d)", i, r.radius, omin);
+        CHECK(r.d1 >= (omin <= KMAX ? omin : KMAX + 1), "S2 read %zu: d1 %d below oracle %d", i, r.d1, omin);
+        continue;
+      }
       ++certified;
       CHECK(rescore(view, r, reads[i].seq) == r.d1,
             "k=%d read %zu: CIGAR rescores to %d, reported %d", p.k, i,
@@ -257,9 +268,9 @@ int main(int argc, char** argv) {
       }
     }
     std::fprintf(stderr,
-                 "k=%d budget=%-3d certified %3d/%zu (SR %d); reads with <=k edits certified %d/%d; "
+                 "k=%d budget=%-3d s2=%-2d certified %3d/%zu (SR %d, S2 placed %d); reads with <=k edits certified %d/%d; "
                  "uncertified: length %d, radius<0 %d, not-found %d, wide %d\n",
-                 p.k, p.budget, certified, reads.size(), sr, easy_cert, easy, reasons[kBadLength],
+                 p.k, p.budget, p.s2_limit, certified, reads.size(), sr, s2, easy_cert, easy, reasons[kBadLength],
                  reasons[kRadiusNegative], reasons[kNotFound], reasons[kClusterTooWide]);
   }
   if (failures) {

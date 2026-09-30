@@ -37,13 +37,13 @@ const char* const kReasonNames[kNumReasons] = {
     "cluster_too_wide", "cross_contig"};
 
 struct Stats {
-  uint64_t reads = 0, bases = 0, certified = 0, s0 = 0, s1 = 0, sr = 0, ties = 0;
+  uint64_t reads = 0, bases = 0, certified = 0, s0 = 0, s1 = 0, sr = 0, s2 = 0, ties = 0;
   uint64_t reason[kNumReasons] = {};
   uint64_t by_radius[KMAX + 2] = {};  // certified reads per radius R
   uint64_t by_d1[KMAX + 1] = {};
   void add(const Stats& o) {
     reads += o.reads; bases += o.bases; certified += o.certified;
-    s0 += o.s0; s1 += o.s1; sr += o.sr; ties += o.ties;
+    s0 += o.s0; s1 += o.s1; sr += o.sr; s2 += o.s2; ties += o.ties;
     for (int i = 0; i < kNumReasons; ++i) reason[i] += o.reason[i];
     for (int i = 0; i < KMAX + 2; ++i) by_radius[i] += o.by_radius[i];
     for (int i = 0; i < KMAX + 1; ++i) by_d1[i] += o.by_d1[i];
@@ -51,8 +51,16 @@ struct Stats {
 };
 
 // Provisional MAPQ from the certified distance gap (to be calibrated).
+// Provisional MAPQ from the distance gap (to be calibrated). Certified tiers:
+// the second-best distance is exact (or > R). S2: only candidates were
+// searched, so the scale is halved and capped at 40.
+int g_s2_limit = 0;
 int mapq_of(const Result& r) {
   if (r.n_best > 1) return 0;
+  if (r.tier == kTierS2) {
+    int second = r.d2 >= 0 ? r.d2 : g_s2_limit + 1;
+    return std::min(40, 10 * (second - r.d1));
+  }
   int second = r.d2 >= 0 ? r.d2 : r.radius + 1;  // lower bound when unseen
   return std::min(60, 20 * (second - r.d1));
 }
@@ -111,7 +119,7 @@ int emit(const Result& r0, const FastqRecord& rec, const Reference& ref,
   } else {
     sam += rec.seq; sam += '\t'; sam += rec.qual;
   }
-  static const char* const kTierNames[] = {"S0", "S1", "SR"};
+  static const char* const kTierNames[] = {"S0", "S1", "SR", "S2"};
   std::snprintf(buf, sizeof buf, "\tNM:i:%d\tXT:Z:%s\tXR:i:%d\tXD:i:%d\tXB:i:%d\n",
                 r.d1, kTierNames[r.tier], r.radius, r.d2, r.n_best);
   sam += buf;
@@ -182,6 +190,9 @@ int cmd_map(const Args& a) {
   if (p.budget < 1 || p.budget > BUDGET_MAX) throw std::runtime_error("--budget must be in [1, 256]");
   // Escalation: reads that fail because the budget limited how many parts
   // they could search are re-run with this budget (0 disables).
+  p.s2_limit = a.geti("--s2", 8);
+  if (p.s2_limit < 0 || p.s2_limit > S2_MAX) throw std::runtime_error("--s2 must be in [0, 10]");
+  g_s2_limit = p.s2_limit;
   Params p2 = p;
   p2.budget = a.geti("--budget2", 256);
   if (p2.budget != 0 && (p2.budget <= p.budget || p2.budget > BUDGET_MAX))
@@ -285,7 +296,9 @@ int cmd_map(const Args& a) {
       for (size_t i = 0; i < res.size(); ++i) {
         const Result& r = res[i];
         const int want = r.parts < p.k + 1 ? r.parts : p.k + 1;
-        if (!r.certified && (r.reason == kRadiusNegative || r.reason == kNotFound) && r.used < want)
+        const bool failed = (r.certified == 0 && (r.reason == kRadiusNegative || r.reason == kNotFound)) ||
+                            r.certified == 2;  // S2 placements may certify with more parts
+        if (failed && r.used < want)
           redo.push_back(i);
       }
       if (!redo.empty()) {
@@ -325,7 +338,9 @@ int cmd_map(const Args& a) {
           ++s.reads;
           s.bases += recs[i].seq.size();
           ++s.reason[reason];
-          if (reason == kOk) {
+          if (reason == kOk && res[i].certified == 2) {
+            ++s.s2;  // placed without certificate
+          } else if (reason == kOk) {
             ++s.certified;
             ++(res[i].tier == kTierS0 ? s.s0 : res[i].tier == kTierS1 ? s.s1 : s.sr);
             s.ties += res[i].n_best > 1;
@@ -360,6 +375,8 @@ int cmd_map(const Args& a) {
                pct(total.s0), pct(total.s1), pct(total.sr), pct(total.ties));
   for (int i = 1; i < kNumReasons; ++i)
     std::fprintf(stderr, "[map]   uncertified/%s: %.2f%%\n", kReasonNames[i], pct(total.reason[i]));
+  std::fprintf(stderr, "[map] placed without certificate (S2, <= %d edits): %.2f%%; to fallback: %.2f%%\n",
+               p.s2_limit, pct(total.s2), pct(total.reads - total.certified - total.s2));
   std::fprintf(stderr, "[map] escalated to budget %d: %.2f%% of reads\n", p2.budget, pct(escalated));
   std::fprintf(stderr,
                "[map] time: load %.2f s, upload %.2f s, read+encode %.2f s (overlapped; "
@@ -375,10 +392,11 @@ int cmd_map(const Args& a) {
                  gpu ? "gpu" : "cpu", gm ? gm->device_name().c_str() : "", threads);
     std::fprintf(js, "  \"k\": %d, \"budget\": %d, \"budget2\": %d, \"escalated\": %llu, \"q\": %d, \"s\": %d,\n",
                  p.k, p.budget, p2.budget, static_cast<unsigned long long>(escalated), ix.q, ix.s);
-    std::fprintf(js, "  \"reads\": %llu, \"bases\": %llu, \"certified\": %llu, \"s0\": %llu, \"s1\": %llu, \"sr\": %llu, \"ties\": %llu,\n",
+    std::fprintf(js, "  \"reads\": %llu, \"bases\": %llu, \"certified\": %llu, \"s0\": %llu, \"s1\": %llu, \"sr\": %llu, \"s2\": %llu, \"s2_limit\": %d, \"ties\": %llu,\n",
                  static_cast<unsigned long long>(total.reads), static_cast<unsigned long long>(total.bases),
                  static_cast<unsigned long long>(total.certified), static_cast<unsigned long long>(total.s0),
                  static_cast<unsigned long long>(total.s1), static_cast<unsigned long long>(total.sr),
+                 static_cast<unsigned long long>(total.s2), p.s2_limit,
                  static_cast<unsigned long long>(total.ties));
     std::fprintf(js, "  \"uncertified\": {");
     for (int i = 1; i < kNumReasons; ++i)

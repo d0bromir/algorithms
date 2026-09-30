@@ -44,12 +44,17 @@ constexpr int LMAX = 320;                       // max read length handled
 constexpr int BMAX = 48;                        // max band width (diagonals)
 constexpr int MAX_CAND = BUDGET_MAX;            // candidates per strand
 constexpr int MAX_CLUST = 2 * MAX_CAND;         // clusters over both strands
-constexpr int MAX_CIGAR = 2 * KMAX + 2;
+constexpr int MAX_CIGAR = 2 * 10 + 2;           // up to S2_MAX edits
 constexpr int REP_SAMPLE = 64;                  // hits examined for tier SR
 constexpr int REP_KEEP = 8;                     // exact copies kept for tier SR
 constexpr int BIG = 1 << 20;
 
-enum Tier : uint8_t { kTierS0 = 0, kTierS1 = 1, kTierSR = 2 };
+// S0/S1/SR are certified. S2 is a heuristic placement, reported with
+// Result::certified = 2 and a conservative MAPQ.
+enum Tier : uint8_t { kTierS0 = 0, kTierS1 = 1, kTierSR = 2, kTierS2 = 3 };
+constexpr int S2_MAX = 10;  // largest --s2 edit limit (band must fit BMAX)
+static_assert(MAX_CIGAR >= 2 * S2_MAX + 1, "CIGAR buffer too small for S2");
+static_assert(4 * S2_MAX + 1 <= BMAX, "S2 band does not fit BMAX");
 
 enum Reason : uint8_t {
   kOk = 0,
@@ -78,13 +83,16 @@ struct Params {
   int k;       // maximum certified radius sought (at most k + 1 parts used)
   int budget;  // max hits enumerated per strand
   int reverse_order = 0;  // testing only: verify clusters least-supported first
+  // Tier S2 (not certified): when no locus lies within the certified radius,
+  // align the enumerated candidates with this larger edit limit (0 = off).
+  int s2_limit = 0;
 };
 
 struct Result {
   int64_t ref_pos;              // 0-based start in concatenated reference
   uint32_t cigar[MAX_CIGAR];    // BAM encoding: (len << 4) | op
   uint8_t n_cigar;
-  uint8_t certified;            // 1 if the certificate holds
+  uint8_t certified;            // 1 certified, 2 emitted without certificate (S2)
   uint8_t tier;                 // Tier: S0 exact, S1 1..R edits, SR repeat
   uint8_t strand;               // 0 forward, 1 reverse complement
   uint8_t reason;               // Reason when not certified
@@ -317,6 +325,115 @@ CERTA_HD inline void band_traceback(const IndexView& ix, const uint8_t* rd,
   for (int x = nrev - 1; x >= 0; --x) push_op(r, rev[x]);
 }
 
+// Groups the sorted candidate diagonals of both strands into clusters whose
+// bands (+-pad) overlap. Returns the number of clusters, or -1 when a cluster
+// is wider than BMAX and skip_wide is false (with skip_wide it is dropped).
+CERTA_HD inline int build_clusters(Workspace& ws, int pad, bool skip_wide) {
+  int nclust = 0;
+  for (int st = 0; st < 2; ++st) {
+    const int64_t* c = ws.cand[st];
+    const int n = ws.ncand[st];
+    int i = 0;
+    while (i < n) {
+      int64_t dmin = c[i], dmax = c[i];
+      int j = i + 1;
+      while (j < n && c[j] - dmax <= 2 * pad) { dmax = c[j]; ++j; }
+      const int64_t width = dmax - dmin + 2 * pad + 1;
+      if (width > BMAX) {
+        if (!skip_wide) return -1;
+        i = j;
+        continue;
+      }
+      Cluster& cl = ws.clusters[nclust++];
+      cl.lo = dmin - pad;
+      cl.width = (uint8_t)width;
+      cl.strand = (uint8_t)st;
+      cl.beg = (uint16_t)i;
+      cl.end = (uint16_t)j;
+      i = j;
+    }
+  }
+  return nclust;
+}
+
+// Verify clusters, best-supported first, tracking the two smallest distances
+// b1 <= b2 (initially cap + 1). Only a distance below b2 can change (b1, b2),
+// so each cluster is evaluated with limit b2 - 1: b1 is exact, and when
+// b1 < b2 the second-best distance b2 (<= cap) is exact too. Once two loci tie
+// at b1 the rest are skipped, so the tie count becomes a lower bound (MAPQ 0
+// either way). A Hamming check at the member diagonals gives an upper bound
+// first, so exact matches never reach the DP. Cluster.dist is exact or cap + 1.
+CERTA_HD inline void evaluate_clusters(const IndexView& ix, int L, int nclust, int cap,
+                                       int reverse, Workspace& ws, int* pb1, int* pb2) {
+  for (int x = 0; x < nclust; ++x) ws.corder[x] = (uint16_t)x;
+  for (int x = 1; x < nclust; ++x) {  // stable sort by member count, descending
+    uint16_t v = ws.corder[x];
+    int sv = ws.clusters[v].end - ws.clusters[v].beg, y = x - 1;
+    while (y >= 0 && ws.clusters[ws.corder[y]].end - ws.clusters[ws.corder[y]].beg < sv) {
+      ws.corder[y + 1] = ws.corder[y];
+      --y;
+    }
+    ws.corder[y + 1] = v;
+  }
+  if (reverse)  // results must not depend on the order (tested)
+    for (int x = 0, y = nclust - 1; x < y; ++x, --y) {
+      uint16_t t = ws.corder[x];
+      ws.corder[x] = ws.corder[y];
+      ws.corder[y] = t;
+    }
+  int b1 = cap + 1, b2 = cap + 1;
+  for (int x = 0; x < nclust; ++x) {
+    Cluster& cl = ws.clusters[ws.corder[x]];
+    cl.dist = (int8_t)(cap + 1);  // "cannot improve (b1, b2)"
+    const int limit = b2 - 1;
+    if (limit < 0) continue;
+    const uint8_t* rd = ws.seq[cl.strand];
+    int u = limit + 1;  // Hamming upper bound, only tracked below limit + 1
+    for (int e = cl.beg; e < cl.end && u > 0; ++e) {
+      int h = hamming(ix, rd, L, ws.cand[cl.strand][e], u - 1);
+      if (h < u) u = h;
+    }
+    int d;
+    if (u == 0) {
+      d = 0;
+    } else {
+      const int lim = u <= limit ? u : limit;
+      d = band_distance(ix, rd, L, cl.lo, cl.width, lim, ws.row_a, ws.row_b);
+      if (d > lim) continue;  // distance >= b2: irrelevant
+    }
+    cl.dist = (int8_t)d;
+    if (d < b1) { b2 = b1; b1 = d; } else if (d < b2) { b2 = d; }
+  }
+  *pb1 = b1;
+  *pb2 = b2;
+}
+
+// Chooses among the clusters at distance d1 (deterministically, seeded by the
+// read name), aligns the read there and returns how many clusters tie.
+CERTA_HD inline int align_best(const IndexView& ix, int L, int nclust, int d1,
+                               uint64_t name_hash, Workspace& ws, Result& r) {
+  int n_best = 0;
+  for (int x = 0; x < nclust; ++x) n_best += ws.clusters[x].dist == d1;
+  int pick = (int)(name_hash % (uint64_t)n_best), chosen = -1;
+  for (int x = 0; x < nclust; ++x)
+    if (ws.clusters[x].dist == d1 && pick-- == 0) { chosen = x; break; }
+  const Cluster& cl = ws.clusters[chosen];
+  const uint8_t* rd = ws.seq[cl.strand];
+  // Prefer an ungapped alignment when it is optimal.
+  int64_t ungapped = -1;
+  for (int b = 0; b < cl.width && ungapped < 0; ++b)
+    if (hamming(ix, rd, L, cl.lo + b, d1) == d1) ungapped = cl.lo + b;
+  if (ungapped >= 0) {
+    r.ref_pos = ungapped;
+    r.n_cigar = 1;
+    r.cigar[0] = ((uint32_t)L << 4) | kOpM;
+  } else {
+    band_traceback(ix, rd, L, cl.lo, cl.width, ws, r);
+  }
+  r.strand = cl.strand;
+  return n_best;
+}
+
 // Tier SR: sample hits of the rarest part on each strand; >= 2 distinct exact
 // full-read matches prove d1 = 0 and a multi-mapping read.
 CERTA_HD inline bool certify_repeat(const IndexView& ix, int L, int P,
@@ -392,107 +509,46 @@ CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
   enumerate_parts(ix, L, P, m, ws, 0);
   enumerate_parts(ix, L, P, m, ws, 1);
 
-  // Cluster sorted diagonals whose bands overlap.
-  const int pad = 2 * R;  // indels shift the start diagonal by <= R
-  int nclust = 0;
-  for (int st = 0; st < 2; ++st) {
-    int64_t* c = ws.cand[st];
-    int n = ws.ncand[st];
-    sort_i64(c, n);
-    int i = 0;
-    while (i < n) {
-      int64_t dmin = c[i], dmax = c[i];
-      int j = i + 1;
-      while (j < n && c[j] - dmax <= 2 * pad) { dmax = c[j]; ++j; }
-      int64_t width = dmax - dmin + 2 * pad + 1;
-      if (width > BMAX) { r.reason = kClusterTooWide; return; }
-      Cluster& cl = ws.clusters[nclust++];
-      cl.lo = dmin - pad;
-      cl.width = (uint8_t)width;
-      cl.strand = (uint8_t)st;
-      cl.beg = (uint16_t)i;
-      cl.end = (uint16_t)j;
-      i = j;
-    }
-  }
-  r.n_clusters = (uint16_t)nclust;
+  sort_i64(ws.cand[0], ws.ncand[0]);
+  sort_i64(ws.cand[1], ws.ncand[1]);
 
-  // Verify clusters, best-supported first, tracking the two smallest
-  // distances b1 <= b2. Only a distance below b2 can change (b1, b2), so each
-  // cluster is evaluated with limit b2 - 1: d1 = b1 is exact, and when b1 < b2
-  // the second-best distance b2 (<= R) is exact too. Once two loci tie at b1,
-  // the rest are skipped and n_best becomes a lower bound (MAPQ 0 either way).
-  // A Hamming check at the member diagonals gives an upper bound first, so
-  // exact matches never reach the DP.
-  for (int x = 0; x < nclust; ++x) ws.corder[x] = (uint16_t)x;
-  for (int x = 1; x < nclust; ++x) {  // stable sort by member count, descending
-    uint16_t v = ws.corder[x];
-    int sv = ws.clusters[v].end - ws.clusters[v].beg, y = x - 1;
-    while (y >= 0 && ws.clusters[ws.corder[y]].end - ws.clusters[ws.corder[y]].beg < sv) {
-      ws.corder[y + 1] = ws.corder[y];
-      --y;
-    }
-    ws.corder[y + 1] = v;
-  }
-  if (p.reverse_order)  // results must not depend on the order (tested)
-    for (int x = 0, y = nclust - 1; x < y; ++x, --y) {
-      uint16_t t = ws.corder[x];
-      ws.corder[x] = ws.corder[y];
-      ws.corder[y] = t;
-    }
+  // Certified path: every locus within R edits contains an enumerated part.
+  const int nclust = build_clusters(ws, 2 * R, false);  // indels shift <= R
   int b1 = R + 1, b2 = R + 1;
-  for (int x = 0; x < nclust; ++x) {
-    Cluster& cl = ws.clusters[ws.corder[x]];
-    cl.dist = (int8_t)(R + 1);  // "cannot improve (b1, b2)"
-    const int limit = b2 - 1;
-    if (limit < 0) continue;
-    const uint8_t* rd = ws.seq[cl.strand];
-    int u = limit + 1;  // Hamming upper bound, only tracked below limit + 1
-    for (int e = cl.beg; e < cl.end && u > 0; ++e) {
-      int h = hamming(ix, rd, L, ws.cand[cl.strand][e], u - 1);
-      if (h < u) u = h;
+  if (nclust >= 0) {
+    r.n_clusters = (uint16_t)nclust;
+    evaluate_clusters(ix, L, nclust, R, p.reverse_order, ws, &b1, &b2);
+    if (b1 <= R) {
+      const int n_best = align_best(ix, L, nclust, b1, name_hash, ws, r);
+      r.certified = 1;
+      r.tier = b1 == 0 ? kTierS0 : kTierS1;
+      r.d1 = (int8_t)b1;
+      r.d2 = (int8_t)(n_best > 1 ? b1 : (b2 <= R ? b2 : -1));
+      r.n_best = (uint16_t)n_best;
+      return;
     }
-    int d;
-    if (u == 0) {
-      d = 0;
-    } else {
-      const int lim = u <= limit ? u : limit;
-      d = band_distance(ix, rd, L, cl.lo, cl.width, lim, ws.row_a, ws.row_b);
-      if (d > lim) continue;  // distance >= b2: irrelevant
-    }
-    cl.dist = (int8_t)d;
-    if (d < b1) { b2 = b1; b1 = d; } else if (d < b2) { b2 = d; }
   }
 
-  const int d1 = b1;
-  if (d1 > R) { r.reason = kNotFound; return; }
-  int n_best = 0;
-  for (int x = 0; x < nclust; ++x) n_best += ws.clusters[x].dist == d1;
-  const int d2 = n_best > 1 ? d1 : (b2 <= R ? b2 : -1);
-  // Deterministic, name-seeded choice among tied loci.
-  int pick = (int)(name_hash % (uint64_t)n_best), chosen = -1;
-  for (int x = 0; x < nclust; ++x)
-    if (ws.clusters[x].dist == d1 && pick-- == 0) { chosen = x; break; }
-  const Cluster& cl = ws.clusters[chosen];
-  const uint8_t* rd = ws.seq[cl.strand];
-
-  // Prefer an ungapped alignment when it is optimal.
-  int64_t ungapped = -1;
-  for (int b = 0; b < cl.width && ungapped < 0; ++b)
-    if (hamming(ix, rd, L, cl.lo + b, d1) == d1) ungapped = cl.lo + b;
-  if (ungapped >= 0) {
-    r.ref_pos = ungapped;
-    r.n_cigar = 1;
-    r.cigar[0] = ((uint32_t)L << 4) | kOpM;
-  } else {
-    band_traceback(ix, rd, L, cl.lo, cl.width, ws, r);
+  // Tier S2 (no certificate): best alignment among the enumerated candidates
+  // with up to D edits. A better locus with R+1..D edits could exist where no
+  // enumerated part matches exactly, so MAPQ is set conservatively by the host.
+  const int D = p.s2_limit < S2_MAX ? p.s2_limit : S2_MAX;
+  if (D > R) {
+    const int nc2 = build_clusters(ws, 2 * D, true);  // skips over-wide clusters
+    int c1 = D + 1, c2 = D + 1;
+    evaluate_clusters(ix, L, nc2, D, p.reverse_order, ws, &c1, &c2);
+    if (c1 <= D) {
+      const int n_best = align_best(ix, L, nc2, c1, name_hash, ws, r);
+      r.n_clusters = (uint16_t)nc2;
+      r.certified = 2;
+      r.tier = kTierS2;
+      r.d1 = (int8_t)c1;
+      r.d2 = (int8_t)(n_best > 1 ? c1 : (c2 <= D ? c2 : -1));
+      r.n_best = (uint16_t)n_best;
+      return;
+    }
   }
-  r.certified = 1;
-  r.tier = d1 == 0 ? kTierS0 : kTierS1;
-  r.strand = cl.strand;
-  r.d1 = (int8_t)d1;
-  r.d2 = (int8_t)d2;
-  r.n_best = (uint16_t)n_best;
+  r.reason = nclust < 0 ? kClusterTooWide : kNotFound;
 }
 
 }  // namespace certa
