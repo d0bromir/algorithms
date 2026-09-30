@@ -163,7 +163,21 @@ pipelines.** Both are single-end, 22×. Precision / recall / F1:
 |---|---|---|---|---|
 | BWA-MEM2 | 0.9898 / 0.9778 / **0.9837** | 0.9851 / 0.9603 / **0.9726** | 0.9888 / 0.9778 / 0.9833 | 0.9341 / 0.9125 / 0.9231 |
 | CERTA v0.6 + minibwa (run 3) | 0.9897 / 0.9767 / 0.9832 | 0.9853 / 0.9619 / **0.9734** | 0.9884 / 0.9778 / 0.9831 | 0.9339 / 0.9144 / **0.9240** |
-| CERTA, MAPQ as bwa-mem (run 4) | *pending* | *pending* | *pending* | *pending* |
+| **CERTA v0.6 + minibwa, MAPQ as bwa-mem (run 4, final)** | 0.9886 / **0.9810** / **0.9848** | 0.9851 / **0.9623** / **0.9736** | 0.9873 / **0.9809** / **0.9841** | 0.9335 / **0.9148** / **0.9241** |
+
+In the final version, F1 is **higher than BWA-MEM2 for SNVs and indels
+with both callers**:
+
+| Measure | Δ F1 |
+|---|---|
+| GATK SNV | +0.0011 |
+| GATK indel | +0.0010 |
+| bcftools SNV | +0.0008 |
+| bcftools indel | +0.0010 |
+
+The gain comes from recall (GATK SNV: 228 more true positives); precision
+is slightly lower (0.9886 vs 0.9898). Raw rtg vcfeval output:
+`results/hg002_2026-09/giab_chr20_vcfeval.tsv`.
 
 How the accuracy was reached (each step measured on the same protocol):
 1. **First version: indels suffered.** Reporting edit-distance alignments
@@ -177,10 +191,29 @@ How the accuracy was reached (each step measured on the same protocol):
    BWA-MEM2 gives 22–36, because BWA-MEM's default MAPQ formula differs from
    the one first used. Run 4 uses BWA-MEM's formula.
 
-**Speed (20 M reads, galaxy: A100 + 64 ARM cores, same 64 CPU threads for
-every tool):** see `bench/RESULTS.md`. At v0.3 the certified GPU pipeline
-was 4.1× faster than BWA-MEM2 and 1.08× faster than minibwa. The final
-v0.6 timing is *pending*.
+**Speed.** 20 M reads on galaxy: an A100 plus 64 ARM cores. Every tool
+gets the same 64 CPU threads; for CERTA that is 16 threads plus the GPU
+for the certified tier and 48 threads for concurrent minibwa. Median of 3
+runs in one session, spread < 2 %
+(`results/hg002_2026-09/galaxy_timing_v06.tsv`):
+
+| Pipeline | Wall | CPU time | vs BWA-MEM2 | vs minibwa |
+|---|---|---|---|---|
+| BWA-MEM2 | 99.81 s | 5,230 s | 1.00× | 0.27× |
+| minibwa | 26.58 s | 1,367 s | 3.75× | 1.00× |
+| **CERTA v0.6 (A100) → minibwa, concurrent** | **22.94 s** | **707 s** | **4.35×** | **1.16×** |
+| *CERTA certified tier alone (94.4 % of reads)* | *11.02 s* | *69 s* | — | — |
+
+The complete pipeline is **4.35× faster than BWA-MEM2 with better F1**. It
+also uses **7.4× less CPU time**, which matters for cost per genome. It is
+1.16× faster than the fastest tool (minibwa), which has more provable errors
+(§1).
+
+The pilot did not reach 10× over BWA-MEM2:
+- the certified tier alone processes 94 % of reads in 11 s (9× BWA-MEM2's
+  wall time);
+- the 5.6 % of reads that are not certified take longer than that on 48
+  CPU threads (Amdahl's law; `bench/RESULTS.md` §5b).
 
 ## 5. Contributions, stated for a paper
 
@@ -198,8 +231,9 @@ v0.6 timing is *pending*.
    the GPU with uniform warps; a compacted second pass handles the hard ones;
    the fallback runs concurrently on the CPU. The design is deterministic,
    with identical output on CPU, GPU, x86-64 and ARM64.
-4. **Non-inferior variant-calling accuracy** relative to BWA-MEM2 under GATK
-   and bcftools on GIAB HG002 chr20 (pilot; final numbers pending).
+4. **Speed and accuracy together (pilot).** On GIAB HG002 chr20, F1 is
+   higher than BWA-MEM2's for SNVs and indels with both GATK and bcftools,
+   at 4.35× BWA-MEM2's speed and 7.4× less CPU time.
 
 ## 6. Limitations a reviewer will raise (and what would answer them)
 
@@ -215,5 +249,13 @@ v0.6 timing is *pending*.
 - **MAPQ is not calibrated from first principles.** It reuses BWA-MEM's
   formula. Calibrating it on certified second-best distances is future work.
 - **Speed vs the fastest tool is modest.** The certified tier is fast, but
-  the uncertified ~5 % dominate the remaining cost (`bench/RESULTS.md` §5b).
-  Large speedups exist against BWA-MEM2, not against minibwa.
+  the uncertified ~5.6 % dominate the remaining cost (`bench/RESULTS.md`
+  §5b). The speedup is 4.35× against BWA-MEM2 and only 1.16× against
+  minibwa. Answer: fewer uncertified reads (paired-end, a certified
+  local-alignment mode) or a faster engine for them.
+- **The GPU is part of the claim.** The comparison is A100 + 64 threads vs
+  64 threads. Cost per genome (GPU hour vs CPU hours) should be reported
+  alongside wall time.
+- **Precision is slightly lower than BWA-MEM2's** (GATK SNV 0.9886 vs
+  0.9898), with F1 higher through recall. A multi-sample study is needed to
+  show this is systematic and not sample noise.
