@@ -171,12 +171,17 @@ CERTA_HD inline int part_count(int L, int q, int s) {
 // Shortest read with at least one part; radius R needs R + 1 parts.
 CERTA_HD inline int min_read_length(int q, int s) { return q + s - 1; }
 
+// Shell sort (Ciura gaps): O(n^1.3) instead of insertion sort's O(n^2), which
+// stalled whole GPU warps on repetitive reads with hundreds of candidates.
 CERTA_HD inline void sort_i64(int64_t* a, int n) {
-  for (int i = 1; i < n; ++i) {
-    int64_t v = a[i];
-    int j = i - 1;
-    while (j >= 0 && a[j] > v) { a[j + 1] = a[j]; --j; }
-    a[j + 1] = v;
+  const int gaps[] = {132, 57, 23, 10, 4, 1};
+  for (int g : gaps) {
+    for (int i = g; i < n; ++i) {
+      int64_t v = a[i];
+      int j = i;
+      while (j >= g && a[j - g] > v) { a[j] = a[j - g]; j -= g; }
+      a[j] = v;
+    }
   }
 }
 

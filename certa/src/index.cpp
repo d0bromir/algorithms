@@ -142,7 +142,7 @@ Index Index::build(const Reference& ref, int q, int s, int threads) {
   std::vector<KeyPos>().swap(kp);
 
   int bits = 8;
-  while (bits < 26 && (uint64_t(1) << (bits + 1)) <= ix.keys.size()) ++bits;
+  while (bits < 28 && (uint64_t(1) << (bits + 1)) <= ix.keys.size()) ++bits;
   ix.dir_bits = std::min(bits, 2 * q);
   const int shift = 2 * q - ix.dir_bits;
   const uint64_t nb = uint64_t(1) << ix.dir_bits;
