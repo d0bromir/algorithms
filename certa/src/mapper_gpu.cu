@@ -93,6 +93,7 @@ GpuMapper::GpuMapper(const Reference& ref, const Index& ix, int device)
 
 GpuMapper::~GpuMapper() {
   Impl& m = *impl_;
+  cudaSetDevice(m.device);  // may run on a different host thread
   cudaFree(m.d_ref); cudaFree(m.d_keys); cudaFree(m.d_pos); cudaFree(m.d_dir);
   cudaFree(m.d_codes); cudaFree(m.d_offs); cudaFree(m.d_lens);
   cudaFree(m.d_hashes); cudaFree(m.d_out);
@@ -100,6 +101,9 @@ GpuMapper::~GpuMapper() {
 
 void GpuMapper::map(const Params& p, const ReadBatch& b, std::vector<Result>& out) {
   Impl& m = *impl_;
+  // The current CUDA device is per host thread, and the mapper may have been
+  // built on another thread (the background upload); select it every call.
+  check(cudaSetDevice(m.device), "cudaSetDevice");
   const size_t n = b.size();
   out.resize(n);
   if (n == 0) return;
