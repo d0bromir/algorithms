@@ -114,14 +114,14 @@ Reference make_reference(std::mt19937_64& g) {
   for (int r = 0; r < 10; ++r)
     std::copy(elem.begin(), elem.end(), c2.begin() + 20000 + r * 350);
   Reference ref;
-  ref.seq.assign(kContigPad, 4);
+  ref.seq.owned.assign(kContigPad, 4);
   const std::vector<uint8_t>* cs[2] = {&c1, &c2};
   for (int c = 0; c < 2; ++c) {
     ref.names.push_back("chr" + std::to_string(c + 1));
-    ref.offsets.push_back(ref.seq.size());
+    ref.offsets.push_back(ref.seq.owned.size());
     ref.lengths.push_back(cs[c]->size());
-    ref.seq.insert(ref.seq.end(), cs[c]->begin(), cs[c]->end());
-    ref.seq.insert(ref.seq.end(), kContigPad, 4);
+    ref.seq.owned.insert(ref.seq.owned.end(), cs[c]->begin(), cs[c]->end());
+    ref.seq.owned.insert(ref.seq.owned.end(), kContigPad, 4);
   }
   return ref;
 }
@@ -172,7 +172,7 @@ int main(int argc, char** argv) {
       int64_t start = a >= 0 && c == 0 ? a + static_cast<int64_t>(g() % 1500)
                                        : static_cast<int64_t>(g() % (ref.lengths[c] - L - 20));
       start += static_cast<int64_t>(ref.offsets[c]);
-      s.assign(ref.seq.begin() + start, ref.seq.begin() + start + L + 10);
+      s.assign(ref.seq.owned.begin() + start, ref.seq.owned.begin() + start + L + 10);
       mutate(g, s, edits);
       s.resize(L);
       if (g() % 2) {  // reverse strand
@@ -187,7 +187,7 @@ int main(int argc, char** argv) {
 
   std::fprintf(stderr, "computing oracle for %zu reads over %zu bases...\n", reads.size(), ref.seq.size());
   std::vector<std::vector<Hit>> truth;
-  for (auto& r : reads) truth.push_back(oracle(ref.seq, r.seq.data(), static_cast<int>(r.seq.size()), KMAX));
+  for (auto& r : reads) truth.push_back(oracle(ref.seq.owned, r.seq.data(), static_cast<int>(r.seq.size()), KMAX));
 
   ReadBatch batch;
   for (size_t i = 0; i < reads.size(); ++i) {

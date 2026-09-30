@@ -6,6 +6,11 @@
 #include <stdexcept>
 #include <thread>
 
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include "seqio.h"
 
 namespace certa {
@@ -24,29 +29,30 @@ Reference Reference::load_fasta(const std::string& path) {
   Reference ref;
   LineReader in(path);
   std::string line;
-  ref.seq.assign(kContigPad, 4);
+  std::vector<uint8_t>& seq = ref.seq.owned;
+  seq.assign(kContigPad, 4);
   bool open = false;
   while (in.getline(line)) {
     if (line.empty()) continue;
     if (line[0] == '>') {
       if (open) {
-        ref.lengths.back() = ref.seq.size() - ref.offsets.back();
-        ref.seq.insert(ref.seq.end(), kContigPad, 4);
+        ref.lengths.back() = seq.size() - ref.offsets.back();
+        seq.insert(seq.end(), kContigPad, 4);
       }
       size_t sp = line.find_first_of(" \t");
       ref.names.push_back(line.substr(1, sp == std::string::npos ? std::string::npos : sp - 1));
-      ref.offsets.push_back(ref.seq.size());
+      ref.offsets.push_back(seq.size());
       ref.lengths.push_back(0);
       open = true;
       continue;
     }
     if (!open) throw std::runtime_error("FASTA does not start with '>': " + path);
-    for (char c : line) ref.seq.push_back(encode_base(c));
+    for (char c : line) seq.push_back(encode_base(c));
   }
   if (!open) throw std::runtime_error("no sequences in " + path);
-  ref.lengths.back() = ref.seq.size() - ref.offsets.back();
-  ref.seq.insert(ref.seq.end(), kContigPad, 4);
-  if (ref.seq.size() >= (uint64_t(1) << 32))
+  ref.lengths.back() = seq.size() - ref.offsets.back();
+  seq.insert(seq.end(), kContigPad, 4);
+  if (seq.size() >= (uint64_t(1) << 32))
     throw std::runtime_error("reference longer than 2^32 bases is not supported");
   return ref;
 }
@@ -133,22 +139,25 @@ Index Index::build(const Reference& ref, int q, int s, int threads) {
     bounds.swap(next);
   }
 
-  ix.keys.resize(kp.size());
-  ix.pos.resize(kp.size());
+  std::vector<uint64_t>& keys = ix.keys.owned;
+  std::vector<uint32_t>& pos = ix.pos.owned;
+  keys.resize(kp.size());
+  pos.resize(kp.size());
   for (size_t i = 0; i < kp.size(); ++i) {
-    ix.keys[i] = kp[i].key;
-    ix.pos[i] = kp[i].pos;
+    keys[i] = kp[i].key;
+    pos[i] = kp[i].pos;
   }
   std::vector<KeyPos>().swap(kp);
 
   int bits = 8;
-  while (bits < 28 && (uint64_t(1) << (bits + 1)) <= ix.keys.size()) ++bits;
+  while (bits < 28 && (uint64_t(1) << (bits + 1)) <= keys.size()) ++bits;
   ix.dir_bits = std::min(bits, 2 * q);
   const int shift = 2 * q - ix.dir_bits;
   const uint64_t nb = uint64_t(1) << ix.dir_bits;
-  ix.dir.assign(nb + 1, 0);
-  for (uint64_t k : ix.keys) ++ix.dir[(k >> shift) + 1];
-  for (uint64_t b = 0; b < nb; ++b) ix.dir[b + 1] += ix.dir[b];
+  std::vector<uint64_t>& dir = ix.dir.owned;
+  dir.assign(nb + 1, 0);
+  for (uint64_t k : keys) ++dir[(k >> shift) + 1];
+  for (uint64_t b = 0; b < nb; ++b) dir[b + 1] += dir[b];
   return ix;
 }
 
@@ -168,7 +177,12 @@ IndexView Index::view(const Reference& ref) const {
 
 namespace {
 
-const char kMagic[8] = {'C', 'E', 'R', 'T', 'A', 'I', 'X', '1'};
+// v1: arrays packed after their sizes (read with fread).
+// v2: every array starts on a 64-byte boundary, so it can be used in place
+// from a memory mapping.
+const char kMagicV1[8] = {'C', 'E', 'R', 'T', 'A', 'I', 'X', '1'};
+const char kMagicV2[8] = {'C', 'E', 'R', 'T', 'A', 'I', 'X', '2'};
+constexpr uint64_t kAlign = 64;
 
 struct File {
   std::FILE* f;
@@ -184,13 +198,50 @@ struct File {
   }
   template <class T> void put(T v) { write(&v, sizeof v); }
   template <class T> T get() { T v; read(&v, sizeof v); return v; }
-  template <class T> void put_vec(const std::vector<T>& v) {
-    put<uint64_t>(v.size());
-    write(v.data(), v.size() * sizeof(T));
+  // v2 layout: size, zero padding to a 64-byte boundary, then the data.
+  template <class T> void put_array(const Array<T>& a) {
+    put<uint64_t>(a.size());
+    static const char zeros[kAlign] = {};
+    long at = std::ftell(f);
+    write(zeros, (kAlign - static_cast<uint64_t>(at) % kAlign) % kAlign);
+    write(a.data(), a.size() * sizeof(T));
   }
-  template <class T> void get_vec(std::vector<T>& v) {
+  template <class T> void get_vec(std::vector<T>& v) {  // v1 layout
     v.resize(get<uint64_t>());
     read(v.data(), v.size() * sizeof(T));
+  }
+};
+
+// A read-only file mapping, released when the last Index referring to it goes.
+struct Mapping {
+  void* base = MAP_FAILED;
+  size_t size = 0;
+  ~Mapping() {
+    if (base != MAP_FAILED) munmap(base, size);
+  }
+};
+
+// Sequential reader over the mapped v2 file.
+struct Cursor {
+  const char* base;
+  uint64_t at, size;
+  void need(uint64_t n) const {
+    if (at + n > size) throw std::runtime_error("index file truncated");
+  }
+  template <class T> T get() {
+    need(sizeof(T));
+    T v;
+    std::memcpy(&v, base + at, sizeof v);
+    at += sizeof v;
+    return v;
+  }
+  template <class T> void array(Array<T>& a) {
+    a.len = get<uint64_t>();
+    at += (kAlign - at % kAlign) % kAlign;
+    need(a.len * sizeof(T));
+    a.ptr = reinterpret_cast<const T*>(base + at);
+    a.owned.clear();
+    at += a.len * sizeof(T);
   }
 };
 
@@ -198,7 +249,7 @@ struct File {
 
 void save_index(const std::string& path, const Reference& ref, const Index& ix) {
   File f(path, "wb");
-  f.write(kMagic, sizeof kMagic);
+  f.write(kMagicV2, sizeof kMagicV2);
   f.put<int32_t>(ix.q);
   f.put<int32_t>(ix.s);
   f.put<int32_t>(ix.dir_bits);
@@ -209,35 +260,73 @@ void save_index(const std::string& path, const Reference& ref, const Index& ix) 
     f.put<uint64_t>(ref.offsets[i]);
     f.put<uint64_t>(ref.lengths[i]);
   }
-  f.put_vec(ref.seq);
-  f.put_vec(ix.keys);
-  f.put_vec(ix.pos);
-  f.put_vec(ix.dir);
+  f.put_array(ref.seq);
+  f.put_array(ix.keys);
+  f.put_array(ix.pos);
+  f.put_array(ix.dir);
 }
 
 void load_index(const std::string& path, Reference& ref, Index& ix) {
-  File f(path, "rb");
   char magic[8];
-  f.read(magic, sizeof magic);
-  if (std::memcmp(magic, kMagic, sizeof magic) != 0)
-    throw std::runtime_error(path + " is not a CERTA index (or wrong version)");
-  ix.q = f.get<int32_t>();
-  ix.s = f.get<int32_t>();
-  ix.dir_bits = f.get<int32_t>();
-  uint64_t n = f.get<uint64_t>();
+  {
+    File f(path, "rb");
+    f.read(magic, sizeof magic);
+    if (std::memcmp(magic, kMagicV1, sizeof magic) == 0) {  // legacy: fread
+      ix.q = f.get<int32_t>();
+      ix.s = f.get<int32_t>();
+      ix.dir_bits = f.get<int32_t>();
+      uint64_t n = f.get<uint64_t>();
+      ref.names.resize(n);
+      ref.offsets.resize(n);
+      ref.lengths.resize(n);
+      for (uint64_t i = 0; i < n; ++i) {
+        ref.names[i].resize(f.get<uint64_t>());
+        f.read(&ref.names[i][0], ref.names[i].size());
+        ref.offsets[i] = f.get<uint64_t>();
+        ref.lengths[i] = f.get<uint64_t>();
+      }
+      f.get_vec(ref.seq.owned);
+      f.get_vec(ix.keys.owned);
+      f.get_vec(ix.pos.owned);
+      f.get_vec(ix.dir.owned);
+      return;
+    }
+    if (std::memcmp(magic, kMagicV2, sizeof magic) != 0)
+      throw std::runtime_error(path + " is not a CERTA index");
+  }
+  int fd = ::open(path.c_str(), O_RDONLY);
+  if (fd < 0) throw std::runtime_error("cannot open " + path);
+  struct stat st;
+  if (fstat(fd, &st) != 0) {
+    ::close(fd);
+    throw std::runtime_error("cannot stat " + path);
+  }
+  auto m = std::make_shared<Mapping>();
+  m->size = static_cast<size_t>(st.st_size);
+  m->base = mmap(nullptr, m->size, PROT_READ, MAP_SHARED | MAP_POPULATE, fd, 0);
+  ::close(fd);
+  if (m->base == MAP_FAILED) throw std::runtime_error("cannot mmap " + path);
+  Cursor c{static_cast<const char*>(m->base), sizeof magic, m->size};
+  ix.q = c.get<int32_t>();
+  ix.s = c.get<int32_t>();
+  ix.dir_bits = c.get<int32_t>();
+  uint64_t n = c.get<uint64_t>();
   ref.names.resize(n);
   ref.offsets.resize(n);
   ref.lengths.resize(n);
   for (uint64_t i = 0; i < n; ++i) {
-    ref.names[i].resize(f.get<uint64_t>());
-    f.read(&ref.names[i][0], ref.names[i].size());
-    ref.offsets[i] = f.get<uint64_t>();
-    ref.lengths[i] = f.get<uint64_t>();
+    uint64_t len = c.get<uint64_t>();
+    c.need(len);
+    ref.names[i].assign(c.base + c.at, len);
+    c.at += len;
+    ref.offsets[i] = c.get<uint64_t>();
+    ref.lengths[i] = c.get<uint64_t>();
   }
-  f.get_vec(ref.seq);
-  f.get_vec(ix.keys);
-  f.get_vec(ix.pos);
-  f.get_vec(ix.dir);
+  c.array(ref.seq);
+  c.array(ix.keys);
+  c.array(ix.pos);
+  c.array(ix.dir);
+  ix.mapping = m;
 }
 
 }  // namespace certa
