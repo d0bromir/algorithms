@@ -18,22 +18,11 @@ void check(cudaError_t e, const char* what) {
                              cudaGetErrorString(e));
 }
 
-// Copies n elements to a new device buffer. The host range (usually a
-// read-only memory mapping of the index) is temporarily registered as pinned
-// memory, which roughly doubles PCIe throughput; if registration is refused
-// the ordinary pageable copy is used.
 template <class T>
 T* upload(const T* host, size_t n, const char* what) {
   T* dev = nullptr;
   check(cudaMalloc(&dev, (n ? n : 1) * sizeof(T)), what);
-  if (!n) return dev;
-  void* p = const_cast<T*>(host);
-  const size_t bytes = n * sizeof(T);
-  const bool pinned =
-      cudaHostRegister(p, bytes, cudaHostRegisterReadOnly | cudaHostRegisterPortable) == cudaSuccess;
-  if (!pinned) cudaGetLastError();  // clear the refused registration
-  check(cudaMemcpy(dev, host, bytes, cudaMemcpyHostToDevice), what);
-  if (pinned) cudaHostUnregister(p);
+  if (n) check(cudaMemcpy(dev, host, n * sizeof(T), cudaMemcpyHostToDevice), what);
   return dev;
 }
 
