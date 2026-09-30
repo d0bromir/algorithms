@@ -174,7 +174,7 @@ int cmd_index(const Args& a) {
   auto t1 = Clock::now();
   Index ix = Index::build(ref, a.geti("-q", 22), a.geti("-s", 8), a.geti("-t", default_threads()));
   std::fprintf(stderr, "[index] q=%d s=%d dir_bits=%d, %llu entries, built in %.1f s\n",
-               ix.q, ix.s, ix.dir_bits, static_cast<unsigned long long>(ix.keys.size()), secs(t1));
+               ix.q, ix.s, ix.dir_bits, static_cast<unsigned long long>(ix.pos.size()), secs(t1));
   auto t2 = Clock::now();
   save_index(a.get("-o", ""), ref, ix);
   std::fprintf(stderr, "[index] written to %s in %.1f s\n", a.get("-o", "").c_str(), secs(t2));
@@ -223,7 +223,7 @@ int cmd_map(const Args& a) {
   load_index(a.pos[0], ref, ix);
   const double t_load = secs(t_all);
   std::fprintf(stderr, "[map] index %s: q=%d s=%d, %llu entries, loaded in %.1f s\n",
-               a.pos[0].c_str(), ix.q, ix.s, static_cast<unsigned long long>(ix.keys.size()), t_load);
+               a.pos[0].c_str(), ix.q, ix.s, static_cast<unsigned long long>(ix.pos.size()), t_load);
   std::fprintf(stderr,
                "[map] pass 1: k=%d budget=%d; pass 2: k=%d budget=%d S2<=%d; parts are >= %d bases\n",
                p.k, p.budget, p2.k, p2.budget, p2.s2_limit, min_read_length(ix.q, ix.s));

@@ -73,7 +73,9 @@ constexpr uint32_t kOpM = 0, kOpI = 1, kOpD = 2;
 struct IndexView {
   const uint8_t* ref;     // concatenated reference, codes 0..3, 4 = N
   uint64_t ref_len;
-  const uint64_t* keys;   // sorted q-mer keys of sampled positions
+  const uint64_t* keys;   // sorted q-mer keys of sampled positions, or null:
+  const uint16_t* keys16; // low 16 bits only, when 2q - dir_bits <= 16 (the
+                          // bucket directory already fixes the high bits)
   const uint32_t* pos;    // positions (multiples of s), parallel to keys
   const uint64_t* dir;    // bucket directory, size 2^dir_bits + 1
   uint64_t n;
@@ -149,8 +151,24 @@ CERTA_HD inline bool kmer_key(const uint8_t* s, int q, uint64_t* key) {
 // Half-open range [*lo, *hi) of index entries whose key equals `key`.
 CERTA_HD inline void lookup(const IndexView& ix, uint64_t key, uint64_t* lo,
                             uint64_t* hi) {
-  uint64_t b = key >> (2 * ix.q - ix.dir_bits);
+  const int shift = 2 * ix.q - ix.dir_bits;
+  uint64_t b = key >> shift;
   uint64_t l = ix.dir[b], r = ix.dir[b + 1];
+  if (ix.keys16) {  // within a bucket, keys are ordered by their low bits
+    const uint16_t k = (uint16_t)(key & ((1ull << shift) - 1));
+    while (l < r) {
+      uint64_t m = l + (r - l) / 2;
+      if (ix.keys16[m] < k) l = m + 1; else r = m;
+    }
+    *lo = l;
+    r = ix.dir[b + 1];
+    while (l < r) {
+      uint64_t m = l + (r - l) / 2;
+      if (ix.keys16[m] <= k) l = m + 1; else r = m;
+    }
+    *hi = l;
+    return;
+  }
   while (l < r) {
     uint64_t m = l + (r - l) / 2;
     if (ix.keys[m] < key) l = m + 1; else r = m;

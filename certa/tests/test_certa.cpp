@@ -153,6 +153,16 @@ int main(int argc, char** argv) {
   Reference ref = make_reference(g);
   Index ix = Index::build(ref, 14, 4, 4);
   const IndexView view = ix.view(ref);
+  // Round trip through the on-disk format: with q = 14 the file stores only
+  // 16-bit key suffixes and is memory-mapped; results must not change.
+  const std::string tmp = "test_certa.tmp.cidx";
+  save_index(tmp, ref, ix);
+  Reference ref_m;
+  Index ix_m;
+  load_index(tmp, ref_m, ix_m);
+  std::remove(tmp.c_str());  // the mapping stays valid until ix_m is gone
+  const IndexView view_m = ix_m.view(ref_m);
+  CHECK(view_m.keys16 != nullptr, "saved index should use 16-bit keys (q=14)");
 
   // Reads: from unique sequence, repeat copies, the exact duplicate, the
   // tandem repeat and near the N run; with 0..7 edits; plus random reads.
@@ -201,9 +211,13 @@ int main(int argc, char** argv) {
   const Params configs[] = {{2, 256}, {3, 256}, {5, 256}, {4, 64}, {4, 16}, {3, 4}, {2, 1},
                             {3, 16, 0, 8}, {5, 256, 0, 10}, {2, 4, 0, 6}};
   for (const Params& p : configs) {
-    std::vector<Result> res, res1, resrev;
+    std::vector<Result> res, res1, resrev, resm;
     map_cpu(view, p, batch, res, 4);
     map_cpu(view, p, batch, res1, 1);
+    map_cpu(view_m, p, batch, resm, 4);
+    for (size_t i = 0; i < reads.size(); ++i)
+      CHECK(std::memcmp(&res[i], &resm[i], sizeof(Result)) == 0,
+            "read %zu differs between in-memory and memory-mapped (16-bit key) index", i);
     Params prev = p;
     prev.reverse_order = 1;
     map_cpu(view, prev, batch, resrev, 4);

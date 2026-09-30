@@ -44,6 +44,7 @@ struct GpuMapper::Impl {
   IndexView view{};
   uint8_t* d_ref = nullptr;
   uint64_t* d_keys = nullptr;
+  uint16_t* d_keys16 = nullptr;
   uint32_t* d_pos = nullptr;
   uint64_t* d_dir = nullptr;
   // Batch buffers, grown on demand.
@@ -81,12 +82,16 @@ GpuMapper::GpuMapper(const Reference& ref, const Index& ix, int device)
   // Workspace lives in per-thread local memory (~26 KB); raise the limit.
   check(cudaDeviceSetLimit(cudaLimitStackSize, 48 * 1024), "stack limit");
   m.d_ref = upload(ref.seq.data(), ref.seq.size(), "upload reference");
-  m.d_keys = upload(ix.keys.data(), ix.keys.size(), "upload keys");
+  if (ix.keys16.size())
+    m.d_keys16 = upload(ix.keys16.data(), ix.keys16.size(), "upload keys");
+  else
+    m.d_keys = upload(ix.keys.data(), ix.keys.size(), "upload keys");
   m.d_pos = upload(ix.pos.data(), ix.pos.size(), "upload positions");
   m.d_dir = upload(ix.dir.data(), ix.dir.size(), "upload directory");
   m.view = ix.view(ref);
   m.view.ref = m.d_ref;
-  m.view.keys = m.d_keys;
+  m.view.keys = m.d_keys16 ? nullptr : m.d_keys;
+  m.view.keys16 = m.d_keys16;
   m.view.pos = m.d_pos;
   m.view.dir = m.d_dir;
 }
@@ -94,7 +99,7 @@ GpuMapper::GpuMapper(const Reference& ref, const Index& ix, int device)
 GpuMapper::~GpuMapper() {
   Impl& m = *impl_;
   cudaSetDevice(m.device);  // may run on a different host thread
-  cudaFree(m.d_ref); cudaFree(m.d_keys); cudaFree(m.d_pos); cudaFree(m.d_dir);
+  cudaFree(m.d_ref); cudaFree(m.d_keys); cudaFree(m.d_keys16); cudaFree(m.d_pos); cudaFree(m.d_dir);
   cudaFree(m.d_codes); cudaFree(m.d_offs); cudaFree(m.d_lens);
   cudaFree(m.d_hashes); cudaFree(m.d_out);
 }
