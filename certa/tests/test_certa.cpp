@@ -533,6 +533,36 @@ int main(int argc, char** argv) {
   }
   std::fprintf(stderr, "SL scores checked against the local oracle for %d reads\n", local_checked);
 
+  // ---- band_score must equal affine_align's score on any band and start range.
+  {
+    std::unique_ptr<Workspace> ws(new Workspace);
+    int compared = 0;
+    for (int n = 0; n < 4000; ++n) {
+      const int B = 1 + static_cast<int>(g() % BMAX);
+      int64_t lo = static_cast<int64_t>(g() % (ref.seq.size() - 600));
+      std::vector<uint8_t> rd = reads[g() % reads.size()].seq;
+      if (n % 4 >= 2) {  // a read from this very place, so scores are high
+        rd.assign(ref.seq.owned.begin() + lo + B / 2, ref.seq.owned.begin() + lo + B / 2 + 160);
+        mutate(g, rd, static_cast<int>(g() % 8));
+        rd.resize(150, 0);
+      }
+      const int L = static_cast<int>(rd.size());
+      int64_t smin = INT64_MIN, smax = INT64_MAX;
+      if (n % 2) {
+        smin = lo + static_cast<int64_t>(g() % 200) - 50;
+        smax = smin + static_cast<int64_t>(g() % 120);
+      }
+      Result tmp;
+      const bool ok = affine_align(view, rd.data(), L, lo, B, *ws, tmp, true, smin, smax);
+      const int v = band_score(view, rd.data(), L, lo, B, smin, smax);
+      CHECK(ok ? v == tmp.score : v == kNoSub, "band_score %d vs affine_align %d (ok %d) lo %lld B %d", v,
+            ok ? tmp.score : 0, ok, static_cast<long long>(lo), B);
+
+      ++compared;
+    }
+    std::fprintf(stderr, "band_score compared with affine_align on %d random bands\n", compared);
+  }
+
   // ---- Paired-end certificate (tier PR) against the proper-pair oracle.
   {
     const int D = 500, L = 150;

@@ -850,6 +850,73 @@ inline int build_chains(Workspace& ws, int pad) {
   return n;
 }
 
+// Score-only twin of affine_align: the same objective, band and optional
+// start range, returning the best score (or kNoSub when no start is allowed).
+// No traceback; the reference window is copied once; 16-bit lanes (scores
+// lie in [-5 L, L]; "minus infinity" is -16000 and stays above -32768 after
+// a read's worth of gap penalties), so the row loops vectorize 8 cells per
+// 128-bit register. Deletions: extending (-ext) always beats reopening
+// (-open - ext), so F(b) = max over k < b of H'(k) - open - ext (b - k), with
+// H' = max(M, E): a running prefix maximum of H'(k) + ext k, one register per
+// row. Tested against affine_align on random bands.
+inline void band_row16(int B, int blo, int bhi, int16_t start, int16_t eopen, int16_t NEG,
+                       const int16_t* __restrict hp, const int16_t* __restrict ep,
+                       const int16_t* __restrict sub, int16_t* __restrict m, int16_t* __restrict hq,
+                       int16_t* __restrict en) {
+  for (int b = 0; b < B; ++b) {
+    const int16_t st = (b >= blo && b <= bhi) ? start : NEG;
+    const int16_t d = hp[b] > st ? hp[b] : st;
+    const int16_t mv = (int16_t)(d + sub[b]);
+    m[b] = mv;
+    const int16_t o = (int16_t)(hp[b + 1] - eopen), x = (int16_t)(ep[b + 1] - kGapExt);
+    const int16_t e = o > x ? o : x;
+    en[b] = e;
+    hq[b] = mv > e ? mv : e;
+  }
+}
+
+inline int band_score(const IndexView& ix, const uint8_t* rd, int L, int64_t lo, int B,
+                      int64_t smin = INT64_MIN, int64_t smax = INT64_MAX) {
+  static_assert(LMAX * (kMismatch + kGapOpen + kGapExt) < 16000, "16-bit band scores");
+  const int16_t NEG = -16000;
+  alignas(16) int16_t buf[4][BMAX + 8], m[BMAX + 8], sub[BMAX + 8], hq[BMAX + 8];
+  int16_t *hp = buf[0], *hn = buf[1], *ep = buf[2], *en = buf[3];
+  uint8_t refw[LMAX + BMAX];
+  for (int j = 0; j < L - 1 + B; ++j) refw[j] = ref_at(ix, lo + j);
+  for (int b = 0; b <= B; ++b) { hp[b] = NEG; ep[b] = NEG; }
+  int best = NEG;
+  for (int i = 1; i <= L; ++i) {
+    const uint8_t c = rd[i - 1];
+    const int16_t start = i == 1 ? 0 : -kClip;
+    const int64_t base = (int64_t)i - 1 + lo;
+    const int64_t blo64 = smin == INT64_MIN ? 0 : smin - base, bhi64 = smax == INT64_MAX ? B : smax - base;
+    const int blo = blo64 < 0 ? 0 : (blo64 > B ? B : (int)blo64);
+    const int bhi = bhi64 < -1 ? -1 : (bhi64 >= B ? B - 1 : (int)bhi64);
+    const uint8_t* rw = refw + (i - 1);
+    const int16_t eopen = i > 1 ? kGapOpen + kGapExt : 8000;  // no alignment starts with a gap
+    const uint8_t cc = c < 4 ? c : 0xFF;                      // N never matches
+    for (int b = 0; b < B; ++b) sub[b] = rw[b] == cc ? kMatch : -kMismatch;
+    band_row16(B, blo, bhi, start, eopen, NEG, hp, ep, sub, m, hq, en);
+    int pm = NEG;
+    hn[0] = hq[0];
+    for (int b = 1; b < B; ++b) {
+      const int g = hq[b - 1] + kGapExt * (b - 1);
+      pm = pm > g ? pm : g;
+      const int f = pm - kGapOpen - kGapExt * b;
+      hn[b] = (int16_t)(hq[b] > f ? hq[b] : f);
+    }
+    int16_t rb = NEG;
+    for (int b = 0; b < B; ++b) rb = rb > m[b] ? rb : m[b];
+    const int clip = i < L ? kClip : 0;
+    if (rb - clip > best) best = rb - clip;
+    hn[B] = NEG;
+    en[B] = NEG;
+    int16_t* t = hp; hp = hn; hn = t;
+    t = ep; ep = en; en = t;
+  }
+  return best < NEG / 2 ? kNoSub : best;
+}
+
 // Best local score in a chain: its member diagonals are covered by bands
 // [d - pad, d + pad], merged into bands of at most BMAX diagonals. Returns
 // the score (or kNoSub) and the band that attains it.
@@ -864,9 +931,9 @@ inline int chain_best(const IndexView& ix, int L, const Cluster& cl, int pad, Wo
     while (e < cl.end && diag_of(c[e]) - d0 <= BMAX - 2 * pad - 1) ++e;
     const int64_t lo = d0 - pad;
     const int B = (int)(diag_of(c[e - 1]) - d0) + 2 * pad + 1;
-    Result tmp;
-    if (affine_align(ix, ws.seq[cl.strand], L, lo, B, ws, tmp, true) && tmp.score > best) {
-      best = tmp.score;
+    const int sc = band_score(ix, ws.seq[cl.strand], L, lo, B);
+    if (sc > best) {
+      best = sc;
       *best_lo = lo;
       *best_B = B;
     }

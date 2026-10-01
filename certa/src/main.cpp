@@ -238,10 +238,28 @@ void emit_pair(const Result* r0, const Result* se, const FastqRecord* rec, const
     if (r[x].certified == 2) { r[x].certified = 0; r[x].reason = kNotFound; }
     check_contig(r[x], ref);
   }
-  if (!r[0].certified || !r[1].certified) {
+  if (!r[0].certified && !r[1].certified) {
     fastq_record(rec[0], fq1);
     fastq_record(rec[1], fq2);
-    for (int x = 0; x < 2; ++x) reason[x] = r[x].certified ? kNotFound : r[x].reason;
+    for (int x = 0; x < 2; ++x) reason[x] = r[x].reason;
+    return;
+  }
+  if (!r[0].certified || !r[1].certified) {
+    // One mate keeps its single-end certificate. Both mates still go to the
+    // fallback (so it can pair them), named "name~k" where k is the certified
+    // mate, whose fallback record is dropped downstream
+    // (bench/drop_certified_mates.awk). Mate fields are unknown here.
+    const int k = r[0].certified ? 0 : 1;
+    MateInfo mi;
+    mi.flag = 1 | (k == 0 ? 64 : 128);
+    sam_line(r[k], rec[k], ref, mapq_of(r[k], static_cast<int>(rec[k].seq.size())), mi, sam);
+    FastqRecord m0 = rec[0], m1 = rec[1];
+    m0.name += k == 0 ? "~1" : "~2";
+    m1.name = m0.name;
+    fastq_record(m0, fq1);
+    fastq_record(m1, fq2);
+    reason[k] = kOk;
+    reason[1 - k] = r[1 - k].reason;
     return;
   }
   const bool proper = is_proper(r[0], r[1], ref, max_dist);
@@ -562,13 +580,17 @@ int cmd_map(const Args& a) {
       local += redo.size();
     }
     if (paired) {
-      // Pair pass, on the CPU: pairs with an uncertified mate or a tied mate.
+      // Pair pass, on the CPU: pairs with one certified mate and an
+      // uncertified or tied mate.
       se_res = res;
       std::vector<size_t> todo;
       for (size_t i = 0; 2 * i + 1 < res.size(); ++i) {
         const Result& x = res[2 * i];
         const Result& y = res[2 * i + 1];
-        if (x.certified != 1 || y.certified != 1 || x.n_best > 1 || y.n_best > 1) todo.push_back(i);
+        // Pairs with both mates uncertified are skipped: on HG002 under 1%
+        // of them get a pair certificate, at a fifth of the pass's cost.
+        const bool one = x.certified == 1 || y.certified == 1;
+        if (one && (x.certified != 1 || y.certified != 1 || x.n_best > 1 || y.n_best > 1)) todo.push_back(i);
       }
       pair_tried += todo.size();
       std::atomic<size_t> next{0};
@@ -595,6 +617,10 @@ int cmd_map(const Args& a) {
     t = Clock::now();
     const int nt = std::max(1, std::min<int>(threads, static_cast<int>(recs.size() / 1024) + 1));
     std::vector<std::string> sam_out(nt), fq_out(nt), fq2_out(nt);
+    // Paired fallback: pair-aligned cut points, so the two mate files can be
+    // written in alternating small chunks (a consumer reading both pipes in
+    // lockstep, record by record, never waits on one while we block on the other).
+    std::vector<std::vector<std::pair<size_t, size_t>>> cuts(nt);
     std::vector<Stats> st(nt);
     std::vector<std::thread> pool;
     for (int w = 0; w < nt; ++w) {
@@ -612,10 +638,11 @@ int cmd_map(const Args& a) {
                         pair_reason);
               Stats& s = st[w];
               ++s.pairs;
-              if (pair_reason[0] == kOk) {
+              if (pair_reason[0] == kOk && pair_reason[1] == kOk) {
                 ++s.pairs_cert;
                 s.pairs_proper += is_proper(res[i], res[i + 1], ref, pp.max_dist);
               }
+              if (s.pairs % 64 == 0) cuts[w].push_back({fq_out[w].size(), fq2_out[w].size()});
             }
             reason = pair_reason[i % 2];
           }
@@ -641,8 +668,21 @@ int cmd_map(const Args& a) {
     for (auto& th : pool) th.join();
     for (int w = 0; w < nt; ++w) {
       std::fwrite(sam_out[w].data(), 1, sam_out[w].size(), sam);
-      if (fq) std::fwrite(fq_out[w].data(), 1, fq_out[w].size(), fq);
-      if (fq2) std::fwrite(fq2_out[w].data(), 1, fq2_out[w].size(), fq2);
+      if (fq && fq2) {
+        size_t a1 = 0, a2 = 0;
+        cuts[w].push_back({fq_out[w].size(), fq2_out[w].size()});
+        for (const auto& c : cuts[w]) {
+          if (c.first == a1 && c.second == a2) continue;
+          std::fwrite(fq_out[w].data() + a1, 1, c.first - a1, fq);
+          std::fflush(fq);
+          std::fwrite(fq2_out[w].data() + a2, 1, c.second - a2, fq2);
+          std::fflush(fq2);
+          a1 = c.first;
+          a2 = c.second;
+        }
+      } else if (fq) {
+        std::fwrite(fq_out[w].data(), 1, fq_out[w].size(), fq);
+      }
       total.add(st[w]);
     }
     t_out += secs(t);
