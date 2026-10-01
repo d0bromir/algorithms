@@ -38,7 +38,16 @@ namespace certa {
 
 constexpr int KMAX = 5;                         // max certified radius (k)
 constexpr int PMAX = 8;                         // max parts per read
-constexpr int BUDGET_MAX = 256;                 // max hits enumerated per strand
+// Max hits enumerated per strand. The GPU keeps its workspace in per-thread
+// stack memory, so its budget is small; on the host (CPU passes, including the
+// CPU third pass of GPU runs) the workspace is heap-allocated.
+constexpr int GPU_BUDGET_MAX = 256;
+constexpr int HOST_BUDGET_MAX = 4096;
+#ifdef __CUDA_ARCH__
+constexpr int BUDGET_MAX = GPU_BUDGET_MAX;
+#else
+constexpr int BUDGET_MAX = HOST_BUDGET_MAX;
+#endif
 constexpr int SMAX = 16;                        // max index sampling step
 constexpr int LMAX = 320;                       // max read length handled
 constexpr int BMAX = 48;                        // max band width (diagonals)
@@ -137,6 +146,7 @@ struct Workspace {
   int ncand[2];
   Cluster clusters[MAX_CLUST];
   uint16_t corder[MAX_CLUST];  // evaluation order of clusters
+  int count_buf[MAX_CAND + 2];  // counting sort of clusters by support
   int row_a[BMAX], row_b[BMAX];
   int aff[4][BMAX];  // affine DP rows: H prev/cur, E prev/cur
   uint8_t tb[(LMAX + 1) * BMAX];
@@ -388,6 +398,40 @@ CERTA_HD inline int build_clusters(Workspace& ws, int pad, bool skip_wide) {
   return nclust;
 }
 
+// ws.corder = cluster indices ordered by member count, descending; ties keep
+// index order (stable). Insertion sort for small n, counting sort for the
+// large candidate sets of host passes; both give the same order.
+CERTA_HD inline void order_by_support(Workspace& ws, int n) {
+  auto support = [&](int x) { return ws.clusters[x].end - ws.clusters[x].beg; };
+  if (n <= 64) {
+    for (int x = 0; x < n; ++x) ws.corder[x] = (uint16_t)x;
+    for (int x = 1; x < n; ++x) {
+      uint16_t v = ws.corder[x];
+      int sv = support(v), y = x - 1;
+      while (y >= 0 && support(ws.corder[y]) < sv) {
+        ws.corder[y + 1] = ws.corder[y];
+        --y;
+      }
+      ws.corder[y + 1] = v;
+    }
+    return;
+  }
+  // Counting sort on support in [1, MAX_CAND]: start offsets for each count,
+  // highest count first, then place clusters in index order (stable).
+  int maxs = 0;
+  for (int x = 0; x < n; ++x) if (support(x) > maxs) maxs = support(x);
+  int* start = ws.count_buf;  // size MAX_CAND + 2
+  for (int s = 0; s <= maxs + 1; ++s) start[s] = 0;
+  for (int x = 0; x < n; ++x) ++start[support(x)];
+  int at = 0;
+  for (int s = maxs; s >= 0; --s) {
+    const int c = start[s];
+    start[s] = at;
+    at += c;
+  }
+  for (int x = 0; x < n; ++x) ws.corder[start[support(x)]++] = (uint16_t)x;
+}
+
 // Verify clusters, best-supported first, tracking the two smallest distances
 // b1 <= b2 (initially cap + 1). Only a distance below b2 can change (b1, b2),
 // so each cluster is evaluated with limit b2 - 1: b1 is exact, and when
@@ -398,16 +442,7 @@ CERTA_HD inline int build_clusters(Workspace& ws, int pad, bool skip_wide) {
 CERTA_HD inline void evaluate_clusters(const IndexView& ix, int L, int nclust, int cap,
                                        int reverse, int max_eval, Workspace& ws, int* pb1,
                                        int* pb2) {
-  for (int x = 0; x < nclust; ++x) ws.corder[x] = (uint16_t)x;
-  for (int x = 1; x < nclust; ++x) {  // stable sort by member count, descending
-    uint16_t v = ws.corder[x];
-    int sv = ws.clusters[v].end - ws.clusters[v].beg, y = x - 1;
-    while (y >= 0 && ws.clusters[ws.corder[y]].end - ws.clusters[ws.corder[y]].beg < sv) {
-      ws.corder[y + 1] = ws.corder[y];
-      --y;
-    }
-    ws.corder[y + 1] = v;
-  }
+  order_by_support(ws, nclust);
   if (reverse)  // results must not depend on the order (tested)
     for (int x = 0, y = nclust - 1; x < y; ++x, --y) {
       uint16_t t = ws.corder[x];
@@ -605,16 +640,7 @@ CERTA_HD inline int other_candidates(const IndexView& ix, int L, int limit, cons
                                      Workspace& ws, int16_t* sub) {
   const int M = limit < S2_MAX ? limit : S2_MAX;
   const int nc = build_clusters(ws, 2 * M, true);
-  for (int x = 0; x < nc; ++x) ws.corder[x] = (uint16_t)x;
-  for (int x = 1; x < nc; ++x) {  // by member count, descending (stable)
-    uint16_t v = ws.corder[x];
-    int sv = ws.clusters[v].end - ws.clusters[v].beg, y = x - 1;
-    while (y >= 0 && ws.clusters[ws.corder[y]].end - ws.clusters[ws.corder[y]].beg < sv) {
-      ws.corder[y + 1] = ws.corder[y];
-      --y;
-    }
-    ws.corder[y + 1] = v;
-  }
+  order_by_support(ws, nc);
   int best = M + 1, evaluated = 0, best_c = -1;
   for (int x = 0; x < nc && evaluated < S2_TOP && best > 0; ++x) {
     const Cluster& cl = ws.clusters[ws.corder[x]];

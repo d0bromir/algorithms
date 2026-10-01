@@ -225,7 +225,7 @@ int cmd_map(const Args& a) {
   p.k = a.geti("-k", 5);
   p.budget = a.geti("--budget", a.geti("--cap", 16));  // --cap: the v0.1 name
   if (p.k < 0 || p.k > KMAX) throw std::runtime_error("-k must be in [0, 5]");
-  if (p.budget < 1 || p.budget > BUDGET_MAX) throw std::runtime_error("--budget must be in [1, 256]");
+  if (p.budget < 1 || p.budget > GPU_BUDGET_MAX) throw std::runtime_error("--budget must be in [1, 256]");
   // Escalation: reads that fail because the budget limited how many parts
   // they could search are re-run with this budget (0 disables).
   p.mapq_limit = a.geti("--mapq-limit", 8);  // MAPQ second-best estimate (0 = off)
@@ -240,7 +240,7 @@ int cmd_map(const Args& a) {
   // among hard reads. Each re-run read gets exactly its single-pass result.
   Params p2 = p;
   p2.budget = a.geti("--budget2", 256);
-  if (p2.budget != 0 && (p2.budget < p.budget || p2.budget > BUDGET_MAX))
+  if (p2.budget != 0 && (p2.budget < p.budget || p2.budget > GPU_BUDGET_MAX))
     throw std::runtime_error("--budget2 must be 0 or in [budget, 256]");
   if (p2.budget == 0) p2.budget = p.budget;
   p.s2_limit = 0;
@@ -249,6 +249,12 @@ int cmd_map(const Args& a) {
   p.k = std::min(p2.k, a.geti("--k1", 2));
   if (p.k < 0) throw std::runtime_error("--k1 must be >= 0");
   const bool second_pass = p2.budget > p.budget || p2.s2_limit > 0 || p2.k > p.k;
+  // Pass 3 (CPU): larger budgets for reads whose parts are all repetitive.
+  Params p3 = p2;
+  p3.budget = a.geti("--budget3", HOST_BUDGET_MAX);
+  if (p3.budget != 0 && (p3.budget < p2.budget || p3.budget > HOST_BUDGET_MAX))
+    throw std::runtime_error("--budget3 must be 0 or in [budget2, 4096]");
+  if (p3.budget == 0) p3.budget = p2.budget;
   const bool gpu = a.has("--gpu");
   const int threads = a.geti("-t", default_threads());
   // Threads that parse and encode the next batch while the current one maps.
@@ -317,6 +323,7 @@ int cmd_map(const Args& a) {
   std::exception_ptr read_error;
   double t_io = 0, t_wait = 0, t_map = 0, t_out = 0;
   uint64_t escalated = 0;  // reads re-run with --budget2
+  uint64_t third = 0;      // reads re-run on the CPU with --budget3
   auto load = [&](int slot) {
     try {
       auto t = Clock::now();
@@ -349,33 +356,47 @@ int cmd_map(const Args& a) {
     auto t = Clock::now();
     if (gm) gm->map(p, batch, res);
     else map_cpu(view, p, batch, res, threads);
+    // Re-runs the selected reads as a compacted batch with other parameters.
+    auto rerun = [&](const std::vector<size_t>& redo, const Params& pp, bool on_gpu) {
+      if (redo.empty()) return;
+      ReadBatch sub;
+      sub.offs.resize(redo.size());
+      sub.lens.resize(redo.size());
+      sub.hashes.resize(redo.size());
+      for (size_t x = 0; x < redo.size(); ++x) {
+        const size_t i = redo[x];
+        sub.offs[x] = sub.codes.size();
+        sub.lens[x] = batch.lens[i];
+        sub.hashes[x] = batch.hashes[i];
+        sub.codes.insert(sub.codes.end(), batch.codes.begin() + batch.offs[i],
+                         batch.codes.begin() + batch.offs[i] + batch.lens[i]);
+      }
+      std::vector<Result> res2;
+      if (on_gpu) gm->map(pp, sub, res2);
+      else map_cpu(view, pp, sub, res2, threads);
+      for (size_t x = 0; x < redo.size(); ++x) res[redo[x]] = res2[x];
+    };
     if (second_pass) {
-      // Pass 2 on a compacted batch: every read pass 1 could not certify
-      // (except too-long/short reads). Certified reads keep pass-1 results.
+      // Pass 2: every read pass 1 could not certify (except too-long/short
+      // reads). Certified reads keep pass-1 results.
+      std::vector<size_t> redo;
+      for (size_t i = 0; i < res.size(); ++i)
+        if (res[i].certified == 0 && res[i].reason != kBadLength) redo.push_back(i);
+      rerun(redo, p2, gm != nullptr);
+      escalated += redo.size();
+    }
+    if (p3.budget > p2.budget) {
+      // Pass 3, always on the CPU (identical in CPU and GPU runs): reads that
+      // failed because the budget limited how many parts they could search.
       std::vector<size_t> redo;
       for (size_t i = 0; i < res.size(); ++i) {
         const Result& r = res[i];
-        if (r.certified == 0 && r.reason != kBadLength) redo.push_back(i);
+        const int want = r.parts < p3.k + 1 ? r.parts : p3.k + 1;
+        if (r.certified == 0 && (r.reason == kRadiusNegative || r.reason == kNotFound) && r.used < want)
+          redo.push_back(i);
       }
-      if (!redo.empty()) {
-        ReadBatch sub;
-        sub.offs.resize(redo.size());
-        sub.lens.resize(redo.size());
-        sub.hashes.resize(redo.size());
-        for (size_t x = 0; x < redo.size(); ++x) {
-          const size_t i = redo[x];
-          sub.offs[x] = sub.codes.size();
-          sub.lens[x] = batch.lens[i];
-          sub.hashes[x] = batch.hashes[i];
-          sub.codes.insert(sub.codes.end(), batch.codes.begin() + batch.offs[i],
-                           batch.codes.begin() + batch.offs[i] + batch.lens[i]);
-        }
-        std::vector<Result> res2;
-        if (gm) gm->map(p2, sub, res2);
-        else map_cpu(view, p2, sub, res2, threads);
-        for (size_t x = 0; x < redo.size(); ++x) res[redo[x]] = res2[x];
-        escalated += redo.size();
-      }
+      rerun(redo, p3, false);
+      third += redo.size();
     }
     t_map += secs(t);
 
@@ -433,8 +454,8 @@ int cmd_map(const Args& a) {
     std::fprintf(stderr, "[map]   uncertified/%s: %.2f%%\n", kReasonNames[i], pct(total.reason[i]));
   std::fprintf(stderr, "[map] placed without certificate (S2, <= %d edits): %.2f%%; to fallback: %.2f%%\n",
                p2.s2_limit, pct(total.s2), pct(total.reads - total.certified - total.s2));
-  std::fprintf(stderr, "[map] second pass (budget %d, S2 <= %d): %.2f%% of reads\n", p2.budget,
-               p2.s2_limit, pct(escalated));
+  std::fprintf(stderr, "[map] second pass (budget %d, S2 <= %d): %.2f%% of reads; third pass (CPU, budget %d): %.2f%%\n",
+               p2.budget, p2.s2_limit, pct(escalated), p3.budget, pct(third));
   std::fprintf(stderr,
                "[map] time: load %.2f s, upload %.2f s, read+encode %.2f s (overlapped; "
                "waited %.2f s), map %.2f s (%.0f reads/s), output %.2f s, total %.2f s "
