@@ -219,8 +219,9 @@ int cmd_index(const Args& a) {
 int cmd_map(const Args& a) {
   if (a.pos.size() != 2)
     throw std::runtime_error(
-        "usage: certa map ref.cidx reads.fq[.gz] [-k 4] [--budget 256] [-t N] [--gpu] "
-        "[--device 0] [-o out.sam] [-u uncertified.fq] [--stats s.json] [--batch N] [--io-threads N]");
+        "usage: certa map ref.cidx reads.fq[.gz] [-k 5] [--k1 2] [--budget 16] [--budget2 256] "
+        "[--budget3 0] [--support3 2] [--mapq-limit 8] [-t N] [--gpu] [--device 0] [-o out.sam] "
+        "[-u uncertified.fq] [--stats s.json] [--batch N] [--io-threads N]");
   Params p;
   p.k = a.geti("-k", 5);
   p.budget = a.geti("--budget", a.geti("--cap", 16));  // --cap: the v0.1 name
@@ -249,9 +250,12 @@ int cmd_map(const Args& a) {
   p.k = std::min(p2.k, a.geti("--k1", 2));
   if (p.k < 0) throw std::runtime_error("--k1 must be >= 0");
   const bool second_pass = p2.budget > p.budget || p2.s2_limit > 0 || p2.k > p.k;
-  // Pass 3 (CPU): larger budgets for reads whose parts are all repetitive.
+  // Pass 3 (CPU, opt-in): larger budgets for reads whose parts are all
+  // repetitive. It certifies ~0.9% more reads but costs more CPU than the
+  // fallback mapper spends on them, so it is off by default; use
+  // --budget3 4096 for maximum certification.
   Params p3 = p2;
-  p3.budget = a.geti("--budget3", HOST_BUDGET_MAX);
+  p3.budget = a.geti("--budget3", 0);
   if (p3.budget != 0 && (p3.budget < p2.budget || p3.budget > HOST_BUDGET_MAX))
     throw std::runtime_error("--budget3 must be 0 or in [budget2, 4096]");
   if (p3.budget == 0) p3.budget = p2.budget;
@@ -504,9 +508,10 @@ int main(int argc, char** argv) {
   try {
     if (argc < 2) {
       std::fprintf(stderr,
-                   "certa 0.1 - certified short-read fast path (prototype)\n"
+                   "certa 0.7 - certified short-read fast path (prototype)\n"
                    "  certa index ref.fa -o ref.cidx [-q 22] [-s 8] [-t N]\n"
-                   "  certa map ref.cidx reads.fq[.gz] [-k 4] [--budget 256] [-t N] [--gpu] [--device 0]\n"
+                   "  certa map ref.cidx reads.fq[.gz] [-k 5] [--k1 2] [--budget 16] [--budget2 256]\n"
+                   "            [--budget3 0|4096] [--support3 2] [-t N] [--gpu] [--device 0]\n"
                    "            [-o out.sam] [-u uncertified.fq] [--stats s.json] [--batch N] [--io-threads N]\n"
                    "GPU support compiled in: %s\n",
                    GpuMapper::compiled_in() ? "yes" : "no");
