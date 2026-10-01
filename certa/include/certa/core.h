@@ -106,6 +106,9 @@ struct Params {
   // For MAPQ only: when the second-best locus lies beyond the certified
   // radius, estimate it among the other candidates up to this many edits.
   int mapq_limit = 0;
+  // q-gram-lemma filter: only clusters hit by at least this many distinct
+  // enumerated parts are verified; the radius becomes |S| - min_support.
+  int min_support = 1;
 };
 
 struct Result {
@@ -135,7 +138,19 @@ struct Cluster {
   uint8_t strand;
   int8_t dist;      // exact distance, or radius + 1 if it cannot beat the best two
   uint16_t beg, end;  // member diagonals: ws.cand[strand][beg, end)
+  uint8_t pmask;      // distinct parts with a hit in the cluster (bit j = part j)
 };
+
+// Candidates store diagonal * 8 + part index (PMAX <= 8), so sorting orders
+// by diagonal and the part survives the sort.
+static_assert(PMAX <= 8, "part index must fit in 3 bits");
+CERTA_HD inline int64_t diag_of(int64_t c) { return c >> 3; }  // floor(c / 8)
+CERTA_HD inline int part_of(int64_t c) { return (int)(c & 7); }
+CERTA_HD inline int popcount8(uint8_t v) {
+  int n = 0;
+  for (; v; v &= (uint8_t)(v - 1)) ++n;
+  return n;
+}
 
 struct Workspace {
   uint8_t seq[2][LMAX];
@@ -286,7 +301,7 @@ CERTA_HD inline void enumerate_parts(const IndexView& ix, int L, int P, int m,
     part_geometry(L, P, j, &off, &len);
     for (int t = 0; t < ix.s; ++t)
       for (uint64_t e = ws.rlo[st][j][t]; e < ws.rhi[st][j][t]; ++e)
-        ws.cand[st][n++] = (int64_t)ix.pos[e] - (off + t);
+        ws.cand[st][n++] = ((int64_t)ix.pos[e] - (off + t)) * 8 + j;  // diagonal, part
   }
   ws.ncand[st] = n;
 }
@@ -377,9 +392,14 @@ CERTA_HD inline int build_clusters(Workspace& ws, int pad, bool skip_wide) {
     const int n = ws.ncand[st];
     int i = 0;
     while (i < n) {
-      int64_t dmin = c[i], dmax = c[i];
+      int64_t dmin = diag_of(c[i]), dmax = dmin;
+      uint8_t pmask = (uint8_t)(1u << part_of(c[i]));
       int j = i + 1;
-      while (j < n && c[j] - dmax <= 2 * pad) { dmax = c[j]; ++j; }
+      while (j < n && diag_of(c[j]) - dmax <= 2 * pad) {
+        dmax = diag_of(c[j]);
+        pmask |= (uint8_t)(1u << part_of(c[j]));
+        ++j;
+      }
       const int64_t width = dmax - dmin + 2 * pad + 1;
       if (width > BMAX) {
         if (!skip_wide) return -1;
@@ -392,6 +412,7 @@ CERTA_HD inline int build_clusters(Workspace& ws, int pad, bool skip_wide) {
       cl.strand = (uint8_t)st;
       cl.beg = (uint16_t)i;
       cl.end = (uint16_t)j;
+      cl.pmask = pmask;
       i = j;
     }
   }
@@ -440,8 +461,8 @@ CERTA_HD inline void order_by_support(Workspace& ws, int n) {
 // either way). A Hamming check at the member diagonals gives an upper bound
 // first, so exact matches never reach the DP. Cluster.dist is exact or cap + 1.
 CERTA_HD inline void evaluate_clusters(const IndexView& ix, int L, int nclust, int cap,
-                                       int reverse, int max_eval, Workspace& ws, int* pb1,
-                                       int* pb2) {
+                                       int reverse, int max_eval, int min_support, Workspace& ws,
+                                       int* pb1, int* pb2) {
   order_by_support(ws, nclust);
   if (reverse)  // results must not depend on the order (tested)
     for (int x = 0, y = nclust - 1; x < y; ++x, --y) {
@@ -455,10 +476,11 @@ CERTA_HD inline void evaluate_clusters(const IndexView& ix, int L, int nclust, i
     cl.dist = (int8_t)(cap + 1);  // "cannot improve (b1, b2)", or not evaluated
     const int limit = b2 - 1;
     if (limit < 0 || x >= max_eval) continue;
+    if (popcount8(cl.pmask) < min_support) continue;  // q-gram lemma: no locus within R here
     const uint8_t* rd = ws.seq[cl.strand];
     int u = limit + 1;  // Hamming upper bound, only tracked below limit + 1
     for (int e = cl.beg; e < cl.end && u > 0; ++e) {
-      int h = hamming(ix, rd, L, ws.cand[cl.strand][e], u - 1);
+      int h = hamming(ix, rd, L, diag_of(ws.cand[cl.strand][e]), u - 1);
       if (h < u) u = h;
     }
     int d;
@@ -719,12 +741,14 @@ CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
   // Same number of rarest parts on both strands, within budget and k + 1.
   count_parts(ix, ws.seq[0], L, P, ws, 0);
   count_parts(ix, ws.seq[1], L, P, ws, 1);
-  const int m0 = parts_that_fit(ws, 0, P, p.k + 1, p.budget);
-  const int m1 = parts_that_fit(ws, 1, P, p.k + 1, p.budget);
+  // With min_support t, |S| parts certify radius |S| - t (q-gram lemma).
+  const int t = p.min_support < 1 ? 1 : p.min_support;
+  const int m0 = parts_that_fit(ws, 0, P, p.k + t, p.budget);
+  const int m1 = parts_that_fit(ws, 1, P, p.k + t, p.budget);
   const int m = m0 < m1 ? m0 : m1;
   r.parts = (uint8_t)P;
   r.used = (uint8_t)m;
-  const int R = m - 1;
+  const int R = m - t;
   r.radius = (int8_t)R;
   if (R < 0) {
     if (!certify_repeat(ix, L, P, name_hash, ws, r)) r.reason = kRadiusNegative;
@@ -741,7 +765,7 @@ CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
   int b1 = R + 1, b2 = R + 1;
   if (nclust >= 0) {
     r.n_clusters = (uint16_t)nclust;
-    evaluate_clusters(ix, L, nclust, R, p.reverse_order, nclust, ws, &b1, &b2);  // all: certificate
+    evaluate_clusters(ix, L, nclust, R, p.reverse_order, nclust, p.min_support, ws, &b1, &b2);  // all: certificate
     if (b1 <= R) {
       const int n_best = align_best(ix, L, nclust, b1, name_hash, ws, r);
       r.certified = 1;
@@ -770,7 +794,7 @@ CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
     // Heuristic: only the S2_TOP best-supported clusters, in a fixed order
     // (S2 makes no exactness claim, so the order-independence test does not
     // apply). The host caps MAPQ when clusters were left out.
-    evaluate_clusters(ix, L, nc2, D, 0, S2_TOP, ws, &c1, &c2);
+    evaluate_clusters(ix, L, nc2, D, 0, S2_TOP, 1, ws, &c1, &c2);
     if (c1 <= D) {
       const int n_best = align_best(ix, L, nc2, c1, name_hash, ws, r);
       r.n_clusters = (uint16_t)nc2;

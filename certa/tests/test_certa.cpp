@@ -211,7 +211,9 @@ int main(int argc, char** argv) {
   // {k, budget, reverse_order, s2_limit}
   const Params configs[] = {{2, 256}, {3, 256}, {5, 256}, {4, 64}, {4, 16}, {3, 4}, {2, 1},
                             {3, 16, 0, 8}, {5, 256, 0, 10}, {2, 4, 0, 6},
-                            {5, 2048}, {4, 4096}};  // host-only budgets (CPU pass 3)
+                            {5, 2048}, {4, 4096},   // host-only budgets (CPU pass 3)
+                            // {k, budget, reverse, s2, mapq_limit, min_support}: q-gram filter
+                            {3, 256, 0, 0, 0, 2}, {4, 4096, 0, 0, 0, 2}, {2, 16, 0, 0, 0, 2}, {2, 64, 0, 0, 0, 3}};
   for (const Params& p : configs) {
     std::vector<Result> res, res1, resrev, resm;
     map_cpu(view, p, batch, res, 4);

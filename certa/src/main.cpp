@@ -255,6 +255,10 @@ int cmd_map(const Args& a) {
   if (p3.budget != 0 && (p3.budget < p2.budget || p3.budget > HOST_BUDGET_MAX))
     throw std::runtime_error("--budget3 must be 0 or in [budget2, 4096]");
   if (p3.budget == 0) p3.budget = p2.budget;
+  // Pass 3 verifies only clusters hit by >= t distinct parts (radius |S| - t),
+  // which skips the flood of single-part hits from repetitive parts.
+  p3.min_support = a.geti("--support3", 2);
+  if (p3.min_support < 1 || p3.min_support > PMAX) throw std::runtime_error("--support3 must be in [1, 8]");
   const bool gpu = a.has("--gpu");
   const int threads = a.geti("-t", default_threads());
   // Threads that parse and encode the next batch while the current one maps.
@@ -391,7 +395,7 @@ int cmd_map(const Args& a) {
       std::vector<size_t> redo;
       for (size_t i = 0; i < res.size(); ++i) {
         const Result& r = res[i];
-        const int want = r.parts < p3.k + 1 ? r.parts : p3.k + 1;
+        const int want = r.parts < p3.k + p3.min_support ? r.parts : p3.k + p3.min_support;
         if (r.certified == 0 && (r.reason == kRadiusNegative || r.reason == kNotFound) && r.used < want)
           redo.push_back(i);
       }
