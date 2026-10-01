@@ -8,6 +8,7 @@
 // Certified reads are written to SAM. All other reads are written unchanged
 // to the uncertified FASTQ, for a full aligner (minibwa, BWA-MEM2, ...).
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -20,6 +21,7 @@
 #include <thread>
 #include <vector>
 
+#include "certa/pair.h"
 #include "index.h"
 #include "mapper.h"
 #include "seqio.h"
@@ -43,6 +45,8 @@ struct Stats {
   uint64_t by_radius[KMAX + 2] = {};  // certified reads per radius R
   uint64_t by_d1[KMAX + 1] = {};
   uint64_t unc_by_used[PMAX + 1] = {};  // uncertified reads per parts searched |S|
+  uint64_t pr = 0;                      // reads certified by the pair certificate (PR)
+  uint64_t pairs = 0, pairs_cert = 0, pairs_proper = 0;
   void add(const Stats& o) {
     reads += o.reads; bases += o.bases; certified += o.certified;
     s0 += o.s0; s1 += o.s1; sr += o.sr; sl += o.sl; s2 += o.s2; ties += o.ties;
@@ -50,6 +54,7 @@ struct Stats {
     for (int i = 0; i < KMAX + 2; ++i) by_radius[i] += o.by_radius[i];
     for (int i = 0; i < KMAX + 1; ++i) by_d1[i] += o.by_d1[i];
     for (int i = 0; i <= PMAX; ++i) unc_by_used[i] += o.unc_by_used[i];
+    pr += o.pr; pairs += o.pairs; pairs_cert += o.pairs_cert; pairs_proper += o.pairs_proper;
   }
 };
 
@@ -111,44 +116,73 @@ char comp(char c) {
   }
 }
 
+int64_t ref_span(const Result& r) {
+  int64_t span = 0;
+  for (int i = 0; i < r.n_cigar; ++i) {
+    const uint32_t op = r.cigar[i] & 0xF;
+    if (op == kOpM || op == kOpD) span += r.cigar[i] >> 4;
+  }
+  return span;
+}
+
+// Host-side check: a certified alignment must lie within one contig.
+void check_contig(Result& r, const Reference& ref) {
+  if (!r.certified) return;
+  const int c = ref.contig_of(r.ref_pos);
+  if (c < 0 || ref.contig_of(r.ref_pos + ref_span(r) - 1) != c) {
+    r.certified = 0;
+    r.reason = kCrossContig;
+  }
+}
+
+void fastq_record(const FastqRecord& rec, std::string& fq) {
+  fq += '@'; fq += rec.name; fq += '\n';
+  fq += rec.seq; fq += "\n+\n";
+  fq += rec.qual; fq += '\n';
+}
+
+// Mate fields of a SAM line (single-end: none).
+struct MateInfo {
+  int flag = 0;
+  std::string rnext = "*";
+  int64_t pnext = 0, tlen = 0;
+};
+
+void sam_line(const Result& r, const FastqRecord& rec, const Reference& ref, int mapq,
+              const MateInfo& mi, std::string& sam);
+
 // Appends a SAM line (certified) or a FASTQ record (fallback). Returns the
 // final reason code after the host-side contig check.
 int emit(const Result& r0, const FastqRecord& rec, const Reference& ref,
          std::string& sam, std::string& fq) {
   Result r = r0;
-  if (r.certified) {
-    int64_t span = 0;
-    for (int i = 0; i < r.n_cigar; ++i) {
-      uint32_t op = r.cigar[i] & 0xF;
-      if (op == kOpM || op == kOpD) span += r.cigar[i] >> 4;
-    }
-    int c = ref.contig_of(r.ref_pos);
-    if (c < 0 || ref.contig_of(r.ref_pos + span - 1) != c) {
-      r.certified = 0;
-      r.reason = kCrossContig;
-    }
-  }
+  check_contig(r, ref);
   if (!r.certified) {
-    fq += '@'; fq += rec.name; fq += '\n';
-    fq += rec.seq; fq += "\n+\n";
-    fq += rec.qual; fq += '\n';
+    fastq_record(rec, fq);
     return r.reason;
   }
+  sam_line(r, rec, ref, mapq_of(r, static_cast<int>(rec.seq.size())), MateInfo(), sam);
+  return kOk;
+}
+
+void sam_line(const Result& r, const FastqRecord& rec, const Reference& ref, int mapq,
+              const MateInfo& mi, std::string& sam) {
   int c = ref.contig_of(r.ref_pos);
-  char buf[64];
+  char buf[96];
   sam += rec.name;
-  std::snprintf(buf, sizeof buf, "\t%d\t", r.strand ? 16 : 0);
+  std::snprintf(buf, sizeof buf, "\t%d\t", mi.flag | (r.strand ? 16 : 0));
   sam += buf;
   sam += ref.names[c];
   std::snprintf(buf, sizeof buf, "\t%lld\t%d\t",
-                static_cast<long long>(r.ref_pos - ref.offsets[c] + 1),
-                mapq_of(r, static_cast<int>(rec.seq.size())));
+                static_cast<long long>(r.ref_pos - ref.offsets[c] + 1), mapq);
   sam += buf;
   for (int i = 0; i < r.n_cigar; ++i) {
     std::snprintf(buf, sizeof buf, "%u%c", r.cigar[i] >> 4, "MIDNS"[r.cigar[i] & 0xF]);
     sam += buf;
   }
-  sam += "\t*\t0\t0\t";
+  std::snprintf(buf, sizeof buf, "\t%s\t%lld\t%lld\t", mi.rnext.c_str(),
+                static_cast<long long>(mi.pnext), static_cast<long long>(mi.tlen));
+  sam += buf;
   if (r.strand) {
     for (size_t i = rec.seq.size(); i-- > 0;) sam += comp(rec.seq[i]);
     sam += '\t';
@@ -156,7 +190,7 @@ int emit(const Result& r0, const FastqRecord& rec, const Reference& ref,
   } else {
     sam += rec.seq; sam += '\t'; sam += rec.qual;
   }
-  static const char* const kTierNames[] = {"S0", "S1", "SR", "S2", "SL"};
+  static const char* const kTierNames[] = {"S0", "S1", "SR", "S2", "SL", "PR"};
   // NM: edits in the reported (affine, possibly clipped) alignment.
   // XE: the certified minimum end-to-end edit distance over the reference
   // (-1 for SL). SL: AS (clip penalties included) is the certified maximum
@@ -164,10 +198,71 @@ int emit(const Result& r0, const FastqRecord& rec, const Reference& ref,
   char tags[160];
   int n = std::snprintf(tags, sizeof tags, "\tNM:i:%d\tAS:i:%d\tXE:i:%d\tXT:Z:%s\tXR:i:%d\tXD:i:%d\tXB:i:%d",
                         r.nm, r.score, r.d1, kTierNames[r.tier], r.radius, r.d2, r.n_best);
-  if (r.tier == kTierSL) std::snprintf(tags + n, sizeof tags - n, "\tXF:i:%d", r.floor);
+  if (r.tier == kTierSL) n += std::snprintf(tags + n, sizeof tags - n, "\tXF:i:%d", r.floor);
+  // PR: XP is the certified maximum pair score, XF its threshold, XS a bound
+  // on every other proper pair.
+  if (r.tier == kTierPR) std::snprintf(tags + n, sizeof tags - n, "\tXF:i:%d\tXS:i:%d", r.floor, r.sub_score);
   sam += tags;
   sam += '\n';
-  return kOk;
+}
+
+// Proper pair (as certified): one contig, opposite strands, and the reverse
+// mate's first aligned base 0..max_dist after the forward mate's.
+bool is_proper(const Result& a, const Result& b, const Reference& ref, int max_dist) {
+  if (a.strand == b.strand || ref.contig_of(a.ref_pos) != ref.contig_of(b.ref_pos)) return false;
+  const Result& f = a.strand ? b : a;
+  const Result& r = a.strand ? a : b;
+  return r.ref_pos >= f.ref_pos && r.ref_pos - f.ref_pos <= max_dist;
+}
+
+// BWA-MEM's pairing: q_pe from the pair score margin; a mate's MAPQ is raised
+// towards it (by at most 40 over its single-end MAPQ).
+int mapq_pair(const Result& r, const Result& mate, const Result& se, int L) {
+  if (r.tier != kTierPR) return mapq_of(r, L);
+  int q_se = se.certified == 1 ? mapq_of(se, L) : 0;
+  int q_pe = 0;
+  if (r.n_best == 1) {
+    const int margin = r.score + mate.score - r.sub_score;
+    q_pe = std::min(60, static_cast<int>(6.02 * margin / kMatch + 0.499));
+  }
+  if (q_pe > q_se) q_se = std::min(q_pe, q_se + 40);
+  return q_se;
+}
+
+// Both mates as SAM lines if both are certified, else both to the fallback.
+// Writes each mate's final reason to reason[0..1].
+void emit_pair(const Result* r0, const Result* se, const FastqRecord* rec, const Reference& ref,
+               int max_dist, std::string& sam, std::string& fq1, std::string& fq2, int* reason) {
+  Result r[2] = {r0[0], r0[1]};
+  for (int x = 0; x < 2; ++x) {
+    if (r[x].certified == 2) { r[x].certified = 0; r[x].reason = kNotFound; }
+    check_contig(r[x], ref);
+  }
+  if (!r[0].certified || !r[1].certified) {
+    fastq_record(rec[0], fq1);
+    fastq_record(rec[1], fq2);
+    for (int x = 0; x < 2; ++x) reason[x] = r[x].certified ? kNotFound : r[x].reason;
+    return;
+  }
+  const bool proper = is_proper(r[0], r[1], ref, max_dist);
+  const int c0 = ref.contig_of(r[0].ref_pos), c1 = ref.contig_of(r[1].ref_pos);
+  for (int x = 0; x < 2; ++x) {
+    const Result& a = r[x];
+    const Result& b = r[1 - x];
+    MateInfo mi;
+    mi.flag = 1 | (proper ? 2 : 0) | (b.strand ? 32 : 0) | (x == 0 ? 64 : 128);
+    const int cb = x == 0 ? c1 : c0;
+    mi.rnext = c0 == c1 ? "=" : ref.names[cb];
+    mi.pnext = b.ref_pos - static_cast<int64_t>(ref.offsets[cb]) + 1;
+    if (c0 == c1) {
+      const int64_t lo = std::min(a.ref_pos, b.ref_pos);
+      const int64_t hi = std::max(a.ref_pos + ref_span(a), b.ref_pos + ref_span(b));
+      const bool left = a.ref_pos < b.ref_pos || (a.ref_pos == b.ref_pos && x == 0);
+      mi.tlen = left ? hi - lo : -(hi - lo);
+    }
+    sam_line(a, rec[x], ref, mapq_pair(a, b, se[x], static_cast<int>(rec[x].seq.size())), mi, sam);
+    reason[x] = kOk;
+  }
 }
 
 struct Args {
@@ -223,11 +318,11 @@ int cmd_index(const Args& a) {
 }
 
 int cmd_map(const Args& a) {
-  if (a.pos.size() != 2)
+  if (a.pos.size() != 2 && a.pos.size() != 3)
     throw std::runtime_error(
-        "usage: certa map ref.cidx reads.fq[.gz] [-k 5] [--k1 2] [--budget 16] [--budget2 256] "
+        "usage: certa map ref.cidx reads.fq[.gz] [mates.fq[.gz]] [-k 5] [--k1 2] [--budget 16] [--budget2 256] "
         "[--budget3 0] [--support3 2] [--local 0] [--mapq-limit 8] [-t N] [--gpu] [--device 0] [-o out.sam] "
-        "[-u uncertified.fq] [--stats s.json] [--batch N] [--io-threads N]");
+        "[-u uncertified.fq] [-U uncertified_mates.fq] [--max-dist 850] [--stats s.json] [--batch N] [--io-threads N]");
   Params p;
   p.k = a.geti("-k", 5);
   p.budget = a.geti("--budget", a.geti("--cap", 16));  // --cap: the v0.1 name
@@ -277,6 +372,14 @@ int cmd_map(const Args& a) {
   pl.local = a.geti("--local", 0);
   pl.local_only = 1;
   if (pl.local < 0 || pl.local > PMAX) throw std::runtime_error("--local must be in [0, 8]");
+  // Paired-end: a second FASTQ with the mates, in the same order.
+  const bool paired = a.pos.size() == 3;
+  PairParams pp;
+  pp.se = p2;
+  pp.se.budget = std::max(p2.budget, p3.budget);
+  pp.se.min_support = 1;
+  pp.max_dist = a.geti("--max-dist", 850);
+  if (pp.max_dist < 0) throw std::runtime_error("--max-dist must be >= 0");
   const bool gpu = a.has("--gpu");
   const int threads = a.geti("-t", default_threads());
   // Threads that parse and encode the next batch while the current one maps.
@@ -298,14 +401,21 @@ int cmd_map(const Args& a) {
   // Open input and outputs first, so a failure cannot leave the upload
   // thread running. Uncompressed regular files are memory-mapped; gzip and
   // pipes are streamed.
-  std::unique_ptr<MappedFastq> mapped;
-  std::unique_ptr<LineReader> stream;
+  std::unique_ptr<MappedFastq> mapped, mapped2;
+  std::unique_ptr<LineReader> stream, stream2;
   if (MappedFastq::usable(a.pos[1])) mapped.reset(new MappedFastq(a.pos[1]));
   else stream.reset(new LineReader(a.pos[1]));
+  if (paired) {
+    if (MappedFastq::usable(a.pos[2])) mapped2.reset(new MappedFastq(a.pos[2]));
+    else stream2.reset(new LineReader(a.pos[2]));
+  }
   std::FILE* sam = a.has("-o") ? std::fopen(a.get("-o", "").c_str(), "wb") : stdout;
   if (!sam) throw std::runtime_error("cannot open SAM output");
   std::FILE* fq = a.has("-u") ? std::fopen(a.get("-u", "").c_str(), "wb") : nullptr;
   if (a.has("-u") && !fq) throw std::runtime_error("cannot open uncertified FASTQ output");
+  std::FILE* fq2 = a.has("-U") ? std::fopen(a.get("-U", "").c_str(), "wb") : nullptr;
+  if (a.has("-U") && !fq2) throw std::runtime_error("cannot open uncertified mates output");
+  if (paired && fq && !fq2) throw std::runtime_error("paired input: -u needs -U for the mates");
   std::fprintf(sam, "@HD\tVN:1.6\tSO:unsorted\n");
   for (size_t c = 0; c < ref.names.size(); ++c)
     std::fprintf(sam, "@SQ\tSN:%s\tLN:%llu\n", ref.names[c].c_str(),
@@ -347,11 +457,32 @@ int cmd_map(const Args& a) {
   uint64_t escalated = 0;  // reads re-run with --budget2
   uint64_t third = 0;      // reads re-run on the CPU with --budget3
   uint64_t local = 0;      // reads re-run on the CPU for tier SL
+  uint64_t pair_tried = 0; // pairs given to the pair certificate
+  std::vector<Result> se_res;  // single-end results (paired mode, for MAPQ)
   auto load = [&](int slot) {
     try {
       auto t = Clock::now();
-      if (mapped) mapped->next_batch(recs_buf[slot], batch_size, io_threads);
-      else read_fastq_batch(*stream, recs_buf[slot], batch_size, io_threads);
+      if (!paired) {
+        if (mapped) mapped->next_batch(recs_buf[slot], batch_size, io_threads);
+        else read_fastq_batch(*stream, recs_buf[slot], batch_size, io_threads);
+      } else {
+        // Mates interleaved: read 2i is mate 1, read 2i + 1 its mate 2.
+        std::vector<FastqRecord> m1, m2;
+        const size_t half = std::max<size_t>(1, batch_size / 2);
+        if (mapped) mapped->next_batch(m1, half, io_threads);
+        else read_fastq_batch(*stream, m1, half, io_threads);
+        if (mapped2) mapped2->next_batch(m2, half, io_threads);
+        else read_fastq_batch(*stream2, m2, half, io_threads);
+        if (m1.size() != m2.size()) throw std::runtime_error("mate files have different numbers of reads");
+        std::vector<FastqRecord>& out = recs_buf[slot];
+        out.resize(2 * m1.size());
+        for (size_t i = 0; i < m1.size(); ++i) {
+          if (m1[i].name != m2[i].name)
+            throw std::runtime_error("mate names differ: " + m1[i].name + " / " + m2[i].name);
+          out[2 * i] = std::move(m1[i]);
+          out[2 * i + 1] = std::move(m2[i]);
+        }
+      }
       encode_batch(recs_buf[slot], batch_buf[slot], io_threads);
       t_io += secs(t);
     } catch (...) {
@@ -430,19 +561,64 @@ int cmd_map(const Args& a) {
       rerun(redo, pl, false);
       local += redo.size();
     }
+    if (paired) {
+      // Pair pass, on the CPU: pairs with an uncertified mate or a tied mate.
+      se_res = res;
+      std::vector<size_t> todo;
+      for (size_t i = 0; 2 * i + 1 < res.size(); ++i) {
+        const Result& x = res[2 * i];
+        const Result& y = res[2 * i + 1];
+        if (x.certified != 1 || y.certified != 1 || x.n_best > 1 || y.n_best > 1) todo.push_back(i);
+      }
+      pair_tried += todo.size();
+      std::atomic<size_t> next{0};
+      auto worker = [&] {
+        std::unique_ptr<Workspace> w1(new Workspace), w2(new Workspace);
+        PairScratch sc;
+        for (size_t z; (z = next.fetch_add(1)) < todo.size();) {
+          const size_t i = todo[z];
+          Result r1 = res[2 * i], r2 = res[2 * i + 1];
+          const PairOut po = certify_pair(view, pp, batch.codes.data() + batch.offs[2 * i], batch.lens[2 * i],
+                                          batch.codes.data() + batch.offs[2 * i + 1], batch.lens[2 * i + 1],
+                                          *w1, *w2, sc, r1, r2);
+          if (po.certified) { res[2 * i] = r1; res[2 * i + 1] = r2; }
+        }
+      };
+      std::vector<std::thread> pw;
+      for (int w = 1; w < threads; ++w) pw.emplace_back(worker);
+      worker();
+      for (auto& th : pw) th.join();
+    }
     t_map += secs(t);
 
     // Format in parallel over contiguous slices, then write in input order.
     t = Clock::now();
     const int nt = std::max(1, std::min<int>(threads, static_cast<int>(recs.size() / 1024) + 1));
-    std::vector<std::string> sam_out(nt), fq_out(nt);
+    std::vector<std::string> sam_out(nt), fq_out(nt), fq2_out(nt);
     std::vector<Stats> st(nt);
     std::vector<std::thread> pool;
     for (int w = 0; w < nt; ++w) {
       pool.emplace_back([&, w] {
         size_t a0 = recs.size() * w / nt, b0 = recs.size() * (w + 1) / nt;
+        if (paired) { a0 &= ~size_t(1); b0 = w == nt - 1 ? recs.size() : (b0 & ~size_t(1)); }
+        int pair_reason[2] = {0, 0};
         for (size_t i = a0; i < b0; ++i) {
-          int reason = emit(res[i], recs[i], ref, sam_out[w], fq_out[w]);
+          int reason;
+          if (!paired) {
+            reason = emit(res[i], recs[i], ref, sam_out[w], fq_out[w]);
+          } else {
+            if (i % 2 == 0) {
+              emit_pair(&res[i], &se_res[i], &recs[i], ref, pp.max_dist, sam_out[w], fq_out[w], fq2_out[w],
+                        pair_reason);
+              Stats& s = st[w];
+              ++s.pairs;
+              if (pair_reason[0] == kOk) {
+                ++s.pairs_cert;
+                s.pairs_proper += is_proper(res[i], res[i + 1], ref, pp.max_dist);
+              }
+            }
+            reason = pair_reason[i % 2];
+          }
           Stats& s = st[w];
           ++s.reads;
           s.bases += recs[i].seq.size();
@@ -453,7 +629,8 @@ int cmd_map(const Args& a) {
           } else if (reason == kOk) {
             ++s.certified;
             const uint8_t tier = res[i].tier;
-            ++(tier == kTierS0 ? s.s0 : tier == kTierS1 ? s.s1 : tier == kTierSR ? s.sr : s.sl);
+            ++(tier == kTierS0 ? s.s0 : tier == kTierS1 ? s.s1 : tier == kTierSR ? s.sr :
+               tier == kTierSL ? s.sl : s.pr);
             s.ties += res[i].n_best > 1;
             if (res[i].radius >= 0) ++s.by_radius[res[i].radius];
             if (res[i].d1 >= 0) ++s.by_d1[res[i].d1];
@@ -465,6 +642,7 @@ int cmd_map(const Args& a) {
     for (int w = 0; w < nt; ++w) {
       std::fwrite(sam_out[w].data(), 1, sam_out[w].size(), sam);
       if (fq) std::fwrite(fq_out[w].data(), 1, fq_out[w].size(), fq);
+      if (fq2) std::fwrite(fq2_out[w].data(), 1, fq2_out[w].size(), fq2);
       total.add(st[w]);
     }
     t_out += secs(t);
@@ -476,6 +654,7 @@ int cmd_map(const Args& a) {
   if (read_error) std::rethrow_exception(read_error);
   if (sam != stdout) std::fclose(sam);
   if (fq) std::fclose(fq);
+  if (fq2) std::fclose(fq2);
   const double t_total = secs(t_all);
 
   auto pct = [&](uint64_t x) { return total.reads ? 100.0 * x / total.reads : 0.0; };
@@ -491,6 +670,14 @@ int cmd_map(const Args& a) {
   std::fprintf(stderr, "[map] second pass (budget %d, S2 <= %d): %.2f%% of reads; third pass (CPU, budget %d): %.2f%%\n",
                p2.budget, p2.s2_limit, pct(escalated), p3.budget, pct(third));
   std::fprintf(stderr, "[map] local pass (CPU, support %d): %.2f%% of reads\n", pl.local, pct(local));
+  if (paired) {
+    const double np = total.pairs ? 100.0 / total.pairs : 0.0;
+    std::fprintf(stderr,
+                 "[map] pairs %llu: both mates certified %.2f%% (proper %.2f%%); PR pair certificate "
+                 "%.2f%% of reads; pair pass tried %.2f%% of pairs\n",
+                 static_cast<unsigned long long>(total.pairs), np * total.pairs_cert, np * total.pairs_proper,
+                 pct(total.pr), np * pair_tried);
+  }
   std::fprintf(stderr, "[map] uncertified by parts searched |S|:");
   for (int i = 0; i <= PMAX; ++i) std::fprintf(stderr, " %d:%.2f%%", i, pct(total.unc_by_used[i]));
   std::fprintf(stderr, "\n");

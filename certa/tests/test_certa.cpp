@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "index.h"
+#include "certa/pair.h"
 #include "mapper.h"
 
 using namespace certa;
@@ -103,6 +104,69 @@ int oracle_local(const std::vector<uint8_t>& ref, const uint8_t* fwd, int L) {
       }
       std::swap(hp, hc);
       std::swap(yp, yc);
+    }
+  }
+  return best;
+}
+
+// For every reference position j: the best affine local score of `rd`
+// (aligned forward) among alignments whose first aligned base is j. Local DP
+// on the reversed read against the reference read backwards (its end column
+// is the start in forward coordinates; clip penalties are symmetric).
+std::vector<int> oracle_starts(const std::vector<uint8_t>& ref, const uint8_t* rd, int L) {
+  const int NEG = -(1 << 20);
+  std::vector<int> best(ref.size(), NEG), hp(L + 1), hc(L + 1), yp(L + 1), yc(L + 1);
+  hp.assign(L + 1, NEG);
+  yp.assign(L + 1, NEG);
+  hp[0] = 0;
+  for (size_t jj = ref.size(); jj-- > 0;) {
+    hc[0] = 0;
+    yc[0] = NEG;
+    int x = NEG;
+    for (int i = 1; i <= L; ++i) {
+      const uint8_t c = rd[L - i];
+      const int start = i == 1 ? 0 : -kClip;
+      const int m = std::max(hp[i - 1], start) + (sub_cost(c, ref[jj]) ? -kMismatch : kMatch);
+      x = i > 1 ? std::max(hc[i - 1] - kGapOpen - kGapExt, x - kGapExt) : NEG;
+      yc[i] = std::max(hp[i] - kGapOpen - kGapExt, yp[i] - kGapExt);
+      hc[i] = std::max(m, std::max(x, yc[i]));
+      best[jj] = std::max(best[jj], m - (i < L ? kClip : 0));
+    }
+    std::swap(hp, hc);
+    std::swap(yp, yc);
+  }
+  return best;
+}
+
+// Best proper pair: opposite strands, reverse mate starting 0..D after the
+// forward mate (sliding-window maximum).
+int oracle_pair(const std::vector<uint8_t>& ref, const std::vector<uint8_t>& m1,
+                const std::vector<uint8_t>& m2, int D) {
+  auto rc = [](const std::vector<uint8_t>& v) {
+    std::vector<uint8_t> o(v.size());
+    for (size_t i = 0; i < v.size(); ++i) o[i] = v[v.size() - 1 - i] < 4 ? 3 - v[v.size() - 1 - i] : 4;
+    return o;
+  };
+  const std::vector<uint8_t> r1 = rc(m1), r2 = rc(m2);
+  const auto F1 = oracle_starts(ref, m1.data(), static_cast<int>(m1.size()));
+  const auto R1 = oracle_starts(ref, r1.data(), static_cast<int>(r1.size()));
+  const auto F2 = oracle_starts(ref, m2.data(), static_cast<int>(m2.size()));
+  const auto R2 = oracle_starts(ref, r2.data(), static_cast<int>(r2.size()));
+  const int n = static_cast<int>(ref.size());
+  int best = INT32_MIN;
+  for (int pass = 0; pass < 2; ++pass) {
+    const std::vector<int>& F = pass ? F2 : F1;
+    const std::vector<int>& R = pass ? R1 : R2;
+    std::vector<int> dq;  // indices into R, decreasing values, window [f, f + D]
+    size_t head = 0;
+    int next = 0;
+    for (int f = 0; f < n; ++f) {
+      while (next < n && next <= f + D) {
+        while (dq.size() > head && R[dq.back()] <= R[next]) dq.pop_back();
+        dq.push_back(next++);
+      }
+      while (head < dq.size() && dq[head] < f) ++head;
+      if (head < dq.size()) best = std::max(best, F[f] + R[dq[head]]);
     }
   }
   return best;
@@ -468,6 +532,84 @@ int main(int argc, char** argv) {
                  reasons[kRadiusNegative], reasons[kNotFound], reasons[kClusterTooWide]);
   }
   std::fprintf(stderr, "SL scores checked against the local oracle for %d reads\n", local_checked);
+
+  // ---- Paired-end certificate (tier PR) against the proper-pair oracle.
+  {
+    const int D = 500, L = 150;
+    struct SimPair { std::vector<uint8_t> a, b; };
+    std::vector<SimPair> pairs;
+    auto& R = ref.seq.owned;
+    auto rcv = [](std::vector<uint8_t> v) {
+      std::reverse(v.begin(), v.end());
+      for (auto& c : v) c = c < 4 ? static_cast<uint8_t>(3 - c) : c;
+      return v;
+    };
+    for (int n = 0; n < 90; ++n) {
+      const int F = L + static_cast<int>(g() % (D + 1));  // fragment length
+      int64_t f;
+      switch (n % 6) {
+        case 0: case 1:  // unique sequence
+          f = static_cast<int64_t>(ref.offsets[g() % 2]) + 1000 + static_cast<int64_t>(g() % 3000); break;
+        case 2: case 3:  // one mate inside a copy of the 40/10-copy element
+          f = static_cast<int64_t>(ref.offsets[0]) + 60200 + 350 * static_cast<int64_t>(g() % 40) -
+              static_cast<int64_t>(F) + 100 + static_cast<int64_t>(g() % 150); break;
+        case 4:          // diverged segment copies
+          f = static_cast<int64_t>(ref.offsets[0]) + 10000 + 20000 * static_cast<int64_t>(g() % 3) +
+              static_cast<int64_t>(g() % 1500); break;
+        default:         // tandem repeat
+          f = static_cast<int64_t>(ref.offsets[0]) + 74800 + static_cast<int64_t>(g() % 600); break;
+      }
+      std::vector<uint8_t> frag(R.begin() + f, R.begin() + f + F + 10);
+      std::vector<uint8_t> a(frag.begin(), frag.begin() + L);
+      std::vector<uint8_t> b(frag.begin() + F - L, frag.begin() + F);
+      mutate(g, a, static_cast<int>(g() % 5));
+      mutate(g, b, static_cast<int>(g() % 9));
+      a.resize(L, 0);
+      b.resize(L, 0);
+      if (n % 7 == 3) {  // adapter-like tail on one mate
+        const int cut = 5 + static_cast<int>(g() % 30);
+        for (int i = L - cut; i < L; ++i) b[i] = rand_base(g);
+      }
+      b = rcv(b);
+      if (g() % 2) std::swap(a, b);
+      pairs.push_back({a, b});
+    }
+    PairParams pp;
+    pp.max_dist = D;
+    const Params cfgs[] = {{5, 256}, {5, 16}};
+    std::vector<int> truth_pair(pairs.size(), INT32_MIN);
+    int checked = 0;
+    for (const Params& pc : cfgs) {
+      pp.se = pc;
+      int cert = 0;
+      std::unique_ptr<Workspace> w1(new Workspace), w2(new Workspace);
+      PairScratch sc;
+      for (size_t i = 0; i < pairs.size(); ++i) {
+        Result r1{}, r2{};
+        const PairOut po = certify_pair(view, pp, pairs[i].a.data(), L, pairs[i].b.data(), L, *w1, *w2, sc, r1, r2);
+        if (!po.certified) continue;
+        ++cert;
+        CHECK(r1.tier == kTierPR && r2.tier == kTierPR && r1.strand != r2.strand, "pair %zu: bad PR result", i);
+        CHECK(rescore_affine(view, r1, pairs[i].a) == r1.score && rescore_affine(view, r2, pairs[i].b) == r2.score,
+              "pair %zu: CIGARs score %d/%d, reported %d/%d", i, rescore_affine(view, r1, pairs[i].a),
+              rescore_affine(view, r2, pairs[i].b), r1.score, r2.score);
+        const Result& fw = r1.strand ? r2 : r1;
+        const Result& rv = r1.strand ? r1 : r2;
+        CHECK(rv.ref_pos >= fw.ref_pos && rv.ref_pos - fw.ref_pos <= D, "pair %zu: improper (%lld, %lld)", i,
+              static_cast<long long>(fw.ref_pos), static_cast<long long>(rv.ref_pos));
+        CHECK(po.score == r1.score + r2.score && po.score > po.floor && po.sub <= po.score,
+              "pair %zu: inconsistent pair score", i);
+        if (truth_pair[i] == INT32_MIN) {
+          truth_pair[i] = oracle_pair(R, pairs[i].a, pairs[i].b, D);
+          ++checked;
+        }
+        CHECK(po.score == truth_pair[i], "budget=%d pair %zu: PR score %d != oracle %d", pc.budget, i, po.score,
+              truth_pair[i]);
+      }
+      std::fprintf(stderr, "pairs budget=%-3d certified %d/%zu\n", pc.budget, cert, pairs.size());
+    }
+    std::fprintf(stderr, "PR scores checked against the proper-pair oracle for %d pairs\n", checked);
+  }
   if (failures) {
     std::fprintf(stderr, "%d check(s) FAILED\n", failures);
     return 1;

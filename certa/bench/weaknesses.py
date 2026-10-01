@@ -46,12 +46,13 @@ def load(path):
             flag = int(t[1])
             if flag & 0x900:
                 continue
+            key = t[0] + ("/1" if flag & 64 else "/2" if flag & 128 else "")  # mates share a name
             if flag & 4:
-                d[t[0]] = None
+                d[key] = None
                 continue
             tags = {x[:2]: x[5:] for x in t[11:]}
             nm = int(tags.get("NM", 0))
-            d[t[0]] = {
+            d[key] = {
                 "chrom": t[2], "pos": int(t[3]), "mapq": int(t[4]),
                 "score": bwa_score(t[5], nm), "xt": tags.get("XT"),
                 "xb": int(tags.get("XB", 1)), "xe": int(tags.get("XE", nm)),
@@ -61,7 +62,7 @@ def load(path):
 
 def main():
     certa = load(sys.argv[1])
-    cert = {k: v for k, v in certa.items() if v and v["xt"] in ("S0", "S1", "SR", "SL")}
+    cert = {k: v for k, v in certa.items() if v and v["xt"] in ("S0", "S1", "SR", "SL", "PR")}
     ties = {k for k, v in cert.items() if v["xe"] == 0 and (v["xt"] == "SR" or v["xb"] > 1)}
     n_reads = len(certa)
     print(f"reads {n_reads}; CERTA-certified {len(cert)} ({100 * len(cert) / n_reads:.2f}%); "

@@ -27,6 +27,7 @@
 //   (MAPQ 0) even though not every copy was enumerated.
 //   Certified local alignment (tier SL, host only): see certify_local.
 #pragma once
+#include <climits>
 #include <cstdint>
 #ifndef __CUDA_ARCH__
 #include <algorithm>
@@ -69,8 +70,8 @@ constexpr int BIG = 1 << 20;
 
 // S0/S1/SR are certified. S2 is a heuristic placement, reported with
 // Result::certified = 2 and a conservative MAPQ.
-// SL: certified local (clipped) alignment, host only.
-enum Tier : uint8_t { kTierS0 = 0, kTierS1 = 1, kTierSR = 2, kTierS2 = 3, kTierSL = 4 };
+// SL: certified local (clipped) alignment; PR: certified proper pair (both host only).
+enum Tier : uint8_t { kTierS0 = 0, kTierS1 = 1, kTierSR = 2, kTierS2 = 3, kTierSL = 4, kTierPR = 5 };
 constexpr int S2_MAX = 10;  // largest --s2 edit limit (band must fit BMAX)
 constexpr int S2_TOP = 8;   // S2 evaluates only this many best-supported clusters
 static_assert(MAX_CIGAR >= 2 * S2_MAX + 1, "CIGAR buffer too small for S2");
@@ -525,10 +526,13 @@ CERTA_HD inline void evaluate_clusters(const IndexView& ix, int L, int nclust, i
 // reference ends free. Gotoh recurrences on the same band indexing as
 // band_distance: cell (i, b) aligns read base i-1 to reference i-1+lo+b.
 // Writes CIGAR (with soft clips), ref_pos, nm and score into `r`; returns
-// false (leaving `r` unchanged) if the CIGAR would not fit.
+// false (leaving `r` unchanged) if the CIGAR would not fit. Optionally only
+// alignments whose first aligned reference base lies in [smin, smax] count
+// (false if there is none).
 CERTA_HD inline bool affine_align(const IndexView& ix, const uint8_t* rd, int L,
                                   int64_t lo, int B, Workspace& ws, Result& r,
-                                  bool score_only = false) {
+                                  bool score_only = false, int64_t smin = INT64_MIN,
+                                  int64_t smax = INT64_MAX) {
   const int NEG = -(1 << 20);
   int* hp = ws.aff[0];
   int* hc = ws.aff[1];
@@ -537,7 +541,7 @@ CERTA_HD inline bool affine_align(const IndexView& ix, const uint8_t* rd, int L,
   // tb bits: 0-1 H source (0 match/mismatch, 1 insertion E, 2 deletion F),
   // 2 the diagonal step starts the alignment (read prefix clipped or none),
   // 3 E extends E, 4 F extends F.
-  for (int b = 0; b < B; ++b) { hp[b] = 0; ep[b] = NEG; }
+  for (int b = 0; b < B; ++b) { hp[b] = NEG; ep[b] = NEG; }
   int best = NEG, best_i = 0, best_b = 0;
   for (int i = 1; i <= L; ++i) {
     const uint8_t c = rd[i - 1];
@@ -546,8 +550,9 @@ CERTA_HD inline bool affine_align(const IndexView& ix, const uint8_t* rd, int L,
     for (int b = 0; b < B; ++b) {
       uint8_t bits = 0;
       int diag = hp[b];
-      if (start >= diag) { diag = start; bits |= 4; }
-      const int m = diag + (sub_cost(c, ref_at(ix, (int64_t)i - 1 + lo + b)) ? -kMismatch : kMatch);
+      const int64_t pos = (int64_t)i - 1 + lo + b;
+      if (start >= diag && pos >= smin && pos <= smax) { diag = start; bits |= 4; }
+      const int m = diag + (sub_cost(c, ref_at(ix, pos)) ? -kMismatch : kMatch);
       int e = NEG;
       if (b + 1 < B && i > 1) {  // no alignment may start with a gap
         const int open = hp[b + 1] - kGapOpen - kGapExt, ext = ep[b + 1] - kGapExt;
@@ -575,7 +580,7 @@ CERTA_HD inline bool affine_align(const IndexView& ix, const uint8_t* rd, int L,
     int* t = hp; hp = hc; hc = t;
     t = ep; ep = ec; ec = t;
   }
-  if (best == NEG) return false;
+  if (best < NEG / 2) return false;  // no allowed start
   if (score_only) {
     r.score = (int16_t)best;
     return true;
