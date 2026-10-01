@@ -1,0 +1,4 @@
+tool	rep	pairs	wall_s	user_s	sys_s	max_rss_kb
+certa-gpu-pe-pipe	1	20001073	76.96	2984.22	23.65	40339144
+minibwa	1	20001073	61.65	3597.70	7.02	9496632
+bwa-mem2	1	20001073	311.22	16913.01	44.92	33289084

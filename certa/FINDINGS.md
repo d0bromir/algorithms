@@ -164,6 +164,42 @@ alignment A of read span [x, y) is (y − x) − score(A) − its clip penalties
 - *Scope:* this certifies the score's optimality, not uniqueness. Ties
   between chains set MAPQ 0.
 
+**Theorem P (certified proper pair, tier PR; paired input).** The objective
+is the pair score σ(A1) + σ(A2), with σ the Theorem L local score. It is
+taken over *proper* pairs: the mates lie on opposite strands, and the
+reverse mate's first aligned base is 0 to D bases (`--max-dist`, 850) after
+the forward mate's.
+- *Floor:* if no enumerated part of either mate occurs exactly, Lemma L
+  bounds the pair by U1 + U2. The floor is
+  max(U1 + U2, L1 + L2 − 7 − 47), where the second term keeps each mate's
+  gap total within the 96-diagonal host band.
+- *Anchors:* every proper pair scoring above the floor has an exact part
+  in some mate x, so mate x lies in one of x's chains C (an *anchor*).
+  - Its partner y starts inside C's insert window.
+  - The partner is found exhaustively there. The window is about 1 kb, so
+    y's ~12-base parts are scanned directly in the reference, with no
+    index. Lemma L then applies with up to 12 parts, so any partner not
+    found scores at most the window's floor.
+- *Bounds:*
+  - Anchors are evaluated best bound first, with
+    bound(C) = ub_x(C) + (the best bound of y near C, or U_y).
+  - A partner in a chain whose pairs are already accounted for is covered,
+    so the bound tightens as chains are finished.
+  - Each evaluation gives `up`, a bound on every pair through C, and a pair
+    actually *realized*: x at its best place in C, and y at its best in that
+    place's exact window.
+- *Statement:* let R1 be the best realized pair. If R1 > floor, every anchor
+  of R1's pair has up = R1, and every other bound (other anchors' up,
+  skipped anchors' bounds, the floor) is ≤ R1, then R1 is the maximum pair
+  score over all proper pairs in the reference. ∎
+- *Also reported:* S2 is the largest of those other bounds and drives a
+  BWA-MEM-style pair MAPQ. S2 is not a uniqueness proof: a second, equal
+  partner inside the winning anchor's own window is bounded only by R1.
+- *Tags:* `XT:Z:PR`, `AS` (each mate's score), `XF` (floor), `XS` (S2).
+- *Pipeline:* when the pair cannot be certified, a mate keeps its
+  single-end certificate. Both mates still go to the fallback mapper so
+  that it can pair them, and its record of the certified mate is dropped.
+
 **What is deliberately not claimed**
 - **Optimal ≠ true origin:** the certificate is about the optimization
   problem, not the read's true origin. A read from a diverged repeat copy
@@ -202,6 +238,29 @@ alignment A of read span [x, y) is (y − x) − score(A) − its clip penalties
     Two 1–2-point overclaims survive, because they need an alignment
     exactly at the boundary: a floor lowered by 1, and a span start shifted
     by 2.
+- **Tier PR (Theorem P):**
+  - *Third oracle:* the best proper pair over the whole reference. It takes
+    each mate's best local score per start position (local DP on the
+    reversed read, both orientations), then a sliding-window maximum over
+    the allowed distance.
+  - *Pairs:*
+    - 90 simulated pairs from unique sequence, from inside a 50-copy
+      element, from diverged copies and from a tandem repeat, with 0–8
+      edits and adapter tails.
+    - 40 adversarial pairs. At the true locus mate 1 has 1–4 mismatches in
+      distinct parts; at a planted decoy mate 1 is exact and mate 2 has 1–6
+      mismatches. So the two pair scores are close, either way round.
+  - *Result:* about 85 PR certificates per seed are checked, and all equal
+    the oracle optimum.
+  - *Fast DP kernel:* `band_score`, the 16-bit vectorized twin of
+    `affine_align`, equals it on 4,000 random bands per seed.
+  - *Mutation testing* (2 seeds each): the decoy pairs catch both
+    partner-bound bugs (a missing nearby-partner bound, and treating
+    unfinished chains as finished), and the kernel test catches a deletion
+    recurrence off by one. Seven threshold mutations, off by 2–3 points in
+    the floor, band pad or window threshold, survive. They need pairs
+    exactly at those thresholds, for example a ~46-bp deletion against a
+    decoy one point below.
 - **Real data:**
   - 1,672,120 certified HG002 reads were compared with BWA-MEM2's unclipped
     alignments. BWA-MEM2 never has fewer edits than the certified minimum,
@@ -278,6 +337,45 @@ needs:
 - error-tolerant parts (1-mismatch neighbourhoods give ≥ 7 points per
   part, but cost ~66 lookups per part);
 - or paired-end information.
+
+**Paired-end (Theorem P; HG002 R1 + R2, the mates of the same reads).**
+Certified reads, 20M pairs:
+
+| | Single-end (R1) | Paired-end |
+|---|---|---|
+| reads certified | 94.38 % | **95.38 %** |
+| … by the pair certificate (PR) | — | 6.99 % |
+| pairs with both mates certified | — | 93.53 % |
+
+The pair pass runs only for pairs with one certified mate and one
+uncertified or tied mate (11.9 % of pairs).
+- *Success rate:* on a 100k-pair sample it certifies 74 % of the tied pairs
+  and 46 % of the one-uncertified pairs.
+- *Pairs with both mates uncertified* are skipped: under 1 % of them can be
+  certified.
+- *Why the rest fail:* most fallback pairs are improper (30 %) or
+  ambiguous. Among fallback pairs that minibwa pairs properly with low
+  loss, 83 % have a mate with MAPQ < 20.
+
+The paired pipeline is **4.0× faster than BWA-MEM2 in paired mode**, with
+5.7× less CPU time. It is not yet faster than minibwa (20M pairs, galaxy,
+A100 + 64
+threads, one run; `results/hg002_2026-10/galaxy_timing_pe.tsv`):
+
+| Pipeline | Wall | CPU time |
+|---|---|---|
+| BWA-MEM2 | 311.22 s | 16,913 s |
+| minibwa | 61.65 s | 3,598 s |
+| CERTA (A100, 32 threads) + minibwa fallback (32 threads) | 76.96 s | 2,984 s |
+
+- *Pair pass cost:* about 1,050 CPU-s. It went from 54 s to 0.35 s per
+  100k pairs during development.
+- *Fallback size:* a pair with one uncertified mate sends **both** mates to
+  minibwa, so that minibwa can pair them. That is 12.9 % of reads, and the
+  costliest ones.
+- *Options:* send only the uncertified mate, with no mate rescue in the
+  fallback; restrict the pair pass to the one-uncertified pairs; or move
+  the pair pass to the GPU.
 
 **Variant-calling accuracy on chr20 vs GIAB v4.2.1, same caller for both
 pipelines.** Both are single-end, 22×. Precision / recall / F1:

@@ -331,6 +331,47 @@ int main(int argc, char** argv) {
       planted.push_back({s});
     }
   }
+  // Adversarial pairs for tier PR: at the true locus mate 1 has k1
+  // mismatches (in distinct parts) and mate 2 is exact; at a planted decoy
+  // mate 1 is exact and mate 2 has kd mismatches, at a proper distance. The
+  // two pair scores are close, either way round, so a loose bound or an early
+  // stop picks the wrong pair.
+  std::vector<std::pair<std::vector<uint8_t>, std::vector<uint8_t>>> decoy_pairs;
+  {
+    const int L = 150, P = part_count(L, 14, 4);
+    auto& R = ref.seq.owned;
+    auto rcv = [](std::vector<uint8_t> v) {
+      std::reverse(v.begin(), v.end());
+      for (auto& c : v) c = c < 4 ? static_cast<uint8_t>(3 - c) : c;
+      return v;
+    };
+    for (int n = 0; n < 40; ++n) {
+      const int F = 300 + static_cast<int>(g() % 150), Fd = 300 + static_cast<int>(g() % 100);
+      const int64_t T = static_cast<int64_t>(ref.offsets[1]) + 1000 + static_cast<int64_t>(g() % 3000);
+      std::vector<uint8_t> m1(R.begin() + T, R.begin() + T + L);
+      const std::vector<uint8_t> fwd2(R.begin() + T + F - L, R.begin() + T + F);
+      const int k1 = 1 + static_cast<int>(g() % 4), kd = 1 + static_cast<int>(g() % 6);
+      int order[PMAX];
+      for (int j = 0; j < P; ++j) order[j] = j;
+      for (int j = P - 1; j > 0; --j) std::swap(order[j], order[g() % (j + 1)]);
+      for (int y = 0; y < k1; ++y) {
+        int off, len;
+        part_geometry(L, P, order[y], &off, &len);
+        const int x = off + 2 + static_cast<int>(g() % (len - 4));
+        m1[x] = static_cast<uint8_t>((m1[x] + 1 + g() % 3) % 4);
+      }
+      // Decoy in chr1 12500-29500 (free): mate 1 exact, mate 2 with kd mismatches.
+      const int64_t D = static_cast<int64_t>(ref.offsets[0]) + 12500 + 420 * n;
+      std::copy(m1.begin(), m1.end(), R.begin() + D);
+      std::vector<uint8_t> d2 = fwd2;
+      for (int y = 0; y < kd; ++y) {
+        const int x = static_cast<int>((y * L) / kd + g() % (L / kd));
+        d2[x] = static_cast<uint8_t>((d2[x] + 1 + g() % 3) % 4);
+      }
+      std::copy(d2.begin(), d2.end(), R.begin() + D + Fd - L);
+      decoy_pairs.push_back({m1, rcv(fwd2)});
+    }
+  }
   Index ix = Index::build(ref, 14, 4, 4);
   const IndexView view = ix.view(ref);
   // Round trip through the on-disk format: with q = 14 the file stores only
@@ -603,6 +644,10 @@ int main(int argc, char** argv) {
       b = rcv(b);
       if (g() % 2) std::swap(a, b);
       pairs.push_back({a, b});
+    }
+    for (auto& dp : decoy_pairs) {
+      if (g() % 2) pairs.push_back({dp.first, dp.second});
+      else pairs.push_back({dp.second, dp.first});
     }
     PairParams pp;
     pp.max_dist = D;
