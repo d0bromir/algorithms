@@ -31,6 +31,18 @@ for rep in $(seq 1 "$REPS"); do
           '$BIN/minibwa' map -t $((T - GT)) '$idx/minibwa' '$out/u1' '$out/u2' 2>/dev/null \
             | awk -f '$here/drop_certified_mates.awk' > '$sam_fb'
           wait") ;;
+      certa-gpu-pe-single)
+        # --fallback-mates single: pairs with both mates uncertified go to a
+        # paired minibwa, lone uncertified mates to a single-end minibwa.
+        rm -f "$out/u1" "$out/u2" "$out/s"; mkfifo "$out/u1" "$out/u2" "$out/s"
+        FT=$(( (T - GT) / 2 ))
+        CMD=(bash -c "set -o pipefail
+          '$CERTA' map '$idx/$CIDX' '$r1' '$r2' -t $GT --gpu --device $DEV ${CERTA_ARGS:-} -o '$sam_certa' \
+            -u '$out/u1' -U '$out/u2' --fallback-mates single -S '$out/s' --stats '$out/certa_pe_single.stats.json' \
+            2> '$out/certa_pe_single.log' &
+          '$BIN/minibwa' map -t $FT '$idx/minibwa' '$out/u1' '$out/u2' 2>/dev/null > '$sam_fb' &
+          '$BIN/minibwa' map -t $FT '$idx/minibwa' '$out/s' 2>/dev/null > /dev/null &
+          wait") ;;
       minibwa)  CMD=(bash -c "'$BIN/minibwa' map -t $T '$idx/minibwa' '$r1' '$r2' > /dev/null 2>&1") ;;
       bwa-mem2) CMD=(bash -c "'$BIN/bwa-mem2' mem -t $T '$idx/bwa-mem2' '$r1' '$r2' > /dev/null 2>&1") ;;
       *) echo "unknown tool $tool" >&2; exit 1 ;;

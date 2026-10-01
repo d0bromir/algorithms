@@ -229,10 +229,12 @@ int mapq_pair(const Result& r, const Result& mate, const Result& se, int L) {
   return q_se;
 }
 
-// Both mates as SAM lines if both are certified, else both to the fallback.
-// Writes each mate's final reason to reason[0..1].
+// Both mates as SAM lines if both are certified, else to the fallback.
+// Writes each mate's final reason to reason[0..1]. With `single` (not null),
+// a pair with one certified mate sends only the other mate, single-end, there.
 void emit_pair(const Result* r0, const Result* se, const FastqRecord* rec, const Reference& ref,
-               int max_dist, std::string& sam, std::string& fq1, std::string& fq2, int* reason) {
+               int max_dist, std::string& sam, std::string& fq1, std::string& fq2, std::string* single,
+               int* reason) {
   Result r[2] = {r0[0], r0[1]};
   for (int x = 0; x < 2; ++x) {
     if (r[x].certified == 2) { r[x].certified = 0; r[x].reason = kNotFound; }
@@ -242,6 +244,16 @@ void emit_pair(const Result* r0, const Result* se, const FastqRecord* rec, const
     fastq_record(rec[0], fq1);
     fastq_record(rec[1], fq2);
     for (int x = 0; x < 2; ++x) reason[x] = r[x].reason;
+    return;
+  }
+  if ((!r[0].certified || !r[1].certified) && single) {
+    // One mate keeps its single-end certificate; the other is mapped
+    // single-end by the fallback, so both records are written unpaired.
+    const int k = r[0].certified ? 0 : 1;
+    sam_line(r[k], rec[k], ref, mapq_of(r[k], static_cast<int>(rec[k].seq.size())), MateInfo(), sam);
+    fastq_record(rec[1 - k], *single);
+    reason[k] = kOk;
+    reason[1 - k] = r[1 - k].reason;
     return;
   }
   if (!r[0].certified || !r[1].certified) {
@@ -340,7 +352,7 @@ int cmd_map(const Args& a) {
     throw std::runtime_error(
         "usage: certa map ref.cidx reads.fq[.gz] [mates.fq[.gz]] [-k 5] [--k1 2] [--budget 16] [--budget2 256] "
         "[--budget3 0] [--support3 2] [--local 0] [--mapq-limit 8] [-t N] [--gpu] [--device 0] [-o out.sam] "
-        "[-u uncertified.fq] [-U uncertified_mates.fq] [--max-dist 850] [--stats s.json] [--batch N] [--io-threads N]");
+        "[-u uncertified.fq] [-U uncertified_mates.fq] [--fallback-mates pair|single -S single_mates.fq] [--max-dist 850] [--stats s.json] [--batch N] [--io-threads N]");
   Params p;
   p.k = a.geti("-k", 5);
   p.budget = a.geti("--budget", a.geti("--cap", 16));  // --cap: the v0.1 name
@@ -433,6 +445,16 @@ int cmd_map(const Args& a) {
   if (a.has("-u") && !fq) throw std::runtime_error("cannot open uncertified FASTQ output");
   std::FILE* fq2 = a.has("-U") ? std::fopen(a.get("-U", "").c_str(), "wb") : nullptr;
   if (a.has("-U") && !fq2) throw std::runtime_error("cannot open uncertified mates output");
+  // --fallback-mates single: the uncertified mate of a half-certified pair goes
+  // single-end to -S (default "pair": both mates to -u/-U, renamed name~k).
+  const std::string fb_mode = a.get("--fallback-mates", "pair");
+  if (fb_mode != "pair" && fb_mode != "single") throw std::runtime_error("--fallback-mates must be pair or single");
+  std::FILE* fqs = nullptr;
+  if (fb_mode == "single") {
+    if (!a.has("-S")) throw std::runtime_error("--fallback-mates single needs -S single_mates.fq");
+    fqs = std::fopen(a.get("-S", "").c_str(), "wb");
+    if (!fqs) throw std::runtime_error("cannot open single-mate fallback output");
+  }
   if (paired && fq && !fq2) throw std::runtime_error("paired input: -u needs -U for the mates");
   std::fprintf(sam, "@HD\tVN:1.6\tSO:unsorted\n");
   for (size_t c = 0; c < ref.names.size(); ++c)
@@ -616,7 +638,7 @@ int cmd_map(const Args& a) {
     // Format in parallel over contiguous slices, then write in input order.
     t = Clock::now();
     const int nt = std::max(1, std::min<int>(threads, static_cast<int>(recs.size() / 1024) + 1));
-    std::vector<std::string> sam_out(nt), fq_out(nt), fq2_out(nt);
+    std::vector<std::string> sam_out(nt), fq_out(nt), fq2_out(nt), fqs_out(nt);
     // Paired fallback: pair-aligned cut points, so the two mate files can be
     // written in alternating small chunks (a consumer reading both pipes in
     // lockstep, record by record, never waits on one while we block on the other).
@@ -635,6 +657,7 @@ int cmd_map(const Args& a) {
           } else {
             if (i % 2 == 0) {
               emit_pair(&res[i], &se_res[i], &recs[i], ref, pp.max_dist, sam_out[w], fq_out[w], fq2_out[w],
+                        fqs ? &fqs_out[w] : nullptr,
                         pair_reason);
               Stats& s = st[w];
               ++s.pairs;
@@ -683,6 +706,7 @@ int cmd_map(const Args& a) {
       } else if (fq) {
         std::fwrite(fq_out[w].data(), 1, fq_out[w].size(), fq);
       }
+      if (fqs) std::fwrite(fqs_out[w].data(), 1, fqs_out[w].size(), fqs);
       total.add(st[w]);
     }
     t_out += secs(t);
@@ -695,6 +719,7 @@ int cmd_map(const Args& a) {
   if (sam != stdout) std::fclose(sam);
   if (fq) std::fclose(fq);
   if (fq2) std::fclose(fq2);
+  if (fqs) std::fclose(fqs);
   const double t_total = secs(t_all);
 
   auto pct = [&](uint64_t x) { return total.reads ? 100.0 * x / total.reads : 0.0; };
