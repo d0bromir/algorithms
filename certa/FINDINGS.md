@@ -132,6 +132,38 @@ Notation:
 matches are found among sampled hits, then d1 = 0 is optimal and the read
 has ≥ 2 optimal loci. This holds under any scoring, so MAPQ 0 is proven.
 
+**Theorem L (certified local alignment, tier SL; opt-in `--local t`).** The
+objective here is BWA-MEM's own: the local score with soft clipping (+1 /
+−4 / gap −6−1k, −5 per clipped end), which `AS` reports. The *loss* of an
+alignment A of read span [x, y) is (y − x) − score(A) − its clip penalties.
+- *Lemma L:* every enumerated part fully inside [x, y) that does not occur
+  exactly in A adds ≥ 5 to the loss, disjointly.
+  - A mismatch costs 5.
+  - A deletion lies between two read bases, so it touches ≤ 1 part, for
+    ≥ 7.
+  - An insertion of k bases touching j ≥ 2 parts covers the j − 2 parts
+    between them, so k ≥ 2 + (j − 2)·(part length), and 6 + 2k ≥ 5j.
+- *Consequences:*
+  - An alignment with fewer than t exact parts of S scores at most
+    floor = max over spans of (y − x) − 5·(#parts inside − t + 1) − clips.
+  - Its total gap length is G ≤ pad = L − floor − 7, because the loss is
+    ≥ 6 + G and < L − floor.
+  - So its exact parts lie on diagonals within G of each other, in one
+    chain C of candidate diagonals joined at gaps ≤ pad. The alignment
+    stays within ±pad of each of them.
+  - It scores ≤ ub(C), the same bound with C's part mask treated as free.
+- *Statement:* chains with ub > floor are evaluated by banded affine DP in
+  any order, keeping the best two scores s1 ≥ s2 (initially floor) and
+  skipping chains with ub ≤ s2. If s1 > floor, then s1 is the maximum local
+  score over the whole reference, both strands. The reported alignment
+  attains it.
+- *Proof:* a better alignment either lies in an evaluated chain's band, so
+  it would have been found, or in a skipped chain, so it scores ≤ s2 ≤ s1. ∎
+- *Tags:* `XT:Z:SL`, `AS` (the certified maximum, clip penalties included),
+  `XF` (the floor it exceeds).
+- *Scope:* this certifies the score's optimality, not uniqueness. Ties
+  between chains set MAPQ 0.
+
 **What is deliberately not claimed**
 - **Optimal ≠ true origin:** the certificate is about the optimization
   problem, not the read's true origin. A read from a diverged repeat copy
@@ -155,6 +187,21 @@ has ≥ 2 optimal loci. This holds under any scoring, so MAPQ 0 is proven.
   caught. The bugs were an overclaimed radius, a one-copy SR proof, a
   dropped sampling shift, a narrowed band, a wrong verification limit, a
   lost previous best, and a wrong key-suffix mask.
+- **Tier SL (Theorem L):**
+  - *Second oracle:* full Gotoh DP of the affine local objective over the
+    whole reference, both strands.
+  - *Read sets:* reads with adapter-like heads and tails, chimeras,
+    adversarial reads, and every read in local-only configurations. The
+    adversarial reads have a mismatch in most parts plus a planted, slightly
+    worse decoy, or a long indel near a read end.
+  - *Result:* about 460 SL certificates per seed are checked, and all equal
+    the oracle optimum.
+  - *Mutation testing* (3 seeds each): overclaims of ≥ 2–3 points are
+    caught. These are a floor lowered by 3, a band narrowed by 2, a chain
+    bound lowered by 2, one extra free part, and a skip test off by 2.
+    Two 1–2-point overclaims survive, because they need an alignment
+    exactly at the boundary: a floor lowered by 1, and a span start shifted
+    by 2.
 - **Real data:**
   - 1,672,120 certified HG002 reads were compared with BWA-MEM2's unclipped
     alignments. BWA-MEM2 never has fewer edits than the certified minimum,
@@ -196,6 +243,41 @@ running concurrently (median of 3,
 | maximum certification (budget 4096, t = 2) | 95.28 % | 33.69 s | 859 s | 2.96× |
 
 The default re-run matches v0.6 (22.94 s) within 2 %.
+
+**Optional certified local alignment (tier SL, `--local t`, CPU pass).**
+Measured on 2 M HG002 reads (A100 + 16 threads):
+
+| Setting | Certified | SL | Map time |
+|---|---|---|---|
+| defaults | 94.46 % | — | 0.76 s |
+| `--local 2` | 94.66 % | 0.20 % | 1.23 s |
+| `--local 1` | 94.82 % | 0.36 % | 13.39 s |
+| `--budget3 4096 --local 2` | 95.65 % | 0.32 % | 5.58 s |
+
+Real-data check of the SL certificate (`bench/compare_sam.py`, 6,306 SL
+reads with `--budget3 4096 --local 2`): BWA-MEM2 never scores above the
+certified maximum, except 4 reads whose window contains reference `N`s
+(BWA replaces them with random bases). BWA-MEM2 reports a lower-scoring
+alignment at another locus for 575 SL reads. Of these, 570 are
+low-complexity (NovaSeq poly-G artifacts), and 1 complex read has
+MAPQ ≥ 20. So SL widens certification, but it does not reveal a new
+BWA-MEM2 weakness.
+
+**Why SL rescues so few reads.** The diagnostic `uncertified by parts
+searched |S|` shows that after `--local 2`, 5.3 % remain uncertified:
+- **3.6 % are limited by repeats.** Fewer than 6 parts fit the budget
+  (0.47 % have none), so the floor is close to L.
+- **1.8 % searched all 6 parts.** Their best alignment loses ≥ 25 points:
+  long clips, chimeras, or many edits.
+
+Both limits come from q = 22. A 150 bp read has at most 6 disjoint 22-mers,
+and Lemma L charges 5 points per destroyed part, so no exact-part
+certificate can prove an alignment that loses ≥ 30 points. Moving that line
+needs:
+- shorter parts (a second, smaller-q index);
+- error-tolerant parts (1-mismatch neighbourhoods give ≥ 7 points per
+  part, but cost ~66 lookups per part);
+- or paired-end information.
 
 **Variant-calling accuracy on chr20 vs GIAB v4.2.1, same caller for both
 pipelines.** Both are single-end, 22×. Precision / recall / F1:
@@ -282,7 +364,11 @@ The pilot did not reach 10× over BWA-MEM2:
   several GIAB samples, paired-end, whole genome and DeepVariant as a second
   caller.
 - **5.5 % of reads carry no certificate.** They get whatever minibwa gives.
-  Paired-end rescue and a certified local-alignment mode would reduce this.
+  The certified local-alignment mode (Theorem L) rescues only 0.2–0.4 %:
+  - 3.6 % of reads are repeat-limited;
+  - 1.8 % lose ≥ 25 points, beyond what 6 exact 22-mer parts can certify.
+
+  Answer: paired-end rescue, shorter or error-tolerant parts (§4).
 - **The certificate uses edit distance, while calling uses affine
   scores.** The reported alignment is affine-optimal at the certified locus,
   but the locus itself is edit-optimal. For almost all reads these coincide,

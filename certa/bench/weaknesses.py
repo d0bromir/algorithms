@@ -4,7 +4,8 @@
   weaknesses.py CERTA.sam TOOL=tool.sam [TOOL=tool.sam ...]
 
 For every read CERTA certifies (tiers S0/S1/SR) the best end-to-end locus
-is proven, together with whether it is unique or tied. Per tool it counts:
+is proven, together with whether it is unique or tied; for tier SL the
+maximum local (clipped) score is proven. Per tool it counts:
 
   missed better locus  the tool reports a different locus (>10 bp away, or
                        another contig) whose alignment scores at least one
@@ -12,7 +13,8 @@ is proven, together with whether it is unique or tied. Per tool it counts:
                        scheme (+1/-4, gap -6-1k, clip -5 per end), than the
                        alignment CERTA reports at the certified locus;
   unmapped             the tool reports nothing although an alignment with
-                       at most R <= 5 edits provably exists;
+                       at most R <= 5 edits (SL: with the certified score)
+                       provably exists;
   overconfident ties   the read has >= 2 identical exact copies (a proven
                        tie under any scoring), yet the tool gives MAPQ >= 20.
 
@@ -59,7 +61,7 @@ def load(path):
 
 def main():
     certa = load(sys.argv[1])
-    cert = {k: v for k, v in certa.items() if v and v["xt"] in ("S0", "S1", "SR")}
+    cert = {k: v for k, v in certa.items() if v and v["xt"] in ("S0", "S1", "SR", "SL")}
     ties = {k for k, v in cert.items() if v["xe"] == 0 and (v["xt"] == "SR" or v["xb"] > 1)}
     n_reads = len(certa)
     print(f"reads {n_reads}; CERTA-certified {len(cert)} ({100 * len(cert) / n_reads:.2f}%); "

@@ -11,6 +11,12 @@
 //   4. uniqueness     - if CERTA reports a unique best with no second locus
 //                       within R, the oracle has no other locus within R;
 //   5. determinism    - results are identical with 1 and 4 threads.
+// Tier SL (certified local alignment) is checked against a second oracle:
+// the best affine local score (bwa-mem defaults, clip penalty per clipped
+// end) over the entire reference, both strands, by full Gotoh DP.
+#include <algorithm>
+#include <climits>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -66,6 +72,61 @@ std::vector<Hit> oracle(const std::vector<uint8_t>& ref, const uint8_t* fwd, int
     }
   }
   return hits;
+}
+
+// Best affine local score over the whole reference (the objective of
+// affine_align with an unbounded band): alignments end with a match/mismatch
+// and pay kClip per clipped read end.
+int oracle_local(const std::vector<uint8_t>& ref, const uint8_t* fwd, int L) {
+  const int NEG = -(1 << 20);
+  std::vector<uint8_t> rc(L);
+  for (int i = 0; i < L; ++i) rc[i] = fwd[L - 1 - i] < 4 ? 3 - fwd[L - 1 - i] : 4;
+  std::vector<int> hp(L + 1), hc(L + 1), yp(L + 1), yc(L + 1);
+  int best = NEG;
+  for (int st = 0; st < 2; ++st) {
+    const uint8_t* rd = st ? rc.data() : fwd;
+    hp.assign(L + 1, NEG);
+    yp.assign(L + 1, NEG);
+    hp[0] = 0;
+    for (size_t j = 0; j < ref.size(); ++j) {
+      hc[0] = 0;
+      yc[0] = NEG;
+      int x = NEG;  // insertion state at (i - 1, j)
+      for (int i = 1; i <= L; ++i) {
+        const int start = i == 1 ? 0 : -kClip;
+        const int m = std::max(hp[i - 1], start) +
+                      (sub_cost(rd[i - 1], ref[j]) ? -kMismatch : kMatch);
+        x = i > 1 ? std::max(hc[i - 1] - kGapOpen - kGapExt, x - kGapExt) : NEG;
+        yc[i] = std::max(hp[i] - kGapOpen - kGapExt, yp[i] - kGapExt);
+        hc[i] = std::max(m, std::max(x, yc[i]));
+        best = std::max(best, m - (i < L ? kClip : 0));
+      }
+      std::swap(hp, hc);
+      std::swap(yp, yc);
+    }
+  }
+  return best;
+}
+
+// Affine score of a reported alignment, clip penalties included.
+int rescore_affine(const IndexView& ix, const Result& r, const std::vector<uint8_t>& fwd) {
+  const int L = static_cast<int>(fwd.size());
+  std::vector<uint8_t> rd(fwd);
+  if (r.strand)
+    for (int i = 0; i < L; ++i) rd[i] = fwd[L - 1 - i] < 4 ? 3 - fwd[L - 1 - i] : 4;
+  int64_t j = r.ref_pos;
+  int i = 0, sc = 0;
+  for (int c = 0; c < r.n_cigar; ++c) {
+    const int len = static_cast<int>(r.cigar[c] >> 4);
+    switch (r.cigar[c] & 0xF) {
+      case kOpS: sc -= kClip; i += len; break;
+      case kOpI: sc -= kGapOpen + kGapExt * len; i += len; break;
+      case kOpD: sc -= kGapOpen + kGapExt * len; j += len; break;
+      default:
+        for (int x = 0; x < len; ++x) sc += sub_cost(rd[i++], ref_at(ix, j++)) ? -kMismatch : kMatch;
+    }
+  }
+  return i == L ? sc : -100000;
 }
 
 uint8_t rand_base(std::mt19937_64& g) { return static_cast<uint8_t>(g() % 4); }
@@ -152,6 +213,60 @@ int main(int argc, char** argv) {
   std::fprintf(stderr, "seed %llu\n", static_cast<unsigned long long>(seed));
   std::mt19937_64 g(seed);
   Reference ref = make_reference(g);
+  // Adversarial reads for tier SL, planted before the index is built:
+  //  (a) the read has a mismatch in most parts at its true locus (so few or
+  //      no enumerated parts occur exactly there), and an exact copy of a
+  //      piece of it is planted elsewhere as a slightly worse decoy, so the
+  //      certificate threshold decides between the two;
+  //  (b) a long deletion or insertion near a read end, so the optimum needs
+  //      a wide band and competes with clipping.
+  struct Planted { std::vector<uint8_t> seq; };
+  std::vector<Planted> planted;
+  {
+    const int L = 150, P = part_count(L, 14, 4);
+    auto& R = ref.seq.owned;
+    for (int n = 0; n < 100; ++n) {
+      const int64_t a = static_cast<int64_t>(ref.offsets[0]) + 1000 + static_cast<int64_t>(g() % 8000);
+      std::vector<uint8_t> s(R.begin() + a, R.begin() + a + L);
+      // One mismatch in each of `mut` random parts: the true alignment then
+      // has exactly P - mut exact parts and scores L - 5 mut.
+      const int mut = 2 + static_cast<int>(g() % (P - 1));
+      int order[PMAX];
+      for (int j = 0; j < P; ++j) order[j] = j;
+      for (int j = P - 1; j > 0; --j) std::swap(order[j], order[g() % (j + 1)]);
+      for (int y = 0; y < mut; ++y) {
+        int off, len;
+        part_geometry(L, P, order[y], &off, &len);
+        const int x = off + 2 + static_cast<int>(g() % (len - 4));
+        s[x] = static_cast<uint8_t>((s[x] + 1 + g() % 3) % 4);
+      }
+      // Decoy: an exact copy of a piece, scoring (y0 - x0) - 5 per clip.
+      const int x0 = g() % 2 ? 0 : static_cast<int>(g() % 30), y0 = L - 5 - static_cast<int>(g() % 40);
+      // Free stretches: chr1 32000-50000 and chr2 24000-40000.
+      const int64_t d = n < 60 ? static_cast<int64_t>(ref.offsets[0]) + 32000 + n * 240
+                               : static_cast<int64_t>(ref.offsets[1]) + 24000 + (n - 60) * 240;
+      std::copy(s.begin() + x0, s.begin() + y0, R.begin() + d);
+      planted.push_back({s});
+    }
+    for (int n = 0; n < 120; ++n) {
+      const int c = static_cast<int>(g() % 2);
+      const int64_t a = static_cast<int64_t>(ref.offsets[c]) + 1000 + static_cast<int64_t>(g() % 3000);
+      // Gap lengths around the band limit, near a read end, where clipping
+      // the short side competes with the gapped alignment.
+      const int G = 8 + static_cast<int>(g() % 20);
+      const int at = n % 2 ? 12 + static_cast<int>(g() % 16) : L - 12 - static_cast<int>(g() % 16);
+      std::vector<uint8_t> s(R.begin() + a, R.begin() + a + at);
+      if (n % 4 < 2) {  // deletion of G reference bases
+        s.insert(s.end(), R.begin() + a + at + G, R.begin() + a + L + G);
+      } else {          // insertion of G random bases
+        std::vector<uint8_t> ins = random_seq(g, G);
+        s.insert(s.end(), ins.begin(), ins.end());
+        s.insert(s.end(), R.begin() + a + at, R.begin() + a + at + std::max(0, L - at - G));
+      }
+      s.resize(L);
+      planted.push_back({s});
+    }
+  }
   Index ix = Index::build(ref, 14, 4, 4);
   const IndexView view = ix.view(ref);
   // Round trip through the on-disk format: with q = 14 the file stores only
@@ -195,6 +310,39 @@ int main(int argc, char** argv) {
     if (n % 40 == 7) s[g() % L] = 4;  // an N in the read
     reads.push_back({s, edits});
   }
+  for (auto& pl : planted) {
+    std::vector<uint8_t> s = pl.seq;
+    if (g() % 2) {
+      const int L = static_cast<int>(s.size());
+      std::vector<uint8_t> rc(L);
+      for (int i = 0; i < L; ++i) rc[i] = s[L - 1 - i] < 4 ? 3 - s[L - 1 - i] : 4;
+      s.swap(rc);
+    }
+    reads.push_back({s, -1});
+  }
+  // Reads for tier SL: an adapter-like random tail or head, or a chimera of
+  // two loci, with 0..3 further edits.
+  for (int n = 0; n < 120; ++n) {
+    const int L = 150, cut = 2 + static_cast<int>(g() % 40);
+    auto take = [&](int len) {
+      int c = static_cast<int>(g() % 2);
+      int64_t start = static_cast<int64_t>(g() % (ref.lengths[c] - len - 20)) + static_cast<int64_t>(ref.offsets[c]);
+      if (n % 6 == 5) start = static_cast<int64_t>(ref.offsets[0]) + 10000 + static_cast<int64_t>(g() % 1500);
+      return std::vector<uint8_t>(ref.seq.owned.begin() + start, ref.seq.owned.begin() + start + len);
+    };
+    std::vector<uint8_t> s = take(L + 10);
+    mutate(g, s, static_cast<int>(g() % 4));
+    s.resize(L);
+    std::vector<uint8_t> other = n % 3 == 2 ? take(cut) : random_seq(g, cut);
+    if (n % 2) std::copy(other.begin(), other.end(), s.begin());   // head
+    else std::copy(other.begin(), other.end(), s.end() - cut);     // tail
+    if (g() % 2) {
+      std::vector<uint8_t> rc(L);
+      for (int i = 0; i < L; ++i) rc[i] = s[L - 1 - i] < 4 ? 3 - s[L - 1 - i] : 4;
+      s.swap(rc);
+    }
+    reads.push_back({s, -1});
+  }
 
   std::fprintf(stderr, "computing oracle for %zu reads over %zu bases...\n", reads.size(), ref.seq.size());
   std::vector<std::vector<Hit>> truth;
@@ -213,7 +361,12 @@ int main(int argc, char** argv) {
                             {3, 16, 0, 8}, {5, 256, 0, 10}, {2, 4, 0, 6},
                             {5, 2048}, {4, 4096},   // host-only budgets (CPU pass 3)
                             // {k, budget, reverse, s2, mapq_limit, min_support}: q-gram filter
-                            {3, 256, 0, 0, 0, 2}, {4, 4096, 0, 0, 0, 2}, {2, 16, 0, 0, 0, 2}, {2, 64, 0, 0, 0, 3}};
+                            {3, 256, 0, 0, 0, 2}, {4, 4096, 0, 0, 0, 2}, {2, 16, 0, 0, 0, 2}, {2, 64, 0, 0, 0, 3},
+                            // {.., min_support, local, local_only}: tier SL
+                            {5, 256, 0, 0, 8, 1, 2}, {5, 4096, 0, 0, 8, 1, 1}, {3, 16, 0, 0, 0, 1, 2},
+                            {5, 256, 0, 0, 8, 1, 2, 1}, {5, 4096, 0, 0, 0, 1, 3, 1}};
+  std::vector<int> local_truth(reads.size(), INT32_MIN);
+  int local_checked = 0;
   for (const Params& p : configs) {
     std::vector<Result> res, res1, resrev, resm;
     map_cpu(view, p, batch, res, 4);
@@ -225,7 +378,7 @@ int main(int argc, char** argv) {
     Params prev = p;
     prev.reverse_order = 1;
     map_cpu(view, prev, batch, resrev, 4);
-    int certified = 0, easy = 0, easy_cert = 0, sr = 0, s2 = 0;
+    int certified = 0, easy = 0, easy_cert = 0, sr = 0, s2 = 0, sl = 0;
     int reasons[kNumReasons] = {};
     for (size_t i = 0; i < reads.size(); ++i) {
       const Result& r = res[i];
@@ -233,6 +386,8 @@ int main(int argc, char** argv) {
       // Metamorphic: verifying clusters in reverse order must give the same
       // certificate (d1; d2 whenever the best locus is unique).
       const Result& rv = resrev[i];
+      CHECK(r.tier != kTierSL || (rv.tier == kTierSL && r.score == rv.score),
+            "local=%d read %zu: order-dependent SL score (%d vs %d)", p.local, i, r.score, rv.score);
       CHECK(r.certified == rv.certified && r.d1 == rv.d1 && r.radius == rv.radius,
             "k=%d budget=%d read %zu: order-dependent d1 (%d vs %d)", p.k, p.budget, i, r.d1, rv.d1);
       if (r.certified && r.n_best == 1 && rv.n_best == 1)
@@ -247,7 +402,7 @@ int main(int argc, char** argv) {
         ++easy;
         easy_cert += r.certified == 1;
       }
-      if (r.reason == kNotFound)
+      if (r.reason == kNotFound && !p.local_only)
         CHECK(omin > r.radius, "k=%d budget=%d read %zu: lossless violated, oracle %d <= R %d",
               p.k, p.budget, i, omin, r.radius);
       if (!r.certified) continue;
@@ -261,6 +416,21 @@ int main(int argc, char** argv) {
         continue;
       }
       ++certified;
+      if (r.tier == kTierSL) {  // the certified maximum local score
+        ++sl;
+        CHECK(rescore(view, r, reads[i].seq) == r.nm, "SL read %zu: CIGAR rescores to %d edits, NM %d",
+              i, rescore(view, r, reads[i].seq), r.nm);
+        CHECK(rescore_affine(view, r, reads[i].seq) == r.score, "SL read %zu: CIGAR scores %d, AS %d",
+              i, rescore_affine(view, r, reads[i].seq), r.score);
+        CHECK(r.score > r.floor, "SL read %zu: score %d not above floor %d", i, r.score, r.floor);
+        if (local_truth[i] == INT32_MIN) {
+          local_truth[i] = oracle_local(ref.seq.owned, reads[i].seq.data(), static_cast<int>(reads[i].seq.size()));
+          ++local_checked;
+        }
+        CHECK(r.score == local_truth[i], "local=%d budget=%d read %zu: SL score %d != oracle %d",
+              p.local, p.budget, i, r.score, local_truth[i]);
+        continue;
+      }
       // The reported alignment (affine, possibly clipped) must be what NM says;
       // unclipped, it cannot have fewer edits than the certified minimum d1.
       CHECK(rescore(view, r, reads[i].seq) == r.nm,
@@ -291,11 +461,13 @@ int main(int argc, char** argv) {
       }
     }
     std::fprintf(stderr,
-                 "k=%d budget=%-3d s2=%-2d certified %3d/%zu (SR %d, S2 placed %d); reads with <=k edits certified %d/%d; "
+                 "k=%d budget=%-3d s2=%-2d local=%d%s certified %3d/%zu (SR %d, SL %d, S2 placed %d); reads with <=k edits certified %d/%d; "
                  "uncertified: length %d, radius<0 %d, not-found %d, wide %d\n",
-                 p.k, p.budget, p.s2_limit, certified, reads.size(), sr, s2, easy_cert, easy, reasons[kBadLength],
+                 p.k, p.budget, p.s2_limit, p.local, p.local_only ? "o" : " ", certified, reads.size(), sr, sl, s2,
+                 easy_cert, easy, reasons[kBadLength],
                  reasons[kRadiusNegative], reasons[kNotFound], reasons[kClusterTooWide]);
   }
+  std::fprintf(stderr, "SL scores checked against the local oracle for %d reads\n", local_checked);
   if (failures) {
     std::fprintf(stderr, "%d check(s) FAILED\n", failures);
     return 1;

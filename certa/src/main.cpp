@@ -38,16 +38,18 @@ const char* const kReasonNames[kNumReasons] = {
     "cluster_too_wide", "cross_contig"};
 
 struct Stats {
-  uint64_t reads = 0, bases = 0, certified = 0, s0 = 0, s1 = 0, sr = 0, s2 = 0, ties = 0;
+  uint64_t reads = 0, bases = 0, certified = 0, s0 = 0, s1 = 0, sr = 0, sl = 0, s2 = 0, ties = 0;
   uint64_t reason[kNumReasons] = {};
   uint64_t by_radius[KMAX + 2] = {};  // certified reads per radius R
   uint64_t by_d1[KMAX + 1] = {};
+  uint64_t unc_by_used[PMAX + 1] = {};  // uncertified reads per parts searched |S|
   void add(const Stats& o) {
     reads += o.reads; bases += o.bases; certified += o.certified;
-    s0 += o.s0; s1 += o.s1; sr += o.sr; s2 += o.s2; ties += o.ties;
+    s0 += o.s0; s1 += o.s1; sr += o.sr; sl += o.sl; s2 += o.s2; ties += o.ties;
     for (int i = 0; i < kNumReasons; ++i) reason[i] += o.reason[i];
     for (int i = 0; i < KMAX + 2; ++i) by_radius[i] += o.by_radius[i];
     for (int i = 0; i < KMAX + 1; ++i) by_d1[i] += o.by_d1[i];
+    for (int i = 0; i <= PMAX; ++i) unc_by_used[i] += o.unc_by_used[i];
   }
 };
 
@@ -154,13 +156,17 @@ int emit(const Result& r0, const FastqRecord& rec, const Reference& ref,
   } else {
     sam += rec.seq; sam += '\t'; sam += rec.qual;
   }
-  static const char* const kTierNames[] = {"S0", "S1", "SR", "S2"};
+  static const char* const kTierNames[] = {"S0", "S1", "SR", "S2", "SL"};
   // NM: edits in the reported (affine, possibly clipped) alignment.
-  // XE: the certified minimum end-to-end edit distance over the reference.
-  char tags[128];
-  std::snprintf(tags, sizeof tags, "\tNM:i:%d\tAS:i:%d\tXE:i:%d\tXT:Z:%s\tXR:i:%d\tXD:i:%d\tXB:i:%d\n",
-                r.nm, r.score, r.d1, kTierNames[r.tier], r.radius, r.d2, r.n_best);
+  // XE: the certified minimum end-to-end edit distance over the reference
+  // (-1 for SL). SL: AS (clip penalties included) is the certified maximum
+  // local score over the reference, and XF the threshold it exceeds.
+  char tags[160];
+  int n = std::snprintf(tags, sizeof tags, "\tNM:i:%d\tAS:i:%d\tXE:i:%d\tXT:Z:%s\tXR:i:%d\tXD:i:%d\tXB:i:%d",
+                        r.nm, r.score, r.d1, kTierNames[r.tier], r.radius, r.d2, r.n_best);
+  if (r.tier == kTierSL) std::snprintf(tags + n, sizeof tags - n, "\tXF:i:%d", r.floor);
   sam += tags;
+  sam += '\n';
   return kOk;
 }
 
@@ -220,7 +226,7 @@ int cmd_map(const Args& a) {
   if (a.pos.size() != 2)
     throw std::runtime_error(
         "usage: certa map ref.cidx reads.fq[.gz] [-k 5] [--k1 2] [--budget 16] [--budget2 256] "
-        "[--budget3 0] [--support3 2] [--mapq-limit 8] [-t N] [--gpu] [--device 0] [-o out.sam] "
+        "[--budget3 0] [--support3 2] [--local 0] [--mapq-limit 8] [-t N] [--gpu] [--device 0] [-o out.sam] "
         "[-u uncertified.fq] [--stats s.json] [--batch N] [--io-threads N]");
   Params p;
   p.k = a.geti("-k", 5);
@@ -263,6 +269,14 @@ int cmd_map(const Args& a) {
   // which skips the flood of single-part hits from repetitive parts.
   p3.min_support = a.geti("--support3", 2);
   if (p3.min_support < 1 || p3.min_support > PMAX) throw std::runtime_error("--support3 must be in [1, 8]");
+  // Pass L (CPU, opt-in): certified local alignment (tier SL) for reads still
+  // uncertified. --local t verifies chains hit by >= t parts; 2 is the
+  // cheap setting (t = 1 costs ~10x more on HG002 for +0.16 points).
+  Params pl = p2;
+  pl.budget = std::max(p2.budget, p3.budget);
+  pl.local = a.geti("--local", 0);
+  pl.local_only = 1;
+  if (pl.local < 0 || pl.local > PMAX) throw std::runtime_error("--local must be in [0, 8]");
   const bool gpu = a.has("--gpu");
   const int threads = a.geti("-t", default_threads());
   // Threads that parse and encode the next batch while the current one maps.
@@ -332,6 +346,7 @@ int cmd_map(const Args& a) {
   double t_io = 0, t_wait = 0, t_map = 0, t_out = 0;
   uint64_t escalated = 0;  // reads re-run with --budget2
   uint64_t third = 0;      // reads re-run on the CPU with --budget3
+  uint64_t local = 0;      // reads re-run on the CPU for tier SL
   auto load = [&](int slot) {
     try {
       auto t = Clock::now();
@@ -406,6 +421,15 @@ int cmd_map(const Args& a) {
       rerun(redo, p3, false);
       third += redo.size();
     }
+    if (pl.local > 0) {
+      // Pass L, on the CPU: certified local alignment (tier SL).
+      std::vector<size_t> redo;
+      for (size_t i = 0; i < res.size(); ++i)
+        if (res[i].certified == 0 && (res[i].reason == kNotFound || res[i].reason == kClusterTooWide))
+          redo.push_back(i);
+      rerun(redo, pl, false);
+      local += redo.size();
+    }
     t_map += secs(t);
 
     // Format in parallel over contiguous slices, then write in input order.
@@ -423,14 +447,16 @@ int cmd_map(const Args& a) {
           ++s.reads;
           s.bases += recs[i].seq.size();
           ++s.reason[reason];
+          if (reason != kOk) ++s.unc_by_used[res[i].used];
           if (reason == kOk && res[i].certified == 2) {
             ++s.s2;  // placed without certificate
           } else if (reason == kOk) {
             ++s.certified;
-            ++(res[i].tier == kTierS0 ? s.s0 : res[i].tier == kTierS1 ? s.s1 : s.sr);
+            const uint8_t tier = res[i].tier;
+            ++(tier == kTierS0 ? s.s0 : tier == kTierS1 ? s.s1 : tier == kTierSR ? s.sr : s.sl);
             s.ties += res[i].n_best > 1;
             if (res[i].radius >= 0) ++s.by_radius[res[i].radius];
-            ++s.by_d1[res[i].d1];
+            if (res[i].d1 >= 0) ++s.by_d1[res[i].d1];
           }
         }
       });
@@ -455,15 +481,19 @@ int cmd_map(const Args& a) {
   auto pct = [&](uint64_t x) { return total.reads ? 100.0 * x / total.reads : 0.0; };
   std::fprintf(stderr,
                "[map] %llu reads: certified %.2f%% (S0 exact %.2f%%, S1 <=R edits %.2f%%, "
-               "SR repeat %.2f%%), ties %.2f%%\n",
+               "SR repeat %.2f%%, SL local %.2f%%), ties %.2f%%\n",
                static_cast<unsigned long long>(total.reads), pct(total.certified),
-               pct(total.s0), pct(total.s1), pct(total.sr), pct(total.ties));
+               pct(total.s0), pct(total.s1), pct(total.sr), pct(total.sl), pct(total.ties));
   for (int i = 1; i < kNumReasons; ++i)
     std::fprintf(stderr, "[map]   uncertified/%s: %.2f%%\n", kReasonNames[i], pct(total.reason[i]));
   std::fprintf(stderr, "[map] placed without certificate (S2, <= %d edits): %.2f%%; to fallback: %.2f%%\n",
                p2.s2_limit, pct(total.s2), pct(total.reads - total.certified - total.s2));
   std::fprintf(stderr, "[map] second pass (budget %d, S2 <= %d): %.2f%% of reads; third pass (CPU, budget %d): %.2f%%\n",
                p2.budget, p2.s2_limit, pct(escalated), p3.budget, pct(third));
+  std::fprintf(stderr, "[map] local pass (CPU, support %d): %.2f%% of reads\n", pl.local, pct(local));
+  std::fprintf(stderr, "[map] uncertified by parts searched |S|:");
+  for (int i = 0; i <= PMAX; ++i) std::fprintf(stderr, " %d:%.2f%%", i, pct(total.unc_by_used[i]));
+  std::fprintf(stderr, "\n");
   std::fprintf(stderr,
                "[map] time: load %.2f s, upload %.2f s, read+encode %.2f s (overlapped; "
                "waited %.2f s), map %.2f s (%.0f reads/s), output %.2f s, total %.2f s "
@@ -478,11 +508,11 @@ int cmd_map(const Args& a) {
                  gpu ? "gpu" : "cpu", gm ? gm->device_name().c_str() : "", threads);
     std::fprintf(js, "  \"k\": %d, \"k1\": %d, \"budget\": %d, \"budget2\": %d, \"second_pass\": %llu, \"q\": %d, \"s\": %d,\n",
                  p2.k, p.k, p.budget, p2.budget, static_cast<unsigned long long>(escalated), ix.q, ix.s);
-    std::fprintf(js, "  \"reads\": %llu, \"bases\": %llu, \"certified\": %llu, \"s0\": %llu, \"s1\": %llu, \"sr\": %llu, \"s2\": %llu, \"s2_limit\": %d, \"ties\": %llu,\n",
+    std::fprintf(js, "  \"reads\": %llu, \"bases\": %llu, \"certified\": %llu, \"s0\": %llu, \"s1\": %llu, \"sr\": %llu, \"sl\": %llu, \"s2\": %llu, \"s2_limit\": %d, \"ties\": %llu,\n",
                  static_cast<unsigned long long>(total.reads), static_cast<unsigned long long>(total.bases),
                  static_cast<unsigned long long>(total.certified), static_cast<unsigned long long>(total.s0),
                  static_cast<unsigned long long>(total.s1), static_cast<unsigned long long>(total.sr),
-                 static_cast<unsigned long long>(total.s2), p2.s2_limit,
+                 static_cast<unsigned long long>(total.sl), static_cast<unsigned long long>(total.s2), p2.s2_limit,
                  static_cast<unsigned long long>(total.ties));
     std::fprintf(js, "  \"uncertified\": {");
     for (int i = 1; i < kNumReasons; ++i)
@@ -511,7 +541,7 @@ int main(int argc, char** argv) {
                    "certa 0.7 - certified short-read fast path (prototype)\n"
                    "  certa index ref.fa -o ref.cidx [-q 22] [-s 8] [-t N]\n"
                    "  certa map ref.cidx reads.fq[.gz] [-k 5] [--k1 2] [--budget 16] [--budget2 256]\n"
-                   "            [--budget3 0|4096] [--support3 2] [-t N] [--gpu] [--device 0]\n"
+                   "            [--budget3 0|4096] [--support3 2] [--local 0|2] [-t N] [--gpu] [--device 0]\n"
                    "            [-o out.sam] [-u uncertified.fq] [--stats s.json] [--batch N] [--io-threads N]\n"
                    "GPU support compiled in: %s\n",
                    GpuMapper::compiled_in() ? "yes" : "no");

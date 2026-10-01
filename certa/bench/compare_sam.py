@@ -27,6 +27,16 @@ import sys
 CIGAR = re.compile(r"(\d+)([MIDNSHP=X])")
 
 
+def bwa_score(ops, nm):
+    """bwa-mem default score with -5 per clipped end (CERTA's SL objective)."""
+    ops = [(int(n), o) for n, o in ops]
+    m = sum(n for n, o in ops if o in "M=X")
+    gaps = [n for n, o in ops if o in "ID"]
+    mism = max(0, nm - sum(gaps))
+    clips = sum(1 for n, o in ops if o in "SH")
+    return (m - mism) - 4 * mism - sum(6 + g for g in gaps) - 5 * clips
+
+
 def primary(path):
     """name -> (contig, unclipped_start, strand, mapq, nm, clipped)"""
     out = {}
@@ -57,7 +67,9 @@ def primary(path):
                 elif tag.startswith("XE:i:"):  # CERTA: certified min edit distance
                     nm = int(tag[5:])
             tags = t[11] if len(t) > 11 else ""
-            out[name] = (t[2], int(t[3]) - lead, "-" if flag & 16 else "+", int(t[4]), nm, clipped, tags)
+            nm_rep = re.search(r"NM:i:(\d+)", tags)
+            score = bwa_score(ops, int(nm_rep.group(1)) if nm_rep else 0)
+            out[name] = (t[2], int(t[3]) - lead, "-" if flag & 16 else "+", int(t[4]), nm, clipped, tags, score)
     return out
 
 
@@ -116,15 +128,20 @@ def main():
     cer = primary(a.certa)
     print(f"\nCERTA certified reads: {len(cer)} ({100 * len(cer) / a.reads:.2f}% of input)")
     groups = {}
-    violations, checked = [], 0
+    violations, checked, checked_sl = [], 0, 0
     for k, v in cer.items():
-        tier = re.search(r"XT:Z:(S\d)", v[6]).group(1)
+        tier = re.search(r"XT:Z:(S[0-9RL])", v[6]).group(1)
         g = groups.setdefault((tier, v[3]), [0, 0, 0])
         g[0] += 1
         r = ref.get(k)
         g[1] += agree(v, r, a.window)
         g[2] += r is not None and r[3] >= 30
-        if r is not None and not r[5] and r[4] >= 0:  # unclipped reference alignment
+        if tier == "SL":  # certified maximum local score: nothing may score higher
+            if r is not None:
+                checked_sl += 1
+                if r[7] > v[7]:
+                    violations.append((k, v, r))
+        elif r is not None and not r[5] and r[4] >= 0:  # unclipped reference alignment
             checked += 1
             if r[4] < v[4]:
                 violations.append((k, v, r))
@@ -133,7 +150,8 @@ def main():
         n, ag, rc = groups[(tier, mq)]
         print(f"{tier:5s} {mq:4d} {n:10d} {100 * ag / n:17.3f} {100 * rc / n:15.3f}")
     print(f"\ncertificate check: {checked} certified reads with an unclipped {ref_name} alignment; "
-          f"{len(violations)} where {ref_name} reports fewer edits than CERTA's certified minimum")
+          f"and {checked_sl} SL reads it maps; {len(violations)} where {ref_name} reports fewer edits than "
+          f"CERTA's certified minimum (S0/S1/SR) or a higher score than its certified maximum (SL)")
     fasta = Fasta(a.fasta) if a.fasta else None
     unexplained = 0
     for k, v, r in violations:
@@ -144,7 +162,8 @@ def main():
             if bad:
                 why = f"explained: {bad} non-ACGT reference base(s) in window (random base in {ref_name} index)"
         unexplained += why == "UNEXPLAINED"
-        print(f"  {k}: CERTA {v[0]}:{v[1]}{v[2]} NM={v[4]}  {ref_name} {r[0]}:{r[1]}{r[2]} NM={r[4]}  -> {why}")
+        print(f"  {k}: CERTA {v[0]}:{v[1]}{v[2]} NM={v[4]} score={v[7]}  {ref_name} {r[0]}:{r[1]}{r[2]} "
+              f"NM={r[4]} score={r[7]}  -> {why}")
     print(f"unexplained violations: {unexplained}" + ("" if fasta else " (pass --fasta to classify)"))
     if unexplained:
         sys.exit(1)
