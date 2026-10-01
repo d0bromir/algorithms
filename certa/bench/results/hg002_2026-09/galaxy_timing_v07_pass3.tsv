@@ -1,0 +1,7 @@
+mode	rep	wall_s	user_s	sys_s
+default	1	23.40	707.24	8.52
+default	2	23.26	706.87	8.57
+default	3	23.42	706.39	8.74
+maxcert	1	33.69	851.05	7.89
+maxcert	2	33.70	850.66	8.44
+maxcert	3	33.63	850.67	8.31

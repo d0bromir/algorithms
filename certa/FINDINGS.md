@@ -88,6 +88,21 @@ Notation:
   when any fixed part is repetitive. On HG002 that change took
   certification from 83.4 % to 94.5 % of reads (§3).
 
+**Theorem 1′ (q-gram-lemma threshold).**
+- *Statement:* with S enumerated as in Theorem 1 and any t ≥ 1, every locus
+  ℓ with d(r, ℓ) ≤ |S| − t yields one cluster that contains hits of at
+  least t distinct parts of S. So clusters supported by fewer than t parts
+  can be skipped without loss, and the certified radius becomes
+  R = |S| − t.
+- *Proof:* d ≤ |S| − t edits leave ≥ t parts of S untouched, each occurring
+  exactly at ℓ with a diagonal in [δ − d, δ + d], where δ is ℓ's start
+  diagonal. Clusters join consecutive sorted diagonals whose gap is ≤ 4R
+  (pad 2R), and these diagonals are ≤ 2d ≤ 2R apart, so all of them, and
+  every candidate between them, fall in one cluster. ∎
+- *Why it matters:* when every part is repetitive, the budget is spent on
+  thousands of single-part hits. With t = 2 these are skipped. In the oracle
+  test, t = 2 and t = 3 meet every certificate check.
+
 **Theorem 2 (exact verification).**
 - *Statement:* for a cluster of candidate diagonals [dmin, dmax], banded
   semi-global DP over diagonals [dmin − 2R, dmax + 2R] computes d(r, ℓ)
@@ -134,7 +149,8 @@ has ≥ 2 optimal loci. This holds under any scoring, so MAPQ 0 is proven.
   repeat, tandem repeats and `N` runs. It checks soundness, optimality of d1,
   losslessness, uniqueness claims, SR claims (≥ 2 exact loci in the oracle),
   order independence, thread determinism, and in-memory vs memory-mapped
-  identity. It runs 10 configurations on multiple seeds.
+  identity. It runs 16 configurations on multiple seeds, including host
+  budgets up to 4096 and q-gram thresholds t = 2 and 3.
 - **Mutation testing:** every injected bug in the certificate logic is
   caught. The bugs were an overclaimed radius, a one-copy SR proof, a
   dropped sampling shift, a narrowed band, a wrong verification limit, a
@@ -155,6 +171,31 @@ certified:
 - 1.5 % as certified repeats.
 
 The remaining 5.5 % go to minibwa, which runs concurrently on the CPU.
+
+**Optional pass 3 (CPU, `--budget3`).** It re-runs, with budgets up to 4096
+hits per strand, the reads whose rarest parts did not all fit pass 2's
+budget (3.6 % of reads). Measured on 2 M HG002 reads (A100 + 16 threads):
+
+| Pass 3 | Certified | Map time |
+|---|---|---|
+| off (default) | 94.46 % | 0.76 s |
+| budget 1024, t = 2 | 94.62 % | 1.01 s |
+| budget 4096, t = 2 (Theorem 1′) | 95.34 % | 2.16 s |
+| budget 4096, t = 1 | 95.95 % | 9.61 s |
+
+The t = 2 threshold makes the large budget affordable (4.4× less map time
+than t = 1) at the cost of one unit of radius. Pass 3 certifies reads but
+spends more CPU on them than minibwa would, so it is off by default and
+offered as a maximum-certification mode. On 20 M reads with minibwa
+running concurrently (median of 3,
+`results/hg002_2026-09/galaxy_timing_v07_pass3.tsv`):
+
+| Pipeline | Certified | Wall | CPU time | vs BWA-MEM2 |
+|---|---|---|---|---|
+| default (pass 3 off) | 94.38 % | 23.40 s | 716 s | 4.27× |
+| maximum certification (budget 4096, t = 2) | 95.28 % | 33.69 s | 859 s | 2.96× |
+
+The default re-run matches v0.6 (22.94 s) within 2 %.
 
 **Variant-calling accuracy on chr20 vs GIAB v4.2.1, same caller for both
 pipelines.** Both are single-end, 22×. Precision / recall / F1:
