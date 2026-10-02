@@ -357,6 +357,22 @@ uncertified or tied mate (11.9 % of pairs).
   ambiguous. Among fallback pairs that minibwa pairs properly with low
   loss, 83 % have a mate with MAPQ < 20.
 
+**Variant-calling accuracy, paired-end** (all 444,524,794 pairs mapped, chr20
+vs GIAB v4.2.1, 44×; same protocol as single-end;
+`results/hg002_2026-10/giab_chr20_vcfeval_pe.tsv`). Precision / recall / F1:
+
+| Pipeline | GATK SNV | GATK indel | bcftools SNV | bcftools indel |
+|---|---|---|---|---|
+| BWA-MEM2 PE | 0.9900 / 0.9948 / 0.9924 | 0.9935 / 0.9932 / 0.9934 | 0.9872 / 0.9943 / 0.9907 | 0.9311 / 0.9203 / 0.9257 |
+| **CERTA PE + minibwa** | **0.9937** / 0.9925 / **0.9931** | **0.9954** / 0.9926 / **0.9940** | **0.9910** / 0.9926 / **0.9918** | **0.9346 / 0.9238 / 0.9291** |
+
+- *F1:* higher than BWA-MEM2's for SNVs and indels with both callers
+  (+0.0007, +0.0006, +0.0011, +0.0034).
+- *Where the gain comes from:* the opposite of single-end. Precision is
+  higher (GATK SNV false positives 452 vs 719), and recall is slightly
+  lower (false negatives 533 vs 369).
+- *Certification on the whole sample:* 95.38 % of the 889 M reads.
+
 The paired pipeline is **4.0× faster than BWA-MEM2 in paired mode**, with
 5.7× less CPU time. It is not yet faster than minibwa (20M pairs, galaxy,
 A100 + 64

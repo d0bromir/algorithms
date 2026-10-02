@@ -1,0 +1,8 @@
+ourspe	gatk	snps	    6.000              70829          70829        452        533     0.9937       0.9925     0.9931
+ourspe	gatk	indels	    3.000              11173          11174         52         83     0.9954       0.9926     0.9940
+ourspe	bcftools	snps	     None              70832          70832        645        530     0.9910       0.9926     0.9918
+ourspe	bcftools	indels	     None              10398          10398        728        858     0.9346       0.9238     0.9291
+bwape	gatk	snps	    4.000              70993          70993        719        369     0.9900       0.9948     0.9924
+bwape	gatk	indels	    4.000              11180          11181         73         76     0.9935       0.9932     0.9934
+bwape	bcftools	snps	     None              70957          70957        923        405     0.9872       0.9943     0.9907
+bwape	bcftools	indels	     None              10359          10359        767        897     0.9311       0.9203     0.9257
