@@ -20,7 +20,7 @@ struct ReadBatch {
   size_t size() const { return lens.size(); }
 };
 
-void encode_batch(const std::vector<FastqRecord>& recs, ReadBatch& out);
+void encode_batch(const std::vector<FastqRecord>& recs, ReadBatch& out, int threads = 1);
 
 void map_cpu(const IndexView& ix, const Params& p, const ReadBatch& batch,
              std::vector<Result>& out, int threads);

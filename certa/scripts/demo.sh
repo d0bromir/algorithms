@@ -3,7 +3,8 @@
 # available) -> check CPU/GPU outputs are identical -> placement accuracy.
 #   scripts/demo.sh [genome_bp] [n_reads]          (defaults 50 Mbp, 2 M reads)
 # Environment: BUILD_DIR (default build-<host>-<arch>), WORK (default ./demo-<host>),
-#              K (edit budget, default 2), THREADS (default all cores).
+#              K (edit budget, default 2), THREADS (default all cores),
+#              DEVICE (CUDA device index, default 0).
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 bin="${BUILD_DIR:-$here/build-$(hostname -s)-$(uname -m)}/certa"
@@ -27,7 +28,7 @@ python3 "$here/tools/simulate.py" eval "$work/cpu.sam"
 usage="$("$bin" 2>&1 || true)"  # the usage screen reports GPU support
 if [[ "$usage" == *"GPU support compiled in: yes"* ]] && command -v nvidia-smi >/dev/null; then
   echo "== GPU"
-  "$bin" map "$work/genome.cidx" "$work/reads.fq" -k "$k" -t "$threads" --gpu \
+  "$bin" map "$work/genome.cidx" "$work/reads.fq" -k "$k" -t "$threads" --gpu --device "${DEVICE:-0}" \
     -o "$work/gpu.sam" -u "$work/gpu.uncertified.fq" --stats "$work/gpu.stats.json"
   if cmp -s <(grep -v '^@PG' "$work/cpu.sam") <(grep -v '^@PG' "$work/gpu.sam") &&
      cmp -s "$work/cpu.uncertified.fq" "$work/gpu.uncertified.fq"; then

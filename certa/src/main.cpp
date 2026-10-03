@@ -3,7 +3,7 @@
 //   certa index ref.fa -o ref.cidx [-q 22] [-s 8] [-t threads]
 //   certa map ref.cidx reads.fq[.gz] [-k 2] [--cap 32] [-t threads]
 //             [--gpu [--device 0]] [-o out.sam] [-u uncertified.fq]
-//             [--stats stats.json] [--batch N]
+//             [--stats stats.json] [--batch N] [--io-threads N]
 //
 // Certified reads are written to SAM. All other reads are written unchanged
 // to the uncertified FASTQ, for a full aligner (minibwa, BWA-MEM2, ...).
@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -172,7 +173,7 @@ int cmd_map(const Args& a) {
   if (a.pos.size() != 2)
     throw std::runtime_error(
         "usage: certa map ref.cidx reads.fq[.gz] [-k 2] [--cap 32] [-t N] [--gpu] "
-        "[--device 0] [-o out.sam] [-u uncertified.fq] [--stats s.json] [--batch N]");
+        "[--device 0] [-o out.sam] [-u uncertified.fq] [--stats s.json] [--batch N] [--io-threads N]");
   Params p;
   p.k = a.geti("-k", 2);
   p.cap = a.geti("--cap", 32);
@@ -180,6 +181,8 @@ int cmd_map(const Args& a) {
   if (p.cap < 1 || p.cap > CAP_MAX) throw std::runtime_error("--cap must be in [1, 32]");
   const bool gpu = a.has("--gpu");
   const int threads = a.geti("-t", default_threads());
+  // Threads that parse and encode the next batch while the current one maps.
+  const int io_threads = a.geti("--io-threads", std::max(1, std::min(16, threads / 4)));
   const size_t batch_size = static_cast<size_t>(a.geti("--batch", gpu ? 1000000 : 200000));
 
   auto t_all = Clock::now();
@@ -213,19 +216,33 @@ int cmd_map(const Args& a) {
   std::fprintf(sam, "@PG\tID:certa\tPN:certa\tVN:0.1\tCL:certa map -k %d --cap %d%s\n",
                p.k, p.cap, gpu ? " --gpu" : "");
 
+  // Double buffering: a reader thread parses and encodes batch n+1 while
+  // batch n is mapped and written, so input parsing overlaps with mapping.
   LineReader in(a.pos[1]);
-  std::vector<FastqRecord> recs;
-  ReadBatch batch;
+  std::vector<FastqRecord> recs_buf[2];
+  ReadBatch batch_buf[2];
+  std::exception_ptr read_error;
+  double t_io = 0, t_wait = 0, t_map = 0, t_out = 0;
+  auto load = [&](int slot) {
+    try {
+      auto t = Clock::now();
+      read_fastq_batch(in, recs_buf[slot], batch_size, io_threads);
+      encode_batch(recs_buf[slot], batch_buf[slot], io_threads);
+      t_io += secs(t);
+    } catch (...) {
+      recs_buf[slot].clear();
+      read_error = std::current_exception();
+    }
+  };
   std::vector<Result> res;
   Stats total;
-  double t_io = 0, t_map = 0, t_out = 0;
-  for (;;) {
-    auto t = Clock::now();
-    if (read_fastq_batch(in, recs, batch_size) == 0) break;
-    encode_batch(recs, batch);
-    t_io += secs(t);
+  load(0);
+  for (int cur = 0; !recs_buf[cur].empty(); cur ^= 1) {
+    std::thread prefetch(load, cur ^ 1);
+    const std::vector<FastqRecord>& recs = recs_buf[cur];
+    const ReadBatch& batch = batch_buf[cur];
 
-    t = Clock::now();
+    auto t = Clock::now();
     if (gm) gm->map(p, batch, res);
     else map_cpu(view, p, batch, res, threads);
     t_map += secs(t);
@@ -262,7 +279,12 @@ int cmd_map(const Args& a) {
       total.add(st[w]);
     }
     t_out += secs(t);
+
+    t = Clock::now();
+    prefetch.join();
+    t_wait += secs(t);
   }
+  if (read_error) std::rethrow_exception(read_error);
   if (sam != stdout) std::fclose(sam);
   if (fq) std::fclose(fq);
   const double t_total = secs(t_all);
@@ -276,9 +298,11 @@ int cmd_map(const Args& a) {
   for (int i = 1; i < kNumReasons; ++i)
     std::fprintf(stderr, "[map]   uncertified/%s: %.2f%%\n", kReasonNames[i], pct(total.reason[i]));
   std::fprintf(stderr,
-               "[map] time: load %.2f s, upload %.2f s, read+encode %.2f s, map %.2f s "
-               "(%.0f reads/s), output %.2f s, total %.2f s\n",
-               t_load, t_upload, t_io, t_map, t_map > 0 ? total.reads / t_map : 0.0, t_out, t_total);
+               "[map] time: load %.2f s, upload %.2f s, read+encode %.2f s (overlapped; "
+               "waited %.2f s), map %.2f s (%.0f reads/s), output %.2f s, total %.2f s "
+               "(%.0f reads/s end to end)\n",
+               t_load, t_upload, t_io, t_wait, t_map, t_map > 0 ? total.reads / t_map : 0.0,
+               t_out, t_total, t_total > 0 ? total.reads / t_total : 0.0);
 
   if (a.has("--stats")) {
     std::FILE* js = std::fopen(a.get("--stats", "").c_str(), "wb");
@@ -301,8 +325,8 @@ int cmd_map(const Args& a) {
     for (int i = 0; i <= KMAX; ++i)
       std::fprintf(js, "%s%llu", i ? ", " : "", static_cast<unsigned long long>(total.by_radius[i]));
     std::fprintf(js, "],\n  \"seconds\": {\"load\": %.3f, \"upload\": %.3f, \"read_encode\": %.3f, "
-                     "\"map\": %.3f, \"output\": %.3f, \"total\": %.3f}\n}\n",
-                 t_load, t_upload, t_io, t_map, t_out, t_total);
+                     "\"read_wait\": %.3f, \"map\": %.3f, \"output\": %.3f, \"total\": %.3f}\n}\n",
+                 t_load, t_upload, t_io, t_wait, t_map, t_out, t_total);
     std::fclose(js);
   }
   return 0;
@@ -317,7 +341,7 @@ int main(int argc, char** argv) {
                    "certa 0.1 - certified short-read fast path (prototype)\n"
                    "  certa index ref.fa -o ref.cidx [-q 22] [-s 8] [-t N]\n"
                    "  certa map ref.cidx reads.fq[.gz] [-k 2] [--cap 32] [-t N] [--gpu] [--device 0]\n"
-                   "            [-o out.sam] [-u uncertified.fq] [--stats s.json] [--batch N]\n"
+                   "            [-o out.sam] [-u uncertified.fq] [--stats s.json] [--batch N] [--io-threads N]\n"
                    "GPU support compiled in: %s\n",
                    GpuMapper::compiled_in() ? "yes" : "no");
       return 1;

@@ -1,7 +1,10 @@
 #include "seqio.h"
 
+#include <algorithm>
 #include <cstring>
+#include <exception>
 #include <stdexcept>
+#include <thread>
 
 #ifdef CERTA_WITH_ZLIB
 #include <zlib.h>
@@ -50,6 +53,29 @@ bool LineReader::fill() {
   return n > 0;
 }
 
+long LineReader::append_line(std::string& out) {
+  for (;;) {
+    char* start = buf_.data() + beg_;
+    char* nl = static_cast<char*>(std::memchr(start, '\n', end_ - beg_));
+    size_t len;
+    if (nl) {
+      len = static_cast<size_t>(nl - start);
+      beg_ += len + 1;
+    } else if (!fill()) {  // fill() may move or reallocate the buffer
+      if (beg_ == end_) return -1;
+      start = buf_.data() + beg_;
+      len = end_ - beg_;
+      beg_ = end_;
+    } else {
+      continue;
+    }
+    if (len > 0 && start[len - 1] == '\r') --len;
+    out.append(start, len);
+    out.push_back('\n');
+    return static_cast<long>(len);
+  }
+}
+
 bool LineReader::getline(std::string& line) {
   for (;;) {
     char* start = buf_.data() + beg_;
@@ -72,23 +98,75 @@ bool LineReader::getline(std::string& line) {
   }
 }
 
-size_t read_fastq_batch(LineReader& in, std::vector<FastqRecord>& out,
-                        size_t max_records) {
-  out.clear();
-  std::string h, plus;
-  while (out.size() < max_records && in.getline(h)) {
-    if (h.empty()) continue;
-    if (h[0] != '@') throw std::runtime_error("malformed FASTQ header: " + h);
-    FastqRecord r;
-    size_t sp = h.find_first_of(" \t");
-    r.name = h.substr(1, sp == std::string::npos ? std::string::npos : sp - 1);
-    if (!in.getline(r.seq) || !in.getline(plus) || !in.getline(r.qual))
-      throw std::runtime_error("truncated FASTQ record: " + r.name);
-    if (r.qual.size() != r.seq.size())
-      throw std::runtime_error("SEQ/QUAL length mismatch: " + r.name);
-    out.push_back(std::move(r));
+namespace {
+
+// Parses one 4-line record from [p, end) (lines end with '\n').
+void parse_record(const char* p, const char* end, FastqRecord& r) {
+  const char* lines[5];
+  lines[0] = p;
+  for (int i = 1; i <= 4; ++i) {
+    const char* nl = static_cast<const char*>(std::memchr(lines[i - 1], '\n', end - lines[i - 1]));
+    lines[i] = nl + 1;
   }
-  return out.size();
+  auto line = [&](int i) { return std::string(lines[i], lines[i + 1] - 1); };
+  std::string h = line(0);
+  if (h.empty() || h[0] != '@') throw std::runtime_error("malformed FASTQ header: " + h);
+  size_t sp = h.find_first_of(" \t");
+  r.name = h.substr(1, sp == std::string::npos ? std::string::npos : sp - 1);
+  r.seq = line(1);
+  r.qual = line(3);
+  if (r.qual.size() != r.seq.size())
+    throw std::runtime_error("SEQ/QUAL length mismatch: " + r.name);
+}
+
+}  // namespace
+
+size_t read_fastq_batch(LineReader& in, std::vector<FastqRecord>& out,
+                        size_t max_records, int threads) {
+  // Serial part: slice whole records into one block (no per-record allocation).
+  std::string block;
+  std::vector<size_t> starts;
+  block.reserve(max_records * 400);  // ~2 x 150 bp + name, typical short reads
+  starts.reserve(max_records + 1);
+  while (starts.size() < max_records) {
+    size_t start = block.size();
+    int n = 0;
+    long len;
+    while (n < 4 && (len = in.append_line(block)) >= 0) {
+      if (n == 0 && len == 0) {  // tolerate blank lines between records
+        block.resize(start);
+        continue;
+      }
+      ++n;
+    }
+    if (n == 0) break;
+    if (n < 4) throw std::runtime_error("truncated FASTQ record at end of input");
+    starts.push_back(start);
+  }
+  starts.push_back(block.size());
+
+  // Parallel part: build records.
+  const size_t nrec = starts.size() - 1;
+  out.clear();
+  out.resize(nrec);
+  threads = std::max(1, std::min<int>(threads, static_cast<int>(nrec / 4096) + 1));
+  std::vector<std::exception_ptr> errors(threads);
+  std::vector<std::thread> pool;
+  for (int t = 0; t < threads; ++t) {
+    pool.emplace_back([&, t] {
+      try {
+        const char* base = block.data();
+        for (size_t i = nrec * t / threads; i < nrec * (t + 1) / threads; ++i)
+          parse_record(base + starts[i], base + starts[i + 1], out[i]);
+      } catch (...) {
+        errors[t] = std::current_exception();
+      }
+    });
+  }
+  for (auto& th : pool) th.join();
+  for (auto& e : errors)
+    if (e) std::rethrow_exception(e);
+  return nrec;
 }
 
 }  // namespace certa
