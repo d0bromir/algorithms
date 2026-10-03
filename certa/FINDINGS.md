@@ -373,6 +373,33 @@ vs GIAB v4.2.1, 44×; same protocol as single-end;
   lower (false negatives 533 vs 369).
 - *Certification on the whole sample:* 95.38 % of the 889 M reads.
 
+**Three samples (paired-end, chr20 vs GIAB v4.2.1).** These are HG002
+(NovaSeq X) and two more GIAB samples on another instrument: HG001 and HG005,
+NovaSeq 6000 2×151 PCR-free, study PRJNA734598 (SRR14724533, SRR14724528).
+Every pair was mapped (722 M and 726 M reads), with the same protocol as
+above. For HG001 and HG005 GIAB provides only the standard benchmark BED,
+not HG002's "noinconsistent" variant.
+(`results/hg002_2026-10/giab_chr20_vcfeval_hg001_hg005_pe.tsv`)
+
+F1, CERTA / BWA-MEM2 (Δ):
+
+| Sample | Certified | GATK SNV | GATK indel | bcftools SNV | bcftools indel |
+|---|---|---|---|---|---|
+| HG002 | 95.38 % | 0.9931 / 0.9924 (+0.0007) | 0.9940 / 0.9934 (+0.0006) | 0.9918 / 0.9907 (+0.0011) | 0.9291 / 0.9257 (+0.0034) |
+| HG001 | 92.93 % | 0.9925 / 0.9921 (+0.0004) | **0.9909 / 0.9922 (−0.0013)** | 0.9921 / 0.9915 (+0.0006) | 0.9469 / 0.9456 (+0.0013) |
+| HG005 | 92.86 % | 0.9926 / 0.9917 (+0.0009) | 0.9938 / 0.9925 (+0.0013) | 0.9926 / 0.9916 (+0.0010) | 0.9472 / 0.9454 (+0.0018) |
+
+- *Overall:* CERTA has the higher F1 in 11 of 12 comparisons.
+- *The exception:* HG001 GATK indels, −0.0013. That is 88 false
+  positives against 75, and 94 false negatives against 80, out of about
+  9,900 true indels.
+- *A consistent trade-off:* higher precision for SNVs in all six
+  sample–caller pairs (GATK SNV false positives: HG001 508 vs 743, HG005
+  537 vs 830), with slightly lower recall.
+- *Certification:* lower on the NovaSeq 6000 samples, 92.9 % against
+  95.4 %. These reads are 151 bp and carry more sequencing errors, so fewer
+  of them fall within the certified radius.
+
 The paired pipeline is **4.0× faster than BWA-MEM2 in paired mode**, with
 5.7× less CPU time. It is not yet faster than minibwa (20M pairs, galaxy,
 A100 + 64
