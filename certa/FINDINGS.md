@@ -524,6 +524,39 @@ The pilot did not reach 10× over BWA-MEM2:
 - **The GPU is part of the claim.** The comparison is A100 + 64 threads vs
   64 threads. Cost per genome (GPU hour vs CPU hours) should be reported
   alongside wall time.
-- **Precision is slightly lower than BWA-MEM2's** (GATK SNV 0.9886 vs
-  0.9898), with F1 higher through recall. A multi-sample study is needed to
-  show this is systematic and not sample noise.
+- **Precision is slightly lower than BWA-MEM2's in single-end mode**
+  (GATK SNV 0.9886 vs 0.9898), with F1 higher through recall. In paired
+  mode the opposite holds on all three samples: higher precision, slightly
+  lower recall (§4).
+
+## 7. Open items (state as of 2026-10-03)
+
+- **Speed in paired mode:** 4.0× faster than BWA-MEM2 but slower than
+  minibwa (77 s vs 62 s, 20M pairs). The cost lies in the pair pass (about
+  1,050 CPU-s) and in the fallback's hard reads. Sending only the
+  uncertified mate (`--fallback-mates single`) barely helps. Candidates:
+  move the pair pass to the GPU; restrict it to the one-uncertified pairs;
+  improve the fallback.
+- **PR tests:** seven threshold mutations, off by 2–3 points in the floor,
+  band pad or window threshold, survive. Adversarial pairs placed exactly
+  at those thresholds would close the gap.
+- **S2 in tier PR** bounds pairs from other anchors only. It is not yet a
+  uniqueness proof, because a second partner inside the winning anchor's
+  window is not separately bounded.
+- **HG001 GATK indels** are the one comparison where CERTA's F1 is lower
+  (0.9909 vs 0.9922). Look at the 13 extra FP and 14 extra FN.
+- **Long reads:** the current limits (320 bp, 8 parts, radius 5) exclude
+  them. In principle HiFi fits, with an error rate well below the ~4.5 %
+  limit of 22-base parts. A full long-read CERTA would likely be slower than
+  shmap-rs, which does no base-level alignment: about 11.7 s for 2,000
+  HG002 HiFi reads single-threaded (a2:`~/shmap-rs/profiling/other-mappers/`).
+  A more promising idea is to certify only the reads shmap-rs flags as
+  ambiguous. First step, needing no downloads: measure on a2's HiFi data
+  what fraction of reads fall within the certifiable error range.
+- **Data on the hosts:**
+  - galaxy:
+    - HG005 FASTQs (52 GB, `~/certa-data/SRR14724528_*`); delete them if
+      the space is needed;
+    - 20M/2M HG002 subsamples with R2 mates (`~/certa-bench/reads`);
+    - per-sample results in `~/certa-bench/acc_HG00{1,5}` and `acc2`.
+  - a2: the full HG002 R2 (`~/certa-data/SRR37356339_2.fastq.gz`).
