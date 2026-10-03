@@ -1,0 +1,11 @@
+{
+  "mode": "gpu",
+  "device": "NVIDIA A100 80GB PCIe (sm_80, 81152 MiB)",
+  "threads": 32,
+  "k": 5, "k1": 2, "budget": 16, "budget2": 256, "second_pass": 107490097, "q": 22, "s": 1,
+  "reads": 725804508, "bases": 109596480708, "certified": 673961289, "s0": 462215495, "s1": 149382224, "sr": 7461276, "sl": 0, "s2": 0, "s2_limit": 0, "ties": 35279094,
+  "uncertified": {"bad_length": 0, "radius_negative": 2454975, "not_found": 49089066, "cluster_too_wide": 298844, "cross_contig": 334},
+  "certified_by_d1": [469676771, 98851358, 27552430, 11800204, 7037297, 4140935],
+  "certified_by_radius": [18844850, 26837289, 540891143, 2168179, 3180061, 19676197],
+  "seconds": {"load": 0.016, "upload": 2.021, "read_encode": 1582.444, "read_wait": 1.255, "map": 1056.481, "output": 1283.471, "total": 2384.703}
+}

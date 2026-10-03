@@ -174,6 +174,70 @@ The accuracy reports are **byte-identical on galaxy (ARM64) and a2
   4. GIAB variant-level accuracy (DeepVariant) of the hybrid output.
   5. NUMA-aware thread placement on multi-socket hosts.
 
+## 5b. v0.4: adaptive certificate, and where a 10x speedup could come from
+
+**What changed.** v0.4 splits each read into as many parts as fit (5 for
+150 bp), enumerates the *rarest* parts that fit a per-strand hit budget,
+and certifies radius |S| − 1. It also adds a certified-repeat tier (SR:
+≥ 2 exact copies found ⇒ d1 = 0, MAPQ 0) and bounded cluster
+verification. Raw data: `sweep_2M_v04_*.json`, `galaxy_timing_v04.tsv`,
+`full_444M_gpu_v04.stats.json`.
+
+**Certified fraction, 2 M reads**
+
+| k / budget | Certified | S0 | S1 | SR | Uncertified: repetitive | Uncertified: > R |
+|---|---|---|---|---|---|---|
+| v0.3 (k=2, cap 32/part) | 83.66 % | — | — | — | 7.78 % | 8.73 % |
+| 2 / 32 | 89.38 % | 72.38 % | 15.67 % | 1.32 % | 2.68 % | 7.94 % |
+| 2 / 256 | 91.31 % | 73.68 % | 16.63 % | 1.00 % | 1.13 % | 7.55 % |
+| 3 / 256 | 92.51 % | 73.68 % | 17.83 % | 1.00 % | 1.13 % | 6.33 % |
+| 4 / 128 | 92.44 % | 73.30 % | 18.01 % | 1.12 % | 1.55 % | 5.98 % |
+| **4 / 256 (default)** | **93.03 %** | 73.67 % | 18.36 % | 1.00 % | 1.13 % | 5.79 % |
+
+On all 444.5 M reads, v0.4 certifies **92.89 %**.
+
+**Timing, galaxy, 20 M reads (median of 3)**
+
+| Configuration | Wall | vs minibwa | vs BWA-MEM2 |
+|---|---|---|---|
+| v0.4 A100 → pipe → minibwa | 24.40 s | 1.09× | 4.09× |
+| v0.4 A100 + fallback (sequential) | 31.59 s | 0.84× | 3.16× |
+| v0.4 CPU + fallback (sequential) | 44.16 s | 0.60× | 2.26× |
+| *v0.4 A100, certified only (92.9 %)* | *17.93 s* | — | — |
+
+v0.4 halves the fallback's input (1.42 M reads instead of 3.3 M), but the
+GPU kernel became slower: 11.0 s of mapping vs about 2 s for v0.3. More
+parts and larger budgets make GPU threads diverge. End-to-end time is
+unchanged.
+
+**Anatomy of the hard reads.** These are the 31.6 M reads v0.4 leaves
+uncertified out of 444.5 M, classified from minibwa's alignment of them.
+
+| Class | Share | minibwa CPU per read |
+|---|---|---|
+| Repeat, MAPQ 0 | 24.2 % | ~440 µs |
+| Indel/clip event shared with ≥ 3 other hard reads | 25.7 % | 500–760 µs |
+| Substitutions only, NM ≤ 2, unique (radius limited by repetitive parts) | 16.1 % | ~320 µs |
+| Substitutions only, NM ≥ 3 | 19.3 % | 400–550 µs |
+| Private indel/clip events, unmapped, other | ~15 % | 150–1060 µs |
+
+minibwa's average cost is 68 µs per read. The last 7 % of reads cost
+≈ 52 % of its total CPU time (718 of 1368 CPU-s on 20 M reads).
+
+**What this means for a 10× target**
+- **Against minibwa:** by Amdahl's law, if the hard 7 % keep minibwa's
+  per-read cost, the end-to-end speedup cannot exceed ~1.9×, however fast
+  the certified path is.
+- **Coverage amortization** is the most promising different idea: learn
+  shared donor events once and patch the reference, so sibling reads
+  become certifiable. It addresses ~26 % of hard reads; better
+  certification addresses another ~16 %. Even with both, the ceiling
+  against minibwa is roughly 2–3×.
+- **10× over minibwa is not supported by these data.**
+- **10× over BWA-MEM2**, the clinical reference aligner, is plausible:
+  minibwa itself is 3.8× faster than BWA-MEM2 here, and the pipeline
+  above is 4.1×.
+
 ## 6. Index builds (built concurrently in 3 groups; times are upper bounds)
 
 | Tool | galaxy wall | a2 wall | Peak RSS (GiB) |

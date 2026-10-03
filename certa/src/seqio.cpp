@@ -6,6 +6,11 @@
 #include <stdexcept>
 #include <thread>
 
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #ifdef CERTA_WITH_ZLIB
 #include <zlib.h>
 #endif
@@ -100,15 +105,20 @@ bool LineReader::getline(std::string& line) {
 
 namespace {
 
-// Parses one 4-line record from [p, end) (lines end with '\n').
+// Parses one 4-line record from [p, end). Lines end with '\n' (optionally
+// "\r\n"); the last line may end at `end` without a newline.
 void parse_record(const char* p, const char* end, FastqRecord& r) {
-  const char* lines[5];
-  lines[0] = p;
-  for (int i = 1; i <= 4; ++i) {
-    const char* nl = static_cast<const char*>(std::memchr(lines[i - 1], '\n', end - lines[i - 1]));
-    lines[i] = nl + 1;
+  const char* beg[4];
+  const char* stop[4];
+  const char* at = p;
+  for (int i = 0; i < 4; ++i) {
+    const char* nl = static_cast<const char*>(std::memchr(at, '\n', end - at));
+    const char* e = nl ? nl : end;
+    beg[i] = at;
+    stop[i] = (e > at && e[-1] == '\r') ? e - 1 : e;
+    at = nl ? nl + 1 : end;
   }
-  auto line = [&](int i) { return std::string(lines[i], lines[i + 1] - 1); };
+  auto line = [&](int i) { return std::string(beg[i], stop[i]); };
   std::string h = line(0);
   if (h.empty() || h[0] != '@') throw std::runtime_error("malformed FASTQ header: " + h);
   size_t sp = h.find_first_of(" \t");
@@ -119,7 +129,85 @@ void parse_record(const char* p, const char* end, FastqRecord& r) {
     throw std::runtime_error("SEQ/QUAL length mismatch: " + r.name);
 }
 
+// Builds records [starts[i], starts[i+1]) from `base` on several threads.
+void parse_records(const char* base, const std::vector<size_t>& starts,
+                   std::vector<FastqRecord>& out, int threads) {
+  const size_t nrec = starts.size() - 1;
+  out.clear();
+  out.resize(nrec);
+  threads = std::max(1, std::min<int>(threads, static_cast<int>(nrec / 4096) + 1));
+  std::vector<std::exception_ptr> errors(threads);
+  std::vector<std::thread> pool;
+  for (int t = 0; t < threads; ++t) {
+    pool.emplace_back([&, t] {
+      try {
+        for (size_t i = nrec * t / threads; i < nrec * (t + 1) / threads; ++i)
+          parse_record(base + starts[i], base + starts[i + 1], out[i]);
+      } catch (...) {
+        errors[t] = std::current_exception();
+      }
+    });
+  }
+  for (auto& th : pool) th.join();
+  for (auto& e : errors)
+    if (e) std::rethrow_exception(e);
+}
+
 }  // namespace
+
+MappedFastq::MappedFastq(const std::string& path) {
+  int fd = ::open(path.c_str(), O_RDONLY);
+  if (fd < 0) throw std::runtime_error("cannot open " + path);
+  struct stat st;
+  if (fstat(fd, &st) != 0) {
+    ::close(fd);
+    throw std::runtime_error("cannot stat " + path);
+  }
+  size_ = static_cast<size_t>(st.st_size);
+  if (size_ > 0) {
+    void* m = mmap(nullptr, size_, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (m == MAP_FAILED) {
+      ::close(fd);
+      throw std::runtime_error("cannot mmap " + path);
+    }
+    madvise(m, size_, MADV_SEQUENTIAL);
+    base_ = static_cast<const char*>(m);
+  }
+  ::close(fd);
+}
+
+MappedFastq::~MappedFastq() {
+  if (base_) munmap(const_cast<char*>(base_), size_);
+}
+
+bool MappedFastq::usable(const std::string& path) {
+  if (path.size() > 3 && path.compare(path.size() - 3, 3, ".gz") == 0) return false;
+  struct stat st;
+  return ::stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
+}
+
+size_t MappedFastq::next_batch(std::vector<FastqRecord>& out, size_t max_records, int threads) {
+  // Serial part: only find record boundaries (memchr over the mapping).
+  std::vector<size_t> starts;
+  starts.reserve(max_records + 1);
+  while (starts.size() < max_records && pos_ < size_) {
+    // Skip blank lines between records.
+    while (pos_ < size_ && (base_[pos_] == '\n' || base_[pos_] == '\r')) ++pos_;
+    if (pos_ >= size_) break;
+    const size_t start = pos_;
+    int n = 0;
+    while (n < 4 && pos_ < size_) {
+      const char* nl = static_cast<const char*>(std::memchr(base_ + pos_, '\n', size_ - pos_));
+      pos_ = nl ? static_cast<size_t>(nl - base_) + 1 : size_;
+      ++n;
+    }
+    if (n < 4) throw std::runtime_error("truncated FASTQ record at end of input");
+    starts.push_back(start);
+  }
+  starts.push_back(pos_);
+  parse_records(base_, starts, out, threads);
+  return out.size();
+}
 
 size_t read_fastq_batch(LineReader& in, std::vector<FastqRecord>& out,
                         size_t max_records, int threads) {
@@ -144,29 +232,8 @@ size_t read_fastq_batch(LineReader& in, std::vector<FastqRecord>& out,
     starts.push_back(start);
   }
   starts.push_back(block.size());
-
-  // Parallel part: build records.
-  const size_t nrec = starts.size() - 1;
-  out.clear();
-  out.resize(nrec);
-  threads = std::max(1, std::min<int>(threads, static_cast<int>(nrec / 4096) + 1));
-  std::vector<std::exception_ptr> errors(threads);
-  std::vector<std::thread> pool;
-  for (int t = 0; t < threads; ++t) {
-    pool.emplace_back([&, t] {
-      try {
-        const char* base = block.data();
-        for (size_t i = nrec * t / threads; i < nrec * (t + 1) / threads; ++i)
-          parse_record(base + starts[i], base + starts[i + 1], out[i]);
-      } catch (...) {
-        errors[t] = std::current_exception();
-      }
-    });
-  }
-  for (auto& th : pool) th.join();
-  for (auto& e : errors)
-    if (e) std::rethrow_exception(e);
-  return nrec;
+  parse_records(block.data(), starts, out, threads);  // parallel part
+  return out.size();
 }
 
 }  // namespace certa

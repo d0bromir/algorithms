@@ -1,0 +1,7 @@
+reads 1889110; CERTA-certified 1889110 (100.00%); proven exact multi-copy ties 69893
+tool              missed better locus  of which MAPQ>=20   unmapped (<=5 edits exist)    overconfident ties (MAPQ>=20)
+bwa-mem2              177 (0.009%)                 13              0 (0.000%)                0 (0.00% of ties)
+minibwa               420 (0.022%)                 38              0 (0.000%)                0 (0.00% of ties)
+strobealign          4984 (0.264%)                800             11 (0.001%)              704 (1.01% of ties)
+minimap2             2237 (0.118%)                 54            524 (0.028%)                0 (0.00% of ties)
+bowtie2               921 (0.049%)                 61            134 (0.007%)                0 (0.00% of ties)
