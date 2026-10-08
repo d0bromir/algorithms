@@ -265,7 +265,13 @@ the forward mate's.
   - 1,672,120 certified HG002 reads were compared with BWA-MEM2's unclipped
     alignments. BWA-MEM2 never has fewer edits than the certified minimum,
     except 3 reads whose windows contain a reference `N` (W4).
-  - Output is byte-identical on ARM64, x86-64 and an A100.
+  - Output is byte-identical on ARM64, x86-64 and an A100. One regression
+    broke this. From the local-tier commit (`3664ae6`) on, the host's wider
+    band also widened the end-to-end cluster limit, so about 78 reads in 2 M
+    (tandem repeats) were certified S1 on the CPU but SL on the GPU. Both
+    were valid proofs, but the output was not identical. Fixed in Aim 1
+    with a shared `BAND_E2E = 48`; SAM bodies and uncertified reads are
+    byte-identical again on 2 M HG002 reads (CPU vs A100).
   - CI covers native x86-64 and ARM64.
 
 ## 4. End-to-end results (pilot, HG002 NovaSeq X, single-end)
@@ -530,6 +536,16 @@ The pilot did not reach 10× over BWA-MEM2:
   lower recall (§4).
 
 ## 7. Open items (state as of 2026-10-03)
+
+*Update 2026-10-08, Aim 1 of
+[EXACT_ALIGNMENT_PROPOSAL.md](../EXACT_ALIGNMENT_PROPOSAL.md) §6.1.*
+A second index (q = 15, 10 parts per read) breaks the q = 22 ceiling.
+Single-end, the certified share rises:
+- HG002: from 95.65 % to 96.29 % at about 0.27 ms per residual read, or to
+  96.83 % with large budgets;
+- HG005: from 93.53 % to 94.66 %, or to 95.31 %.
+
+The new certificates show no unexplained violation against BWA-MEM2.
 
 - **Speed in paired mode:** 4.0× faster than BWA-MEM2 but slower than
   minibwa (77 s vs 62 s, 20M pairs). The cost lies in the pair pass (about

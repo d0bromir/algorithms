@@ -42,7 +42,9 @@
 namespace certa {
 
 constexpr int KMAX = 5;                         // max certified radius (k)
-constexpr int PMAX = 8;                         // max parts per read
+// Max parts per read. A q = 22 index gives 6 parts for 150 bp; finer
+// indexes (q = 15: 10 parts) lift the certifiable ceiling (Aim 1).
+constexpr int PMAX = 16;
 // Max hits enumerated per strand. The GPU keeps its workspace in per-thread
 // stack memory, so its budget is small; on the host (CPU passes, including the
 // CPU third pass of GPU runs) the workspace is heap-allocated.
@@ -55,9 +57,12 @@ constexpr int BUDGET_MAX = HOST_BUDGET_MAX;
 #endif
 constexpr int SMAX = 16;                        // max index sampling step
 constexpr int LMAX = 320;                       // max read length handled
-// Max band width (diagonals). The host allows wider bands, for tier SL.
+// Max band width (diagonals). The host allows wider bands, for tiers SL and
+// PR. The end-to-end certificate (S0/S1/S2) always uses BAND_E2E, so CPU and
+// GPU runs give byte-identical results.
+constexpr int BAND_E2E = 48;
 #ifdef __CUDA_ARCH__
-constexpr int BMAX = 48;
+constexpr int BMAX = BAND_E2E;
 #else
 constexpr int BMAX = 96;
 #endif
@@ -75,14 +80,14 @@ enum Tier : uint8_t { kTierS0 = 0, kTierS1 = 1, kTierSR = 2, kTierS2 = 3, kTierS
 constexpr int S2_MAX = 10;  // largest --s2 edit limit (band must fit BMAX)
 constexpr int S2_TOP = 8;   // S2 evaluates only this many best-supported clusters
 static_assert(MAX_CIGAR >= 2 * S2_MAX + 1, "CIGAR buffer too small for S2");
-static_assert(4 * S2_MAX + 1 <= BMAX, "S2 band does not fit BMAX");
+static_assert(4 * S2_MAX + 1 <= BAND_E2E, "S2 band does not fit BAND_E2E");
 
 enum Reason : uint8_t {
   kOk = 0,
   kBadLength = 1,        // read shorter than one part needs, or longer than LMAX
   kRadiusNegative = 2,   // every part exceeds the budget and no SR proof
   kNotFound = 3,         // no locus within the certified radius
-  kClusterTooWide = 4,   // candidate cluster wider than BMAX (tandem repeat)
+  kClusterTooWide = 4,   // candidate cluster wider than BAND_E2E (tandem repeat)
   kCrossContig = 5,      // set by the host: alignment spans a contig boundary
   kNumReasons = 6
 };
@@ -148,6 +153,7 @@ struct Result {
   uint8_t parts;                // parts the read was split into
   uint8_t used;                 // parts enumerated per strand (|S|)
   int16_t floor;                // SL: certified threshold (score > floor proves optimality)
+  uint32_t ncand;               // candidate diagonals enumerated, both strands (diagnostic)
 };
 
 struct Cluster {
@@ -156,17 +162,17 @@ struct Cluster {
   uint8_t strand;
   int8_t dist;      // exact distance, or radius + 1 if it cannot beat the best two
   uint16_t beg, end;  // member diagonals: ws.cand[strand][beg, end)
-  uint8_t pmask;      // distinct parts with a hit in the cluster (bit j = part j)
+  uint16_t pmask;     // distinct parts with a hit in the cluster (bit j = part j)
 };
 
-// Candidates store diagonal * 8 + part index (PMAX <= 8), so sorting orders
+// Candidates store diagonal * 16 + part index (PMAX <= 16), so sorting orders
 // by diagonal and the part survives the sort.
-static_assert(PMAX <= 8, "part index must fit in 3 bits");
-CERTA_HD inline int64_t diag_of(int64_t c) { return c >> 3; }  // floor(c / 8)
-CERTA_HD inline int part_of(int64_t c) { return (int)(c & 7); }
-CERTA_HD inline int popcount8(uint8_t v) {
+static_assert(PMAX <= 16, "part index must fit in 4 bits");
+CERTA_HD inline int64_t diag_of(int64_t c) { return c >> 4; }  // floor(c / 16)
+CERTA_HD inline int part_of(int64_t c) { return (int)(c & 15); }
+CERTA_HD inline int popcount16(uint16_t v) {
   int n = 0;
-  for (; v; v &= (uint8_t)(v - 1)) ++n;
+  for (; v; v &= (uint16_t)(v - 1)) ++n;
   return n;
 }
 
@@ -186,7 +192,13 @@ struct Workspace {
 #ifndef __CUDA_ARCH__
   int16_t lub[MAX_CLUST];     // SL: score bound of each chain
   int16_t lscore[MAX_CLUST];  // SL: best score in each chain's bands, or kNoSub
-  int16_t ubmemo[2][256];     // SL: bound per (strand, part mask)
+  // SL/PR: Lemma L bound per (strand, part mask); kNoSub = not computed.
+  // Initialised once (ub_magic), then only the entries a call touched are
+  // reset at the start of the next call.
+  uint64_t ub_magic;
+  int16_t ubmemo[2][1 << PMAX];
+  uint32_t ub_touched[MAX_CLUST];
+  int ub_ntouched;
 #endif
 };
 
@@ -324,7 +336,7 @@ CERTA_HD inline void enumerate_parts(const IndexView& ix, int L, int P, int m,
     part_geometry(L, P, j, &off, &len);
     for (int t = 0; t < ix.s; ++t)
       for (uint64_t e = ws.rlo[st][j][t]; e < ws.rhi[st][j][t]; ++e)
-        ws.cand[st][n++] = ((int64_t)ix.pos[e] - (off + t)) * 8 + j;  // diagonal, part
+        ws.cand[st][n++] = ((int64_t)ix.pos[e] - (off + t)) * 16 + j;  // diagonal, part
   }
   ws.ncand[st] = n;
 }
@@ -407,7 +419,7 @@ CERTA_HD inline void band_traceback(const IndexView& ix, const uint8_t* rd,
 
 // Groups the sorted candidate diagonals of both strands into clusters whose
 // bands (+-pad) overlap. Returns the number of clusters, or -1 when a cluster
-// is wider than BMAX and skip_wide is false (with skip_wide it is dropped).
+// is wider than BAND_E2E and skip_wide is false (with skip_wide it is dropped).
 CERTA_HD inline int build_clusters(Workspace& ws, int pad, bool skip_wide) {
   int nclust = 0;
   for (int st = 0; st < 2; ++st) {
@@ -416,15 +428,15 @@ CERTA_HD inline int build_clusters(Workspace& ws, int pad, bool skip_wide) {
     int i = 0;
     while (i < n) {
       int64_t dmin = diag_of(c[i]), dmax = dmin;
-      uint8_t pmask = (uint8_t)(1u << part_of(c[i]));
+      uint16_t pmask = (uint16_t)(1u << part_of(c[i]));
       int j = i + 1;
       while (j < n && diag_of(c[j]) - dmax <= 2 * pad) {
         dmax = diag_of(c[j]);
-        pmask |= (uint8_t)(1u << part_of(c[j]));
+        pmask |= (uint16_t)(1u << part_of(c[j]));
         ++j;
       }
       const int64_t width = dmax - dmin + 2 * pad + 1;
-      if (width > BMAX) {
+      if (width > BAND_E2E) {
         if (!skip_wide) return -1;
         i = j;
         continue;
@@ -499,7 +511,7 @@ CERTA_HD inline void evaluate_clusters(const IndexView& ix, int L, int nclust, i
     cl.dist = (int8_t)(cap + 1);  // "cannot improve (b1, b2)", or not evaluated
     const int limit = b2 - 1;
     if (limit < 0 || x >= max_eval) continue;
-    if (popcount8(cl.pmask) < min_support) continue;  // q-gram lemma: no locus within R here
+    if (popcount16(cl.pmask) < min_support) continue;  // q-gram lemma: no locus within R here
     const uint8_t* rd = ws.seq[cl.strand];
     int u = limit + 1;  // Hamming upper bound, only tracked below limit + 1
     for (int e = cl.beg; e < cl.end && u > 0; ++e) {
@@ -786,7 +798,35 @@ CERTA_HD inline bool certify_repeat(const IndexView& ix, int L, int P,
 // s1 > floor, s1 is the maximum score over the whole reference: an unseen
 // better alignment would have an evaluated chain (and be found) or a skipped
 // one (and score <= s2 <= s1). The reported alignment attains s1.
-inline int local_bound(const Workspace& ws, int st, int L, int P, int m, uint8_t free_mask,
+constexpr uint64_t kUbMagic = 0x6365727461554221ull;
+
+// Start a fresh set of Lemma L memo entries (see Workspace::ubmemo).
+inline void ubmemo_begin(Workspace& ws) {
+  if (ws.ub_magic != kUbMagic) {
+    for (int st = 0; st < 2; ++st)
+      for (int x = 0; x < (1 << PMAX); ++x) ws.ubmemo[st][x] = kNoSub;
+    ws.ub_magic = kUbMagic;
+    ws.ub_ntouched = 0;
+  }
+  for (int i = 0; i < ws.ub_ntouched; ++i) ws.ubmemo[ws.ub_touched[i] >> 16][ws.ub_touched[i] & 0xFFFF] = kNoSub;
+  ws.ub_ntouched = 0;
+}
+
+inline int local_bound(const Workspace& ws, int st, int L, int P, int m, uint16_t free_mask,
+                       int extra);
+
+// The Lemma L bound of a chain's part mask, memoised for this call.
+inline int ub_of_mask(Workspace& ws, int st, int L, int P, int m, uint16_t mask) {
+  int16_t& u = ws.ubmemo[st][mask];
+  if (u == kNoSub) {
+    u = (int16_t)local_bound(ws, st, L, P, m, mask, 0);
+    if (ws.ub_ntouched < MAX_CLUST) ws.ub_touched[ws.ub_ntouched++] = ((uint32_t)st << 16) | mask;
+    else ws.ub_magic = 0;  // too many to track: full reset next time
+  }
+  return u;
+}
+
+inline int local_bound(const Workspace& ws, int st, int L, int P, int m, uint16_t free_mask,
                        int extra) {
   static_assert(kMatch == 1 && kMismatch == 4 && kGapOpen == 6 && kGapExt == 1 && kClip == 5,
                 "Lemma L is stated for BWA-MEM's default scores");
@@ -830,11 +870,11 @@ inline int build_chains(Workspace& ws, int pad) {
     int i = 0;
     while (i < nc) {
       int64_t dmax = diag_of(c[i]);
-      uint8_t pmask = (uint8_t)(1u << part_of(c[i]));
+      uint16_t pmask = (uint16_t)(1u << part_of(c[i]));
       int j = i + 1;
       while (j < nc && diag_of(c[j]) - dmax <= pad) {
         dmax = diag_of(c[j]);
-        pmask |= (uint8_t)(1u << part_of(c[j]));
+        pmask |= (uint16_t)(1u << part_of(c[j]));
         ++j;
       }
       Cluster& cl = ws.clusters[n++];
@@ -956,14 +996,12 @@ inline bool certify_local(const IndexView& ix, const Params& p, int L, int P, in
   if (pad < 0) pad = 0;
   if (2 * pad + 1 > BMAX) return false;
   const int n = build_chains(ws, pad);
-  for (int st = 0; st < 2; ++st)
-    for (int x = 0; x < 256; ++x) ws.ubmemo[st][x] = kNoSub;
+  ubmemo_begin(ws);
   int ne = 0;
   for (int x = 0; x < n; ++x) {
     const Cluster& cl = ws.clusters[x];
-    int16_t& ub = ws.ubmemo[cl.strand][cl.pmask];
-    if (ub == kNoSub) ub = (int16_t)local_bound(ws, cl.strand, L, P, m, cl.pmask, 0);
-    ws.lub[x] = ub;
+    const int ub = ub_of_mask(ws, cl.strand, L, P, m, cl.pmask);
+    ws.lub[x] = (int16_t)ub;
     ws.lscore[x] = kNoSub;
     if (ub > floor) ws.corder[ne++] = (uint16_t)x;
   }
@@ -1038,7 +1076,7 @@ CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
   r.ref_pos = -1; r.n_cigar = 0; r.certified = 0; r.tier = kTierS0; r.strand = 0;
   r.reason = kOk; r.radius = -1; r.d1 = -1; r.d2 = -1; r.n_best = 0;
   r.n_clusters = 0; r.parts = 0; r.used = 0; r.nm = 0; r.score = 0; r.d2x = -1;
-  r.sub_score = kNoSub; r.floor = 0;
+  r.sub_score = kNoSub; r.floor = 0; r.ncand = 0;
 
   const int P = L <= LMAX ? part_count(L, ix.q, ix.s) : 0;
   if (P < 1) {
@@ -1055,8 +1093,11 @@ CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
   count_parts(ix, ws.seq[1], L, P, ws, 1);
   // With min_support t, |S| parts certify radius |S| - t (q-gram lemma).
   const int t = p.min_support < 1 ? 1 : p.min_support;
-  const int m0 = parts_that_fit(ws, 0, P, p.k + t, p.budget);
-  const int m1 = parts_that_fit(ws, 1, P, p.k + t, p.budget);
+  // The end-to-end certificate needs at most k + t parts; a local-only pass
+  // (tier SL) uses as many as fit the budget, which lowers its floor.
+  const int lim = p.local_only ? PMAX : p.k + t;
+  const int m0 = parts_that_fit(ws, 0, P, lim, p.budget);
+  const int m1 = parts_that_fit(ws, 1, P, lim, p.budget);
   const int m = m0 < m1 ? m0 : m1;
   r.parts = (uint8_t)P;
   r.used = (uint8_t)m;
@@ -1068,6 +1109,7 @@ CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
   }
   enumerate_parts(ix, L, P, m, ws, 0);
   enumerate_parts(ix, L, P, m, ws, 1);
+  r.ncand = (uint32_t)(ws.ncand[0] + ws.ncand[1]);
 
   sort_i64(ws.cand[0], ws.ncand[0]);
   sort_i64(ws.cand[1], ws.ncand[1]);

@@ -466,6 +466,51 @@ The extra points come from the reads with loss between today's ceiling (25) and 
 contaminants, very high loss) get intervals, most of them narrow, or a proof that OPT < T. Aim 1
 replaces these projections with measurements.
 
+### 6.1 Aim 1 result (measured, October 2026)
+
+**Setup.** A second index at q = 15 (s = 1): 2.95 × 10⁹ entries, 21.9 GB, built in under 2 minutes
+at 84 GB peak memory. Two code limits were lifted:
+- up to 16 parts per read, with a 4-bit part number in the candidate encoding;
+- 16-bit part masks.
+
+Local passes (Theorem L) may now use every part that fits the budget. The reads that the q = 22
+pipeline leaves uncertified are re-run through the q = 15 index on the CPU (16 threads). The data
+are random 2 M single-end samples of HG002 (NovaSeq X) and HG005 (NovaSeq 6000). The raw logs are
+in [`certa/bench/results/aim1_2026-10/`](certa/bench/results/aim1_2026-10/summary.tsv).
+
+| Sample | q = 22 default | + q15, t = 2 | q = 22 large budget | + q15, t = 2 | + q15, t = 2, large budget |
+|---|---|---|---|---|---|
+| HG002 | 94.66 % | 95.57 % (0.24 ms) | 95.65 % | **96.29 %** | 96.83 % (2.2 ms) |
+| HG005 | 92.58 % | 93.98 % (0.25 ms) | 93.53 % | **94.66 %** | 95.31 % (1.9 ms) |
+
+Times are CPU per residual read for the q = 15 pass.
+
+**Go / no-go.** The criterion was +1 point at ≤ 1 ms CPU per residual read: **go**.
+- *Cheap q = 15 pass alone* (t = 2, budget 256): +1.40 points on HG005 and +0.91 on HG002, at
+  0.25 ms.
+- *Combined with q = 22's large-budget pass:* +1.63 points on HG002 and +2.08 on HG005, at about
+  0.6 ms per residual read. That pass's CPU cost is estimated from the increase in map time on 16
+  threads.
+
+**Correctness on real data.** The new certificates were checked against BWA-MEM2's alignments of the
+same reads, as in FINDINGS §3: 39,649 checked on HG002 and 50,913 on HG005.
+- 0 unexplained violations;
+- every flagged case (30 and 33) sits in a window with reference `N`s, which BWA-MEM2 replaces with
+  random bases.
+
+**Against the projection.** §6 projected about +1.25 points from the default for ceiling 45. The
+measurement gives +0.91 at budget 256 and +2.02 at budget 4,096, so the projection was in range.
+One assumption was wrong: the random-sequence model of Proposition B predicted about 55 candidates
+per read. The real genome gives about 200 at budget 256, four times more, because of its repeats.
+The budget therefore binds earlier than the model says, as §10 anticipated, and this is where
+tier R (counts and window collapse) and Theorem G's adaptive part lengths come in.
+
+**Side finding: a regression fixed.** Since the local tier was added, the host's wider band (96
+diagonals, for local and pair bands) had also widened the end-to-end certificate's
+cluster-width limit. About 78 reads in 2 M, in tandem repeats, were then certified S1 on the CPU
+but SL on the GPU: both valid proofs, but no longer byte-identical. A shared `BAND_E2E = 48`
+restores identity; SAM bodies and uncertified reads are byte-identical again on 2 M HG002 reads.
+
 **Speed budget** (CPU per read, paired-end, from §2.2). The exact tiers F, R, H and X replace the
 heuristic fallback and see only the 4.6 % uncertified reads:
 - ≲ 1.2 ms CPU per residual read keeps CERTA's total CPU at or below minibwa's;
@@ -479,7 +524,7 @@ such guarantee, so it runs under a per-read budget and returns an interval when 
 
 | Aim | Deliverable | Measurement | Go / no-go |
 |---|---|---|---|
-| **1. Ceiling** (no new data needed) | q = 15 second index; PMAX/KMAX lifted; tier F pass | exact share, occurrence counts, CPU per residual read on HG002, HG001, HG005 | Exact share +1 point at ≤ 1 ms CPU per residual read |
+| **1. Ceiling** (no new data needed) | q = 15 second index; PMAX lifted to 16; tier F pass | exact share, occurrence counts, CPU per residual read on HG002, HG001, HG005 | Exact share +1 point at ≤ 1 ms CPU per residual read. **Done for HG002 and HG005: go (§6.1).** HG001 needs its FASTQs re-downloaded. |
 | **2. Repeats** | FM-index counts; Theorem R ties; Theorem R′ collapse | exact share and tie proofs among the 3.6 % repeat-limited reads; DP calls saved | Half of the repeat-limited reads exact or proven ties |
 | **3. Interval output and MAPQ** | [ℓ, u], SUB interval, conservative MAPQ, SAM tags (`XL`, `XU`) | interval-width distribution; MAPQ calibration on GIAB stratified regions | Variant F1 non-inferior to the current pipeline with **no** heuristic fallback |
 | **4. Checker** | independent checker (Theorem V); sampling audit | check time per read; zero disagreements | Checker accepts 100 % of certificates; injected faults all detected |

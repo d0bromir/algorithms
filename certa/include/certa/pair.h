@@ -237,13 +237,11 @@ inline void chain_mate(Mate& M, int pad) {
   M.ub.assign(M.nch, 0);
   M.slo.assign(M.nch, 0);
   M.shi.assign(M.nch, 0);
-  for (int st = 0; st < 2; ++st)
-    for (int x = 0; x < 256; ++x) ws.ubmemo[st][x] = kNoSub;
+  ubmemo_begin(ws);
   M.B = M.U;
   for (int x = 0; x < M.nch; ++x) {
     const Cluster& cl = ws.clusters[x];
-    int16_t& u = ws.ubmemo[cl.strand][cl.pmask];
-    if (u == kNoSub) u = (int16_t)local_bound(ws, cl.strand, M.L, M.P, M.m, cl.pmask, 0);
+    const int u = ub_of_mask(ws, cl.strand, M.L, M.P, M.m, cl.pmask);
     M.ub[x] = u;
     M.B = std::max(M.B, (int)u);
     // A member diagonal d puts the first aligned base in [d - pad, d + pad + L - 1].

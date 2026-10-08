@@ -47,6 +47,7 @@ struct Stats {
   uint64_t unc_by_used[PMAX + 1] = {};  // uncertified reads per parts searched |S|
   uint64_t pr = 0;                      // reads certified by the pair certificate (PR)
   uint64_t pairs = 0, pairs_cert = 0, pairs_proper = 0;
+  uint64_t cands = 0;                   // candidate diagonals enumerated (last pass per read)
   void add(const Stats& o) {
     reads += o.reads; bases += o.bases; certified += o.certified;
     s0 += o.s0; s1 += o.s1; sr += o.sr; sl += o.sl; s2 += o.s2; ties += o.ties;
@@ -54,6 +55,7 @@ struct Stats {
     for (int i = 0; i < KMAX + 2; ++i) by_radius[i] += o.by_radius[i];
     for (int i = 0; i < KMAX + 1; ++i) by_d1[i] += o.by_d1[i];
     for (int i = 0; i <= PMAX; ++i) unc_by_used[i] += o.unc_by_used[i];
+    cands += o.cands;
     pr += o.pr; pairs += o.pairs; pairs_cert += o.pairs_cert; pairs_proper += o.pairs_proper;
   }
 };
@@ -393,7 +395,7 @@ int cmd_map(const Args& a) {
   // Pass 3 verifies only clusters hit by >= t distinct parts (radius |S| - t),
   // which skips the flood of single-part hits from repetitive parts.
   p3.min_support = a.geti("--support3", 2);
-  if (p3.min_support < 1 || p3.min_support > PMAX) throw std::runtime_error("--support3 must be in [1, 8]");
+  if (p3.min_support < 1 || p3.min_support > PMAX) throw std::runtime_error("--support3 must be in [1, 16]");
   // Pass L (CPU, opt-in): certified local alignment (tier SL) for reads still
   // uncertified. --local t verifies chains hit by >= t parts; 2 is the
   // cheap setting (t = 1 costs ~10x more on HG002 for +0.16 points).
@@ -401,7 +403,7 @@ int cmd_map(const Args& a) {
   pl.budget = std::max(p2.budget, p3.budget);
   pl.local = a.geti("--local", 0);
   pl.local_only = 1;
-  if (pl.local < 0 || pl.local > PMAX) throw std::runtime_error("--local must be in [0, 8]");
+  if (pl.local < 0 || pl.local > PMAX) throw std::runtime_error("--local must be in [0, 16]");
   // Paired-end: a second FASTQ with the mates, in the same order.
   const bool paired = a.pos.size() == 3;
   PairParams pp;
@@ -671,6 +673,7 @@ int cmd_map(const Args& a) {
           }
           Stats& s = st[w];
           ++s.reads;
+          s.cands += res[i].ncand;
           s.bases += recs[i].seq.size();
           ++s.reason[reason];
           if (reason != kOk) ++s.unc_by_used[res[i].used];
@@ -682,7 +685,7 @@ int cmd_map(const Args& a) {
             ++(tier == kTierS0 ? s.s0 : tier == kTierS1 ? s.s1 : tier == kTierSR ? s.sr :
                tier == kTierSL ? s.sl : s.pr);
             s.ties += res[i].n_best > 1;
-            if (res[i].radius >= 0) ++s.by_radius[res[i].radius];
+            if (res[i].radius >= 0 && res[i].radius <= KMAX + 1) ++s.by_radius[res[i].radius];
             if (res[i].d1 >= 0) ++s.by_d1[res[i].d1];
           }
         }
@@ -743,6 +746,8 @@ int cmd_map(const Args& a) {
                  static_cast<unsigned long long>(total.pairs), np * total.pairs_cert, np * total.pairs_proper,
                  pct(total.pr), np * pair_tried);
   }
+  std::fprintf(stderr, "[map] candidates enumerated per read (last pass): %.1f\n",
+               total.reads ? double(total.cands) / total.reads : 0.0);
   std::fprintf(stderr, "[map] uncertified by parts searched |S|:");
   for (int i = 0; i <= PMAX; ++i) std::fprintf(stderr, " %d:%.2f%%", i, pct(total.unc_by_used[i]));
   std::fprintf(stderr, "\n");
