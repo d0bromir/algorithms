@@ -1,0 +1,15 @@
+[map] index idx/grch38.s1v3.cidx: q=22 s=1, 2948602603 entries, loaded in 0.6 s
+[map] pass 1: k=2 budget=16; pass 2: k=5 budget=256 S2<=0; parts are >= 22 bases
+[map] GPU NVIDIA A100 80GB PCIe (sm_80, 81152 MiB), index uploaded in 2.1 s (overlapped with input)
+[map] 1997888 reads: certified 92.58% (S0 exact 69.56%, S1 <=R edits 21.27%, SR repeat 1.40%, SL local 0.36%), ties 4.85%
+[map]   uncertified/bad_length: 0.00%
+[map]   uncertified/radius_negative: 0.43%
+[map]   uncertified/not_found: 6.99%
+[map]   uncertified/cluster_too_wide: 0.00%
+[map]   uncertified/cross_contig: 0.00%
+[map] placed without certificate (S2, <= 0 edits): 0.00%; to fallback: 7.42%
+[map] second pass (budget 256, S2 <= 0): 13.25% of reads; third pass (CPU, budget 256): 0.00%
+[map] local pass (CPU, support 2): 7.35% of reads
+[map] candidates enumerated per read (last pass): 13.6
+[map] uncertified by parts searched |S|: 0:0.43% 1:0.65% 2:0.46% 3:0.50% 4:0.76% 5:1.20% 6:3.42% 7:0.00% 8:0.00% 9:0.00% 10:0.00% 11:0.00% 12:0.00% 13:0.00% 14:0.00% 15:0.00% 16:0.00%
+[map] time: load 0.58 s, upload 2.09 s, read+encode 0.92 s (overlapped; waited 0.00 s), map 1.26 s (1590190 reads/s), output 0.24 s, total 4.20 s (475653 reads/s end to end)

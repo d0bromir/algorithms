@@ -1,0 +1,14 @@
+[map] index idx/grch38.s1q15.cidx: q=15 s=1, 2948610883 entries, loaded in 0.0 s
+[map] pass 1: k=2 budget=16; pass 2: k=5 budget=256 S2<=0; parts are >= 15 bases
+[map] 86924 reads: certified 14.64% (S0 exact 0.50%, S1 <=R edits 3.78%, SR repeat 0.41%, SL local 9.95%), ties 2.17%
+[map]   uncertified/bad_length: 0.00%
+[map]   uncertified/radius_negative: 3.77%
+[map]   uncertified/not_found: 81.59%
+[map]   uncertified/cluster_too_wide: 0.00%
+[map]   uncertified/cross_contig: 0.00%
+[map] placed without certificate (S2, <= 0 edits): 0.00%; to fallback: 85.36%
+[map] second pass (budget 256, S2 <= 0): 99.45% of reads; third pass (CPU, budget 256): 0.00%
+[map] local pass (CPU, support 2): 91.54% of reads
+[map] candidates enumerated per read (last pass): 222.6
+[map] uncertified by parts searched |S|: 0:3.77% 1:6.47% 2:5.51% 3:6.28% 4:8.48% 5:10.21% 6:9.31% 7:9.64% 8:9.37% 9:6.93% 10:9.39% 11:0.00% 12:0.00% 13:0.00% 14:0.00% 15:0.00% 16:0.00%
+[map] time: load 0.01 s, upload 0.00 s, read+encode 0.05 s (overlapped; waited 0.00 s), map 1.56 s (55669 reads/s), output 0.01 s, total 1.63 s (53287 reads/s end to end)
