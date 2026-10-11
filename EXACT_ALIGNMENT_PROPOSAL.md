@@ -564,6 +564,27 @@ is met on HG002 and missed on HG005.
 - **The honest output for them:** an interval. The next lever is not a repeat tier but the
   interval contract itself (Aim 3): report [lo, hi] and a conservative MAPQ.
 
+### 6.3 Aim 3: interval output (pre-registered 2026-10-11, before the HG005 run)
+
+**Deliverable.** `certa map --intervals` ([`certa/include/certa/interval.h`](certa/include/certa/interval.h)).
+No read goes to a heuristic mapper. Every read that the certified tiers leave open goes through
+tier R. Each SAM record carries:
+- `XL`, `XU`: OPT ∈ [XL, XU];
+- `XQ`: a certified lower bound of BWA-MEM's MAPQ formula, from a proven upper bound on SUB;
+- `XT`: the tier (R exact, IV interval, MR placed by the mate's window, UN unmapped).
+
+Pairs with an uncertified mate are placed from the alignments the tiers found plus an
+exhaustive window search for each mate near the other. MAPQ follows BWA-MEM's pairing rule.
+
+**Go criterion (fixed before the run).** HG005, chr20, the protocol of §7: GATK and bcftools,
+SNVs and indels, rtg vcfeval against GIAB v4.2.1.
+- **The criterion:** the interval pipeline's F1 is at least the current pipeline's
+  (CERTA + minibwa fallback) minus 0.0010, in each of the 4 comparisons.
+- **Policies:** the run is evaluated twice, from the same alignments. The criterion applies to
+  MAPQ = the point estimate (BWA-MEM's formula with the best other locus found). MAPQ = XQ (fully
+  certified) is reported alongside.
+- **Data:** HG001's and HG002's FASTQs are no longer on disk, so HG005 is the only sample.
+
 **Speed budget** (CPU per read, paired-end, from §2.2). The exact tiers F, R, H and X replace the
 heuristic fallback and see only the 4.6 % uncertified reads:
 - ≲ 1.2 ms CPU per residual read keeps CERTA's total CPU at or below minibwa's;
