@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "certa/pair.h"
+#include "certa/repeat.h"
 #include "index.h"
 #include "mapper.h"
 #include "seqio.h"
@@ -137,6 +138,10 @@ void check_contig(Result& r, const Reference& ref) {
   }
 }
 
+// --unc-tags: uncertified reads carry a FASTQ comment with the parts the read
+// was split into and the parts searched per strand (|S|), for diagnostics.
+bool g_unc_tags = false;
+
 void fastq_record(const FastqRecord& rec, std::string& fq) {
   fq += '@'; fq += rec.name; fq += '\n';
   fq += rec.seq; fq += "\n+\n";
@@ -160,7 +165,14 @@ int emit(const Result& r0, const FastqRecord& rec, const Reference& ref,
   Result r = r0;
   check_contig(r, ref);
   if (!r.certified) {
-    fastq_record(rec, fq);
+    if (g_unc_tags) {
+      FastqRecord t = rec;
+      t.name += " parts=" + std::to_string(r.parts) + " used=" + std::to_string(r.used) +
+                " reason=" + std::to_string(r.reason);
+      fastq_record(t, fq);
+    } else {
+      fastq_record(rec, fq);
+    }
     return r.reason;
   }
   sam_line(r, rec, ref, mapq_of(r, static_cast<int>(rec.seq.size())), MateInfo(), sam);
@@ -311,7 +323,7 @@ struct Args {
 };
 
 Args parse(int argc, char** argv, int start) {
-  static const char* flags[] = {"--gpu"};
+  static const char* flags[] = {"--gpu", "--unc-tags"};
   Args a;
   for (int i = start; i < argc; ++i) {
     std::string s = argv[i];
@@ -330,6 +342,85 @@ Args parse(int argc, char** argv, int start) {
 int default_threads() {
   unsigned n = std::thread::hardware_concurrency();
   return n ? static_cast<int>(n) : 1;
+}
+
+// Tier R (repeats) on a FASTQ of reads, e.g. those left uncertified by
+// `certa map -u`. Prints a summary; --tsv writes one line per read.
+int cmd_repeat(const Args& a) {
+  if (a.pos.size() != 2)
+    throw std::runtime_error(
+        "usage: certa repeat ref.cidx reads.fq[.gz] [-t N] [--tau 16] [--cmax 4096] [--samples 8] [--tsv out.tsv]");
+  RepeatParams rp;
+  rp.tau = a.geti("--tau", 16);
+  rp.cmax = a.geti("--cmax", 4096);
+  rp.samples = a.geti("--samples", 8);
+  if (rp.tau < 0 || rp.cmax < 1 || rp.samples < 1) throw std::runtime_error("bad tier R parameters");
+  const int threads = a.geti("-t", default_threads());
+  Reference ref;
+  Index ix;
+  load_index(a.pos[0], ref, ix);
+  if (ix.s != 1) throw std::runtime_error("tier R needs an index with s = 1");
+  const IndexView view = ix.view(ref);
+  LineReader in(a.pos[1]);
+  std::vector<FastqRecord> recs, chunk;
+  while (read_fastq_batch(in, chunk, 1 << 20, threads) > 0)
+    for (auto& r : chunk) recs.push_back(std::move(r));
+  ReadBatch batch;
+  encode_batch(recs, batch, threads);
+  std::vector<RepeatOut> out(recs.size());
+  auto t0 = Clock::now();
+  std::atomic<size_t> next{0};
+  auto worker = [&] {
+    std::unique_ptr<Workspace> ws(new Workspace);
+    RepeatScratch sc;
+    for (size_t i; (i = next.fetch_add(1)) < recs.size();)
+      out[i] = repeat_tier(view, rp, batch.codes.data() + batch.offs[i], batch.lens[i], *ws, sc);
+  };
+  std::vector<std::thread> pool;
+  for (int t = 1; t < threads; ++t) pool.emplace_back(worker);
+  worker();
+  for (auto& th : pool) th.join();
+  const double t_run = secs(t0);
+  // Summary. "Ambiguous" means two loci provably score >= lo while OPT <= hi,
+  // so OPT - SUB <= hi - lo; at <= 5 that keeps BWA-MEM's MAPQ below 20.
+  uint64_t n = recs.size(), claim = 0, exact = 0, tie = 0, amb = 0, nolo = 0, w5 = 0, w25 = 0;
+  for (const auto& o : out) {
+    if (!o.claim) continue;
+    ++claim;
+    if (o.lo == kNoSub) { ++nolo; continue; }
+    if (o.exact) { ++exact; tie += o.copies >= 2; continue; }
+    const int w = o.hi - o.lo;
+    w5 += w <= 5;
+    w25 += w <= 25;
+    amb += o.copies >= 2 && w <= 5;
+  }
+  auto pct = [&](uint64_t x) { return n ? 100.0 * x / n : 0.0; };
+  std::fprintf(stderr,
+               "[repeat] %llu reads (tau %d, cmax %d): exact %.2f%% (proven tie %.2f%%); not exact: "
+               "interval <= 5 %.2f%%, <= 25 %.2f%%, proven ambiguous %.2f%%, no alignment %.2f%%\n",
+               static_cast<unsigned long long>(n), rp.tau, rp.cmax, pct(exact), pct(tie), pct(w5), pct(w25),
+               pct(amb), pct(nolo));
+  std::fprintf(stderr, "[repeat] time %.2f s on %d threads (%.3f ms CPU-equivalent per read)\n", t_run, threads,
+               n ? t_run * threads * 1000.0 / n : 0.0);
+  if (a.has("--tsv")) {
+    std::FILE* f = std::fopen(a.get("--tsv", "").c_str(), "wb");
+    if (!f) throw std::runtime_error("cannot open --tsv output");
+    std::fprintf(f, "read\texact\tlo\thi\tcopies\tstrand\tcontig\tpos\tparts\tabsent\toccurrences\n");
+    for (size_t i = 0; i < recs.size(); ++i) {
+      const RepeatOut& o = out[i];
+      std::string contig = "*";
+      long long pos = 0;
+      if (o.lo != kNoSub) {
+        const int c = ref.contig_of(o.aln.ref_pos);
+        if (c >= 0) { contig = ref.names[c]; pos = o.aln.ref_pos - static_cast<long long>(ref.offsets[c]) + 1; }
+      }
+      std::fprintf(f, "%s\t%d\t%d\t%d\t%d\t%d\t%s\t%lld\t%d\t%d\t%d\n", recs[i].name.c_str(), o.exact ? 1 : 0,
+                   o.lo == kNoSub ? -1 : o.lo, o.hi, o.copies, o.lo == kNoSub ? -1 : o.aln.strand, contig.c_str(),
+                   pos, o.nparts, o.nabsent, o.nocc);
+    }
+    std::fclose(f);
+  }
+  return 0;
 }
 
 int cmd_index(const Args& a) {
@@ -412,6 +503,7 @@ int cmd_map(const Args& a) {
   pp.se.min_support = 1;
   pp.max_dist = a.geti("--max-dist", 850);
   if (pp.max_dist < 0) throw std::runtime_error("--max-dist must be >= 0");
+  g_unc_tags = a.has("--unc-tags");
   const bool gpu = a.has("--gpu");
   const int threads = a.geti("-t", default_threads());
   // Threads that parse and encode the next batch while the current one maps.
@@ -808,6 +900,7 @@ int main(int argc, char** argv) {
     Args a = parse(argc, argv, 2);
     if (cmd == "index") return cmd_index(a);
     if (cmd == "map") return cmd_map(a);
+    if (cmd == "repeat") return cmd_repeat(a);
     throw std::runtime_error("unknown command: " + cmd);
   } catch (const std::exception& e) {
     std::fprintf(stderr, "certa: error: %s\n", e.what());

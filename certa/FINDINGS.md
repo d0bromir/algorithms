@@ -547,6 +547,18 @@ Single-end, the certified share rises:
 
 The new certificates show no unexplained violation against BWA-MEM2.
 
+*Update 2026-10-11, Aim 2 (proposal §6.2).* Tier R (`certa repeat`,
+`include/certa/repeat.h`) handles repeats: long rare or absent parts found
+by anchor extension, copy-sampled lower bounds, and count-based tie proofs.
+- **Repeat-limited reads** (|S| < P, 3.55 % of HG002, 3.99 % of HG005):
+  50.5 % and 43.8 % become exact or proven ambiguous; 53.2 % and 46.0 %
+  with larger limits.
+- **Near-perfect copies among them:** 79–86 %.
+- **The rest** are lossy reads beyond any exact-part certificate.
+- **Validity:** 0 violations of tier R's bounds against BWA-MEM2 on 180,804
+  residual reads.
+- **Tests:** all 6 injected faults are caught.
+
 - **Speed in paired mode:** 4.0× faster than BWA-MEM2 but slower than
   minibwa (77 s vs 62 s, 20M pairs). The cost lies in the pair pass (about
   1,050 CPU-s) and in the fallback's hard reads. Sending only the

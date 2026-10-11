@@ -26,6 +26,7 @@
 
 #include "index.h"
 #include "certa/pair.h"
+#include "certa/repeat.h"
 #include "mapper.h"
 
 using namespace certa;
@@ -448,6 +449,23 @@ int main(int argc, char** argv) {
     }
     reads.push_back({s, -1});
   }
+  // Reads for tier R: from inside copies of the 50-copy element (some copies
+  // diverged), with 0-3 edits; the repeat tier must bound them exactly.
+  const size_t repeat_first = reads.size();
+  for (int n = 0; n < 60; ++n) {
+    const int L = 150;
+    const int64_t start = static_cast<int64_t>(ref.offsets[0]) + 60200 + 350 * static_cast<int64_t>(g() % 40) +
+                          static_cast<int64_t>(g() % 150);
+    std::vector<uint8_t> s(ref.seq.owned.begin() + start, ref.seq.owned.begin() + start + L + 10);
+    mutate(g, s, static_cast<int>(g() % 4));
+    s.resize(L);
+    if (g() % 2) {
+      std::vector<uint8_t> rc(L);
+      for (int i = 0; i < L; ++i) rc[i] = s[L - 1 - i] < 4 ? 3 - s[L - 1 - i] : 4;
+      s.swap(rc);
+    }
+    reads.push_back({s, -1});
+  }
 
   std::fprintf(stderr, "computing oracle for %zu reads over %zu bases...\n", reads.size(), ref.seq.size());
   std::vector<std::vector<Hit>> truth;
@@ -684,6 +702,63 @@ int main(int argc, char** argv) {
       std::fprintf(stderr, "pairs budget=%-3d certified %d/%zu\n", pc.budget, cert, pairs.size());
     }
     std::fprintf(stderr, "PR scores checked against the proper-pair oracle for %d pairs\n", checked);
+  }
+
+  // ---- Tier R (repeats): lo <= OPT <= hi against the whole-reference local
+  // oracle; exact claims equal OPT; copies are verified string by string.
+  {
+    Index ix1 = Index::build(ref, 14, 1, 4);  // tier R needs s = 1
+    const IndexView view1 = ix1.view(ref);
+    const auto& R = ref.seq.owned;
+    auto rcs = [](std::vector<uint8_t> v) {
+      std::reverse(v.begin(), v.end());
+      for (auto& c : v) c = c < 4 ? static_cast<uint8_t>(3 - c) : c;
+      return v;
+    };
+    RepeatParams cfgs[3];
+    cfgs[1].tau = 2;
+    cfgs[1].cmax = 64;
+    cfgs[2].tau = 64;
+    cfgs[2].samples = 2;
+    std::unique_ptr<Workspace> ws(new Workspace);
+    RepeatScratch sc;
+    int checked = 0;
+    for (int c = 0; c < 3; ++c) {
+      int exact = 0, exact_rep = 0, ties = 0;
+      for (size_t i = 0; i < reads.size(); ++i) {
+        const bool rep = i >= repeat_first;
+        if (!rep && i % 3 != 0) continue;  // oracle cost: all repeat reads, a third of the others
+        const auto& rd = reads[i].seq;
+        const int L = static_cast<int>(rd.size());
+        const RepeatOut o = repeat_tier(view1, cfgs[c], rd.data(), L, *ws, sc);
+        if (!o.claim || o.lo == kNoSub) continue;
+        if (local_truth[i] == INT32_MIN) local_truth[i] = oracle_local(R, rd.data(), L);
+        ++checked;
+        const int opt = local_truth[i];
+        CHECK(o.lo <= opt && opt <= o.hi, "tier R cfg %d read %zu: OPT %d outside [%d, %d]", c, i, opt, o.lo, o.hi);
+        CHECK(!o.exact || o.lo == opt, "tier R cfg %d read %zu: exact %d but OPT %d", c, i, o.lo, opt);
+        CHECK(rescore_affine(view1, o.aln, rd) == o.lo, "tier R read %zu: CIGAR scores %d, lo %d", i,
+              rescore_affine(view1, o.aln, rd), o.lo);
+        exact += o.exact;
+        exact_rep += o.exact && rep;
+        if (o.copies >= 2) {
+          ++ties;
+          int64_t span = 0;
+          for (int k = 0; k < o.aln.n_cigar; ++k)
+            if ((o.aln.cigar[k] & 0xF) == kOpM || (o.aln.cigar[k] & 0xF) == kOpD) span += o.aln.cigar[k] >> 4;
+          std::vector<uint8_t> w0(R.begin() + o.copy_pos[0], R.begin() + o.copy_pos[0] + span);
+          std::vector<uint8_t> w1(R.begin() + o.copy_pos[1], R.begin() + o.copy_pos[1] + span);
+          const bool same = o.copy_strand[1] == o.copy_strand[0];
+          CHECK((same ? w1 == w0 : w1 == rcs(w0)), "tier R read %zu: claimed copy differs", i);
+          CHECK(!same || o.copy_pos[1] + span <= o.copy_pos[0] || o.copy_pos[0] + span <= o.copy_pos[1],
+                "tier R read %zu: claimed copy overlaps", i);
+          for (uint8_t b : w0) CHECK(b < 4, "tier R read %zu: copy contains N", i);
+        }
+      }
+      std::fprintf(stderr, "tier R cfg %d (tau %d, cmax %d): exact %d (repeat reads %d of %zu), copies>=2 %d\n", c,
+                   cfgs[c].tau, cfgs[c].cmax, exact, exact_rep, reads.size() - repeat_first, ties);
+    }
+    std::fprintf(stderr, "tier R intervals checked against the local oracle: %d\n", checked);
   }
   if (failures) {
     std::fprintf(stderr, "%d check(s) FAILED\n", failures);

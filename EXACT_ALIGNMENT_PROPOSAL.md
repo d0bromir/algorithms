@@ -403,7 +403,7 @@ second-best chain and U, therefore gives a certified *lower* bound on MAPQ.
 | **A** | hash, q = 22 (GPU) | 6 exact parts, Theorems 1/1′/2/3/4, L | [P+T], production prototype |
 | **P** | A + window scan | mate anchors, ~12-base window parts (Theorem P) | [P+T] |
 | **F** | second index, q ≈ 15 hash *or* FM-index | greedy optimal parts (Theorem G), absent parts, t = 2 | new [H] |
-| **R** | FM-index counts | tie proofs (Theorem R), window collapse (Theorem R′), larger budgets | new [H] |
+| **R** | hash index (s = 1); FM-index optional | long rare/absent parts by anchor extension (Theorem G), copy sampling, tie proofs (Theorem R) | measured (§6.2); window collapse (Theorem R′) not yet needed |
 | **H** | F | one-mismatch probes (Lemma H), only where they lower U enough | new [S] |
 | **X** | FM-index (suffix trie) | budgeted branch and bound (R5), search-scheme ordering | new; complete [P] |
 
@@ -511,6 +511,59 @@ cluster-width limit. About 78 reads in 2 M, in tandem repeats, were then certifi
 but SL on the GPU: both valid proofs, but no longer byte-identical. A shared `BAND_E2E = 48`
 restores identity; SAM bodies and uncertified reads are byte-identical again on 2 M HG002 reads.
 
+### 6.2 Aim 2 result (measured, October 2026)
+
+**What was built.** Tier R ([`certa/include/certa/repeat.h`](certa/include/certa/repeat.h); command
+`certa repeat`). It implements Theorem G with the existing hash index (s = 1):
+- **Parts:** a part [s, b) grows until it occurs at most τ times, or not at all.
+- **Exact counts:** the occurrences of a long part are the hits of one anchor 22-mer inside it whose
+  exact match extends to both ends of the part. One pass over the anchor's hits gives the count for
+  every b.
+- **Absent parts:** a part containing a 22-mer that occurs nowhere (one read error or SNP is
+  enough) is absent and needs no enumeration.
+- **The interval:** the upper bound comes from Lemma L plus branch and bound over chains. The lower
+  bound comes from aligning the read to the copies that match it longest.
+- **Ties:** Theorem R finds a second exact copy of the winning reference window.
+
+**Tests.**
+- *Oracle:* on the test genome (50-copy element, tandem repeat, diverged copies, decoys) the oracle
+  checks 981 intervals per seed, on three seeds (ARM and x86). Every lo ≤ OPT ≤ hi; every exact
+  claim equals OPT; every claimed copy is verified string by string.
+- *Mutation testing:* all 6 injected faults are caught: a bound lowered by 3, a narrower band, a
+  looser skip test, an off-by-one in hit extension, rare 22-mers treated as absent, and an
+  overlapping copy counted as a tie.
+
+**The pre-registered cohort** (§7, Aim 2). These are the reads the default pipeline leaves
+uncertified while searching fewer parts than they have (|S| < P). They are followed through every
+tier: q = 22 large budget, q = 15 (Aim 1) and tier R. Raw output is in
+[`certa/bench/results/aim2_2026-10/`](certa/bench/results/aim2_2026-10/prereg_cohort.txt).
+
+| Cohort | HG002 | HG005 |
+|---|---|---|
+| repeat-limited reads (share of all reads) | 70,908 (3.55 %) | 79,767 (3.99 %) |
+| **exact or proven ambiguous**, tier R τ = 256 (0.5 ms/read) | **50.5 %** | **43.8 %** |
+| the same, tier R τ = 1,024, larger limits (1.0–1.2 ms/read) | 53.2 % | 46.0 % |
+| … of which near-perfect copies (BWA-MEM2 score ≥ 120) | 86.3 % | 82.9 % |
+| … of which lossy reads (score < 120, or unmapped) | 3.0 % | 1.0 % |
+
+Tier R's own share of the cohort, at τ = 256, is 14.8 points on HG002 and 13.0 on HG005. On both
+samples, tier R proves ties for about 5–7 % of the cohort: two loci with the same optimal score,
+hence MAPQ 0, proven.
+
+**Validity on real data.** BWA-MEM2's alignments of the same reads never score above tier R's upper
+bound, nor above the claimed optimum for exact reads: 0 violations among 180,804 residual reads.
+
+**Go / no-go: partial go.** The criterion ("half of the repeat-limited reads exact or proven ties")
+is met on HG002 and missed on HG005.
+- **Where it fails:** not the repeat mechanism. On near-perfect copies, the reads the tier was
+  designed for, it reaches 79–86 %.
+- **What remains:** 40–45 % of the cohort are *lossy* reads (BWA-MEM2 score < 120: chimeras,
+  low-complexity sequence, reads with many differences) that happen to fall in repeats. Exact
+  certification of these needs excluding full-length alignments with 30–100 points of loss. That
+  is beyond any exact-part certificate (Proposition A) and expensive for any exact method (§4.1).
+- **The honest output for them:** an interval. The next lever is not a repeat tier but the
+  interval contract itself (Aim 3): report [lo, hi] and a conservative MAPQ.
+
 **Speed budget** (CPU per read, paired-end, from §2.2). The exact tiers F, R, H and X replace the
 heuristic fallback and see only the 4.6 % uncertified reads:
 - ≲ 1.2 ms CPU per residual read keeps CERTA's total CPU at or below minibwa's;
@@ -525,7 +578,7 @@ such guarantee, so it runs under a per-read budget and returns an interval when 
 | Aim | Deliverable | Measurement | Go / no-go |
 |---|---|---|---|
 | **1. Ceiling** (no new data needed) | q = 15 second index; PMAX lifted to 16; tier F pass | exact share, occurrence counts, CPU per residual read on HG002, HG001, HG005 | Exact share +1 point at ≤ 1 ms CPU per residual read. **Done for HG002 and HG005: go (§6.1).** HG001 needs its FASTQs re-downloaded. |
-| **2. Repeats** | FM-index counts; Theorem R ties; Theorem R′ collapse | exact share and tie proofs among the 3.6 % repeat-limited reads; DP calls saved | Half of the repeat-limited reads exact or proven ties |
+| **2. Repeats** | FM-index counts; Theorem R ties; Theorem R′ collapse | exact share and tie proofs among the 3.6 % repeat-limited reads; DP calls saved | Half of the repeat-limited reads exact or proven ties. **Partial go (§6.2): 50.5–53.2 % on HG002, 43.8–46.0 % on HG005; 79–86 % of near-perfect copies.** Built with the hash index (no FM-index needed); window collapse (R′) not needed so far. |
 | **3. Interval output and MAPQ** | [ℓ, u], SUB interval, conservative MAPQ, SAM tags (`XL`, `XU`) | interval-width distribution; MAPQ calibration on GIAB stratified regions | Variant F1 non-inferior to the current pipeline with **no** heuristic fallback |
 | **4. Checker** | independent checker (Theorem V); sampling audit | check time per read; zero disagreements | Checker accepts 100 % of certificates; injected faults all detected |
 | **5. Theory** | written proofs of Lemma H, Theorems C, G, R, V; optional Lean 4 mechanization | — | Proofs reviewed; mutation tests for each bound |
