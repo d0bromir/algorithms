@@ -104,6 +104,35 @@ build-*/certa map grch38.cidx sample_R1.fastq.gz -k 2 --gpu \
 minibwa ... uncertified.fq > fallback.sam      # or bwa-mem2 mem ...
 ```
 
+### Interval output, no fallback (`--intervals`)
+
+```bash
+build-*/certa map grch38.cidx R1.fastq.gz R2.fastq.gz --gpu --intervals -o all.sam --stats stats.json
+```
+
+Every read goes to SAM; none is passed to another aligner.
+- **Uncertified reads** go through tier R (`include/certa/repeat.h`).
+- **Pairs with an uncertified mate** are placed from the alignments found,
+  plus an exhaustive search of each mate's proper-pair window
+  (`include/certa/interval.h`).
+
+Each record carries:
+
+| tag | meaning |
+|---|---|
+| `XL`, `XU` | the best local score over the whole reference (BWA-MEM scoring, both strands) lies in [XL, XU]; XL = XU means the alignment is proven optimal |
+| `XQ` | a certified lower bound of BWA-MEM's MAPQ formula, from a proven upper bound on the best score at any non-overlapping locus |
+| `XT` | the tier: `S0`/`S1`/`SR`/`SL`/`PR` certified; `R` exact by tier R; `IV` an interval; `MR` placed in the mate's window; `UN` unmapped |
+
+**MAPQ.** By default MAPQ is a point estimate: BWA-MEM's formula, using the
+best other locus found. A pair is trusted no more than its more confident
+mate. `--iv-mapq cons` writes XQ instead.
+
+**Tier R options:** `--iv-tau 256`, `--iv-margin 20`, `--iv-chains 8`,
+`--iv-fallback 8`.
+
+Results: [EXACT_ALIGNMENT_PROPOSAL.md §6.3](../EXACT_ALIGNMENT_PROPOSAL.md).
+
 `stats.json` records the certified fraction by tier, why the other reads
 were not certified (radius < 0 = repetitive, not found = more than R edits
 or no locus, …), and a timing breakdown (index load, GPU upload,

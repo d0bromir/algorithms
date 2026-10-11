@@ -14,17 +14,25 @@
 // Tier SL (certified local alignment) is checked against a second oracle:
 // the best affine local score (bwa-mem defaults, clip penalty per clipped
 // end) over the entire reference, both strands, by full Gotoh DP.
+// Interval output (certa/interval.h): every [XL, XU] must contain that
+// optimum, and every SUB bound must hold against the best score at a locus
+// not overlapping the reported one (the same DP on the other strand and on
+// the reference left and right of the reported interval).
 #include <algorithm>
 #include <climits>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <memory>
 #include <random>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "index.h"
+#include "certa/interval.h"
 #include "certa/pair.h"
 #include "certa/repeat.h"
 #include "mapper.h"
@@ -108,6 +116,46 @@ int oracle_local(const std::vector<uint8_t>& ref, const uint8_t* fwd, int L) {
     }
   }
   return best;
+}
+
+// Best affine local score of `rd` (one orientation) against ref[j0, j1),
+// the same recurrences as oracle_local; kNoSub-like -2^20 if the range is empty.
+int local_one(const std::vector<uint8_t>& ref, const uint8_t* rd, int L, int64_t j0, int64_t j1) {
+  const int NEG = -(1 << 20);
+  std::vector<int> hp(L + 1, NEG), hc(L + 1), yp(L + 1, NEG), yc(L + 1);
+  hp[0] = 0;
+  int best = NEG;
+  for (int64_t j = std::max<int64_t>(0, j0); j < j1 && j < static_cast<int64_t>(ref.size()); ++j) {
+    hc[0] = 0;
+    yc[0] = NEG;
+    int x = NEG;
+    for (int i = 1; i <= L; ++i) {
+      const int start = i == 1 ? 0 : -kClip;
+      const int m = std::max(hp[i - 1], start) + (sub_cost(rd[i - 1], ref[j]) ? -kMismatch : kMatch);
+      x = i > 1 ? std::max(hc[i - 1] - kGapOpen - kGapExt, x - kGapExt) : NEG;
+      yc[i] = std::max(hp[i] - kGapOpen - kGapExt, yp[i] - kGapExt);
+      hc[i] = std::max(m, std::max(x, yc[i]));
+      best = std::max(best, m - (i < L ? kClip : 0));
+    }
+    std::swap(hp, hc);
+    std::swap(yp, yc);
+  }
+  return best;
+}
+
+// SUB: the best local score at a locus not overlapping [p, p + span) on
+// `strand` (anything on the other strand; on the same strand, alignments
+// lying wholly left or right of the interval).
+int oracle_sub(const std::vector<uint8_t>& ref, const std::vector<uint8_t>& fwd, int strand, int64_t p,
+               int64_t span) {
+  const int L = static_cast<int>(fwd.size());
+  std::vector<uint8_t> rc(L);
+  for (int i = 0; i < L; ++i) rc[i] = fwd[L - 1 - i] < 4 ? 3 - fwd[L - 1 - i] : 4;
+  const uint8_t* same = strand ? rc.data() : fwd.data();
+  const uint8_t* other = strand ? fwd.data() : rc.data();
+  const int64_t n = static_cast<int64_t>(ref.size());
+  return std::max(local_one(ref, other, L, 0, n),
+                  std::max(local_one(ref, same, L, 0, p), local_one(ref, same, L, p + span, n)));
 }
 
 // For every reference position j: the best affine local score of `rd`
@@ -373,6 +421,45 @@ int main(int argc, char** argv) {
       decoy_pairs.push_back({m1, rcv(fwd2)});
     }
   }
+  // Adversarial reads for the interval bounds (Aim 3), planted before the
+  // index is built:
+  //  (c) Lemma E tight: the read has 2 mismatches at its true locus (chr2
+  //      1000-4000), and a decoy (chr2 34000-39850) equals the read except
+  //      for its last 3 bases. The decoy's clipped alignment scores L - 8,
+  //      above the true locus's L - 10, yet lies 3 edits away: outside
+  //      radius 2, so only edit_bound(L, 3) = L - 8 covers it;
+  //  (d) the own chain: a tandem array (16 copies of a 20-base unit, a
+  //      period below the chain pad) in unique sequence (chr1 77000-83300).
+  //      The read covers one end of the array (145 bases) and 5 flank
+  //      bases; the copy of its tandem part 160 bases inside the array lies
+  //      in the same chain, does not overlap the read's alignment, and
+  //      scores L - 10 (above lo - 20, so tier R's SUB search must find
+  //      it). Even n: the array's right end (copy to the left); odd n: its
+  //      left end (copy to the right).
+  std::vector<std::vector<uint8_t>> bound_reads;
+  {
+    auto& R = ref.seq.owned;
+    const int L = 150;
+    for (int n = 0; n < 20; ++n) {
+      const int64_t a = static_cast<int64_t>(ref.offsets[1]) + 1000 + static_cast<int64_t>(g() % 3000);
+      std::vector<uint8_t> s(R.begin() + a, R.begin() + a + L);
+      for (int y = 0; y < 2; ++y) {
+        const int x = 10 + 60 * y + static_cast<int>(g() % 40);
+        s[x] = static_cast<uint8_t>((s[x] + 1 + g() % 3) % 4);
+      }
+      std::vector<uint8_t> d = s;
+      for (int x = L - 3; x < L; ++x) d[x] = static_cast<uint8_t>((s[x] + 1 + g() % 3) % 4);
+      std::copy(d.begin(), d.end(), R.begin() + static_cast<int64_t>(ref.offsets[1]) + 34000 + 300 * n);
+      bound_reads.push_back(s);
+    }
+    for (int n = 0; n < 10; ++n) {
+      const int64_t at = static_cast<int64_t>(ref.offsets[0]) + 77000 + 700 * n;
+      const std::vector<uint8_t> unit = random_seq(g, 20);
+      for (int c = 0; c < 16; ++c) std::copy(unit.begin(), unit.end(), R.begin() + at + 20 * c);
+      const int64_t from = n % 2 ? at - 5 : at + 175;
+      bound_reads.push_back(std::vector<uint8_t>(R.begin() + from, R.begin() + from + L));
+    }
+  }
   Index ix = Index::build(ref, 14, 4, 4);
   const IndexView view = ix.view(ref);
   // Round trip through the on-disk format: with q = 14 the file stores only
@@ -467,6 +554,20 @@ int main(int argc, char** argv) {
     reads.push_back({s, -1});
   }
 
+  // The planted interval-bound reads, on both strands; always checked.
+  const size_t bounds_first = reads.size();
+  for (const auto& b : bound_reads) {
+    std::vector<uint8_t> s = b;
+    if (g() % 2) {
+      const int L = static_cast<int>(s.size());
+      std::vector<uint8_t> rc(L);
+      for (int i = 0; i < L; ++i) rc[i] = s[L - 1 - i] < 4 ? 3 - s[L - 1 - i] : 4;
+      s.swap(rc);
+    }
+    reads.push_back({s, -1});
+  }
+  auto planted_bound = [&](size_t i) { return i >= bounds_first; };
+
   std::fprintf(stderr, "computing oracle for %zu reads over %zu bases...\n", reads.size(), ref.seq.size());
   std::vector<std::vector<Hit>> truth;
   for (auto& r : reads) truth.push_back(oracle(ref.seq.owned, r.seq.data(), static_cast<int>(r.seq.size()), KMAX));
@@ -490,6 +591,43 @@ int main(int argc, char** argv) {
                             {5, 256, 0, 0, 8, 1, 2, 1}, {5, 4096, 0, 0, 0, 1, 3, 1}};
   std::vector<int> local_truth(reads.size(), INT32_MIN);
   int local_checked = 0;
+  // Interval output of certified reads: [XL, XU] and SUB_hi against the
+  // oracles, for every third read (SUB oracles cached by reported locus).
+  std::map<std::tuple<size_t, int, int64_t, int64_t>, int> sub_cache;
+  int bounds_checked = 0, sub_checked = 0, sub_nontrivial = 0;
+  auto oracle_opt = [&](size_t i) {
+    if (local_truth[i] == INT32_MIN) {
+      local_truth[i] = oracle_local(ref.seq.owned, reads[i].seq.data(), static_cast<int>(reads[i].seq.size()));
+      ++local_checked;
+    }
+    return local_truth[i];
+  };
+  auto oracle_sub_at = [&](size_t i, const Result& r) {
+    const int64_t span = ref_span_of(r);
+    const auto key = std::make_tuple(i, static_cast<int>(r.strand), r.ref_pos, span);
+    auto it = sub_cache.find(key);
+    if (it != sub_cache.end()) return it->second;
+    const int v = oracle_sub(ref.seq.owned, reads[i].seq, r.strand, r.ref_pos, span);
+    sub_cache[key] = v;
+    return v;
+  };
+  auto check_certified_bounds = [&](size_t i, const Result& r, const Params& p) {
+    const int L = static_cast<int>(reads[i].seq.size());
+    int xl, xu, sh;
+    certified_bounds(r, L, &xl, &xu, &sh);
+    const int opt = oracle_opt(i);
+    ++bounds_checked;
+    CHECK(xl <= opt && opt <= xu, "k=%d budget=%d local=%d read %zu tier %d: OPT %d outside [%d, %d]", p.k,
+          p.budget, p.local, i, r.tier, opt, xl, xu);
+    CHECK(sh != kNoSub, "read %zu tier %d: certified without a SUB bound", i, r.tier);
+    if (sh >= opt) return;  // SUB <= OPT: nothing to check
+    ++sub_nontrivial;
+    if (i % 6 != 0 && !planted_bound(i)) return;  // oracle cost: half of them
+    const int sub = oracle_sub_at(i, r);
+    ++sub_checked;
+    CHECK(sub <= sh, "k=%d budget=%d local=%d read %zu tier %d: SUB %d above SUB_hi %d (score %d, d1 %d d2 %d R %d)",
+          p.k, p.budget, p.local, i, r.tier, sub, sh, r.score, r.d1, r.d2, r.radius);
+  };
   for (const Params& p : configs) {
     std::vector<Result> res, res1, resrev, resm;
     map_cpu(view, p, batch, res, 4);
@@ -539,6 +677,7 @@ int main(int argc, char** argv) {
         continue;
       }
       ++certified;
+      if (i % 3 == 0 || planted_bound(i)) check_certified_bounds(i, r, p);
       if (r.tier == kTierSL) {  // the certified maximum local score
         ++sl;
         CHECK(rescore(view, r, reads[i].seq) == r.nm, "SL read %zu: CIGAR rescores to %d edits, NM %d",
@@ -591,6 +730,8 @@ int main(int argc, char** argv) {
                  reasons[kRadiusNegative], reasons[kNotFound], reasons[kClusterTooWide]);
   }
   std::fprintf(stderr, "SL scores checked against the local oracle for %d reads\n", local_checked);
+  std::fprintf(stderr, "certified [XL, XU] checked %d times; SUB bounds below OPT %d, checked against the SUB oracle %d\n",
+               bounds_checked, sub_nontrivial, sub_checked);
 
   // ---- band_score must equal affine_align's score on any band and start range.
   {
@@ -715,19 +856,27 @@ int main(int argc, char** argv) {
       for (auto& c : v) c = c < 4 ? static_cast<uint8_t>(3 - c) : c;
       return v;
     };
-    RepeatParams cfgs[3];
+    RepeatParams cfgs[5];
     cfgs[1].tau = 2;
     cfgs[1].cmax = 64;
     cfgs[2].tau = 64;
     cfgs[2].samples = 2;
+    for (int c = 3; c < 5; ++c) {  // interval mode: SUB bounds, extra chains, satellite fallback
+      cfgs[c].tau = 256;
+      cfgs[c].sub_margin = 20;
+      cfgs[c].fallback_samples = 8;
+      cfgs[c].lb_chains = 8;
+    }
+    cfgs[4].cmax = 8;  // most anchors unaffordable: the fallback samples
     std::unique_ptr<Workspace> ws(new Workspace);
     RepeatScratch sc;
     int checked = 0;
-    for (int c = 0; c < 3; ++c) {
+    int sub_r_checked = 0;
+    for (int c = 0; c < 5; ++c) {
       int exact = 0, exact_rep = 0, ties = 0;
       for (size_t i = 0; i < reads.size(); ++i) {
-        const bool rep = i >= repeat_first;
-        if (!rep && i % 3 != 0) continue;  // oracle cost: all repeat reads, a third of the others
+        const bool rep = i >= repeat_first && i < bounds_first;
+        if (!rep && !planted_bound(i) && i % 3 != 0) continue;  // oracle cost: all repeat and planted reads, a third of the others
         const auto& rd = reads[i].seq;
         const int L = static_cast<int>(rd.size());
         const RepeatOut o = repeat_tier(view1, cfgs[c], rd.data(), L, *ws, sc);
@@ -739,6 +888,19 @@ int main(int argc, char** argv) {
         CHECK(!o.exact || o.lo == opt, "tier R cfg %d read %zu: exact %d but OPT %d", c, i, o.lo, opt);
         CHECK(rescore_affine(view1, o.aln, rd) == o.lo, "tier R read %zu: CIGAR scores %d, lo %d", i,
               rescore_affine(view1, o.aln, rd), o.lo);
+        CHECK(o.has_aln, "tier R read %zu: lo %d without an alignment", i, o.lo);
+        // SUB interval: sub_lo <= SUB <= sub_hi, sub_hi <= hi.
+        CHECK(o.sub_hi <= o.hi && (o.sub_lo == kNoSub || o.sub_lo <= o.sub_hi),
+              "tier R cfg %d read %zu: SUB interval [%d, %d], hi %d", c, i, o.sub_lo, o.sub_hi, o.hi);
+        if (o.has_aln && (o.sub_hi < opt || o.sub_lo != kNoSub) &&
+            (planted_bound(i) || ((c == 3 || c == 4) && i % 2 == 0))) {
+          const int sub = oracle_sub(R, rd, o.aln.strand, o.aln.ref_pos, ref_span_of(o.aln));
+          ++sub_r_checked;
+          CHECK(sub <= o.sub_hi, "tier R cfg %d read %zu: SUB %d above sub_hi %d (lo %d, exact %d)", c, i, sub,
+                o.sub_hi, o.lo, o.exact);
+          CHECK(o.sub_lo == kNoSub || o.sub_lo <= sub, "tier R cfg %d read %zu: sub_lo %d above SUB %d", c, i,
+                o.sub_lo, sub);
+        }
         exact += o.exact;
         exact_rep += o.exact && rep;
         if (o.copies >= 2) {
@@ -756,9 +918,83 @@ int main(int argc, char** argv) {
         }
       }
       std::fprintf(stderr, "tier R cfg %d (tau %d, cmax %d): exact %d (repeat reads %d of %zu), copies>=2 %d\n", c,
-                   cfgs[c].tau, cfgs[c].cmax, exact, exact_rep, reads.size() - repeat_first, ties);
+                   cfgs[c].tau, cfgs[c].cmax, exact, exact_rep, bounds_first - repeat_first, ties);
     }
-    std::fprintf(stderr, "tier R intervals checked against the local oracle: %d\n", checked);
+    std::fprintf(stderr, "tier R intervals checked against the local oracle: %d; SUB intervals: %d\n", checked,
+                 sub_r_checked);
+
+    // ---- Interval-mode placement of pairs (certa/interval.h): every record
+    // rescores to its AS, [XL, XU] contains the mate's optimum, a proper pair
+    // is proper, XQ <= MAPQ.
+    {
+      const int D = 500, Lp = 150;
+      RepeatParams ip;
+      ip.tau = 256;
+      ip.sub_margin = 20;
+      ip.fallback_samples = 8;
+      ip.lb_chains = 8;
+      PairScratch psc;
+      int placed = 0, proper_n = 0, rescued = 0;
+      auto contig_of = [&](int64_t pos) { return ref.contig_of(pos); };
+      for (int n = 0; n < 60; ++n) {
+        // Fragments from unique sequence, the 50-copy element and diverged
+        // copies; mate 2 sometimes heavily mutated (only rescue can place it).
+        const int F = Lp + static_cast<int>(g() % (D - Lp));
+        int64_t f;
+        switch (n % 3) {
+          case 0: f = static_cast<int64_t>(ref.offsets[g() % 2]) + 1000 + static_cast<int64_t>(g() % 3000); break;
+          case 1: f = static_cast<int64_t>(ref.offsets[0]) + 60200 + 350 * static_cast<int64_t>(g() % 40) -
+                      static_cast<int64_t>(F) + 100 + static_cast<int64_t>(g() % 150); break;
+          default: f = static_cast<int64_t>(ref.offsets[0]) + 10000 + 20000 * static_cast<int64_t>(g() % 3) +
+                       static_cast<int64_t>(g() % 1500); break;
+        }
+        std::vector<uint8_t> a(R.begin() + f, R.begin() + f + Lp + 10);
+        std::vector<uint8_t> b(R.begin() + f + F - Lp, R.begin() + f + F + 10);
+        mutate(g, a, static_cast<int>(g() % 4));
+        mutate(g, b, n % 4 == 3 ? 12 + static_cast<int>(g() % 8) : static_cast<int>(g() % 4));
+        a.resize(Lp, 0);
+        b.resize(Lp, 0);
+        b = rcs(b);
+        if (g() % 2) std::swap(a, b);
+        const std::vector<uint8_t>* m[2] = {&a, &b};
+        RepeatOut iv[2];
+        Placement se[2], out[2];
+        const RepeatOut* ivp[2] = {&iv[0], &iv[1]};
+        const uint8_t* cp[2] = {a.data(), b.data()};
+        const int Ls[2] = {Lp, Lp};
+        for (int x = 0; x < 2; ++x) {
+          iv[x] = repeat_tier(view1, ip, m[x]->data(), Lp, *ws, sc);
+          Result none{};
+          se[x] = place_single(none, 0, &iv[x], Lp);
+        }
+        const bool proper = place_pair(view1, D, 12, se, ivp, cp, Ls, psc, contig_of, out);
+        proper_n += proper;
+        for (int x = 0; x < 2; ++x) {
+          const Placement& o = out[x];
+          const int opt = local_one(R, m[x]->data(), Lp, 0, static_cast<int64_t>(R.size()));
+          const std::vector<uint8_t> rcm = rcs(*m[x]);
+          const int opt2 = std::max(opt, local_one(R, rcm.data(), Lp, 0, static_cast<int64_t>(R.size())));
+          CHECK(o.xu >= opt2 && (o.xl == kNoSub || o.xl <= opt2), "pair %d mate %d: OPT %d outside [%d, %d]", n, x,
+                opt2, o.xl, o.xu);
+          CHECK(o.xq <= o.mapq, "pair %d mate %d: XQ %d above MAPQ %d", n, x, o.xq, o.mapq);
+          if (!o.mapped) continue;
+          ++placed;
+          rescued += o.r.tier == kTierMR;
+          CHECK(rescore_affine(view1, o.r, *m[x]) == o.r.score, "pair %d mate %d: CIGAR scores %d, AS %d", n, x,
+                rescore_affine(view1, o.r, *m[x]), o.r.score);
+          CHECK(o.xl != kNoSub && o.r.score <= o.xl, "pair %d mate %d: AS %d above XL %d", n, x, o.r.score, o.xl);
+        }
+        if (proper) {
+          const Result& fw = out[0].r.strand ? out[1].r : out[0].r;
+          const Result& rv = out[0].r.strand ? out[0].r : out[1].r;
+          CHECK(out[0].mapped && out[1].mapped && out[0].r.strand != out[1].r.strand && rv.ref_pos >= fw.ref_pos &&
+                    rv.ref_pos - fw.ref_pos <= D,
+                "pair %d: claimed proper but not", n);
+        }
+      }
+      std::fprintf(stderr, "interval pairs: %d records placed (%d by the pair window), %d proper pairs of 60\n",
+                   placed, rescued, proper_n);
+    }
   }
   if (failures) {
     std::fprintf(stderr, "%d check(s) FAILED\n", failures);

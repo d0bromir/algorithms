@@ -2,7 +2,8 @@
 # Paired-end GIAB accuracy for one sample (chr20 vs GIAB v4.2.1):
 #   bench/sample_accuracy.sh SAMPLE R1.fq.gz R2.fq.gz STEP
 # STEP: prep (chr20 truth), certa (CERTA PE + minibwa paired fallback),
-#       bwa (BWA-MEM2 PE), eval-certa, eval-bwa.
+#       certa-iv (CERTA PE --intervals, no fallback), bwa (BWA-MEM2 PE),
+#       eval-certa, eval-iv, eval-iv-cons, eval-bwa.
 # Works in ~/certa-bench/acc_SAMPLE; truth from ~/certa-data/giab.
 set -euo pipefail
 S=$1; R1=$2; R2=$3; STEP=$4
@@ -46,6 +47,27 @@ certa)
   samtools index certa.chr20.bam
   rm -f merged.bam u1 u2 r1 r2
   ;;
+certa-iv)
+  # Interval output (Aim 3): no fallback, every read from CERTA. iv: MAPQ as
+  # point estimate; iv-cons: the same alignments with MAPQ = XQ, the
+  # certified lower bound.
+  rm -f r1 r2; mkfifo r1 r2
+  start=$(date +%s)
+  pigz -dc -p 4 $R1 > r1 &
+  pigz -dc -p 4 $R2 > r2 &
+  $C map $B/idx/grch38.s1v3.cidx r1 r2 -t ${THREADS:-64} --gpu --device 1 --intervals --stats iv.json 2> iv.log \
+    | awk -f $B/acc2/chr20.awk | samtools sort -@ 4 -m 2G -o iv.only.chr20.bam -
+  wait
+  echo "CERTA intervals pipeline wall $(( $(date +%s) - start )) s"
+  grep -E "reads: cert|pairs|intervals|time:" iv.log
+  samtools addreplacerg -r "$RG" -o iv.chr20.bam iv.only.chr20.bam
+  samtools index iv.chr20.bam
+  samtools view -h -@ 4 iv.chr20.bam \
+    | awk 'BEGIN { FS = OFS = "\t" } /^@/ { print; next } { for (i = 12; i <= NF; ++i) if ($i ~ /^XQ:i:/) $5 = substr($i, 6); print }' \
+    | samtools view -b -@ 4 -o iv-cons.chr20.bam -
+  samtools index iv-cons.chr20.bam
+  rm -f iv.only.chr20.bam r1 r2
+  ;;
 bwa)
   start=$(date +%s)
   bwa-mem2 mem -t 64 -R "$RG" $B/idx/bwa-mem2 $R1 $R2 2> bwa.log \
@@ -53,7 +75,7 @@ bwa)
   echo "BWA-MEM2 PE pipeline wall $(( $(date +%s) - start )) s"
   samtools index bwa.chr20.bam
   ;;
-eval-certa|eval-bwa)
+eval-certa|eval-iv|eval-iv-cons|eval-bwa)
   L=${STEP#eval-}
   gatk --java-options "-Xmx16g" HaplotypeCaller -R $B/idx/ref.fa -I $L.chr20.bam -L 20 -O $L.gatk.vcf.gz \
     --native-pair-hmm-threads 16 > $L.gatk.log 2>&1

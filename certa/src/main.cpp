@@ -7,6 +7,9 @@
 //
 // Certified reads are written to SAM. All other reads are written unchanged
 // to the uncertified FASTQ, for a full aligner (minibwa, BWA-MEM2, ...).
+// With --intervals every read is written to SAM (certa/interval.h): the best
+// alignment found, the interval [XL, XU] that contains its optimum, and XQ,
+// a certified lower bound of its MAPQ.
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -21,6 +24,7 @@
 #include <thread>
 #include <vector>
 
+#include "certa/interval.h"
 #include "certa/pair.h"
 #include "certa/repeat.h"
 #include "index.h"
@@ -49,6 +53,27 @@ struct Stats {
   uint64_t pr = 0;                      // reads certified by the pair certificate (PR)
   uint64_t pairs = 0, pairs_cert = 0, pairs_proper = 0;
   uint64_t cands = 0;                   // candidate diagonals enumerated (last pass per read)
+  // Interval mode, per record: placed by tier R exact / as an interval / by
+  // the pair window (MR) / unmapped (of which proven unalignable, XU < T);
+  // XU - XL of mapped records: 0, 1-5, 6-10, 11-25, 26-50, > 50.
+  uint64_t iv_r = 0, iv_iv = 0, iv_mr = 0, iv_un = 0, iv_unalignable = 0, iv_point = 0, iv_proper = 0;
+  uint64_t iv_width[6] = {};
+  uint64_t iv_mapq20 = 0, iv_xq20 = 0;
+  void count_iv(const Placement& p) {
+    if (!p.mapped) {
+      ++iv_un;
+      iv_unalignable += p.xu < kMinScore;
+      return;
+    }
+    iv_r += p.r.tier == kTierR;
+    iv_iv += p.r.tier == kTierIV;
+    iv_mr += p.r.tier == kTierMR;
+    const int w = p.xl == kNoSub ? BIG : p.xu - p.xl;
+    ++iv_width[w == 0 ? 0 : w <= 5 ? 1 : w <= 10 ? 2 : w <= 25 ? 3 : w <= 50 ? 4 : 5];
+    iv_point += w == 0;
+    iv_mapq20 += p.mapq >= 20;
+    iv_xq20 += p.xq >= 20;
+  }
   void add(const Stats& o) {
     reads += o.reads; bases += o.bases; certified += o.certified;
     s0 += o.s0; s1 += o.s1; sr += o.sr; sl += o.sl; s2 += o.s2; ties += o.ties;
@@ -58,6 +83,9 @@ struct Stats {
     for (int i = 0; i <= PMAX; ++i) unc_by_used[i] += o.unc_by_used[i];
     cands += o.cands;
     pr += o.pr; pairs += o.pairs; pairs_cert += o.pairs_cert; pairs_proper += o.pairs_proper;
+    iv_r += o.iv_r; iv_iv += o.iv_iv; iv_mr += o.iv_mr; iv_un += o.iv_un; iv_unalignable += o.iv_unalignable;
+    iv_point += o.iv_point; iv_proper += o.iv_proper; iv_mapq20 += o.iv_mapq20; iv_xq20 += o.iv_xq20;
+    for (int i = 0; i < 6; ++i) iv_width[i] += o.iv_width[i];
   }
 };
 
@@ -95,10 +123,7 @@ int mapq_of(const Result& r, int L) {
     int sub = r.sub_score != kNoSub ? r.sub_score : 19;
     if (sub < 19) sub = 19;
     if (sub >= r.score) return 0;
-    const double l = L, identity = 1.0 - (l * kMatch - r.score) / (kMatch + kMismatch) / l;
-    double t = l < 50 ? 1.0 : std::log(50.0) / std::log(l);
-    t *= identity * identity;
-    int q = static_cast<int>(6.02 * (r.score - sub) / kMatch * t * t + 0.499);
+    int q = mapq_se_raw(r.score, sub, L);
     // bwa subtracts 4.343 ln(sub_n + 1) for near-optimal alternative hits;
     // lower bound: one when the second locus is within one edit of the best.
     const int second = r.d2 >= 0 ? r.d2 : r.d2x;
@@ -138,6 +163,9 @@ void check_contig(Result& r, const Reference& ref) {
   }
 }
 
+// --iv-mapq cons: in interval mode MAPQ is the certified lower bound XQ.
+bool g_mapq_cons = false;
+
 // --unc-tags: uncertified reads carry a FASTQ comment with the parts the read
 // was split into and the parts searched per strand (|S|), for diagnostics.
 bool g_unc_tags = false;
@@ -156,7 +184,7 @@ struct MateInfo {
 };
 
 void sam_line(const Result& r, const FastqRecord& rec, const Reference& ref, int mapq,
-              const MateInfo& mi, std::string& sam);
+              const MateInfo& mi, std::string& sam, const char* extra = nullptr);
 
 // Appends a SAM line (certified) or a FASTQ record (fallback). Returns the
 // final reason code after the host-side contig check.
@@ -180,7 +208,7 @@ int emit(const Result& r0, const FastqRecord& rec, const Reference& ref,
 }
 
 void sam_line(const Result& r, const FastqRecord& rec, const Reference& ref, int mapq,
-              const MateInfo& mi, std::string& sam) {
+              const MateInfo& mi, std::string& sam, const char* extra) {
   int c = ref.contig_of(r.ref_pos);
   char buf[96];
   sam += rec.name;
@@ -204,7 +232,7 @@ void sam_line(const Result& r, const FastqRecord& rec, const Reference& ref, int
   } else {
     sam += rec.seq; sam += '\t'; sam += rec.qual;
   }
-  static const char* const kTierNames[] = {"S0", "S1", "SR", "S2", "SL", "PR"};
+  static const char* const kTierNames[] = {"S0", "S1", "SR", "S2", "SL", "PR", "R", "IV", "MR"};
   // NM: edits in the reported (affine, possibly clipped) alignment.
   // XE: the certified minimum end-to-end edit distance over the reference
   // (-1 for SL). SL: AS (clip penalties included) is the certified maximum
@@ -217,7 +245,39 @@ void sam_line(const Result& r, const FastqRecord& rec, const Reference& ref, int
   // on every other proper pair.
   if (r.tier == kTierPR) std::snprintf(tags + n, sizeof tags - n, "\tXF:i:%d\tXS:i:%d", r.floor, r.sub_score);
   sam += tags;
+  if (extra) sam += extra;
   sam += '\n';
+}
+
+// Interval mode: the tags every record carries. XL/XU: OPT in [XL, XU]
+// (XL absent when no alignment was found); XQ: certified MAPQ lower bound.
+void interval_tags(const Placement& p, char* buf, size_t n) {
+  int k = 0;
+  if (p.xl != kNoSub) k = std::snprintf(buf, n, "\tXL:i:%d", p.xl);
+  std::snprintf(buf + k, n - k, "\tXU:i:%d\tXQ:i:%d", p.xu, p.xq);
+}
+
+// An unmapped record (SAM: placed at the mate's position when it has one).
+void sam_unmapped(const FastqRecord& rec, const Reference& ref, const MateInfo& mi, int64_t pos, int contig,
+                  const char* extra, std::string& sam) {
+  char buf[96];
+  sam += rec.name;
+  std::snprintf(buf, sizeof buf, "\t%d\t%s\t%lld\t0\t*\t%s\t%lld\t0\t", mi.flag | 4,
+                contig >= 0 ? ref.names[contig].c_str() : "*",
+                static_cast<long long>(contig >= 0 ? pos - ref.offsets[contig] + 1 : 0),
+                contig >= 0 ? "=" : "*", static_cast<long long>(contig >= 0 ? pos - ref.offsets[contig] + 1 : 0));
+  sam += buf;
+  sam += rec.seq;
+  sam += '\t';
+  sam += rec.qual;
+  sam += "\tXT:Z:UN";
+  if (extra) sam += extra;
+  sam += '\n';
+}
+
+bool within_contig(const Result& r, const Reference& ref) {
+  const int c = ref.contig_of(r.ref_pos);
+  return c >= 0 && ref.contig_of(r.ref_pos + ref_span(r) - 1) == c;
 }
 
 // Proper pair (as certified): one contig, opposite strands, and the reverse
@@ -243,12 +303,39 @@ int mapq_pair(const Result& r, const Result& mate, const Result& se, int L) {
   return q_se;
 }
 
+// Interval mode, both mates certified: the single-end bounds of mate r (its
+// single-end result se for a PR mate) and XQ. For a PR mate, XQ uses the
+// certified pair margin R1 - S2 the way mapq_pair uses it.
+Placement certified_placement(const Result& r, const Result& mate, const Result& se, int L, int mapq) {
+  Placement o;
+  o.r = r;
+  o.mapped = true;
+  o.mapq = mapq;
+  if (r.tier != kTierPR) {
+    certified_bounds(r, L, &o.xl, &o.xu, &o.sub_hi);
+    o.xq = std::min(mapq, mapq_se(r.score, o.sub_hi, L));
+    return o;
+  }
+  int q_se = 0;
+  o.xl = r.score;
+  o.xu = L * kMatch;
+  if (se.certified == 1) {
+    int sh;
+    certified_bounds(se, L, &o.xl, &o.xu, &sh);
+    o.xl = std::max<int>(o.xl, r.score);
+    q_se = std::min(mapq_of(se, L), mapq_se(se.score, sh, L));
+  }
+  const int q_pe = r.n_best == 1 ? mapq_margin(r.score + mate.score - r.sub_score) : 0;
+  o.xq = std::min(mapq, std::max(q_se, std::min(q_pe, q_se + 40)));
+  return o;
+}
+
 // Both mates as SAM lines if both are certified, else to the fallback.
 // Writes each mate's final reason to reason[0..1]. With `single` (not null),
 // a pair with one certified mate sends only the other mate, single-end, there.
 void emit_pair(const Result* r0, const Result* se, const FastqRecord* rec, const Reference& ref,
                int max_dist, std::string& sam, std::string& fq1, std::string& fq2, std::string* single,
-               int* reason) {
+               int* reason, bool tags = false, Placement* placed = nullptr) {
   Result r[2] = {r0[0], r0[1]};
   for (int x = 0; x < 2; ++x) {
     if (r[x].certified == 2) { r[x].certified = 0; r[x].reason = kNotFound; }
@@ -304,8 +391,82 @@ void emit_pair(const Result* r0, const Result* se, const FastqRecord* rec, const
       const bool left = a.ref_pos < b.ref_pos || (a.ref_pos == b.ref_pos && x == 0);
       mi.tlen = left ? hi - lo : -(hi - lo);
     }
-    sam_line(a, rec[x], ref, mapq_pair(a, b, se[x], static_cast<int>(rec[x].seq.size())), mi, sam);
+    const int L = static_cast<int>(rec[x].seq.size());
+    const int mapq = mapq_pair(a, b, se[x], L);
+    if (tags) {
+      Placement pl = certified_placement(a, b, se[x], L, mapq);
+      if (g_mapq_cons) pl.mapq = pl.xq;
+      char t[64];
+      interval_tags(pl, t, sizeof t);
+      sam_line(a, rec[x], ref, pl.mapq, mi, sam, t);
+      if (placed) placed[x] = pl;
+    } else {
+      sam_line(a, rec[x], ref, mapq, mi, sam);
+    }
     reason[x] = kOk;
+  }
+}
+
+// Interval mode, single-end.
+void emit_interval(const Result& r0, const RepeatOut* iv, const FastqRecord& rec, const Reference& ref,
+                   std::string& sam, Placement* out) {
+  Result r = r0;
+  check_contig(r, ref);
+  const int L = static_cast<int>(rec.seq.size());
+  Placement p = place_single(r, r.certified == 1 ? mapq_of(r, L) : 0, iv, L);
+  if (p.mapped && !within_contig(p.r, ref)) p.mapped = false;
+  if (g_mapq_cons) p.mapq = p.xq;
+  char t[64];
+  interval_tags(p, t, sizeof t);
+  if (p.mapped) sam_line(p.r, rec, ref, p.mapq, MateInfo(), sam, t);
+  else sam_unmapped(rec, ref, MateInfo(), 0, -1, t, sam);
+  *out = p;
+}
+
+// Interval mode, a pair with at least one uncertified mate (certa/interval.h).
+void emit_pair_interval(const Result* r0, const RepeatOut* const* iv, const uint8_t* const* codes,
+                        const FastqRecord* rec, const Reference& ref, const IndexView& ix, int max_dist,
+                        PairScratch& sc, std::string& sam, Placement* out, bool* proper) {
+  Placement se[2];
+  int L[2];
+  for (int x = 0; x < 2; ++x) {
+    Result r = r0[x];
+    check_contig(r, ref);
+    L[x] = static_cast<int>(rec[x].seq.size());
+    se[x] = place_single(r, r.certified == 1 ? mapq_of(r, L[x]) : 0, iv[x], L[x]);
+    if (se[x].mapped && !within_contig(se[x].r, ref)) se[x].mapped = false;
+  }
+  auto contig_of = [&](int64_t pos) { return ref.contig_of(pos); };
+  *proper = place_pair(ix, max_dist, 12, se, iv, codes, L, sc, contig_of, out);
+  if (g_mapq_cons)
+    for (int x = 0; x < 2; ++x) out[x].mapq = out[x].xq;
+  const Placement* P = out;
+  const int c0 = P[0].mapped ? ref.contig_of(P[0].r.ref_pos) : -1;
+  const int c1 = P[1].mapped ? ref.contig_of(P[1].r.ref_pos) : -1;
+  for (int x = 0; x < 2; ++x) {
+    const Placement& a = P[x];
+    const Placement& b = P[1 - x];
+    const int ca = x == 0 ? c0 : c1, cb = x == 0 ? c1 : c0;
+    MateInfo mi;
+    mi.flag = 1 | (*proper ? 2 : 0) | (x == 0 ? 64 : 128) | (b.mapped ? (b.r.strand ? 32 : 0) : 8);
+    if (b.mapped) {
+      mi.rnext = a.mapped && ca == cb ? "=" : ref.names[cb];
+      mi.pnext = b.r.ref_pos - static_cast<int64_t>(ref.offsets[cb]) + 1;
+      if (!a.mapped) mi.rnext = "=";
+    } else if (a.mapped) {
+      mi.rnext = "=";
+      mi.pnext = a.r.ref_pos - static_cast<int64_t>(ref.offsets[ca]) + 1;
+    }
+    if (a.mapped && b.mapped && ca == cb) {
+      const int64_t lo = std::min(a.r.ref_pos, b.r.ref_pos);
+      const int64_t hi = std::max(a.r.ref_pos + ref_span(a.r), b.r.ref_pos + ref_span(b.r));
+      const bool left = a.r.ref_pos < b.r.ref_pos || (a.r.ref_pos == b.r.ref_pos && x == 0);
+      mi.tlen = left ? hi - lo : -(hi - lo);
+    }
+    char t[64];
+    interval_tags(a, t, sizeof t);
+    if (a.mapped) sam_line(a.r, rec[x], ref, a.mapq, mi, sam, t);
+    else sam_unmapped(rec[x], ref, mi, b.mapped ? b.r.ref_pos : 0, b.mapped ? cb : -1, t, sam);
   }
 }
 
@@ -323,7 +484,7 @@ struct Args {
 };
 
 Args parse(int argc, char** argv, int start) {
-  static const char* flags[] = {"--gpu", "--unc-tags"};
+  static const char* flags[] = {"--gpu", "--unc-tags", "--intervals"};
   Args a;
   for (int i = start; i < argc; ++i) {
     std::string s = argv[i];
@@ -349,12 +510,16 @@ int default_threads() {
 int cmd_repeat(const Args& a) {
   if (a.pos.size() != 2)
     throw std::runtime_error(
-        "usage: certa repeat ref.cidx reads.fq[.gz] [-t N] [--tau 16] [--cmax 4096] [--samples 8] [--tsv out.tsv]");
+        "usage: certa repeat ref.cidx reads.fq[.gz] [-t N] [--tau 16] [--cmax 4096] [--samples 8] [--chains 0] "
+        "[--fallback 0] [--tsv out.tsv]");
   RepeatParams rp;
   rp.tau = a.geti("--tau", 16);
   rp.cmax = a.geti("--cmax", 4096);
   rp.samples = a.geti("--samples", 8);
-  if (rp.tau < 0 || rp.cmax < 1 || rp.samples < 1) throw std::runtime_error("bad tier R parameters");
+  rp.lb_chains = a.geti("--chains", 0);
+  rp.fallback_samples = a.geti("--fallback", 0);
+  if (rp.tau < 0 || rp.cmax < 1 || rp.samples < 1 || rp.lb_chains < 0 || rp.fallback_samples < 0)
+    throw std::runtime_error("bad tier R parameters");
   const int threads = a.geti("-t", default_threads());
   Reference ref;
   Index ix;
@@ -504,6 +669,24 @@ int cmd_map(const Args& a) {
   pp.max_dist = a.geti("--max-dist", 850);
   if (pp.max_dist < 0) throw std::runtime_error("--max-dist must be >= 0");
   g_unc_tags = a.has("--unc-tags");
+  // Interval output: no read goes to the fallback; tier R (CPU) for every
+  // read still uncertified, pairs placed by certa/interval.h.
+  const bool intervals = a.has("--intervals");
+  RepeatParams rp;
+  rp.tau = a.geti("--iv-tau", 256);
+  rp.cmax = a.geti("--iv-cmax", 4096);
+  rp.samples = a.geti("--iv-samples", 8);
+  rp.sub_margin = a.geti("--iv-margin", 20);
+  rp.fallback_samples = a.geti("--iv-fallback", 8);
+  rp.lb_chains = a.geti("--iv-chains", 8);
+  if (rp.tau < 0 || rp.cmax < 1 || rp.samples < 1 || rp.sub_margin < 0 || rp.fallback_samples < 0 ||
+      rp.lb_chains < 0)
+    throw std::runtime_error("bad --iv-* parameters");
+  const std::string mapq_mode = a.get("--iv-mapq", "point");
+  if (mapq_mode != "point" && mapq_mode != "cons") throw std::runtime_error("--iv-mapq must be point or cons");
+  g_mapq_cons = mapq_mode == "cons";
+  if (intervals && (a.has("-u") || a.has("-U") || a.has("-S")))
+    throw std::runtime_error("--intervals writes every read to SAM: no -u/-U/-S");
   const bool gpu = a.has("--gpu");
   const int threads = a.geti("-t", default_threads());
   // Threads that parse and encode the next batch while the current one maps.
@@ -593,6 +776,9 @@ int cmd_map(const Args& a) {
   uint64_t local = 0;      // reads re-run on the CPU for tier SL
   uint64_t pair_tried = 0; // pairs given to the pair certificate
   std::vector<Result> se_res;  // single-end results (paired mode, for MAPQ)
+  uint64_t iv_reads = 0;       // reads given to tier R (interval mode)
+  std::vector<RepeatOut> iv_store;
+  std::vector<int> iv_slot;    // per read: index into iv_store, or -1
   auto load = [&](int slot) {
     try {
       auto t = Clock::now();
@@ -727,6 +913,35 @@ int cmd_map(const Args& a) {
       worker();
       for (auto& th : pw) th.join();
     }
+    if (intervals) {
+      // Interval pass, on the CPU: tier R for every read not certified.
+      std::vector<size_t> todo;
+      iv_slot.assign(res.size(), -1);
+      for (size_t i = 0; i < res.size(); ++i) {
+        Result r = res[i];
+        check_contig(r, ref);
+        if (r.certified != 1 && r.reason != kBadLength) {
+          iv_slot[i] = static_cast<int>(todo.size());
+          todo.push_back(i);
+        }
+      }
+      iv_store.assign(todo.size(), RepeatOut());
+      iv_reads += todo.size();
+      std::atomic<size_t> next{0};
+      auto worker = [&] {
+        std::unique_ptr<Workspace> w(new Workspace);
+        RepeatScratch sc;
+        for (size_t z; (z = next.fetch_add(1)) < todo.size();) {
+          const size_t i = todo[z];
+          iv_store[z] = repeat_tier(view, rp, batch.codes.data() + batch.offs[i], batch.lens[i], *w, sc);
+        }
+      };
+      std::vector<std::thread> pw;
+      for (int w = 1; w < threads; ++w) pw.emplace_back(worker);
+      worker();
+      for (auto& th : pw) th.join();
+    }
+    auto iv_of = [&](size_t i) -> const RepeatOut* { return intervals && iv_slot[i] >= 0 ? &iv_store[iv_slot[i]] : nullptr; };
     t_map += secs(t);
 
     // Format in parallel over contiguous slices, then write in input order.
@@ -744,9 +959,50 @@ int cmd_map(const Args& a) {
         size_t a0 = recs.size() * w / nt, b0 = recs.size() * (w + 1) / nt;
         if (paired) { a0 &= ~size_t(1); b0 = w == nt - 1 ? recs.size() : (b0 & ~size_t(1)); }
         int pair_reason[2] = {0, 0};
+        PairScratch psc;  // interval mode: mate rescue
         for (size_t i = a0; i < b0; ++i) {
           int reason;
-          if (!paired) {
+          if (intervals) {
+            Stats& s = st[w];
+            if (!paired) {
+              Placement pl;
+              emit_interval(res[i], iv_of(i), recs[i], ref, sam_out[w], &pl);
+              Result r = res[i];
+              check_contig(r, ref);
+              reason = r.certified == 1 ? int(kOk) : (r.reason == kOk ? int(kNotFound) : int(r.reason));
+              s.count_iv(pl);
+            } else {
+              if (i % 2 == 0) {
+                Result rr[2] = {res[i], res[i + 1]};
+                for (Result& r : rr) {
+                  if (r.certified == 2) { r.certified = 0; r.reason = kNotFound; }
+                  check_contig(r, ref);
+                }
+                Placement pl[2];
+                ++s.pairs;
+                if (rr[0].certified == 1 && rr[1].certified == 1) {
+                  emit_pair(&res[i], &se_res[i], &recs[i], ref, pp.max_dist, sam_out[w], fq_out[w], fq2_out[w],
+                            nullptr, pair_reason, true, pl);
+                  ++s.pairs_cert;
+                  const bool pr = is_proper(rr[0], rr[1], ref, pp.max_dist);
+                  s.pairs_proper += pr;
+                  s.iv_proper += pr;
+                } else {
+                  const RepeatOut* ivp[2] = {iv_of(i), iv_of(i + 1)};
+                  const uint8_t* cp[2] = {batch.codes.data() + batch.offs[i], batch.codes.data() + batch.offs[i + 1]};
+                  bool proper;
+                  emit_pair_interval(&res[i], ivp, cp, &recs[i], ref, view, pp.max_dist, psc, sam_out[w], pl,
+                                     &proper);
+                  s.iv_proper += proper;
+                  for (int x = 0; x < 2; ++x)
+                    pair_reason[x] = rr[x].certified == 1 ? int(kOk) : (rr[x].reason == kOk ? int(kNotFound) : int(rr[x].reason));
+                }
+                s.count_iv(pl[0]);
+                s.count_iv(pl[1]);
+              }
+              reason = pair_reason[i % 2];
+            }
+          } else if (!paired) {
             reason = emit(res[i], recs[i], ref, sam_out[w], fq_out[w]);
           } else {
             if (i % 2 == 0) {
@@ -838,6 +1094,20 @@ int cmd_map(const Args& a) {
                  static_cast<unsigned long long>(total.pairs), np * total.pairs_cert, np * total.pairs_proper,
                  pct(total.pr), np * pair_tried);
   }
+  if (intervals) {
+    const uint64_t* wd = total.iv_width;
+    std::fprintf(stderr,
+                 "[map] intervals: tier R on %.2f%% of reads (tau %d); records: tier R exact %.2f%%, interval "
+                 "%.2f%%, pair window %.2f%%, unmapped %.2f%% (proven unalignable %.2f%%); exact (XL = XU) "
+                 "%.2f%%; XU - XL 1-5 %.2f%%, 6-10 %.2f%%, 11-25 %.2f%%, 26-50 %.2f%%, >50 %.2f%%; "
+                 "MAPQ >= 20 %.2f%%, XQ >= 20 %.2f%%%s\n",
+                 pct(iv_reads), rp.tau, pct(total.iv_r), pct(total.iv_iv), pct(total.iv_mr), pct(total.iv_un),
+                 pct(total.iv_unalignable), pct(wd[0]), pct(wd[1]), pct(wd[2]), pct(wd[3]), pct(wd[4]),
+                 pct(wd[5]), pct(total.iv_mapq20), pct(total.iv_xq20), g_mapq_cons ? " (MAPQ = XQ)" : "");
+    if (paired)
+      std::fprintf(stderr, "[map] intervals: proper pairs %.2f%%\n",
+                   total.pairs ? 100.0 * total.iv_proper / total.pairs : 0.0);
+  }
   std::fprintf(stderr, "[map] candidates enumerated per read (last pass): %.1f\n",
                total.reads ? double(total.cands) / total.reads : 0.0);
   std::fprintf(stderr, "[map] uncertified by parts searched |S|:");
@@ -873,6 +1143,18 @@ int cmd_map(const Args& a) {
     std::fprintf(js, "],\n  \"certified_by_radius\": [");
     for (int i = 0; i <= KMAX; ++i)
       std::fprintf(js, "%s%llu", i ? ", " : "", static_cast<unsigned long long>(total.by_radius[i]));
+    if (intervals) {
+      std::fprintf(js, "],\n  \"intervals\": {\"tier_r_reads\": %llu, \"tier_r_exact\": %llu, \"interval\": %llu, "
+                       "\"pair_window\": %llu, \"unmapped\": %llu, \"unalignable\": %llu, \"proper_pairs\": %llu, "
+                       "\"mapq20\": %llu, \"xq20\": %llu},\n  \"iv_width\": [",
+                   static_cast<unsigned long long>(iv_reads), static_cast<unsigned long long>(total.iv_r),
+                   static_cast<unsigned long long>(total.iv_iv), static_cast<unsigned long long>(total.iv_mr),
+                   static_cast<unsigned long long>(total.iv_un), static_cast<unsigned long long>(total.iv_unalignable),
+                   static_cast<unsigned long long>(total.iv_proper), static_cast<unsigned long long>(total.iv_mapq20),
+                   static_cast<unsigned long long>(total.iv_xq20));
+      for (int i = 0; i < 6; ++i)
+        std::fprintf(js, "%s%llu", i ? ", " : "", static_cast<unsigned long long>(total.iv_width[i]));
+    }
     std::fprintf(js, "],\n  \"seconds\": {\"load\": %.3f, \"upload\": %.3f, \"read_encode\": %.3f, "
                      "\"read_wait\": %.3f, \"map\": %.3f, \"output\": %.3f, \"total\": %.3f}\n}\n",
                  t_load, t_upload, t_io, t_wait, t_map, t_out, t_total);

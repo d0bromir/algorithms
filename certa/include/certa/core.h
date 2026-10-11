@@ -76,7 +76,10 @@ constexpr int BIG = 1 << 20;
 // S0/S1/SR are certified. S2 is a heuristic placement, reported with
 // Result::certified = 2 and a conservative MAPQ.
 // SL: certified local (clipped) alignment; PR: certified proper pair (both host only).
-enum Tier : uint8_t { kTierS0 = 0, kTierS1 = 1, kTierSR = 2, kTierS2 = 3, kTierSL = 4, kTierPR = 5 };
+// Interval output (host only, certa/interval.h): R exact by tier R, IV an
+// interval [lo, hi] with lo < hi, MR a mate placed by the pair window search.
+enum Tier : uint8_t { kTierS0 = 0, kTierS1 = 1, kTierSR = 2, kTierS2 = 3, kTierSL = 4, kTierPR = 5,
+                      kTierR = 6, kTierIV = 7, kTierMR = 8 };
 constexpr int S2_MAX = 10;  // largest --s2 edit limit (band must fit BMAX)
 constexpr int S2_TOP = 8;   // S2 evaluates only this many best-supported clusters
 static_assert(MAX_CIGAR >= 2 * S2_MAX + 1, "CIGAR buffer too small for S2");
@@ -99,6 +102,19 @@ constexpr uint32_t kOpM = 0, kOpI = 1, kOpD = 2, kOpS = 4;
 // itself is about unit-cost edit distance and picks the locus).
 constexpr int kMatch = 1, kMismatch = 4, kGapOpen = 6, kGapExt = 1, kClip = 5;
 constexpr int16_t kNoSub = -32768;  // Result::sub_score when no other locus was found
+
+// Lemma E. A local alignment of a read of length L whose end-to-end
+// completion (clipped ends aligned base by base) has d >= 1 edits scores at
+// most edit_bound(L, d). Its loss L - score is a sum over events, each
+// costing more than the edits it adds: a mismatch 5 for 1 edit, a clipped end
+// c + 5 for <= c, a gap of k 6 + k (deletion) or 6 + 2k (insertion) for k.
+// One edit: >= 5. Two or more: one event costs >= d + 5 (a clip or gap),
+// several cost >= d + 8.
+CERTA_HD inline int edit_bound(int L, int d) {
+  static_assert(kMatch == 1 && kMismatch == 4 && kGapOpen == 6 && kGapExt == 1 && kClip == 5,
+                "Lemma E is stated for BWA-MEM's default scores");
+  return d <= 0 ? L * kMatch : L * kMatch - d - (d >= 2 ? 5 : 4);
+}
 
 struct IndexView {
   const uint8_t* ref;     // concatenated reference, codes 0..3, 4 = N
@@ -154,6 +170,9 @@ struct Result {
   uint8_t used;                 // parts enumerated per strand (|S|)
   int16_t floor;                // SL: certified threshold (score > floor proves optimality)
   uint32_t ncand;               // candidate diagonals enumerated, both strands (diagnostic)
+  // Certified tiers: an upper bound on SUB, the best local score at a locus
+  // not overlapping the reported one (interval output, Aim 3), or kNoSub.
+  int16_t sub_hi;
 };
 
 struct Cluster {
@@ -194,8 +213,10 @@ struct Workspace {
   int16_t lscore[MAX_CLUST];  // SL: best score in each chain's bands, or kNoSub
   // SL/PR: Lemma L bound per (strand, part mask); kNoSub = not computed.
   // Initialised once (ub_magic), then only the entries a call touched are
-  // reset at the start of the next call.
-  uint64_t ub_magic;
+  // reset at the start of the next call. ub_magic starts at 0: heap memory
+  // that last held a Workspace still carries the magic while other
+  // allocations may have overwritten its touched list since.
+  uint64_t ub_magic = 0;
   int16_t ubmemo[2][1 << PMAX];
   uint32_t ub_touched[MAX_CLUST];
   int ub_ntouched;
@@ -651,14 +672,16 @@ CERTA_HD inline bool affine_align(const IndexView& ix, const uint8_t* rd, int L,
 
 // Chooses among the clusters at distance d1 (deterministically, seeded by the
 // read name), aligns the read there and returns how many clusters tie.
+// *width receives the chosen cluster's band width.
 CERTA_HD inline int align_best(const IndexView& ix, int L, int nclust, int d1,
-                               uint64_t name_hash, Workspace& ws, Result& r) {
+                               uint64_t name_hash, Workspace& ws, Result& r, int* width) {
   int n_best = 0;
   for (int x = 0; x < nclust; ++x) n_best += ws.clusters[x].dist == d1;
   int pick = (int)(name_hash % (uint64_t)n_best), chosen = -1;
   for (int x = 0; x < nclust; ++x)
     if (ws.clusters[x].dist == d1 && pick-- == 0) { chosen = x; break; }
   const Cluster& cl = ws.clusters[chosen];
+  *width = cl.width;
   const uint8_t* rd = ws.seq[cl.strand];
   // Prefer an ungapped alignment when it is optimal.
   int64_t ungapped = -1;
@@ -758,6 +781,7 @@ CERTA_HD inline bool certify_repeat(const IndexView& ix, int L, int P,
   r.score = (int16_t)(L * kMatch);
   r.d2 = 0;
   r.n_best = (uint16_t)found;
+  r.sub_hi = (int16_t)(L * kMatch);  // a second exact copy: SUB = OPT = L
   return true;
 }
 
@@ -959,9 +983,11 @@ inline int band_score(const IndexView& ix, const uint8_t* rd, int L, int64_t lo,
 
 // Best local score in a chain: its member diagonals are covered by bands
 // [d - pad, d + pad], merged into bands of at most BMAX diagonals. Returns
-// the score (or kNoSub) and the band that attains it.
+// the score (or kNoSub) and the band that attains it. Optionally only
+// alignments whose first aligned reference base lies in [smin, smax] count.
 inline int chain_best(const IndexView& ix, int L, const Cluster& cl, int pad, Workspace& ws,
-                      int64_t* best_lo, int* best_B) {
+                      int64_t* best_lo, int* best_B, int64_t smin = INT64_MIN,
+                      int64_t smax = INT64_MAX) {
   const int64_t* c = ws.cand[cl.strand];
   int best = kNoSub;
   int a = cl.beg;
@@ -971,7 +997,7 @@ inline int chain_best(const IndexView& ix, int L, const Cluster& cl, int pad, Wo
     while (e < cl.end && diag_of(c[e]) - d0 <= BMAX - 2 * pad - 1) ++e;
     const int64_t lo = d0 - pad;
     const int B = (int)(diag_of(c[e - 1]) - d0) + 2 * pad + 1;
-    const int sc = band_score(ix, ws.seq[cl.strand], L, lo, B);
+    const int sc = band_score(ix, ws.seq[cl.strand], L, lo, B, smin, smax);
     if (sc > best) {
       best = sc;
       *best_lo = lo;
@@ -1034,6 +1060,26 @@ inline bool certify_local(const IndexView& ix, const Params& p, int L, int P, in
   if (!affine_align(ix, ws.seq[ws.clusters[chosen].strand], L, lo, B, ws, tmp) || tmp.score != s1)
     return false;  // CIGAR does not fit
   r = tmp;
+  // SUB bound: every alignment outside the chosen chain scores <= s2 (an
+  // evaluated chain, a skipped one with ub <= s2, or no chain: <= floor <=
+  // s2). Inside it, one not overlapping [p, p + span) starts before p or at
+  // or after p + span; both start ranges are searched in its bands.
+  if (n_best > 1) {
+    r.sub_hi = (int16_t)s1;
+  } else {
+    int64_t span = 0;
+    for (int c = 0; c < r.n_cigar; ++c)
+      if ((r.cigar[c] & 0xF) == kOpM || (r.cigar[c] & 0xF) == kOpD) span += r.cigar[c] >> 4;
+    int64_t xlo;
+    int xB;
+    const Cluster& ch = ws.clusters[chosen];
+    const int left = chain_best(ix, L, ch, pad, ws, &xlo, &xB, INT64_MIN, r.ref_pos - 1);
+    const int right = chain_best(ix, L, ch, pad, ws, &xlo, &xB, r.ref_pos + span, INT64_MAX);
+    int sh = s2;
+    if (left > sh) sh = left;
+    if (right > sh) sh = right;
+    r.sub_hi = (int16_t)sh;
+  }
   r.certified = 1;
   r.tier = kTierSL;
   r.strand = ws.clusters[chosen].strand;
@@ -1076,7 +1122,7 @@ CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
   r.ref_pos = -1; r.n_cigar = 0; r.certified = 0; r.tier = kTierS0; r.strand = 0;
   r.reason = kOk; r.radius = -1; r.d1 = -1; r.d2 = -1; r.n_best = 0;
   r.n_clusters = 0; r.parts = 0; r.used = 0; r.nm = 0; r.score = 0; r.d2x = -1;
-  r.sub_score = kNoSub; r.floor = 0; r.ncand = 0;
+  r.sub_score = kNoSub; r.floor = 0; r.ncand = 0; r.sub_hi = kNoSub;
 
   const int P = L <= LMAX ? part_count(L, ix.q, ix.s) : 0;
   if (P < 1) {
@@ -1121,12 +1167,30 @@ CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
     r.n_clusters = (uint16_t)nclust;
     evaluate_clusters(ix, L, nclust, R, p.reverse_order, nclust, p.min_support, ws, &b1, &b2);  // all: certificate
     if (b1 <= R) {
-      const int n_best = align_best(ix, L, nclust, b1, name_hash, ws, r);
+      int width;
+      const int n_best = align_best(ix, L, nclust, b1, name_hash, ws, r, &width);
       r.certified = 1;
       r.tier = b1 == 0 ? kTierS0 : kTierS1;
       r.d1 = (int8_t)b1;
       r.d2 = (int8_t)(n_best > 1 ? b1 : (b2 <= R ? b2 : -1));
       r.n_best = (uint16_t)n_best;
+      // SUB bound. Every other locus has end-to-end distance >= d* (the
+      // exact second best, or R + 1 beyond the radius), so by Lemma E an
+      // alignment there that scores above edit_bound(L, R + 1) completes
+      // within R edits and lies in another cluster. Inside the reported band
+      // (w diagonals), an alignment scoring s shares >= s + score - L read
+      // bases with the reported one (each spans >= its score), and sharing
+      // >= 2w + 5 forces their reference intervals to overlap (the paths
+      // stay within w - 1 diagonals of each other); so a non-overlapping one
+      // there scores at most L - score + 2w + 6 (and at most score, the band
+      // optimum).
+      {
+        const int dstar = n_best > 1 ? b1 : (r.d2 >= 0 ? r.d2 : R + 1);
+        const int other = edit_bound(L, dstar);
+        int band = L * kMatch - r.score + 2 * width + 6;
+        if (band > r.score) band = r.score;
+        r.sub_hi = (int16_t)(other > band ? other : band);
+      }
       if (n_best == 1 && r.d2 >= 0) {
         // The certified second-best locus: its affine score, for MAPQ.
         for (int x = 0; x < nclust; ++x)
@@ -1154,7 +1218,8 @@ CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
     // apply). The host caps MAPQ when clusters were left out.
     evaluate_clusters(ix, L, nc2, D, 0, S2_TOP, 1, ws, &c1, &c2);
     if (c1 <= D) {
-      const int n_best = align_best(ix, L, nc2, c1, name_hash, ws, r);
+      int width;
+      const int n_best = align_best(ix, L, nc2, c1, name_hash, ws, r, &width);
       r.n_clusters = (uint16_t)nc2;
       r.certified = 2;
       r.tier = kTierS2;

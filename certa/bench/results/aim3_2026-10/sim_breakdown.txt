@@ -1,0 +1,18 @@
+# misplaced records with MAPQ >= 20, certa --intervals (sim_iv2), by XT tier
+    208 XT:Z:S0
+    190 XT:Z:PR
+     62 XT:Z:S1
+     38 XT:Z:MR
+     21 XT:Z:IV
+     20 XT:Z:R
+# S0/S1 among them by certified radius XR
+    208 XR:i:0
+     49 XR:i:1
+     12 XR:i:2
+      1 XR:i:3
+# certa+minibwa: misplaced with MAPQ >= 20 by origin
+    501 certa
+      3 minibwa
+# misplaced with XQ >= 20 (all PR): same contig within 1 kb vs farther
+     23 farther
+    150 within 1 kb
