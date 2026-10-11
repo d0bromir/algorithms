@@ -391,6 +391,8 @@ second-best chain and U, therefore gives a certified *lower* bound on MAPQ.
   BWA-MEM2's variant-calling behaviour.
 - **Under CERTA-X:** SUB becomes an interval, and Aim 3 measures how calibrated the conservative
   end is.
+- **Measured (§6.3):** the conservative end is biased toward the reference and fails as a caller
+  input. Lemma E costs one point per edit beyond the radius, a SNV five. It stays an audit tag.
 - **Known gap:** the pair tier's second-best score (FINDINGS §7) must also bound alternative
   partners inside the winning anchor's window.
 
@@ -564,7 +566,7 @@ is met on HG002 and missed on HG005.
 - **The honest output for them:** an interval. The next lever is not a repeat tier but the
   interval contract itself (Aim 3): report [lo, hi] and a conservative MAPQ.
 
-### 6.3 Aim 3: interval output (pre-registered 2026-10-11, before the HG005 run)
+### 6.3 Aim 3: interval output (criterion pre-registered 2026-10-11, before the HG005 run)
 
 **Deliverable.** `certa map --intervals` ([`certa/include/certa/interval.h`](certa/include/certa/interval.h)).
 No read goes to a heuristic mapper. Every read that the certified tiers leave open goes through
@@ -585,6 +587,71 @@ SNVs and indels, rtg vcfeval against GIAB v4.2.1.
   certified) is reported alongside.
 - **Data:** HG001's and HG002's FASTQs are no longer on disk, so HG005 is the only sample.
 
+**Result (measured 2026-10-11): go.** F1 ([raw](certa/bench/results/aim3_2026-10/hg005_f1.tsv)):
+
+| HG005 chr20 | CERTA + minibwa | **intervals, no fallback** | Δ | BWA-MEM2 | intervals, MAPQ = XQ |
+|---|---|---|---|---|---|
+| GATK SNVs | 0.9926 | **0.9933** | +0.0007 | 0.9917 | 0.3077 |
+| GATK indels | 0.9938 | **0.9938** | 0.0000 | 0.9925 | 0.5051 |
+| bcftools SNVs | 0.9926 | **0.9937** | +0.0011 | 0.9916 | 0.7849 |
+| bcftools indels | 0.9472 | **0.9464** | −0.0008 | 0.9454 | 0.5842 |
+
+- **All 4 comparisons are within the margin, and all 4 are above BWA-MEM2.**
+  - GATK SNVs: 35 fewer false positives and 70 fewer false negatives than the current pipeline.
+  - bcftools indels: the only loss, 20 more false negatives.
+- **What the run produced** (725.8 M reads):
+  - tier R on 7.14 % of reads;
+  - records: 0.99 % exact by tier R, 3.87 % open intervals, 0.96 % placed in the mate's window,
+    1.58 % unmapped;
+  - 84.85 % of all records proven exact (XL = XU). XU − XL is 1–5 for 6.22 %, 6–10 for 1.76 %,
+    11–25 for 2.19 %, 26–50 for 2.00 % and > 50 for 1.39 %.
+- **The unmapped reads** are mostly low-quality or satellite reads without an error-free 22-mer.
+  On HG002, BWA-MEM2 aligns about 60 % of them, mostly with score < 60 or MAPQ 0. The q = 15
+  index of Aim 1 would seed them.
+- **Cost:**
+  - HG005: 2,647 s wall (64 threads + A100), against 2,409 s for CERTA + minibwa.
+  - 2 M HG002 pairs: 343 CPU-s against 303 (+13 %), about 1.2 ms per uncertified read, which is the
+    break-even budget of §2.2. BWA-MEM2 needs about 5× more.
+- **Exactness by tier** (HG002, 2 M pairs):
+  - S0, SR and tier R exact: 100 %;
+  - PR mates: 70 %;
+  - S1: 73 %. Edit-distance certificates are not affine certificates: another locus where a clipped
+    alignment needs a few more edits can still score higher (Lemma E).
+
+**MAPQ = XQ fails, and the reason is a finding.** The certified bound on SUB costs one point per
+edit beyond the search radius, because a locus that matches all but the clipped last d bases
+scores L − d − 5 (Lemma E). A SNV costs 5 points.
+- **The consequence:** a one-SNV read certified at radius 2 (where most reads stop) gets XQ ≈ 10. At
+  radius 5 it reaches XQ ≈ 21. Each further SNV needs about 5 more edits of radius.
+- **Reads that match the reference** keep XQ 26–40.
+- **The effect on callers:** a caller's MAPQ ≥ 20 filter keeps the reference allele and drops the
+  variant (GATK SNV sensitivity 0.18).
+- **The conclusion:** XQ is an audit quantity, not a caller input. It would become usable with a SUB
+  bound from Lemma L instead of Lemma E. The clipped alignments that drive Lemma E's bound contain
+  exact parts, so they are enumerated, and a SUB bound built the way tier SL builds its floor costs 5
+  points per part (open).
+
+**MAPQ calibration** (1 M simulated pairs with known origin, [raw](certa/bench/results/aim3_2026-10/sim_calibration.txt)).
+Records misplaced with MAPQ ≥ 20:
+- **Totals:** intervals 539, CERTA + minibwa 504, BWA-MEM2 31, minibwa 26.
+- **Where they come from:** 460 of the 539 are certified reads that both CERTA pipelines share:
+  - S0/S1 reads at radius 0–1, where `mapq_of` assumes no second locus;
+  - PR pairs.
+- **The new placements:** tier R and the window search add 79, against 3 for minibwa on the same
+  reads.
+- **XQ ≥ 20** covers 57 % of reads with 173 misplaced. All of them are PR pairs whose score-optimal
+  placement is not the origin: 150 tandem shifts, and 23 segmental duplications where BWA-MEM2 picks
+  the same pair. XQ makes the formula's inputs exact; it cannot make BWA-MEM's formula calibrated.
+
+**Tests.**
+- *Oracle:* every certified [XL, XU] and every SUB bound is checked against the whole-reference
+  oracle, about 3,200 and 660 checks per seed, on 4 seeds, on ARM and x86. Tier R's SUB intervals
+  and the pair placement are checked the same way.
+- *Planted reads* make Lemma E and the own-chain searches tight.
+- *Mutation testing:* 11 of 12 injected faults are caught. The one that survives weakens a term no
+  alignment can reach for reads ≥ 100 bp.
+- *Regression:* default output is byte-identical to the previous version.
+
 **Speed budget** (CPU per read, paired-end, from §2.2). The exact tiers F, R, H and X replace the
 heuristic fallback and see only the 4.6 % uncertified reads:
 - ≲ 1.2 ms CPU per residual read keeps CERTA's total CPU at or below minibwa's;
@@ -600,7 +667,7 @@ such guarantee, so it runs under a per-read budget and returns an interval when 
 |---|---|---|---|
 | **1. Ceiling** (no new data needed) | q = 15 second index; PMAX lifted to 16; tier F pass | exact share, occurrence counts, CPU per residual read on HG002, HG001, HG005 | Exact share +1 point at ≤ 1 ms CPU per residual read. **Done for HG002 and HG005: go (§6.1).** HG001 needs its FASTQs re-downloaded. |
 | **2. Repeats** | FM-index counts; Theorem R ties; Theorem R′ collapse | exact share and tie proofs among the 3.6 % repeat-limited reads; DP calls saved | Half of the repeat-limited reads exact or proven ties. **Partial go (§6.2): 50.5–53.2 % on HG002, 43.8–46.0 % on HG005; 79–86 % of near-perfect copies.** Built with the hash index (no FM-index needed); window collapse (R′) not needed so far. |
-| **3. Interval output and MAPQ** | [ℓ, u], SUB interval, conservative MAPQ, SAM tags (`XL`, `XU`) | interval-width distribution; MAPQ calibration on GIAB stratified regions | Variant F1 non-inferior to the current pipeline with **no** heuristic fallback |
+| **3. Interval output and MAPQ** | [ℓ, u], SUB interval, conservative MAPQ, SAM tags (`XL`, `XU`) | interval-width distribution; MAPQ calibration on GIAB stratified regions | Variant F1 non-inferior to the current pipeline with **no** heuristic fallback. **Go (§6.3): HG005 F1 −0.0008 to +0.0011 against CERTA + minibwa, above BWA-MEM2 in all 4.** Calibration was measured on simulated pairs instead (the GIAB stratification files are not downloaded). XQ as MAPQ fails: it is biased toward the reference. |
 | **4. Checker** | independent checker (Theorem V); sampling audit | check time per read; zero disagreements | Checker accepts 100 % of certificates; injected faults all detected |
 | **5. Theory** | written proofs of Lemma H, Theorems C, G, R, V; optional Lean 4 mechanization | — | Proofs reviewed; mutation tests for each bound |
 | **6. Long reads** | HiFi feasibility on a2's existing data (§8) | share of reads whose loss is below the certifiable ceiling | Go if ≥ 90 % of HiFi reads fit |

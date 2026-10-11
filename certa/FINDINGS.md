@@ -559,6 +559,54 @@ by anchor extension, copy-sampled lower bounds, and count-based tie proofs.
   residual reads.
 - **Tests:** all 6 injected faults are caught.
 
+*Update 2026-10-11, Aim 3 (proposal §6.3).* `certa map --intervals`
+(`include/certa/interval.h`) writes every read itself; nothing goes to a
+fallback mapper. Each record carries:
+- [XL, XU], which contains OPT;
+- XQ, a certified lower bound of BWA-MEM's MAPQ formula.
+
+Findings:
+- **HG005 (725.8 M reads):** 84.9 % of records are proven exact (XL = XU).
+  The pre-registered go criterion is met. Variant-calling F1 against
+  CERTA + minibwa, with no fallback:
+  - GATK SNVs 0.9933 (+0.0007), GATK indels 0.9938 (0);
+  - bcftools SNVs 0.9937 (+0.0011), bcftools indels 0.9464 (−0.0008);
+  - above BWA-MEM2 in all 4.
+
+  Cost: +13 % CPU over CERTA + minibwa on 2 M HG002 pairs.
+- **XQ as MAPQ fails (F1 0.31–0.78): it is biased toward the reference.**
+  Beyond the radius, Lemma E bounds SUB at one point per edit (a locus
+  that matches all but d clipped bases); a SNV costs 5.
+  - A one-SNV read at radius 2 gets XQ ≈ 10; reads matching the
+    reference get 26–40.
+  - Callers' MAPQ ≥ 20 filters therefore drop exactly the variant
+    reads.
+  - A SUB bound from Lemma L (exact parts, as tier SL builds its floor)
+    would fix this (open).
+- **Edit-distance certificates are not affine certificates.** On HG002,
+  27 % of S1 reads have XL < XU: another locus, where a clipped or gapped
+  alignment needs more edits, could still score higher under BWA-MEM's
+  scores. Lemma E gives the bound; running tier SL on these reads would
+  close most of them (open).
+- **Over-confident MAPQ of certified reads at small radius** (a
+  pre-existing issue, shared with the current pipeline). With R = 0 or 1
+  and no second locus within R, `mapq_of` assumes sub = 19 and reports
+  MAPQ 60, although a locus one edit further was never searched. On
+  simulated pairs:
+  - these reads cause most misplaced records with MAPQ ≥ 20: 257 of the
+    539 (208 at R = 0, 49 at R = 1);
+  - their XQ is 7–18, which flags them correctly.
+- **XQ bounds the formula, not the error rate.** On simulated pairs:
+  - all 173 misplaced records with XQ ≥ 20 are PR pairs whose score-optimal
+    placement is not the true origin;
+  - 150 of them are tandem shifts, which by definition count as the same
+    locus;
+  - BWA-MEM2 places the other 23 at the same loci, with MAPQ 0–27.
+- **Bug fixed:** `Workspace::ub_magic` was never initialised. Heap memory
+  that last held a Workspace kept the magic while its touched list was
+  overwritten, so the PR pass wrote out of bounds. Interval mode's
+  allocation pattern exposed it on HG005; it had been latent since tier PR.
+
 - **Speed in paired mode:** 4.0× faster than BWA-MEM2 but slower than
   minibwa (77 s vs 62 s, 20M pairs). The cost lies in the pair pass (about
   1,050 CPU-s) and in the fallback's hard reads. Sending only the

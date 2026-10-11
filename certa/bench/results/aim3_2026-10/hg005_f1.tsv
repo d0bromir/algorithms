@@ -1,0 +1,19 @@
+# HG005 chr20, rtg vcfeval vs GIAB v4.2.1. certa = CERTA + minibwa fallback (2026-10-02);
+# iv = certa map --intervals, MAPQ point estimate (pre-registered); iv-cons = same alignments, MAPQ = XQ.
+caller	type	pipeline	TP	FP	FN	precision	sensitivity	F1	dF1_vs_certa
+gatk	snps	certa	68109	537	483	0.9922	0.9930	0.9926	+0.0000
+gatk	snps	iv	68179	502	413	0.9927	0.9940	0.9933	+0.0007
+gatk	snps	iv-cons	12611	776	55981	0.9420	0.1839	0.3077	-0.6849
+gatk	snps	bwa	68282	830	310	0.9880	0.9955	0.9917	-0.0009
+gatk	indels	certa	8392	48	57	0.9943	0.9933	0.9938	+0.0000
+gatk	indels	iv	8395	50	54	0.9941	0.9936	0.9938	+0.0000
+gatk	indels	iv-cons	2948	275	5501	0.9147	0.3489	0.5051	-0.4887
+gatk	indels	bwa	8388	66	61	0.9922	0.9928	0.9925	-0.0013
+bcftools	snps	certa	68164	583	428	0.9915	0.9938	0.9926	+0.0000
+bcftools	snps	iv	68206	482	386	0.9930	0.9944	0.9937	+0.0011
+bcftools	snps	iv-cons	44415	166	24177	0.9963	0.6475	0.7849	-0.2077
+bcftools	snps	bwa	68234	792	358	0.9885	0.9948	0.9916	-0.0010
+bcftools	indels	certa	7953	391	496	0.9531	0.9413	0.9472	+0.0000
+bcftools	indels	iv	7933	383	516	0.9539	0.9389	0.9464	-0.0008
+bcftools	indels	iv-cons	3626	339	4823	0.9145	0.4292	0.5842	-0.3630
+bcftools	indels	bwa	7937	405	512	0.9515	0.9394	0.9454	-0.0018
