@@ -1,0 +1,10 @@
+[check] 100000 of 4000000 records checked (uniform sample): accepted 100.0000%
+[check]   malformed: 0
+[check]   wrong_score: 0
+[check]   wrong_xl: 0
+[check]   xu_unproven: 0
+[check]   xh_unproven: 0
+[check]   wrong_xq: 0
+[check] claims proven from witnesses: XU < L 22939, XH 82145; XQ resting on the pair certificate (not re-derived) 4191
+[check] per record: 12.2 probe occurrences, 4.09 DP windows, 3805 DP cells; 96.9 us CPU (0.6 s wall on 16 threads)
+[check] audit: if more than 0.003% of all records were wrong, a sample of 100000 would have shown one with 95% probability

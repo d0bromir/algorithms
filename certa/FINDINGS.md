@@ -607,6 +607,25 @@ Findings:
   overwritten, so the PR pass wrote out of bounds. Interval mode's
   allocation pattern exposed it on HG005; it had been latent since tier PR.
 
+*Update 2026-10-12, Aim 4 (proposal §6.4).* `certa check` (`src/check.cpp`)
+is an independent checker of the interval output (Theorem V). It shares no
+alignment, bound or lookup code with the mapper. It recomputes Lemma L,
+enumerates every probe occurrence from an index that `certa check-index`
+has validated against the FASTA, rebuilds the chains, and searches with its
+own banded DP.
+- **Honest records:** all accepted, 4 M each on HG002 and HG005 (2 M pairs
+  each).
+- **Faults false by construction:** all 23,733 injected into real SAM were
+  rejected, with 0 false alarms.
+- **Mapper mutants:** all 6 flagged on real data. One is a wrong constant in
+  the mapper's own Lemma L.
+- **Cost:** 89–134 µs CPU per record, about the mapper's. Index validation
+  takes 34 s once per reference.
+- **A real bug found:** records whose alignment runs off the circular chrM
+  kept XL and XQ after the alignment was dropped. Fixed.
+- **Gap:** the XQ of PR records (about 4 %) rests on the pair certificate,
+  which the checker does not re-derive yet (open).
+
 - **Speed in paired mode:** 4.0× faster than BWA-MEM2 but slower than
   minibwa (77 s vs 62 s, 20M pairs). The cost lies in the pair pass (about
   1,050 CPU-s) and in the fallback's hard reads. Sending only the

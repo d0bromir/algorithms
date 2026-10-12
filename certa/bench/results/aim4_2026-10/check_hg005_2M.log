@@ -1,0 +1,10 @@
+[check] 4000000 of 4000000 records checked: accepted 100.0000%
+[check]   malformed: 0
+[check]   wrong_score: 0
+[check]   wrong_xl: 0
+[check]   xu_unproven: 0
+[check]   xh_unproven: 0
+[check]   wrong_xq: 0
+[check] claims proven from witnesses: XU < L 1163191, XH 3105868; XQ resting on the pair certificate (not re-derived) 176491
+[check] per record: 10.4 probe occurrences, 4.25 DP windows, 4645 DP cells; 134.3 us CPU (17.2 s wall on 32 threads)
+19.24 s wall, 536.89 s user

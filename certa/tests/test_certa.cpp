@@ -18,21 +18,27 @@
 // optimum, and every SUB bound must hold against the best score at a locus
 // not overlapping the reported one (the same DP on the other strand and on
 // the reference left and right of the reported interval).
+// The independent checker (check.h, Theorem V) must accept every honest
+// claim and reject every claim made false against the oracles, and index
+// validation must reject corrupted indexes and FASTAs.
 #include <algorithm>
 #include <climits>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <random>
 #include <string>
+#include <functional>
 #include <tuple>
 #include <vector>
 
 #include "index.h"
 #include "certa/interval.h"
+#include "check.h"
 #include "certa/pair.h"
 #include "certa/repeat.h"
 #include "mapper.h"
@@ -219,6 +225,38 @@ int oracle_pair(const std::vector<uint8_t>& ref, const std::vector<uint8_t>& m1,
     }
   }
   return best;
+}
+
+// The claims of an interval-output record, as certa check reads them.
+check::Claim claim_of(const Placement& p, const std::vector<uint8_t>& read) {
+  check::Claim c;
+  c.read = read;
+  c.mapped = p.mapped;
+  auto aln = [](const Result& r) {
+    check::Aln a;
+    a.pos = r.ref_pos;
+    a.strand = r.strand;
+    a.cigar.assign(r.cigar, r.cigar + r.n_cigar);
+    return a;
+  };
+  if (p.mapped) {
+    c.aln = aln(p.r);
+    c.as = p.r.score;
+  }
+  c.mapq = p.mapq;
+  c.xl = p.xl == kNoSub ? check::kNone : p.xl;
+  c.xu = p.xu;
+  c.xq = p.xq;
+  c.pair_xq = p.mapped && p.r.tier == kTierPR;
+  if (p.xq > 0 && !c.pair_xq) c.xh = p.sub_hi;
+  if (p.xl_sep) {
+    c.has_alt = true;
+    c.alt = aln(p.xl_r);
+  }
+  c.t = p.w.t;
+  for (int st = 0; st < 2; ++st)
+    for (int j = 0; j < p.w.n[st]; ++j) c.probes[st].push_back({p.w.off[st][j], p.w.end[st][j]});
+  return c;
 }
 
 // Affine score of a reported alignment, clip penalties included.
@@ -611,6 +649,46 @@ int main(int argc, char** argv) {
     sub_cache[key] = v;
     return v;
   };
+  // Checker on the certified results (index q = 14, s = 4).
+  const check::Checker checker4(ref, ix);
+  int claims_accepted = 0, claims_tampered = 0, tamper_caught = 0;
+  int caught_by[check::kNumVerdicts] = {};  // rejections of falsified claims, by verdict
+  auto check_claims = [&](size_t i, const Result& r, const Params& p) {
+    if (r.tier != kTierS0 && r.tier != kTierS1 && r.tier != kTierSL) return;
+    const int L = static_cast<int>(reads[i].seq.size());
+    const Placement pl = place_single(r, 60, nullptr, L);
+    check::Claim c = claim_of(pl, reads[i].seq);
+    check::Work w;
+    const check::Verdict v = checker4.check(c, &w);
+    CHECK(v == check::kAccepted, "k=%d budget=%d local=%d read %zu tier %d: checker says %s (XL %d XU %d XH %d XQ %d)",
+          p.k, p.budget, p.local, i, r.tier, check::kVerdictNames[v], c.xl, c.xu, c.xh, c.xq);
+    claims_accepted += v == check::kAccepted;
+    // Falsified claims must be rejected: XU below OPT, XH below SUB, AS off
+    // by one, the alignment moved, the witness dropped.
+    const int opt = oracle_opt(i);
+    auto expect_reject = [&](check::Claim t, const char* what) {
+      check::Work w2;
+      const check::Verdict v2 = checker4.check(t, &w2);
+      ++claims_tampered;
+      tamper_caught += v2 != check::kAccepted;
+      ++caught_by[v2];
+      CHECK(v2 != check::kAccepted, "read %zu tier %d: false claim accepted (%s)", i, r.tier, what);
+    };
+    { check::Claim t = c; t.xu = opt - 1; expect_reject(t, "XU = OPT - 1"); }
+    { check::Claim t = c; t.as = c.as + 1; expect_reject(t, "AS + 1"); }
+    { check::Claim t = c; t.aln.pos += 1; expect_reject(t, "alignment moved by one base"); }
+    if (c.xu < L * kMatch) { check::Claim t = c; t.t = 0; expect_reject(t, "no witness"); }
+    if (i % 6 == 0 || planted_bound(i)) {
+      const int sub = oracle_sub_at(i, r);
+      if (sub >= 19 && sub < c.as) {  // a claim XH = SUB - 1 with a positive XQ is false
+        check::Claim t = c;
+        t.xh = sub - 1;
+        t.xq = 1;
+        t.mapq = 60;
+        expect_reject(t, "XH = SUB - 1");
+      }
+    }
+  };
   auto check_certified_bounds = [&](size_t i, const Result& r, const Params& p) {
     const int L = static_cast<int>(reads[i].seq.size());
     int xl, xu, sh;
@@ -677,7 +755,10 @@ int main(int argc, char** argv) {
         continue;
       }
       ++certified;
-      if (i % 3 == 0 || planted_bound(i)) check_certified_bounds(i, r, p);
+      if (i % 3 == 0 || planted_bound(i)) {
+        check_certified_bounds(i, r, p);
+        if (i % 6 == 0 || planted_bound(i)) check_claims(i, r, p);
+      }
       if (r.tier == kTierSL) {  // the certified maximum local score
         ++sl;
         CHECK(rescore(view, r, reads[i].seq) == r.nm, "SL read %zu: CIGAR rescores to %d edits, NM %d",
@@ -732,6 +813,11 @@ int main(int argc, char** argv) {
   std::fprintf(stderr, "SL scores checked against the local oracle for %d reads\n", local_checked);
   std::fprintf(stderr, "certified [XL, XU] checked %d times; SUB bounds below OPT %d, checked against the SUB oracle %d\n",
                bounds_checked, sub_nontrivial, sub_checked);
+  std::fprintf(stderr, "checker: %d certified records accepted; %d of %d falsified claims rejected (", claims_accepted,
+               tamper_caught, claims_tampered);
+  for (int v = 1; v < check::kNumVerdicts; ++v)
+    std::fprintf(stderr, "%s%s %d", v > 1 ? ", " : "", check::kVerdictNames[v], caught_by[v]);
+  std::fprintf(stderr, ")\n");
 
   // ---- band_score must equal affine_align's score on any band and start range.
   {
@@ -934,8 +1020,9 @@ int main(int argc, char** argv) {
       ip.fallback_samples = 8;
       ip.lb_chains = 8;
       PairScratch psc;
-      int placed = 0, proper_n = 0, rescued = 0;
+      int placed = 0, proper_n = 0, rescued = 0, pair_checked = 0;
       auto contig_of = [&](int64_t pos) { return ref.contig_of(pos); };
+      const check::Checker checker_p(ref, ix1);
       for (int n = 0; n < 60; ++n) {
         // Fragments from unique sequence, the 50-copy element and diverged
         // copies; mate 2 sometimes heavily mutated (only rescue can place it).
@@ -984,6 +1071,12 @@ int main(int argc, char** argv) {
                 rescore_affine(view1, o.r, *m[x]), o.r.score);
           CHECK(o.xl != kNoSub && o.r.score <= o.xl, "pair %d mate %d: AS %d above XL %d", n, x, o.r.score, o.xl);
         }
+        for (int x = 0; x < 2; ++x) {
+          check::Work w;
+          const check::Verdict v = checker_p.check(claim_of(out[x], *m[x]), &w);
+          ++pair_checked;
+          CHECK(v == check::kAccepted, "pair %d mate %d: checker says %s", n, x, check::kVerdictNames[v]);
+        }
         if (proper) {
           const Result& fw = out[0].r.strand ? out[1].r : out[0].r;
           const Result& rv = out[0].r.strand ? out[0].r : out[1].r;
@@ -992,8 +1085,108 @@ int main(int argc, char** argv) {
                 "pair %d: claimed proper but not", n);
         }
       }
-      std::fprintf(stderr, "interval pairs: %d records placed (%d by the pair window), %d proper pairs of 60\n",
-                   placed, rescued, proper_n);
+      std::fprintf(stderr, "interval pairs: %d records placed (%d by the pair window), %d proper pairs of 60; %d checked\n",
+                   placed, rescued, proper_n, pair_checked);
+    }
+
+    // ---- The checker on tier R and pair records (index q = 14, s = 1), and
+    // index validation.
+    {
+      const check::Checker checker1(ref, ix1);
+      RepeatParams ip;
+      ip.tau = 256;
+      ip.sub_margin = 20;
+      ip.fallback_samples = 8;
+      ip.lb_chains = 8;
+      int acc = 0, total = 0, tampered = 0, caught = 0, by_proof = 0;
+      for (size_t i = 0; i < reads.size(); ++i) {
+        if (i % 2 && !planted_bound(i)) continue;
+        const auto& rd = reads[i].seq;
+        const int L = static_cast<int>(rd.size());
+        const RepeatOut o = repeat_tier(view1, ip, rd.data(), L, *ws, sc);
+        if (!o.claim) continue;
+        Result none{};
+        const Placement pl = place_single(none, 0, &o, L);
+        const check::Claim c = claim_of(pl, rd);
+        check::Work w;
+        const check::Verdict v = checker1.check(c, &w);
+        ++total;
+        acc += v == check::kAccepted;
+        CHECK(v == check::kAccepted, "tier R read %zu: checker says %s (XL %d XU %d XH %d XQ %d)", i,
+              check::kVerdictNames[v], c.xl, c.xu, c.xh, c.xq);
+        if (local_truth[i] == INT32_MIN) local_truth[i] = oracle_local(R, rd.data(), L);
+        const int opt = local_truth[i];
+        if (opt - 1 >= (c.xl == check::kNone ? INT32_MIN : c.xl) && opt - 1 >= 0) {
+          check::Claim t = c;
+          t.xu = opt - 1;
+          check::Work w2;
+          ++tampered;
+          const check::Verdict v2 = checker1.check(t, &w2);
+          const bool rej = v2 != check::kAccepted;
+          caught += rej;
+          by_proof += v2 == check::kXUUnproven;
+          CHECK(rej, "tier R read %zu: false XU = OPT - 1 = %d accepted", i, opt - 1);
+        }
+        if (pl.mapped && pl.xq > 0 && i % 4 == 0) {
+          const int sub = oracle_sub(R, rd, pl.r.strand, pl.r.ref_pos, ref_span_of(pl.r));
+          if (sub >= 19 && sub < c.as) {
+            check::Claim t = c;
+            t.xh = sub - 1;
+            check::Work w2;
+            ++tampered;
+            const check::Verdict v2 = checker1.check(t, &w2);
+            const bool rej = v2 != check::kAccepted;
+            caught += rej;
+            by_proof += v2 == check::kXHUnproven;
+            CHECK(rej, "tier R read %zu: false XH = SUB - 1 = %d accepted", i, sub - 1);
+          }
+        }
+      }
+      std::fprintf(stderr,
+                   "checker: tier R records accepted %d of %d; %d of %d falsified claims rejected (%d by the bound "
+                   "search, the rest as XL > XU or wrong XQ)\n",
+                   acc, total, caught, tampered, by_proof);
+
+      // Index validation: the in-memory, the memory-mapped (16-bit keys) and
+      // the s = 1 index are valid, with the reference written as FASTA;
+      // corruptions are not.
+      const std::string fa = "test_certa.tmp.fa";
+      {
+        std::ofstream out(fa);
+        for (size_t c = 0; c < ref.names.size(); ++c) {
+          out << '>' << ref.names[c] << " test\n";
+          for (uint64_t k = 0; k < ref.lengths[c]; ++k) {
+            out << "ACGTN"[R[ref.offsets[c] + k]];
+            if (k % 60 == 59 || k + 1 == ref.lengths[c]) out << '\n';
+          }
+        }
+      }
+      std::string why;
+      CHECK(check::validate_index(ref, ix, fa, 4, &why), "index q14 s4 invalid: %s", why.c_str());
+      CHECK(check::validate_index(ref, ix1, fa, 4, &why), "index q14 s1 invalid: %s", why.c_str());
+      CHECK(check::validate_index(ref_m, ix_m, fa, 4, &why), "memory-mapped index invalid: %s", why.c_str());
+      auto corrupt = [&](const char* what, const std::function<void(Index&)>& f) {
+        Index bad = ix;
+        f(bad);
+        std::string w;
+        CHECK(!check::validate_index(ref, bad, "", 4, &w), "corrupted index accepted (%s)", what);
+      };
+      corrupt("position moved", [](Index& b) { b.pos.owned[b.pos.owned.size() / 2] += 4; });
+      corrupt("key changed", [](Index& b) { b.keys.owned[b.keys.owned.size() / 3] ^= 1; });
+      corrupt("entry dropped", [](Index& b) {
+        b.keys.owned.pop_back();
+        b.pos.owned.pop_back();
+        b.dir.owned.back() -= 1;
+      });
+      corrupt("entry duplicated", [](Index& b) { b.pos.owned[1] = b.pos.owned[0]; b.keys.owned[1] = b.keys.owned[0]; });
+      {
+        Reference r2 = ref;
+        r2.seq.owned[ref.offsets[1] + 77] = static_cast<uint8_t>((r2.seq.owned[ref.offsets[1] + 77] + 1) % 4);
+        std::string w;
+        CHECK(!check::validate_index(r2, ix, fa, 4, &w), "a reference differing from the FASTA accepted");
+      }
+      std::remove(fa.c_str());
+      std::fprintf(stderr, "checker: index validation (3 valid, 5 corruptions rejected) done\n");
     }
   }
   if (failures) {

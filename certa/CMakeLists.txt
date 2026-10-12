@@ -43,7 +43,7 @@ if(NOT CERTA_CUDA STREQUAL "OFF")
   endif()
 endif()
 
-add_library(certa_core STATIC src/index.cpp src/seqio.cpp src/mapper_cpu.cpp)
+add_library(certa_core STATIC src/index.cpp src/seqio.cpp src/mapper_cpu.cpp src/check.cpp)
 target_include_directories(certa_core PUBLIC include src)
 target_link_libraries(certa_core PUBLIC Threads::Threads)
 if(ZLIB_FOUND)

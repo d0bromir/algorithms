@@ -133,6 +133,32 @@ mate. `--iv-mapq cons` writes XQ instead.
 
 Results: [EXACT_ALIGNMENT_PROPOSAL.md §6.3](../EXACT_ALIGNMENT_PROPOSAL.md).
 
+### Checking the output independently (`certa check`)
+
+```bash
+build-*/certa check-index grch38.cidx GRCh38.fa         # once per reference build (34 s for GRCh38)
+build-*/certa map grch38.cidx R1.fq.gz R2.fq.gz --gpu --intervals --witness -o all.sam
+build-*/certa check grch38.cidx all.sam                  # every record
+build-*/certa check grch38.cidx all.sam --sample 100000  # or an audit sample
+```
+
+- **`--witness`** adds:
+  - `XW`, the probes and support the bounds were proven from;
+  - `XH`, the SUB bound behind XQ;
+  - `XV`, the alignment attaining XL when it is not the record's own.
+- **`certa check`** (`src/check.cpp`) shares no alignment, bound or lookup
+  code with the mapper. For each record it verifies:
+  - AS, by rescoring;
+  - XL, by a shown alignment;
+  - XU and XH, by recomputing the bound and enumerating every probe
+    occurrence itself;
+  - XQ, against BWA-MEM's formula.
+- **It exits** with status 2 if any record fails; `--failures f.txt` lists
+  them.
+- **Not checked yet:** the XQ of PR records (pair certificate).
+
+Results: [EXACT_ALIGNMENT_PROPOSAL.md §6.4](../EXACT_ALIGNMENT_PROPOSAL.md).
+
 `stats.json` records the certified fraction by tier, why the other reads
 were not certified (radius < 0 = repetitive, not found = more than R edits
 or no locus, …), and a timing breakdown (index load, GPU upload,

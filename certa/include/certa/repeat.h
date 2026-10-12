@@ -83,6 +83,8 @@ struct RepeatOut {
   int64_t copy_pos[2] = {-1, -1};
   int copy_strand[2] = {0, 0};
   int nparts = 0, nabsent = 0, nocc = 0;
+  int np[2] = {0, 0};    // the parts per strand [poff, pend) (strand 1: in the
+  int16_t poff[2][PMAX], pend[2][PMAX];  // reverse complement), the witness
   bool has_aln = false;  // aln holds A* (its CIGAR fits)
   Result aln;            // A*
   int sub_lo = kNoSub;   // SUB >= sub_lo (an alignment at another locus)
@@ -230,6 +232,11 @@ inline RepeatOut repeat_tier(const IndexView& ix, const RepeatParams& rp, const 
       s = b;
     }
     out.nparts += np[st];
+    out.np[st] = np[st];
+    for (int j = 0; j < np[st]; ++j) {
+      out.poff[st][j] = (int16_t)off[st][j];
+      out.pend[st][j] = (int16_t)end[st][j];
+    }
   }
 
   // Upper bound for alignments with no exact part, and the band they force.

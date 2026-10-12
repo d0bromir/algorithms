@@ -39,14 +39,14 @@ else
     echo "== zlib headers not found: gzip input disabled (plain FASTA/FASTQ only)"
   fi
   objs=()
-  for f in index seqio mapper_cpu main; do
+  for f in index seqio mapper_cpu check main; do
     "$cxx" "${flags[@]}" -c "$here/src/$f.cpp" -o "$build/$f.o" &
     objs+=("$build/$f.o")
   done
   "$cxx" "${flags[@]}" -c "$here/tests/test_certa.cpp" -o "$build/test_certa.o" &
   "$cxx" "${flags[@]}" -c "$here/src/gpu_stub.cpp" -o "$build/gpu_stub.o" &
   wait
-  core=("$build/index.o" "$build/seqio.o" "$build/mapper_cpu.o")
+  core=("$build/index.o" "$build/seqio.o" "$build/mapper_cpu.o" "$build/check.o")
   if [[ "$cuda" != OFF ]] && command -v nvcc >/dev/null; then
     gencode=()
     for a in ${archs//;/ }; do gencode+=(-gencode "arch=compute_$a,code=sm_$a"); done

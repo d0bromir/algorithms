@@ -17,7 +17,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <exception>
+#include <fstream>
+#include <iostream>
+#include <random>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -27,6 +31,7 @@
 #include "certa/interval.h"
 #include "certa/pair.h"
 #include "certa/repeat.h"
+#include "check.h"
 #include "index.h"
 #include "mapper.h"
 #include "seqio.h"
@@ -251,10 +256,52 @@ void sam_line(const Result& r, const FastqRecord& rec, const Reference& ref, int
 
 // Interval mode: the tags every record carries. XL/XU: OPT in [XL, XU]
 // (XL absent when no alignment was found); XQ: certified MAPQ lower bound.
-void interval_tags(const Placement& p, char* buf, size_t n) {
-  int k = 0;
-  if (p.xl != kNoSub) k = std::snprintf(buf, n, "\tXL:i:%d", p.xl);
-  std::snprintf(buf + k, n - k, "\tXU:i:%d\tXQ:i:%d", p.xu, p.xq);
+// --witness adds what certa check needs to verify the claims (Theorem V):
+//   XW:Z:t;o-e,o-e,...;o-e,...  the support t and the probes per strand
+//                               (strand 1: offsets in the reverse complement);
+//   XH:i:  the proven bound on SUB that XQ was computed from (single-end XQ);
+//   XV:Z:contig,pos,strand,CIGAR  the alignment attaining XL, when it is not
+//                               the record's own.
+bool g_witness = false;
+
+void interval_tags(const Placement& p, const Reference& ref, std::string& out) {
+  char buf[96];
+  out.clear();
+  if (p.xl != kNoSub) {
+    std::snprintf(buf, sizeof buf, "\tXL:i:%d", p.xl);
+    out += buf;
+  }
+  std::snprintf(buf, sizeof buf, "\tXU:i:%d\tXQ:i:%d", p.xu, p.xq);
+  out += buf;
+  if (!g_witness) return;
+  if (p.xq > 0 && p.r.tier != kTierPR) {
+    std::snprintf(buf, sizeof buf, "\tXH:i:%d", p.sub_hi);
+    out += buf;
+  }
+  if (p.w.t > 0) {
+    std::snprintf(buf, sizeof buf, "\tXW:Z:%d", p.w.t);
+    out += buf;
+    for (int st = 0; st < 2; ++st) {
+      out += ';';
+      for (int j = 0; j < p.w.n[st]; ++j) {
+        std::snprintf(buf, sizeof buf, "%s%d-%d", j ? "," : "", p.w.off[st][j], p.w.end[st][j]);
+        out += buf;
+      }
+    }
+  }
+  if (p.xl_sep) {
+    const Result& a = p.xl_r;
+    const int c = ref.contig_of(a.ref_pos);
+    if (c >= 0) {
+      std::snprintf(buf, sizeof buf, "\tXV:Z:%s,%lld,%c,", ref.names[c].c_str(),
+                    static_cast<long long>(a.ref_pos - ref.offsets[c] + 1), a.strand ? '-' : '+');
+      out += buf;
+      for (int i = 0; i < a.n_cigar; ++i) {
+        std::snprintf(buf, sizeof buf, "%u%c", a.cigar[i] >> 4, "MIDNS"[a.cigar[i] & 0xF]);
+        out += buf;
+      }
+    }
+  }
 }
 
 // An unmapped record (SAM: placed at the mate's position when it has one).
@@ -278,6 +325,20 @@ void sam_unmapped(const FastqRecord& rec, const Reference& ref, const MateInfo& 
 bool within_contig(const Result& r, const Reference& ref) {
   const int c = ref.contig_of(r.ref_pos);
   return c >= 0 && ref.contig_of(r.ref_pos + ref_span(r) - 1) == c;
+}
+
+// An alignment that runs off its contig (e.g. across the end of the
+// circular chrM into the N padding) is not reported; neither are the claims
+// that rest on it: XL (unless another alignment attains it), XH, XQ.
+void keep_within_contigs(Placement& p, const Reference& ref) {
+  if (p.xl_sep && !within_contig(p.xl_r, ref)) {
+    p.xl_sep = false;
+    p.xl = p.mapped ? p.r.score : kNoSub;
+  }
+  if (!p.mapped || within_contig(p.r, ref)) return;
+  p.mapped = false;
+  p.mapq = p.xq = 0;
+  if (!p.xl_sep) p.xl = kNoSub;
 }
 
 // Proper pair (as certified): one contig, opposite strands, and the reverse
@@ -314,6 +375,7 @@ Placement certified_placement(const Result& r, const Result& mate, const Result&
   if (r.tier != kTierPR) {
     certified_bounds(r, L, &o.xl, &o.xu, &o.sub_hi);
     o.xq = std::min(mapq, mapq_se(r.score, o.sub_hi, L));
+    o.w = witness_of(r, L);
     return o;
   }
   int q_se = 0;
@@ -322,8 +384,13 @@ Placement certified_placement(const Result& r, const Result& mate, const Result&
   if (se.certified == 1) {
     int sh;
     certified_bounds(se, L, &o.xl, &o.xu, &sh);
+    if (se.score > r.score) {  // the single-end optimum lies elsewhere
+      o.xl_sep = true;
+      o.xl_r = se;
+    }
     o.xl = std::max<int>(o.xl, r.score);
     q_se = std::min(mapq_of(se, L), mapq_se(se.score, sh, L));
+    o.w = witness_of(se, L);
   }
   const int q_pe = r.n_best == 1 ? mapq_margin(r.score + mate.score - r.sub_score) : 0;
   o.xq = std::min(mapq, std::max(q_se, std::min(q_pe, q_se + 40)));
@@ -395,10 +462,11 @@ void emit_pair(const Result* r0, const Result* se, const FastqRecord* rec, const
     const int mapq = mapq_pair(a, b, se[x], L);
     if (tags) {
       Placement pl = certified_placement(a, b, se[x], L, mapq);
+      keep_within_contigs(pl, ref);
       if (g_mapq_cons) pl.mapq = pl.xq;
-      char t[64];
-      interval_tags(pl, t, sizeof t);
-      sam_line(a, rec[x], ref, pl.mapq, mi, sam, t);
+      std::string t;
+      interval_tags(pl, ref, t);
+      sam_line(a, rec[x], ref, pl.mapq, mi, sam, t.c_str());
       if (placed) placed[x] = pl;
     } else {
       sam_line(a, rec[x], ref, mapq, mi, sam);
@@ -414,12 +482,12 @@ void emit_interval(const Result& r0, const RepeatOut* iv, const FastqRecord& rec
   check_contig(r, ref);
   const int L = static_cast<int>(rec.seq.size());
   Placement p = place_single(r, r.certified == 1 ? mapq_of(r, L) : 0, iv, L);
-  if (p.mapped && !within_contig(p.r, ref)) p.mapped = false;
+  keep_within_contigs(p, ref);
   if (g_mapq_cons) p.mapq = p.xq;
-  char t[64];
-  interval_tags(p, t, sizeof t);
-  if (p.mapped) sam_line(p.r, rec, ref, p.mapq, MateInfo(), sam, t);
-  else sam_unmapped(rec, ref, MateInfo(), 0, -1, t, sam);
+  std::string t;
+  interval_tags(p, ref, t);
+  if (p.mapped) sam_line(p.r, rec, ref, p.mapq, MateInfo(), sam, t.c_str());
+  else sam_unmapped(rec, ref, MateInfo(), 0, -1, t.c_str(), sam);
   *out = p;
 }
 
@@ -434,7 +502,7 @@ void emit_pair_interval(const Result* r0, const RepeatOut* const* iv, const uint
     check_contig(r, ref);
     L[x] = static_cast<int>(rec[x].seq.size());
     se[x] = place_single(r, r.certified == 1 ? mapq_of(r, L[x]) : 0, iv[x], L[x]);
-    if (se[x].mapped && !within_contig(se[x].r, ref)) se[x].mapped = false;
+    keep_within_contigs(se[x], ref);
   }
   auto contig_of = [&](int64_t pos) { return ref.contig_of(pos); };
   *proper = place_pair(ix, max_dist, 12, se, iv, codes, L, sc, contig_of, out);
@@ -463,10 +531,10 @@ void emit_pair_interval(const Result* r0, const RepeatOut* const* iv, const uint
       const bool left = a.r.ref_pos < b.r.ref_pos || (a.r.ref_pos == b.r.ref_pos && x == 0);
       mi.tlen = left ? hi - lo : -(hi - lo);
     }
-    char t[64];
-    interval_tags(a, t, sizeof t);
-    if (a.mapped) sam_line(a.r, rec[x], ref, a.mapq, mi, sam, t);
-    else sam_unmapped(rec[x], ref, mi, b.mapped ? b.r.ref_pos : 0, b.mapped ? cb : -1, t, sam);
+    std::string t;
+    interval_tags(a, ref, t);
+    if (a.mapped) sam_line(a.r, rec[x], ref, a.mapq, mi, sam, t.c_str());
+    else sam_unmapped(rec[x], ref, mi, b.mapped ? b.r.ref_pos : 0, b.mapped ? cb : -1, t.c_str(), sam);
   }
 }
 
@@ -484,7 +552,7 @@ struct Args {
 };
 
 Args parse(int argc, char** argv, int start) {
-  static const char* flags[] = {"--gpu", "--unc-tags", "--intervals"};
+  static const char* flags[] = {"--gpu", "--unc-tags", "--intervals", "--witness"};
   Args a;
   for (int i = start; i < argc; ++i) {
     std::string s = argv[i];
@@ -588,6 +656,127 @@ int cmd_repeat(const Args& a) {
   return 0;
 }
 
+// Validates an index file against its reference and the FASTA, once per
+// reference build (the trust base of certa check, Theorem V).
+int cmd_check_index(const Args& a) {
+  if (a.pos.size() != 2) throw std::runtime_error("usage: certa check-index ref.cidx ref.fa [-t N]");
+  auto t0 = Clock::now();
+  Reference ref;
+  Index ix;
+  load_index(a.pos[0], ref, ix);
+  std::string why;
+  const bool ok = check::validate_index(ref, ix, a.pos[1], a.geti("-t", default_threads()), &why);
+  std::fprintf(stderr, "[check-index] %s: q=%d s=%d, %llu entries, %zu contigs: %s (%.1f s)\n", a.pos[0].c_str(),
+               ix.q, ix.s, static_cast<unsigned long long>(ix.pos.size()), ref.names.size(),
+               ok ? "valid" : ("INVALID: " + why).c_str(), secs(t0));
+  return ok ? 0 : 1;
+}
+
+// Checks the claims of certa map --intervals --witness records (check.h):
+// every record, or a uniform sample of --sample N.
+int cmd_check(const Args& a) {
+  if (a.pos.size() != 2)
+    throw std::runtime_error("usage: certa check ref.cidx aln.sam|- [-t N] [--sample N] [--seed 1] [--failures f.txt]");
+  const int threads = a.geti("-t", default_threads());
+  const int64_t sample = a.geti("--sample", 0);
+  Reference ref;
+  Index ix;
+  load_index(a.pos[0], ref, ix);
+  const check::Checker ck(ref, ix);
+  std::ifstream file;
+  std::istream* in = &std::cin;
+  if (a.pos[1] != "-") {
+    file.open(a.pos[1]);
+    if (!file) throw std::runtime_error("cannot open " + a.pos[1]);
+    in = &file;
+  }
+  std::FILE* fails = a.has("--failures") ? std::fopen(a.get("--failures", "").c_str(), "wb") : nullptr;
+  uint64_t verdict[check::kNumVerdicts] = {}, records = 0, xu = 0, xh = 0, pair_xq = 0, occ = 0, windows = 0,
+           cells = 0, lines = 0;
+  double t_check = 0;
+  const std::clock_t c0 = std::clock();
+  std::vector<uint64_t> number;  // record number (1-based, headers excluded) of each batch line
+  auto run = [&](std::vector<std::string>& batch) {
+    std::vector<int> v(batch.size());
+    std::vector<check::Work> w(batch.size());
+    auto t = Clock::now();
+    std::atomic<size_t> next{0};
+    auto worker = [&] {
+      for (size_t i; (i = next.fetch_add(1)) < batch.size();) {
+        check::Claim c;
+        v[i] = ck.parse_sam(batch[i], &c) ? ck.check(c, &w[i]) : check::kMalformed;
+      }
+    };
+    std::vector<std::thread> pool;
+    for (int k = 1; k < threads; ++k) pool.emplace_back(worker);
+    worker();
+    for (auto& th : pool) th.join();
+    t_check += secs(t);
+    for (size_t i = 0; i < batch.size(); ++i) {
+      ++records;
+      ++verdict[v[i]];
+      xu += w[i].xu_checked;
+      xh += w[i].xh_checked;
+      pair_xq += w[i].pair_xq;
+      occ += w[i].occurrences;
+      windows += w[i].windows;
+      cells += w[i].cells;
+      if (v[i] != check::kAccepted && fails)
+        std::fprintf(fails, "%s\t%llu\t%s\n", check::kVerdictNames[v[i]],
+                     static_cast<unsigned long long>(number[i]), batch[i].c_str());
+    }
+    batch.clear();
+    number.clear();
+  };
+  std::vector<std::string> batch;
+  std::string line;
+  std::mt19937_64 rng(static_cast<uint64_t>(a.geti("--seed", 1)));
+  while (std::getline(*in, line)) {
+    if (line.empty() || line[0] == '@') continue;
+    ++lines;
+    if (sample > 0) {  // reservoir sample
+      if (static_cast<int64_t>(batch.size()) < sample) {
+        batch.push_back(line);
+        number.push_back(lines);
+      } else {
+        const uint64_t j = rng() % lines;
+        if (j < static_cast<uint64_t>(sample)) {
+          batch[j] = line;
+          number[j] = lines;
+        }
+      }
+    } else {
+      batch.push_back(line);
+      number.push_back(lines);
+      if (batch.size() == (1u << 18)) run(batch);
+    }
+  }
+  if (!batch.empty()) run(batch);
+  if (fails) std::fclose(fails);
+  const double cpu = static_cast<double>(std::clock() - c0) / CLOCKS_PER_SEC;
+  const double n = records ? static_cast<double>(records) : 1.0;
+  std::fprintf(stderr, "[check] %llu of %llu records checked%s: accepted %.4f%%\n",
+               static_cast<unsigned long long>(records), static_cast<unsigned long long>(lines),
+               sample > 0 ? " (uniform sample)" : "", 100.0 * verdict[check::kAccepted] / n);
+  for (int i = 1; i < check::kNumVerdicts; ++i)
+    std::fprintf(stderr, "[check]   %s: %llu\n", check::kVerdictNames[i], static_cast<unsigned long long>(verdict[i]));
+  std::fprintf(stderr,
+               "[check] claims proven from witnesses: XU < L %llu, XH %llu; XQ resting on the pair certificate "
+               "(not re-derived) %llu\n",
+               static_cast<unsigned long long>(xu), static_cast<unsigned long long>(xh),
+               static_cast<unsigned long long>(pair_xq));
+  std::fprintf(stderr,
+               "[check] per record: %.1f probe occurrences, %.2f DP windows, %.0f DP cells; %.1f us CPU (%.1f s wall "
+               "on %d threads)\n",
+               occ / n, windows / n, cells / n, 1e6 * cpu / n, t_check, threads);
+  if (sample > 0 && verdict[check::kAccepted] == records)
+    std::fprintf(stderr,
+                 "[check] audit: if more than %.3g%% of all records were wrong, a sample of %llu would have shown one "
+                 "with 95%% probability\n",
+                 100.0 * (1.0 - std::pow(0.05, 1.0 / n)), static_cast<unsigned long long>(records));
+  return verdict[check::kAccepted] == records ? 0 : 2;
+}
+
 int cmd_index(const Args& a) {
   if (a.pos.size() != 1 || !a.has("-o"))
     throw std::runtime_error("usage: certa index ref.fa -o ref.cidx [-q 22] [-s 8] [-t N]");
@@ -685,6 +874,8 @@ int cmd_map(const Args& a) {
   const std::string mapq_mode = a.get("--iv-mapq", "point");
   if (mapq_mode != "point" && mapq_mode != "cons") throw std::runtime_error("--iv-mapq must be point or cons");
   g_mapq_cons = mapq_mode == "cons";
+  g_witness = a.has("--witness");
+  if (g_witness && !intervals) throw std::runtime_error("--witness needs --intervals");
   if (intervals && (a.has("-u") || a.has("-U") || a.has("-S")))
     throw std::runtime_error("--intervals writes every read to SAM: no -u/-U/-S");
   const bool gpu = a.has("--gpu");
@@ -1174,6 +1365,10 @@ int main(int argc, char** argv) {
                    "  certa map ref.cidx reads.fq[.gz] [-k 5] [--k1 2] [--budget 16] [--budget2 256]\n"
                    "            [--budget3 0|4096] [--support3 2] [--local 0|2] [-t N] [--gpu] [--device 0]\n"
                    "            [-o out.sam] [-u uncertified.fq] [--stats s.json] [--batch N] [--io-threads N]\n"
+                   "            [--intervals [--witness] [--iv-mapq point|cons]]\n"
+                   "  certa repeat ref.cidx reads.fq [--tau 16] [--tsv out.tsv]\n"
+                   "  certa check-index ref.cidx ref.fa       (once per reference build)\n"
+                   "  certa check ref.cidx aln.sam|- [--sample N] [--failures f.txt]\n"
                    "GPU support compiled in: %s\n",
                    GpuMapper::compiled_in() ? "yes" : "no");
       return 1;
@@ -1183,6 +1378,8 @@ int main(int argc, char** argv) {
     if (cmd == "index") return cmd_index(a);
     if (cmd == "map") return cmd_map(a);
     if (cmd == "repeat") return cmd_repeat(a);
+    if (cmd == "check") return cmd_check(a);
+    if (cmd == "check-index") return cmd_check_index(a);
     throw std::runtime_error("unknown command: " + cmd);
   } catch (const std::exception& e) {
     std::fprintf(stderr, "certa: error: %s\n", e.what());

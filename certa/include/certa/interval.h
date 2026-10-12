@@ -105,6 +105,48 @@ inline Result alignment_only(const Result& a, int strand, uint8_t tier) {
   return o;
 }
 
+// The witness of a record's bounds (Theorem V, checked by certa check): the
+// disjoint read intervals ("probes") whose exact occurrences the bound was
+// proven from, per strand (strand 1 in reverse-complement coordinates), and
+// the support t: alignments with fewer than t exact probes are bounded by
+// Lemma L alone. t = 0: no witness (the record claims nothing that needs one).
+struct Witness {
+  int t = 0;
+  int n[2] = {0, 0};
+  int16_t off[2][PMAX], end[2][PMAX];
+};
+
+// The parts a certified result enumerated (tiers S0, S1, SL).
+inline Witness witness_of(const Result& r, int L) {
+  Witness w;
+  if (r.tier != kTierS0 && r.tier != kTierS1 && r.tier != kTierSL) return w;
+  w.t = r.support;
+  for (int st = 0; st < 2; ++st)
+    for (int j = 0; j < r.parts; ++j)
+      if ((r.probes[st] >> j) & 1) {
+        int off, len;
+        part_geometry(L, r.parts, j, &off, &len);
+        w.off[st][w.n[st]] = (int16_t)off;
+        w.end[st][w.n[st]] = (int16_t)(off + len);
+        ++w.n[st];
+      }
+  return w;
+}
+
+// Tier R's parts (t = 1).
+inline Witness witness_of(const RepeatOut& iv) {
+  Witness w;
+  w.t = 1;
+  for (int st = 0; st < 2; ++st) {
+    w.n[st] = iv.np[st];
+    for (int j = 0; j < iv.np[st]; ++j) {
+      w.off[st][j] = iv.poff[st][j];
+      w.end[st][j] = iv.pend[st][j];
+    }
+  }
+  return w;
+}
+
 // One SAM record of interval output.
 struct Placement {
   Result r{};                // the alignment, when mapped
@@ -112,6 +154,9 @@ struct Placement {
   int mapq = 0, xq = 0;      // MAPQ and its certified lower bound
   int xl = kNoSub, xu = 0;   // OPT in [xl, xu]; xl = kNoSub: no alignment found
   int sub_lo = kNoSub, sub_hi = 0;
+  Witness w;                 // proves xu and sub_hi
+  bool xl_sep = false;       // xl is attained by xl_r, not by r
+  Result xl_r{};
 };
 
 // Single-end bounds of a certified result (tiers S0, S1, SR, SL).
@@ -140,6 +185,7 @@ inline Placement place_single(const Result& r, int cert_mapq, const RepeatOut* i
     certified_bounds(r, L, &o.xl, &o.xu, &o.sub_hi);
     o.sub_lo = r.sub_score;
     o.xq = std::min(o.mapq, mapq_se(r.score, o.sub_hi, L));
+    o.w = witness_of(r, L);
     return o;
   }
   o.xu = L * kMatch;
@@ -148,7 +194,15 @@ inline Placement place_single(const Result& r, int cert_mapq, const RepeatOut* i
   o.xu = iv->hi;
   o.sub_lo = iv->sub_lo;
   o.sub_hi = iv->sub_hi;
-  if (!iv->has_aln || iv->lo < kMinScore) return o;
+  o.w = witness_of(*iv);
+  if (iv->has_aln && iv->lo < kMinScore) {  // too low to report: XL's alignment goes in the witness
+    o.xl_sep = true;
+    o.xl_r = alignment_only(iv->aln, iv->aln.strand, kTierIV);
+  }
+  if (!iv->has_aln || iv->lo < kMinScore) {
+    if (!iv->has_aln) o.xl = kNoSub;  // no alignment to show for it
+    return o;
+  }
   o.r = alignment_only(iv->aln, iv->aln.strand, iv->exact ? kTierR : kTierIV);
   o.r.certified = iv->exact ? 1 : 0;
   o.r.n_best = (uint16_t)(iv->copies >= 2 && iv->exact ? 2 : 1);
@@ -284,11 +338,16 @@ inline bool place_pair(const IndexView& ix, int max_dist, int wq, const Placemen
     const Result& p = cand[b].a[x];
     Placement& o = out[x];
     if (!at_se[x]) {
+      // XL stays the single-end best when that beats the pair placement.
+      const Result best_se = se[x].mapped ? se[x].r : se[x].xl_r;
+      const bool se_best = (se[x].mapped || se[x].xl_sep) && best_se.score > p.score;
       o.r = p;
       o.r.tier = kTierMR;
       o.r.certified = 0;
       o.mapped = true;
-      o.xl = std::max(o.xl, (int)p.score);
+      o.xl = se_best ? (int)best_se.score : (int)p.score;
+      o.xl_sep = se_best;
+      if (se_best) o.xl_r = best_se;
       o.xq = 0;
     }
     o.mapq = std::max(q_se[x], std::min(q_pe, q_se[x] + 40));

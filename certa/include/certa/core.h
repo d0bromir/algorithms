@@ -173,6 +173,10 @@ struct Result {
   // Certified tiers: an upper bound on SUB, the best local score at a locus
   // not overlapping the reported one (interval output, Aim 3), or kNoSub.
   int16_t sub_hi;
+  // Witness (Theorem V): the parts enumerated per strand (bit j = part j)
+  // and the support t of the certificate that used them.
+  uint16_t probes[2];
+  uint8_t support;
 };
 
 struct Cluster {
@@ -1082,6 +1086,7 @@ inline bool certify_local(const IndexView& ix, const Params& p, int L, int P, in
   }
   r.certified = 1;
   r.tier = kTierSL;
+  r.support = (uint8_t)t;
   r.strand = ws.clusters[chosen].strand;
   r.d1 = -1;
   r.d2 = -1;
@@ -1123,6 +1128,7 @@ CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
   r.reason = kOk; r.radius = -1; r.d1 = -1; r.d2 = -1; r.n_best = 0;
   r.n_clusters = 0; r.parts = 0; r.used = 0; r.nm = 0; r.score = 0; r.d2x = -1;
   r.sub_score = kNoSub; r.floor = 0; r.ncand = 0; r.sub_hi = kNoSub;
+  r.probes[0] = r.probes[1] = 0; r.support = 0;
 
   const int P = L <= LMAX ? part_count(L, ix.q, ix.s) : 0;
   if (P < 1) {
@@ -1147,6 +1153,9 @@ CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
   const int m = m0 < m1 ? m0 : m1;
   r.parts = (uint8_t)P;
   r.used = (uint8_t)m;
+  for (int st = 0; st < 2; ++st)
+    for (int x = 0; x < m; ++x) r.probes[st] |= (uint16_t)(1u << ws.order[st][x]);
+  r.support = (uint8_t)t;
   const int R = m - t;
   r.radius = (int8_t)R;
   if (R < 0) {

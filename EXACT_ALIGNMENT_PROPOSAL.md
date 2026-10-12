@@ -376,7 +376,7 @@ and accepts only if every claim matches, never accepts a false interval, given a
 
 **Trust base.** The checker is a few hundred lines with no heuristics or part selection. Its cost is
 about that of CERTA's own enumeration and verification, so it can re-check every read, or a random
-sample. A sample of n reads detects a certificate-error rate p with probability 1 − (1 − p)ⁿ. That
+sample. (Built and measured in Aim 4, §6.4: 540 lines, 89–134 µs per record.) A sample of n reads detects a certificate-error rate p with probability 1 − (1 − p)ⁿ. That
 is a concrete QA procedure for clinical audits. The index can itself be validated against the
 reference independently, once per reference build.
 
@@ -652,6 +652,56 @@ Records misplaced with MAPQ ≥ 20:
   alignment can reach for reads ≥ 100 bp.
 - *Regression:* default output is byte-identical to the previous version.
 
+### 6.4 Aim 4 result: the independent checker (measured, October 2026)
+
+**What was built.**
+- **The checker:** `certa check` ([`certa/src/check.cpp`](certa/src/check.cpp), about 540 lines). It shares
+  no alignment, bound or lookup code with the mapper: it has its own index lookup, Lemma L, banded
+  DP and SAM parser.
+- **The witness:** `certa map --intervals --witness` adds what the checker needs to each record:
+  - `XW`: the probes (read intervals) and the support t that the bounds were proven from;
+  - `XH`: the SUB bound behind XQ;
+  - `XV`: the alignment attaining XL, when it is not the record's own.
+- **The verification**, per record (Theorem V, in its strongest form: the checker rebuilds the chains
+  itself instead of trusting a list):
+  1. It rescores AS from the CIGAR.
+  2. It checks that an alignment scoring XL is shown.
+  3. For XU, it recomputes U_t (Lemma L), enumerates every exact occurrence of every probe, chains
+     them with pad = L − XU − 7, and runs a DP over every chain whose Lemma L bound exceeds XU.
+  4. It checks XH the same way, counting only loci that don't overlap the record's.
+  5. It checks XQ against BWA-MEM's formula at (AS, XH).
+- **The index:** `certa check-index` proves, once per reference build, that the index holds exactly
+  the N-free q-mers at every s-th position (all keys match, no position repeats, the count is right)
+  and that the stored reference equals the FASTA. For GRCh38 (2.95 G entries) this takes 34 s on 64
+  threads.
+
+**Results** ([raw](certa/bench/results/aim4_2026-10/)):
+
+| Test | Result |
+|---|---|
+| Honest records, HG002 2 M pairs | **4,000,000 of 4,000,000 accepted**: 920 k non-trivial XU and 3.28 M XH bounds proven |
+| Honest records, HG005 2 M pairs | **4,000,000 of 4,000,000 accepted**: 1.16 M XU and 3.11 M XH bounds proven |
+| Faults false by construction, real SAM | **23,733 of 23,733 rejected**: AS + 1, last base clipped, XU < XL, XQ + 10, witness removed |
+| Faults of unknown truth, real SAM | moved alignment 99.87 %, XH − 10 99.81 %, moved probe 57 % rejected (the rest stay true and provable) |
+| Untouched records rejected | **0** |
+| Mapper mutants on real data (6) | **all 6 flagged**, 20 to 143,329 records each. One is a bug in the mapper's own Lemma L, caught by the checker's independent one. |
+| Oracle unit tests (4 seeds, ARM and x86) | every honest claim accepted; every claim falsified against the oracles rejected (7,000–8,500 per seed, a third of them caught by the bound search itself) |
+| Corrupted indexes and FASTA | all rejected |
+
+**Cost.** 89 µs CPU per record on HG002 and 134 µs on HG005, about the mapper's own 86 µs. That is
+11.5 s on 32 threads for 4 M records.
+- **Sampling audits:** a uniform sample of 100,000 records takes 0.6 s. When it is all accepted, it
+  excludes an error rate above 0.003 % at 95 % confidence.
+- **A real bug found:** the checker's first real-data run rejected 2 of 4 M records. Their
+  alignments ran off the end of the circular chrM, and the mapper had dropped the alignment but kept
+  XL and XQ. The fix makes such records claim nothing they cannot show.
+
+**Go / no-go: go, with one declared gap.** Every claim the checker covers is verified, and every
+injected fault that falsifies one is detected.
+- **The gap:** the XQ of PR records (about 4 % of records) rests on the pair certificate (Theorem P),
+  which the checker does not re-derive yet. These are reported as unchecked; their XL and XU are
+  checked.
+
 **Speed budget** (CPU per read, paired-end, from §2.2). The exact tiers F, R, H and X replace the
 heuristic fallback and see only the 4.6 % uncertified reads:
 - ≲ 1.2 ms CPU per residual read keeps CERTA's total CPU at or below minibwa's;
@@ -668,7 +718,7 @@ such guarantee, so it runs under a per-read budget and returns an interval when 
 | **1. Ceiling** (no new data needed) | q = 15 second index; PMAX lifted to 16; tier F pass | exact share, occurrence counts, CPU per residual read on HG002, HG001, HG005 | Exact share +1 point at ≤ 1 ms CPU per residual read. **Done for HG002 and HG005: go (§6.1).** HG001 needs its FASTQs re-downloaded. |
 | **2. Repeats** | FM-index counts; Theorem R ties; Theorem R′ collapse | exact share and tie proofs among the 3.6 % repeat-limited reads; DP calls saved | Half of the repeat-limited reads exact or proven ties. **Partial go (§6.2): 50.5–53.2 % on HG002, 43.8–46.0 % on HG005; 79–86 % of near-perfect copies.** Built with the hash index (no FM-index needed); window collapse (R′) not needed so far. |
 | **3. Interval output and MAPQ** | [ℓ, u], SUB interval, conservative MAPQ, SAM tags (`XL`, `XU`) | interval-width distribution; MAPQ calibration on GIAB stratified regions | Variant F1 non-inferior to the current pipeline with **no** heuristic fallback. **Go (§6.3): HG005 F1 −0.0008 to +0.0011 against CERTA + minibwa, above BWA-MEM2 in all 4.** Calibration was measured on simulated pairs instead (the GIAB stratification files are not downloaded). XQ as MAPQ fails: it is biased toward the reference. |
-| **4. Checker** | independent checker (Theorem V); sampling audit | check time per read; zero disagreements | Checker accepts 100 % of certificates; injected faults all detected |
+| **4. Checker** | independent checker (Theorem V); sampling audit | check time per read; zero disagreements | Checker accepts 100 % of certificates; injected faults all detected. **Go (§6.4): 8 M real records accepted; all 23,733 false-by-construction faults and all 6 mapper mutants detected; 89–134 µs per record.** Gap: pair-level XQ (PR, about 4 % of records) is not re-derived. |
 | **5. Theory** | written proofs of Lemma H, Theorems C, G, R, V; optional Lean 4 mechanization | — | Proofs reviewed; mutation tests for each bound |
 | **6. Long reads** | HiFi feasibility on a2's existing data (§8) | share of reads whose loss is below the certifiable ceiling | Go if ≥ 90 % of HiFi reads fit |
 

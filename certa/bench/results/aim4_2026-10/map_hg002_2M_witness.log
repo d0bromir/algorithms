@@ -1,0 +1,18 @@
+[map] index ../idx/grch38.s1v3.cidx: q=22 s=1, 2948602603 entries, loaded in 0.6 s
+[map] pass 1: k=2 budget=16; pass 2: k=5 budget=256 S2<=0; parts are >= 22 bases
+[map] GPU NVIDIA A100 80GB PCIe (sm_80, 81152 MiB), index uploaded in 2.2 s (overlapped with input)
+[map] 4000000 reads: certified 95.40% (S0 exact 70.32%, S1 <=R edits 17.01%, SR repeat 1.17%, SL local 0.00%), ties 4.63%
+[map]   uncertified/bad_length: 0.00%
+[map]   uncertified/radius_negative: 0.44%
+[map]   uncertified/not_found: 4.12%
+[map]   uncertified/cluster_too_wide: 0.03%
+[map]   uncertified/cross_contig: 0.00%
+[map] placed without certificate (S2, <= 0 edits): 0.00%; to fallback: 4.60%
+[map] second pass (budget 256, S2 <= 0): 10.52% of reads; third pass (CPU, budget 256): 0.00%
+[map] local pass (CPU, support 0): 0.00% of reads
+[map] pairs 2000000: both mates certified 93.56% (proper 92.06%); PR pair certificate 6.91% of reads; pair pass tried 11.82% of pairs
+[map] intervals: tier R on 4.60% of reads (tau 256); records: tier R exact 0.78%, interval 2.38%, pair window 0.88%, unmapped 0.81% (proven unalignable 0.00%); exact (XL = XU) 89.87%; XU - XL 1-5 4.48%, 6-10 1.19%, 11-25 1.49%, 26-50 1.23%, >50 0.93%; MAPQ >= 20 92.11%, XQ >= 20 70.91%
+[map] intervals: proper pairs 95.32%
+[map] candidates enumerated per read (last pass): 12.4
+[map] uncertified by parts searched |S|: 0:0.44% 1:0.53% 2:0.30% 3:0.32% 4:0.50% 5:0.76% 6:1.74% 7:0.00% 8:0.00% 9:0.00% 10:0.00% 11:0.00% 12:0.00% 13:0.00% 14:0.00% 15:0.00% 16:0.00%
+[map] time: load 0.61 s, upload 2.18 s, read+encode 1.92 s (overlapped; waited 0.00 s), map 8.93 s (448138 reads/s), output 4.60 s, total 17.69 s (226170 reads/s end to end)
