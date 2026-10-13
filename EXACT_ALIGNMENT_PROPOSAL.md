@@ -796,6 +796,39 @@ All 4 are within the 0.0010 margin and above BWA-MEM2. Records with MAPQ ≥ 20 
 - **Lean 4 (optional): not started.** It needs the toolchain downloaded, which has not been
   approved.
 
+### 6.6 Aim 6: long reads (criterion pre-registered 2026-10-13, before the run)
+
+**Question.** Does the exact-part certificate reach HiFi reads? §8 argues that it does: a 13 kb
+read has hundreds of disjoint parts, so the ceiling (about 5 points of loss per part) lies far above
+the loss of a HiFi alignment. This aim measures that on real reads before anything is built.
+
+**Data.** The 242,534 real HG002 HiFi reads in `hifi_1x.fa` (GIAB PacBio CCS 15 kb, Sequel
+Q20 reads; all reads of cell m54238_180901_011437 and the first 103,846 of m54238_180902_013549,
+about 1× coverage; md5 `18fec02a…`), already on a2 and galaxy. Reference: GRCh38, the same FASTA
+as all CERTA runs. No new data.
+
+**Definitions (fixed before the run).**
+- **Best known alignment:** minimap2 2.31 `-x map-hifi -c --eqx`, primary alignment. Its score
+  under CERTA's scores (match +1, mismatch −4, gap 6 + k, 5 per clipped end) is σ ≤ OPT.
+- **Parts:** for each strand of the read, disjoint parts that each occur at most τ = 16 times in
+  GRCh38. They are chosen greedily left to right (Theorem G) and counted from the q = 22, s = 1
+  index by anchor extension (Lemma R). Absent parts (no occurrence) are included. Stretches where
+  no part of ≤ τ occurrences starts are skipped.
+- **Ceiling:** U₁, the Lemma L bound with t = 1 over those parts: an alignment with no exact part
+  occurrence scores at most U₁. The larger value over the two strands is used.
+- **A read fits** when σ > U₁. Its optimum then lies among the alignments through enumerated
+  occurrences, so certifying it needs no heuristic step. What that costs is measured separately.
+
+**Go criterion.** At least 90 % of all 242,534 reads fit. Unmapped reads count as not fitting.
+
+**Also reported, not part of the criterion:**
+- the margin σ − U₁;
+- why reads miss: unmapped, clipped, or repeat-limited;
+- the enumerated occurrences per read, as a proxy for the verification cost;
+- the same at τ = 256.
+
+The measuring tool is debugged on 500 reads of the 10× set that are not in the sample.
+
 ## 7. Evaluation plan and aims
 
 | Aim | Deliverable | Measurement | Go / no-go |
@@ -805,7 +838,7 @@ All 4 are within the 0.0010 margin and above BWA-MEM2. Records with MAPQ ≥ 20 
 | **3. Interval output and MAPQ** | [ℓ, u], SUB interval, conservative MAPQ, SAM tags (`XL`, `XU`) | interval-width distribution; MAPQ calibration on GIAB stratified regions | Variant F1 non-inferior to the current pipeline with **no** heuristic fallback. **Go (§6.3): HG005 F1 −0.0008 to +0.0011 against CERTA + minibwa, above BWA-MEM2 in all 4.** Calibration was measured on simulated pairs instead (the GIAB stratification files are not downloaded). XQ as MAPQ fails: it is biased toward the reference. |
 | **4. Checker** | independent checker (Theorem V); sampling audit | check time per read; zero disagreements | Checker accepts 100 % of certificates; injected faults all detected. **Go (§6.4): 8 M real records accepted; all 23,733 false-by-construction faults and all 6 mapper mutants detected; 89–134 µs per record.** Gap: pair-level XQ (PR, about 4 % of records) is not re-derived. |
 | **5. Theory** | written proofs of Lemma H, Theorems C, G, R, V; optional Lean 4 mechanization | — | Proofs reviewed; mutation tests for each bound. **Half met (§6.5): every bound's mutants killed (50) or proven equivalent (6); exhaustive lemma checks pass; two S2 bugs found and fixed.** Review by a second person pending; Lean not started (needs a download). |
-| **6. Long reads** | HiFi feasibility on a2's existing data (§8) | share of reads whose loss is below the certifiable ceiling | Go if ≥ 90 % of HiFi reads fit |
+| **6. Long reads** | HiFi feasibility on a2's existing data (§8) | share of reads whose loss is below the certifiable ceiling | Go if ≥ 90 % of HiFi reads fit. **Definitions pre-registered in §6.6.** |
 
 **Ground rules:**
 - **Datasets:** the three GIAB samples already processed (HG001, HG002, HG005) and the existing
