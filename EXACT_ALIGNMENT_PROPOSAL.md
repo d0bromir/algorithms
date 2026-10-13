@@ -208,7 +208,7 @@ bounds every alignment with fewer than t exactly matching parts. The prototype p
 equal-length 22-base parts (`include/certa/core.h`, `local_bound`); the argument only uses part
 length ≥ 3, so it covers parts of any length.
 
-**Lemma H, one-mismatch probes [S].** Let the parts have length ≥ 4, and let a part be witnessed
+**Lemma H, one-mismatch probes [P].** Let the parts have length ≥ 4, and let a part be witnessed
 when an *ungapped* occurrence with ≤ 1 mismatch lies on A's path. Then every unwitnessed part inside
 the span adds ≥ 7 to λ(A), disjointly.
 
@@ -223,7 +223,10 @@ unwitnessed part with no other event:
   diagonal, so that ungapped placement has ≤ 1 mismatch and the part is witnessed. Unwitnessed
   therefore means kᵢ ≥ 2 (charge ≥ 7) or another event in the part (≥ 10).
 
-FINDINGS §4 states this bound; the full case analysis still needs to be written out.
+The full case analysis is written out in [certa/THEORY.md](certa/THEORY.md) §9 (Aim 5). It is
+also checked exhaustively: every transcript against every part layout at L = 10, plus the densest
+layout at L = 12, with no violation in 502 M pairs. With 3-base parts the bound fails, so the
+length condition is needed.
 
 **Proposition A, the affine ceiling for error-tolerant probes [P].** For probes that tolerate up to
 e edits, *no* valid per-part bound exceeds e + 7. For substitution-only (Hamming) probes of any
@@ -393,8 +396,9 @@ second-best chain and U, therefore gives a certified *lower* bound on MAPQ.
   end is.
 - **Measured (§6.3):** the conservative end is biased toward the reference and fails as a caller
   input. Lemma E costs one point per edit beyond the radius, a SNV five. It stays an audit tag.
-- **Known gap:** the pair tier's second-best score (FINDINGS §7) must also bound alternative
-  partners inside the winning anchor's window.
+- **Gap closed (Aim 5, §6.5):** the pair tier's second-best score now also bounds alternative
+  partners inside the winning anchor's window, and placements of the mate elsewhere in its own
+  chain (Proposition P2 in [certa/THEORY.md](certa/THEORY.md)).
 
 ## 5. The algorithm
 
@@ -711,6 +715,73 @@ Tier F at ℓ = 15 needs about 10 lookups and about 55 occurrences per read. Tho
 single-part chains, which t = 2 skips without DP, so it should fit comfortably [H]. Tier X has no
 such guarantee, so it runs under a per-read budget and returns an interval when the budget runs out.
 
+### 6.5 Aim 5 result: written proofs and mutation tests (October 2026)
+
+**What was built.**
+- **Written proofs:** [`certa/THEORY.md`](certa/THEORY.md) states and proves every bound the
+  implementation uses. Each statement names the code, the oracle tests, the mutants that break it
+  and, for finite statements, the exhaustive check. It covers:
+  - the index (Lemma I, Proposition V0) and the end-to-end certificates (Theorems 1–4);
+  - the affine local objective (Lemmas L, S, W, C, E, O; Theorem L);
+  - pairs (Lemmas P0 and WS, Theorem P, Proposition P2 for S2);
+  - repeats (Theorem G, Lemma R, Theorems R-int and R);
+  - XQ (Proposition Q) and the checker (Theorem V, as built);
+  - the bounds proposed but not built: Lemma H in full (it was a sketch, §4.3), Proposition A,
+    Theorem C.
+- **Exhaustive checks** of the finite statements
+  ([`certa/tests/verify_lemmas.cpp`](certa/tests/verify_lemmas.cpp), in CI, 33 s).
+- **Mutation tests** ([`certa/tests/mutants.tsv`](certa/tests/mutants.tsv),
+  `tests/run_mutants.sh`): 56 one-line faults. Each weakens one bound by 1–3 points or drops one
+  case. Every mutant runs through the oracle tests on two seeds, and it is killed when a check
+  fails.
+
+**Results** ([raw](certa/bench/results/aim5_2026-10/)):
+
+| Test | Result |
+|---|---|
+| Lemma L, parts ≥ 3: every transcript against every part layout, L = 9 | 52.8 M pairs, **0 violations**. With 2-base parts it fails (17 counterexamples). |
+| Lemma H, parts ≥ 4: all layouts at L = 10, the densest at L = 12 | 502 M pairs, **0 violations**. With 3-base parts it fails. |
+| Lemma E (L = 8), Lemma S, Proposition A, Theorem G, XQ | all hold. Lemma E is attained for d = 1–4; greedy = DP optimum on 20,000 instances. |
+| Mutants (end-to-end 7, SL 8, PR and S2 14, tier R 6, intervals 12, checker 9) | **50 killed; the other 6 proven equivalent** |
+| Oracle tests, 4 seeds | all pass |
+
+**The 6 equivalent mutants** change no claim on any input, so no test can kill them. THEORY.md §9a
+proves each one:
+- **L6 and A2** weaken a term that is never the maximum (Lemma S), or never binds for reads
+  ≥ 98 bp (Lemma O).
+- **P2, P4, P8 and P13** sit where Theorem P is redundant:
+  - a pair at the band edge is also bounded through its partner's anchor (Proposition P3);
+  - the union window already covers the scan pad;
+  - S2's window term implies the `relevant` term.
+
+**What writing the proofs found: two bugs in tier PR's S2, both fixed.**
+1. **The second partner** (the gap declared in §4.8). S2 bounded neither a second partner inside
+   the winning anchor's window nor a placement of the mate elsewhere in its own chain (tandem
+   repeats). A new test oracle for the best other pair found 9 such pairs. S2 now searches both,
+   excluding R1's own alignments (Proposition P2).
+2. **The window pad.** For a high threshold, the window search's band pad went negative, and an
+   exact partner was missed. The same oracle found it. The pad is now clamped at 0.
+
+Killing every mutant also forced new adversarial inputs:
+- pairs placed at each PR threshold (families A–F), which closes the threshold-mutation gap of
+  FINDINGS §7;
+- planted reads at tier SL's thresholds and at Theorem G's read end;
+- a direct test of Lemma WS;
+- two checker tampers. The checker now also rejects a record whose own alignment scores above its
+  XU.
+
+**Effect on real data** (2 M HG002 pairs, [raw](certa/bench/results/aim5_2026-10/pr_fix_effect_hg002.txt)).
+10,901 records (0.29 %) change MAPQ, almost all of them PR: 4,419 fall below 20 and 23 rise to 20 or
+above. 751 placements change.
+
+**Go / no-go: half met.**
+- **Mutation tests for each bound: met.** Every bound the implementation uses has a mutant, and
+  every mutant is killed or proven equivalent.
+- **Proofs reviewed: not yet.** THEORY.md has not been reviewed by a second person; its §11 lists
+  where to start.
+- **Lean 4 (optional): not started.** It needs the toolchain downloaded, which has not been
+  approved.
+
 ## 7. Evaluation plan and aims
 
 | Aim | Deliverable | Measurement | Go / no-go |
@@ -719,7 +790,7 @@ such guarantee, so it runs under a per-read budget and returns an interval when 
 | **2. Repeats** | FM-index counts; Theorem R ties; Theorem R′ collapse | exact share and tie proofs among the 3.6 % repeat-limited reads; DP calls saved | Half of the repeat-limited reads exact or proven ties. **Partial go (§6.2): 50.5–53.2 % on HG002, 43.8–46.0 % on HG005; 79–86 % of near-perfect copies.** Built with the hash index (no FM-index needed); window collapse (R′) not needed so far. |
 | **3. Interval output and MAPQ** | [ℓ, u], SUB interval, conservative MAPQ, SAM tags (`XL`, `XU`) | interval-width distribution; MAPQ calibration on GIAB stratified regions | Variant F1 non-inferior to the current pipeline with **no** heuristic fallback. **Go (§6.3): HG005 F1 −0.0008 to +0.0011 against CERTA + minibwa, above BWA-MEM2 in all 4.** Calibration was measured on simulated pairs instead (the GIAB stratification files are not downloaded). XQ as MAPQ fails: it is biased toward the reference. |
 | **4. Checker** | independent checker (Theorem V); sampling audit | check time per read; zero disagreements | Checker accepts 100 % of certificates; injected faults all detected. **Go (§6.4): 8 M real records accepted; all 23,733 false-by-construction faults and all 6 mapper mutants detected; 89–134 µs per record.** Gap: pair-level XQ (PR, about 4 % of records) is not re-derived. |
-| **5. Theory** | written proofs of Lemma H, Theorems C, G, R, V; optional Lean 4 mechanization | — | Proofs reviewed; mutation tests for each bound |
+| **5. Theory** | written proofs of Lemma H, Theorems C, G, R, V; optional Lean 4 mechanization | — | Proofs reviewed; mutation tests for each bound. **Half met (§6.5): every bound's mutants killed (50) or proven equivalent (6); exhaustive lemma checks pass; two S2 bugs found and fixed.** Review by a second person pending; Lean not started (needs a download). |
 | **6. Long reads** | HiFi feasibility on a2's existing data (§8) | share of reads whose loss is below the certifiable ceiling | Go if ≥ 90 % of HiFi reads fit |
 
 **Ground rules:**

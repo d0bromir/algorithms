@@ -232,16 +232,32 @@ NovaSeq X FASTQ (the Aim 1 measurement).
 ## Layout
 
 ```
-include/certa/core.h   per-read algorithm (host + device)
-src/index.*            FASTA loading, sampled q-mer index, save/load
-src/seqio.*            FASTQ/FASTA reading (plain or gzip)
-src/mapper_cpu.cpp     multi-threaded CPU driver
-src/mapper_gpu.cu      CUDA driver (one thread per read)
-src/main.cpp           CLI, SAM/FASTQ output, statistics
-tests/test_certa.cpp   brute-force certificate test
-tools/simulate.py      synthetic genome/reads and placement evaluation
-scripts/               build.sh, demo.sh
+include/certa/core.h       per-read algorithm (host + device)
+include/certa/pair.h       pair certificate (tier PR)
+include/certa/repeat.h     repeats (tier R)
+include/certa/interval.h   interval output (--intervals)
+src/index.*                FASTA loading, sampled q-mer index, save/load
+src/seqio.*                FASTQ/FASTA reading (plain or gzip)
+src/check.*                independent checker (certa check, check-index)
+src/mapper_cpu.cpp         multi-threaded CPU driver
+src/mapper_gpu.cu          CUDA driver (one thread per read)
+src/main.cpp               CLI, SAM/FASTQ output, statistics
+tests/test_certa.cpp       brute-force oracle tests of every bound
+tests/verify_lemmas.cpp    exhaustive checks of the finite lemmas
+tests/mutants.tsv          one mutant per bound; tests/run_mutants.sh runs them
+tools/simulate.py          synthetic genome/reads and placement evaluation
+scripts/                   build.sh, demo.sh
+THEORY.md                  the proofs, with code, tests and mutants per statement
 ```
+
+**Mutation tests** (from `certa/`; about an hour on 12 cores):
+
+```bash
+tests/run_mutants.sh 12
+```
+
+Each mutant must fail an oracle check, or, when THEORY.md proves it changes
+no claim, pass.
 
 ## Known limitations and next steps
 

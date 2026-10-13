@@ -23,6 +23,8 @@ jobs:
         run: CERTA_CUDA=OFF BUILD_DIR=certa/build bash certa/scripts/build.sh
       - name: Certificate test, more seeds
         run: for s in 11 12 13 14 15; do certa/build/test_certa $s; done
+      - name: Exhaustive lemma checks
+        run: certa/build/verify_lemmas
       - name: End-to-end demo
         run: BUILD_DIR=certa/build WORK=demo bash certa/scripts/demo.sh 5000000 100000
 

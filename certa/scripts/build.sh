@@ -45,6 +45,7 @@ else
   done
   "$cxx" "${flags[@]}" -c "$here/tests/test_certa.cpp" -o "$build/test_certa.o" &
   "$cxx" "${flags[@]}" -c "$here/src/gpu_stub.cpp" -o "$build/gpu_stub.o" &
+  "$cxx" "${flags[@]}" "$here/tests/verify_lemmas.cpp" -o "$build/verify_lemmas" &
   wait
   core=("$build/index.o" "$build/seqio.o" "$build/mapper_cpu.o" "$build/check.o")
   if [[ "$cuda" != OFF ]] && command -v nvcc >/dev/null; then

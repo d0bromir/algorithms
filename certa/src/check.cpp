@@ -352,6 +352,7 @@ Verdict Checker::check(const Claim& c, Work* w) const {
     if (!shown) return kWrongXL;
   }
   if (c.xu != kNone) {
+    if (c.mapped && c.as > c.xu) return kXUUnproven;  // its own alignment refutes it
     w->xu_checked = c.xu < L * kM;
     if (!proven(c, rd, c.xu, false, w)) return kXUUnproven;
   }

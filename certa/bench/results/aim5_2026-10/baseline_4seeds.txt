@@ -1,0 +1,6 @@
+x86_64
+g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+seed 1: threshold pairs: 20 built, 20 behave as designed, 16 certified and checked all certificate checks passed
+seed 2: threshold pairs: 20 built, 20 behave as designed, 16 certified and checked all certificate checks passed
+seed 3: threshold pairs: 20 built, 20 behave as designed, 16 certified and checked all certificate checks passed
+seed 4: threshold pairs: 20 built, 20 behave as designed, 16 certified and checked all certificate checks passed

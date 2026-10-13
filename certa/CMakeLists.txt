@@ -64,5 +64,9 @@ enable_testing()
 add_executable(test_certa tests/test_certa.cpp src/gpu_stub.cpp)
 target_link_libraries(test_certa PRIVATE certa_core)
 add_test(NAME certificate COMMAND test_certa)
+# Exhaustive checks of the finite lemmas behind the bounds (THEORY.md).
+add_executable(verify_lemmas tests/verify_lemmas.cpp)
+target_link_libraries(verify_lemmas PRIVATE certa_core)
+add_test(NAME lemmas COMMAND verify_lemmas)
 
 message(STATUS "CERTA: CUDA back-end ${USE_CUDA} (archs ${CERTA_CUDA_ARCHS}), zlib ${ZLIB_FOUND}")

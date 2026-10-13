@@ -259,6 +259,72 @@ check::Claim claim_of(const Placement& p, const std::vector<uint8_t>& read) {
   return c;
 }
 
+// The best pair from per-start bests: forward mate starting at f, reverse
+// mate starting at r in [f, f + D] (sliding-window maximum).
+int pair_from_starts(const std::vector<int>& F, const std::vector<int>& R, int D) {
+  const int n = static_cast<int>(F.size());
+  int best = INT32_MIN;
+  std::vector<int> dq;
+  size_t head = 0;
+  int next = 0;
+  for (int f = 0; f < n; ++f) {
+    while (next < n && next <= f + D) {
+      while (dq.size() > head && R[dq.back()] <= R[next]) dq.pop_back();
+      dq.push_back(next++);
+    }
+    while (head < dq.size() && dq[head] < f) ++head;
+    if (head < dq.size()) best = std::max(best, F[f] + R[dq[head]]);
+  }
+  return best;
+}
+
+// Per-start bests of `rd` over alignments that do not overlap [p, p + span):
+// the oracle on the reference left of it and right of it.
+std::vector<int> starts_outside(const std::vector<uint8_t>& ref, const uint8_t* rd, int L, int64_t p, int64_t span) {
+  std::vector<int> out(ref.size(), -(1 << 20));
+  const std::vector<uint8_t> left(ref.begin(), ref.begin() + std::max<int64_t>(0, p));
+  const std::vector<uint8_t> right(ref.begin() + std::min<int64_t>(static_cast<int64_t>(ref.size()), p + span), ref.end());
+  const std::vector<int> a = oracle_starts(left, rd, L), b = oracle_starts(right, rd, L);
+  for (size_t j = 0; j < a.size(); ++j) out[j] = a[j];
+  for (size_t j = 0; j < b.size(); ++j) out[ref.size() - right.size() + j] = b[j];
+  return out;
+}
+
+// SUB of a pair: the best proper pair in which some mate does not overlap
+// the reported one (a1 for m1, a2 for m2; strand 1 = reverse complement).
+int oracle_pair_sub(const std::vector<uint8_t>& ref, const std::vector<uint8_t>& m1, const std::vector<uint8_t>& m2,
+                    int D, const Result& a1, const Result& a2) {
+  auto rc = [](const std::vector<uint8_t>& v) {
+    std::vector<uint8_t> o(v.size());
+    for (size_t i = 0; i < v.size(); ++i) o[i] = v[v.size() - 1 - i] < 4 ? 3 - v[v.size() - 1 - i] : 4;
+    return o;
+  };
+  auto span = [](const Result& a) {
+    int64_t n = 0;
+    for (int c = 0; c < a.n_cigar; ++c)
+      if ((a.cigar[c] & 0xF) == kOpM || (a.cigar[c] & 0xF) == kOpD) n += a.cigar[c] >> 4;
+    return n;
+  };
+  const std::vector<uint8_t> seq[2][2] = {{m1, rc(m1)}, {m2, rc(m2)}};  // [mate][strand]
+  const Result* rep[2] = {&a1, &a2};
+  std::vector<int> full[2][2], other[2][2];
+  for (int m = 0; m < 2; ++m)
+    for (int st = 0; st < 2; ++st) {
+      const int L = static_cast<int>(seq[m][st].size());
+      full[m][st] = oracle_starts(ref, seq[m][st].data(), L);
+      other[m][st] = st == rep[m]->strand
+                         ? starts_outside(ref, seq[m][st].data(), L, rep[m]->ref_pos, span(*rep[m]))
+                         : full[m][st];
+    }
+  int best = INT32_MIN;
+  for (int f = 0; f < 2; ++f) {  // f: the forward mate; 1 - f the reverse one
+    const int r = 1 - f;
+    best = std::max(best, pair_from_starts(other[f][0], full[r][1], D));
+    best = std::max(best, pair_from_starts(full[f][0], other[r][1], D));
+  }
+  return best;
+}
+
 // Affine score of a reported alignment, clip penalties included.
 int rescore_affine(const IndexView& ix, const Result& r, const std::vector<uint8_t>& fwd) {
   const int L = static_cast<int>(fwd.size());
@@ -473,7 +539,32 @@ int main(int argc, char** argv) {
   //      in the same chain, does not overlap the read's alignment, and
   //      scores L - 10 (above lo - 20, so tier R's SUB search must find
   //      it). Even n: the array's right end (copy to the left); odd n: its
-  //      left end (copy to the right).
+  //      left end (copy to the right);
+  //  (e) the SL floor (Aim 5): the read occurs exactly at its true locus
+  //      (chr1 1000-9000), and a decoy (chr1 84000-89500) has one exact part
+  //      and a mismatch in each of the other 7. With support 2 the decoy
+  //      scores exactly the floor L - 35 and lies in no chain above it, so
+  //      only the floor bounds SUB there;
+  //  (f-i) tier SL at its other thresholds (local-only, 8 parts; support 2:
+  //      floor L - 35, pad 28; support 3: floor L - 30, pad 23), on chr2
+  //      7000-19000:
+  //    f  the band pad: the read has a 27-bp deletion at a part boundary
+  //       (117, gap 27 <= 28); a decoy clips 29 bases (116);
+  //    g  the chain bound: the read is exact (150); one locus has a 1-bp
+  //       deletion between parts (143, bound 150), another one mismatch (145,
+  //       bound 145): SUB = 145 rests on evaluating a chain whose bound is
+  //       2 above s2;
+  //    h  chain splitting (support 3): a 12-bp deletion at a part boundary
+  //       (132) against two decoys clipping 15 bases (130 each);
+  //    i  the skip test: the read has one mismatch at its locus (145, bound
+  //       145) against two loci with a 1-bp deletion (143 each, bound 150);
+  //  (j) tier R, Theorem G at the read end (Aim 5): a 108-base element in 20
+  //      copies (chr1 52000-58000), each after its own flank. The read is the
+  //      last copy's 42-base flank, with mismatches at offsets 0, 20 and 34,
+  //      then the element: three absent parts, then a stretch occurring 20
+  //      times (> tau) up to the read end, which ends the partition. OPT is
+  //      135, exactly U; the sampled copies score ~103. Charging the element
+  //      as a fourth part would give U = 130.
   std::vector<std::vector<uint8_t>> bound_reads;
   {
     auto& R = ref.seq.owned;
@@ -496,6 +587,81 @@ int main(int argc, char** argv) {
       for (int c = 0; c < 16; ++c) std::copy(unit.begin(), unit.end(), R.begin() + at + 20 * c);
       const int64_t from = n % 2 ? at - 5 : at + 175;
       bound_reads.push_back(std::vector<uint8_t>(R.begin() + from, R.begin() + from + L));
+    }
+    for (int n = 0; n < 10; ++n) {
+      const int64_t a = static_cast<int64_t>(ref.offsets[0]) + 1000 + 800 * n;
+      std::vector<uint8_t> s(R.begin() + a, R.begin() + a + L);
+      std::vector<uint8_t> d = s;
+      const int P = part_count(L, 14, 4), keep = static_cast<int>(g() % P);
+      for (int j = 0; j < P; ++j) {
+        if (j == keep) continue;
+        int off, len;
+        part_geometry(L, P, j, &off, &len);
+        const int x = off + len / 2;
+        d[x] = static_cast<uint8_t>((d[x] + 1 + g() % 3) % 4);
+      }
+      std::copy(d.begin(), d.end(), R.begin() + static_cast<int64_t>(ref.offsets[0]) + 84000 + 550 * n);
+      bound_reads.push_back(s);
+    }
+    const int64_t c2 = static_cast<int64_t>(ref.offsets[1]);
+    auto from = [&](int64_t a, int64_t b) { return std::vector<uint8_t>(R.begin() + a, R.begin() + b); };
+    auto put = [&](int64_t at, const std::vector<uint8_t>& v) { std::copy(v.begin(), v.end(), R.begin() + at); };
+    auto with_extra = [&](const std::vector<uint8_t>& v, int at) {  // one more reference base at read offset `at`
+      std::vector<uint8_t> o(v.begin(), v.begin() + at);
+      o.push_back(rand_base(g));
+      o.insert(o.end(), v.begin() + at, v.end());
+      return o;
+    };
+    auto changed = [&](std::vector<uint8_t> v, int at) {
+      v[at] = static_cast<uint8_t>((v[at] + 1 + g() % 3) % 4);
+      return v;
+    };
+    for (int n = 0; n < 6; ++n) {  // f
+      const int64_t a = c2 + 7000 + 300 * n;
+      std::vector<uint8_t> s = from(a, a + 76), tail = from(a + 103, a + 177);
+      s.insert(s.end(), tail.begin(), tail.end());
+      std::vector<uint8_t> d(s.begin(), s.begin() + 121);
+      const std::vector<uint8_t> rnd = random_seq(g, 29);
+      d.insert(d.end(), rnd.begin(), rnd.end());
+      put(c2 + 8800 + 160 * n, d);
+      bound_reads.push_back(s);
+    }
+    for (int n = 0; n < 6; ++n) {  // g
+      const std::vector<uint8_t> s = from(c2 + 9800 + 160 * n, c2 + 9950 + 160 * n);
+      put(c2 + 10800 + 320 * n, with_extra(s, 76));
+      put(c2 + 10960 + 320 * n, changed(s, 47));
+      bound_reads.push_back(s);
+    }
+    for (int n = 0; n < 6; ++n) {  // h
+      const int64_t a = c2 + 12800 + 180 * n;
+      std::vector<uint8_t> s = from(a, a + 76), tail = from(a + 88, a + 162);
+      s.insert(s.end(), tail.begin(), tail.end());
+      for (int k = 0; k < 2; ++k) {
+        std::vector<uint8_t> d(s.begin(), s.begin() + 135);
+        const std::vector<uint8_t> rnd = random_seq(g, 15);
+        d.insert(d.end(), rnd.begin(), rnd.end());
+        put(c2 + 13900 + 320 * n + 160 * k, d);
+      }
+      bound_reads.push_back(s);
+    }
+    for (int n = 0; n < 6; ++n) {  // i
+      const std::vector<uint8_t> loc = from(c2 + 15900 + 160 * n, c2 + 16050 + 160 * n);
+      const std::vector<uint8_t> s = changed(loc, 47);
+      put(c2 + 16900 + 320 * n, with_extra(s, 76));
+      put(c2 + 17060 + 320 * n, with_extra(s, 76));
+      bound_reads.push_back(s);
+    }
+    for (int n = 0; n < 2; ++n) {  // j
+      const std::vector<uint8_t> elem = random_seq(g, 108);
+      int64_t last = 0;
+      for (int c = 0; c < 20; ++c) {
+        last = static_cast<int64_t>(ref.offsets[0]) + 52000 + 300 * c + 150 * n;
+        put(last, elem);
+      }
+      std::vector<uint8_t> s = from(last - 42, last);
+      for (int x : {0, 20, 34}) s = changed(s, x);
+      s.insert(s.end(), elem.begin(), elem.end());
+      bound_reads.push_back(s);
     }
   }
   Index ix = Index::build(ref, 14, 4, 4);
@@ -675,6 +841,16 @@ int main(int argc, char** argv) {
       CHECK(v2 != check::kAccepted, "read %zu tier %d: false claim accepted (%s)", i, r.tier, what);
     };
     { check::Claim t = c; t.xu = opt - 1; expect_reject(t, "XU = OPT - 1"); }
+    {  // the same with no alignment shown: only the bound search can refute it
+      check::Claim t = c;
+      t.mapped = false;
+      t.xl = t.xh = check::kNone;
+      t.xq = 0;
+      t.has_alt = false;
+      t.xu = opt - 1;
+      expect_reject(t, "XU = OPT - 1, unmapped");
+    }
+    if (c.xh != check::kNone) { check::Claim t = c; t.xq = c.xq + 5; t.mapq = 99; expect_reject(t, "XQ + 5"); }
     { check::Claim t = c; t.as = c.as + 1; expect_reject(t, "AS + 1"); }
     { check::Claim t = c; t.aln.pos += 1; expect_reject(t, "alignment moved by one base"); }
     if (c.xu < L * kMatch) { check::Claim t = c; t.t = 0; expect_reject(t, "no witness"); }
@@ -898,7 +1074,7 @@ int main(int argc, char** argv) {
     pp.max_dist = D;
     const Params cfgs[] = {{5, 256}, {5, 16}};
     std::vector<int> truth_pair(pairs.size(), INT32_MIN);
-    int checked = 0;
+    int checked = 0, sub_checked = 0;
     for (const Params& pc : cfgs) {
       pp.se = pc;
       int cert = 0;
@@ -925,11 +1101,180 @@ int main(int argc, char** argv) {
         }
         CHECK(po.score == truth_pair[i], "budget=%d pair %zu: PR score %d != oracle %d", pc.budget, i, po.score,
               truth_pair[i]);
+        // S2 bounds every other proper pair (a mate not overlapping R1's).
+        const int sub = oracle_pair_sub(R, pairs[i].a, pairs[i].b, D, r1, r2);
+        ++sub_checked;
+        CHECK(po.sub >= sub, "budget=%d pair %zu: S2 %d below the best other pair %d (R1 %d)", pc.budget, i, po.sub,
+              sub, po.score);
       }
       std::fprintf(stderr, "pairs budget=%-3d certified %d/%zu\n", pc.budget, cert, pairs.size());
     }
-    std::fprintf(stderr, "PR scores checked against the proper-pair oracle for %d pairs\n", checked);
+    std::fprintf(stderr, "PR scores checked against the proper-pair oracle for %d pairs; S2 against the other-pair oracle %d times\n",
+                 checked, sub_checked);
   }
+  // ---- Tier PR at its thresholds (Aim 5): pairs built so that one bound of
+  // Theorem P is tight, on a reference of their own. A mutant that moves the
+  // bound by a few points certifies a wrong pair score or a too-low S2.
+  //  A (floor, k = 3, so the floor is U1 + U2 = 260): at the true locus each
+  //    mate has one mismatch in each of its 4 searched parts (no exact part:
+  //    unseen, 260); a decoy pair scores 259.
+  //  B (band pad, k = 5, floor 246, pad 47): mate 1 has a 46-bp deletion at a
+  //    part boundary (98 + 150 = 248); a decoy pair scores 247.
+  //  D (window threshold, 110-bp mates): the best pair scores 180; another
+  //    has a partner with a mismatch in every window part, scoring exactly
+  //    the window bound (65, never returned), so S2 must reach 175.
+  //  E (window chain skip): two placements of each mate in one window, one
+  //    with a 1-bp deletion between window parts (bound 150, score 143), one
+  //    with a mismatch (bound 145, score 145); the best pair is 290.
+  //  F (S2 through R1's own chain): a tandem mate with a non-overlapping
+  //    exact copy and a partner without exact parts: a tie at 270.
+  {
+    std::mt19937_64 h(seed ^ 0xA5A5A5A5ULL);
+    Reference tr;
+    const int64_t len = 40000;
+    tr.seq.owned.assign(kContigPad, 4);
+    tr.names.push_back("thr");
+    tr.offsets.push_back(kContigPad);
+    tr.lengths.push_back(len);
+    const std::vector<uint8_t> body = random_seq(h, len);
+    tr.seq.owned.insert(tr.seq.owned.end(), body.begin(), body.end());
+    tr.seq.owned.insert(tr.seq.owned.end(), kContigPad, 4);
+    auto& T = tr.seq.owned;
+    auto at = [&](int64_t x) { return static_cast<int64_t>(kContigPad) + x; };
+    auto plant = [&](int64_t x, const std::vector<uint8_t>& v) { std::copy(v.begin(), v.end(), T.begin() + at(x)); };
+    auto change = [&](std::vector<uint8_t> v, std::initializer_list<int> where) {
+      for (int i : where) v[i] = static_cast<uint8_t>((v[i] + 1 + h() % 3) % 4);
+      return v;
+    };
+    auto rcv = [](std::vector<uint8_t> v) {
+      std::reverse(v.begin(), v.end());
+      for (auto& c : v) c = c < 4 ? static_cast<uint8_t>(3 - c) : c;
+      return v;
+    };
+    auto cat = [](std::vector<uint8_t> a, const std::vector<uint8_t>& b) {
+      a.insert(a.end(), b.begin(), b.end());
+      return a;
+    };
+    auto sub = [](const std::vector<uint8_t>& v, int a, int b) { return std::vector<uint8_t>(v.begin() + a, v.begin() + b); };
+    struct Fam { char kind; std::vector<uint8_t> m1, m2; int k; };
+    std::vector<Fam> fam;
+    int64_t base = 200;
+    for (int n = 0; n < 4; ++n, base += 1300) {  // A: floor
+      const std::vector<uint8_t> frag = random_seq(h, 600);
+      plant(base, frag);
+      const std::vector<uint8_t> a = change(sub(frag, 0, 150), {9, 28, 47, 66});
+      const std::vector<uint8_t> f2 = change(sub(frag, 250, 400), {9, 28, 47, 66});
+      plant(base + 700, a);
+      plant(base + 950, cat(sub(f2, 0, 114), random_seq(h, 36)));
+      plant(base + 1150, sub(f2, 114, 150));  // parts 6-7 of mate 2 twice: parts 0-3 are the rarest
+      fam.push_back({'A', a, rcv(f2), 3});
+    }
+    for (int n = 0; n < 4; ++n, base += 1300) {  // B: band pad
+      const std::vector<uint8_t> frag = random_seq(h, 700);
+      plant(base, frag);
+      const std::vector<uint8_t> a = cat(sub(frag, 0, 76), sub(frag, 122, 196));  // 76M46D74M
+      const std::vector<uint8_t> f2 = sub(frag, 300, 450);
+      // The decoy's tail differs from mate 1 at every base, so it scores
+      // exactly 102 - 5 (with a random tail it could extend by chance).
+      std::vector<uint8_t> tail = sub(a, 102, 150);
+      for (auto& c : tail) c = static_cast<uint8_t>((c + 1 + h() % 3) % 4);
+      plant(base + 750, cat(sub(a, 0, 102), tail));
+      plant(base + 1050, f2);
+      fam.push_back({'B', a, rcv(f2), 5});
+    }
+    for (int n = 0; n < 4; ++n, base += 1300) {  // D: window threshold, 110-bp mates
+      const std::vector<uint8_t> x = random_seq(h, 110), yf = random_seq(h, 110);
+      plant(base, x);
+      plant(base + 290, change(yf, {6, 19, 31, 43, 55, 67, 79, 91}));  // 8 window parts: 70
+      plant(base + 650, x);
+      plant(base + 940, change(yf, {6, 19, 31, 43, 55, 67, 79, 91, 103}));  // all 9: 65
+      fam.push_back({'D', x, rcv(yf), 5});
+    }
+    for (int n = 0; n < 4; ++n, base += 1300) {  // F: S2, mate x elsewhere in R1's own chain
+      // x lies in a tandem array (period 20, 320 bp): its placements at
+      // shifts 0 and 160 are exact and do not overlap. y has a mismatch in 6
+      // parts (no exact part, 120), 400 bp on: both pairs are proper and
+      // score 270, so S2 must reach R1 through x's own chain.
+      const std::vector<uint8_t> unit = random_seq(h, 20);
+      std::vector<uint8_t> arr;
+      for (int c = 0; c < 16; ++c) arr.insert(arr.end(), unit.begin(), unit.end());
+      plant(base, arr);
+      const std::vector<uint8_t> yref = random_seq(h, 150);
+      plant(base + 400, yref);
+      fam.push_back({'F', sub(arr, 0, 150), rcv(change(yref, {9, 28, 47, 66, 85, 104})), 5});
+    }
+    for (int n = 0; n < 4; ++n, base += 1300) {  // E: window chain skip
+      const std::vector<uint8_t> x = random_seq(h, 150), yf = random_seq(h, 150);
+      auto extra = [&](const std::vector<uint8_t>& v) {  // one more reference base at window boundary 78
+        return cat(cat(sub(v, 0, 78), random_seq(h, 1)), sub(v, 78, 150));
+      };
+      plant(base, change(x, {20}));
+      plant(base + 160, extra(x));
+      plant(base + 330, extra(yf));
+      plant(base + 490, change(yf, {20}));
+      fam.push_back({'E', x, rcv(yf), 5});
+    }
+    Index tix = Index::build(tr, 14, 4, 4);
+    const IndexView tv = tix.view(tr);
+    PairParams tp;
+    tp.max_dist = 500;
+    std::unique_ptr<Workspace> w1(new Workspace), w2(new Workspace);
+    PairScratch tsc;
+    int certified = 0, as_designed = 0;
+    for (size_t i = 0; i < fam.size(); ++i) {
+      const Fam& f = fam[i];
+      tp.se = Params{f.k, 256};
+      tp.se.min_support = 1;
+      Result r1{}, r2{};
+      const int L1 = static_cast<int>(f.m1.size()), L2 = static_cast<int>(f.m2.size());
+      const PairOut po = certify_pair(tv, tp, f.m1.data(), L1, f.m2.data(), L2, *w1, *w2, tsc, r1, r2);
+      const int opt = oracle_pair(T, f.m1, f.m2, tp.max_dist);
+      const int expect = f.kind == 'A' ? 260 : f.kind == 'B' ? 248 : f.kind == 'D' ? 180 : f.kind == 'F' ? 270 : 290;
+      const bool designed = opt == expect && (f.kind == 'A' ? !po.certified : po.certified);
+      as_designed += designed;
+      if (!designed)
+        std::fprintf(stderr, "threshold pair %c%zu: oracle %d (designed %d), certified %d\n", f.kind, i, opt, expect,
+                     static_cast<int>(po.certified));
+      if (!po.certified) continue;
+      ++certified;
+      CHECK(po.score == opt, "threshold pair %c%zu: PR score %d != oracle %d", f.kind, i, po.score, opt);
+      const int sub2 = oracle_pair_sub(T, f.m1, f.m2, tp.max_dist, r1, r2);
+      CHECK(po.sub >= sub2, "threshold pair %c%zu: S2 %d below the best other pair %d", f.kind, i, po.sub, sub2);
+    }
+    std::fprintf(stderr, "threshold pairs: %zu built, %d behave as designed, %d certified and checked\n", fam.size(),
+                 as_designed, certified);
+    // Lemma WS itself: for each mate (reference orientation) and a range of
+    // thresholds up to need = L - 2, in windows around its best start
+    // (centred, ending there, starting there), window_search returns the
+    // best alignment starting in the window, or that one scores <= *thr.
+    int ws_checked = 0;
+    for (size_t i = 0; i < fam.size(); ++i) {
+      for (int x = 0; x < 2; ++x) {
+        const std::vector<uint8_t> m = x ? rcv(fam[i].m2) : fam[i].m1;
+        const int L = static_cast<int>(m.size());
+        const std::vector<int> st = oracle_starts(T, m.data(), L);
+        const int64_t p = std::max_element(st.begin(), st.end()) - st.begin();
+        const int64_t win[3][2] = {{p - 150, p + 150}, {p - 300, p}, {p, p + 300}};
+        for (const auto& w : win) {
+          int opt = INT32_MIN;
+          for (int64_t j = std::max<int64_t>(0, w[0]); j <= w[1] && j < static_cast<int64_t>(st.size()); ++j)
+            opt = std::max(opt, st[j]);
+          for (int need : {0, L - 30, L - 10, L - 7, L - 6, L - 5, L - 2}) {
+            Band bd;
+            int thr;
+            const int v = window_search(tv, m.data(), L, w[0], w[1], tp.wq, need, tsc, &bd, &thr);
+            ++ws_checked;
+            CHECK(v == kNoSub ? opt <= thr : v == opt,
+                  "Lemma WS %c%zu mate %d, starts [%lld, %lld], need %d: returned %d (threshold %d), best %d",
+                  fam[i].kind, i, x + 1, static_cast<long long>(w[0]), static_cast<long long>(w[1]), need, v, thr,
+                  opt);
+          }
+        }
+      }
+    }
+    std::fprintf(stderr, "Lemma WS checked against the start oracle %d times\n", ws_checked);
+  }
+
 
   // ---- Tier R (repeats): lo <= OPT <= hi against the whole-reference local
   // oracle; exact claims equal OPT; copies are verified string by string.
@@ -1116,8 +1461,12 @@ int main(int argc, char** argv) {
               check::kVerdictNames[v], c.xl, c.xu, c.xh, c.xq);
         if (local_truth[i] == INT32_MIN) local_truth[i] = oracle_local(R, rd.data(), L);
         const int opt = local_truth[i];
-        if (opt - 1 >= (c.xl == check::kNone ? INT32_MIN : c.xl) && opt - 1 >= 0) {
+        if (opt - 1 >= 0) {  // with no alignment shown, only the bound search can refute it
           check::Claim t = c;
+          t.mapped = false;
+          t.xl = t.xh = check::kNone;
+          t.xq = 0;
+          t.has_alt = false;
           t.xu = opt - 1;
           check::Work w2;
           ++tampered;

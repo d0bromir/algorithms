@@ -193,8 +193,11 @@ the forward mate's.
   skipped anchors' bounds, the floor) is ≤ R1, then R1 is the maximum pair
   score over all proper pairs in the reference. ∎
 - *Also reported:* S2 is the largest of those other bounds and drives a
-  BWA-MEM-style pair MAPQ. S2 is not a uniqueness proof: a second, equal
-  partner inside the winning anchor's own window is bounded only by R1.
+  BWA-MEM-style pair MAPQ. Since Aim 5, S2 bounds every proper pair that
+  differs from R1's pair in some mate, including a second partner inside
+  the winning anchor's own window, and the mate placed elsewhere in its own
+  chain (THEORY.md, Proposition P2). Before that fix, such a pair was
+  bounded only by R1.
 - *Tags:* `XT:Z:PR`, `AS` (each mate's score), `XF` (floor), `XS` (S2).
 - *Pipeline:* when the pair cannot be certified, a mate keeps its
   single-end certificate. Both mates still go to the fallback mapper so
@@ -258,9 +261,10 @@ the forward mate's.
     partner-bound bugs (a missing nearby-partner bound, and treating
     unfinished chains as finished), and the kernel test catches a deletion
     recurrence off by one. Seven threshold mutations, off by 2–3 points in
-    the floor, band pad or window threshold, survive. They need pairs
-    exactly at those thresholds, for example a ~46-bp deletion against a
-    decoy one point below.
+    the floor, band pad or window threshold, survived these tests. Aim 5
+    closed this gap (§7): pairs placed exactly at each threshold, a direct
+    test of the window search, and an oracle for S2. Every PR mutant is now
+    killed, or proven to change no claim (THEORY.md §9a).
 - **Real data:**
   - 1,672,120 certified HG002 reads were compared with BWA-MEM2's unclipped
     alignments. BWA-MEM2 never has fewer edits than the certified minimum,
@@ -626,18 +630,35 @@ own banded DP.
 - **Gap:** the XQ of PR records (about 4 %) rests on the pair certificate,
   which the checker does not re-derive yet (open).
 
+*Update 2026-10-13, Aim 5 (proposal §6.5).* [THEORY.md](THEORY.md) holds
+written proofs of every bound the implementation uses. Each one is traced to
+its code, its oracle tests and the mutants that break it.
+- **Exhaustive checks** of the finite lemmas (`tests/verify_lemmas.cpp`, in
+  CI): Lemma L on 52.8 M and Lemma H on 502 M transcript-layout pairs, no
+  violation. Their part-length conditions are necessary: 2- and 3-base parts
+  give counterexamples.
+- **Mutation tests** (`tests/mutants.tsv`, `tests/run_mutants.sh`): 56
+  faults, 50 killed. The other 6 change no claim on any input, which
+  THEORY.md §9a proves.
+- **Two bugs in tier PR's S2, found and fixed:**
+  - S2 did not bound a second partner inside the winning anchor's window, or
+    the mate elsewhere in its own chain. This closes the S2 open item
+    listed here before.
+  - The window search's band pad went negative for high thresholds, missing
+    an exact partner.
+  - On 2 M HG002 pairs, 0.29 % of records change MAPQ (4,419 fall below
+    20).
+- **Checker:** it now also rejects a record whose own alignment scores above
+  its XU.
+- **Open:** review of THEORY.md by a second person. The optional Lean 4
+  mechanization needs a toolchain download (not approved).
+
 - **Speed in paired mode:** 4.0× faster than BWA-MEM2 but slower than
   minibwa (77 s vs 62 s, 20M pairs). The cost lies in the pair pass (about
   1,050 CPU-s) and in the fallback's hard reads. Sending only the
   uncertified mate (`--fallback-mates single`) barely helps. Candidates:
   move the pair pass to the GPU; restrict it to the one-uncertified pairs;
   improve the fallback.
-- **PR tests:** seven threshold mutations, off by 2–3 points in the floor,
-  band pad or window threshold, survive. Adversarial pairs placed exactly
-  at those thresholds would close the gap.
-- **S2 in tier PR** bounds pairs from other anchors only. It is not yet a
-  uniqueness proof, because a second partner inside the winning anchor's
-  window is not separately bounded.
 - **HG001 GATK indels** are the one comparison where CERTA's F1 is lower
   (0.9909 vs 0.9922). Look at the 13 extra FP and 14 extra FN.
 - **Long reads:** the current limits (320 bp, 8 parts, radius 5) exclude

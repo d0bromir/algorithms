@@ -24,8 +24,12 @@
 // actually realized (mate x at the best place in C, mate y the best in its
 // exact window). The best realized pair R1 is the certified maximum when
 // R1 > floor, every anchor of that pair has up == R1, and every other
-// anchor's up, every skipped anchor's bound and the floor are <= R1. The
-// largest of these other bounds, S2, bounds every other pair (MAPQ).
+// anchor's up, every skipped anchor's bound and the floor are <= R1.
+// S2 bounds every other proper pair: one with a mate that does not overlap
+// R1's (MAPQ). The bounds of the other anchors cover the pairs through
+// them; a pair through an anchor of R1's pair either keeps mate x where R1
+// has it and moves mate y elsewhere in the window, or moves x elsewhere in
+// its chain, and both are bounded by searches that exclude R1's mates.
 #pragma once
 #include <algorithm>
 #include <cstdint>
@@ -121,7 +125,8 @@ inline int window_search(const IndexView& ix, const uint8_t* rd, int L, int64_t 
   if (t < need) t = need;
   *thr = t;
   if (t >= L * kMatch) return kNoSub;
-  const int pad = L * kMatch - t - 7;
+  // Gap total of an alignment scoring > t; 0 (no gap at all) once t >= L - 7.
+  const int pad = std::max(0, L * kMatch - t - 7);
   // Part keys (first wq bases; parts with N can never occur exactly).
   sc.keys.clear();
   for (int k = 0; k < n; ++k) {
@@ -266,7 +271,7 @@ inline PairOut certify_pair(const IndexView& ix, const PairParams& pp, const uin
   if (floor < Ltot - pp.max_loss) floor = Ltot - pp.max_loss;   // narrower bands, less work
   po.floor = floor;
   if (floor >= Ltot) return po;
-  const int pad = Ltot - floor - 7;
+  const int pad = std::max(0, Ltot - floor - 7);
   chain_mate(M[0], pad);
   chain_mate(M[1], pad);
   const int64_t D = pp.max_dist;
@@ -315,6 +320,13 @@ inline PairOut certify_pair(const IndexView& ix, const PairParams& pp, const uin
     return a.chain < b.chain;
   });
   int R1 = floor, upb = -BIG, S2 = floor, evaluated = 0;
+  // The anchors that realized R1's pair, with what bounding their other
+  // pairs needs.
+  struct Win {
+    int mate, chain, apad, sx, fu, thr, need, relevant;
+    int64_t ulo, uhi;
+  };
+  std::vector<Win> wins;
   bool confirmed = false;  // R1's pair re-found by a full anchor evaluation (its up is known)
   int id_strand = -1;      // mate 1's strand in the best pair
   Result best[2];          // the best pair's two alignments
@@ -411,9 +423,11 @@ inline PairOut certify_pair(const IndexView& ix, const PairParams& pp, const uin
     const Result& a1 = an.mate == 0 ? ax : ay;
     const Result& a2 = an.mate == 0 ? ay : ax;
     const int s1 = an.mate == 0 ? st : 1 - st;  // mate 1's strand
+    const Win win{an.mate, an.chain, apad, sx, fu, thr, need, relevant, ulo, uhi};
     if (id_strand >= 0 && same_pair(s1, a1, a2)) {
       upb = confirmed ? std::max(upb, up) : up;
       confirmed = true;
+      wins.push_back(win);
       if (r > R1) {  // the full band found a better alignment of the same pair
         R1 = r;
         best[0] = a1;
@@ -427,11 +441,47 @@ inline PairOut certify_pair(const IndexView& ix, const PairParams& pp, const uin
       id_strand = s1;
       best[0] = a1;
       best[1] = a2;
+      wins.assign(1, win);
     } else {
       S2 = std::max(S2, up);
     }
   }
   if (id_strand < 0 || !confirmed || R1 <= floor || upb > R1 || S2 > R1) return po;
+  // The other pairs through R1's anchors. Pairs at or below `relevant` (the
+  // anchor's bands were narrowed to it) are bounded by it.
+  for (const Win& w : wins) {
+    const Mate& X = M[w.mate];
+    const Mate& Y = M[1 - w.mate];
+    const Cluster& cl = X.ws->clusters[w.chain];
+    const Result& ax = best[w.mate];
+    const Result& ay = best[1 - w.mate];
+    auto span = [](const Result& a) {
+      int64_t n = 0;
+      for (int c = 0; c < a.n_cigar; ++c)
+        if ((a.cigar[c] & 0xF) == kOpM || (a.cigar[c] & 0xF) == kOpD) n += a.cigar[c] >> 4;
+      return n;
+    };
+    S2 = std::max(S2, w.relevant);
+    // x where R1 has it (<= sx), y starting before R1's y or after its end.
+    const uint8_t* ry = Y.ws->seq[1 - cl.strand];
+    auto ywin = [&](int64_t a, int64_t b) {
+      if (b < a) return;
+      Band bd;
+      int t;
+      const int v = window_search(ix, ry, Y.L, a, b, pp.wq, w.need, sc, &bd, &t);
+      S2 = std::max(S2, w.sx + std::max(v, t));
+    };
+    ywin(w.ulo, std::min(w.uhi, ay.ref_pos - 1));
+    ywin(std::max(w.ulo, ay.ref_pos + span(ay)), w.uhi);
+    // x elsewhere in its chain (starting before R1's x or after its end), y
+    // anywhere in the window (<= max(fu, thr)).
+    int64_t blo;
+    int bB;
+    const int xo = std::max(chain_best(ix, X.L, cl, w.apad, *X.ws, &blo, &bB, INT64_MIN, ax.ref_pos - 1),
+                            chain_best(ix, X.L, cl, w.apad, *X.ws, &blo, &bB, ax.ref_pos + span(ax), INT64_MAX));
+    if (xo != kNoSub) S2 = std::max(S2, xo + std::max(w.fu, w.thr));
+  }
+  S2 = std::min(S2, R1);  // every pair scores <= R1 = OPT
   po.certified = true;
   po.score = R1;
   po.sub = S2;
