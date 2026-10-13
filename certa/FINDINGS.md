@@ -648,6 +648,10 @@ its code, its oracle tests and the mutants that break it.
     an exact partner.
   - On 2 M HG002 pairs, 0.29 % of records change MAPQ (4,419 fall below
     20).
+  - HG005 re-run with the fixes: variant-calling F1 stays within the
+    Aim 3 margin and above BWA-MEM2 in all 4 comparisons. GATK SNVs
+    0.9933, GATK indels 0.9935, bcftools SNVs 0.9938, bcftools indels
+    0.9467.
 - **Checker:** it now also rejects a record whose own alignment scores above
   its XU.
 - **Open:** review of THEORY.md by a second person. The optional Lean 4

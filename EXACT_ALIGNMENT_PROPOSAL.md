@@ -600,7 +600,8 @@ SNVs and indels, rtg vcfeval against GIAB v4.2.1.
 | bcftools SNVs | 0.9926 | **0.9937** | +0.0011 | 0.9916 | 0.7849 |
 | bcftools indels | 0.9472 | **0.9464** | −0.0008 | 0.9454 | 0.5842 |
 
-- **All 4 comparisons are within the margin, and all 4 are above BWA-MEM2.**
+- **All 4 comparisons are within the margin, and all 4 are above BWA-MEM2.** They still are after
+  the Aim 5 fixes to the pair tier (re-run, §6.5).
   - GATK SNVs: 35 fewer false positives and 70 fewer false negatives than the current pipeline.
   - bcftools indels: the only loss, 20 more false negatives.
 - **What the run produced** (725.8 M reads):
@@ -770,9 +771,22 @@ Killing every mutant also forced new adversarial inputs:
 - two checker tampers. The checker now also rejects a record whose own alignment scores above its
   XU.
 
-**Effect on real data** (2 M HG002 pairs, [raw](certa/bench/results/aim5_2026-10/pr_fix_effect_hg002.txt)).
-10,901 records (0.29 %) change MAPQ, almost all of them PR: 4,419 fall below 20 and 23 rise to 20 or
-above. 751 placements change.
+**Effect on real data.**
+- **2 M HG002 pairs** ([raw](certa/bench/results/aim5_2026-10/pr_fix_effect_hg002.txt)): 10,901
+  records (0.29 %) change MAPQ, almost all of them PR. 4,419 fall below 20, 23 rise to 20 or above,
+  and 751 placements change.
+- **The Aim 3 criterion still holds** on the fixed code. HG005 was re-run with the same protocol
+  and pre-registered MAPQ policy ([raw](certa/bench/results/aim5_2026-10/hg005_rerun_f1.tsv)):
+
+| HG005 chr20 | CERTA + minibwa | intervals, Aim 3 | **intervals, Aim 5** | Δ vs CERTA + minibwa | BWA-MEM2 |
+|---|---|---|---|---|---|
+| GATK SNVs | 0.9926 | 0.9933 | **0.9933** | +0.0007 | 0.9917 |
+| GATK indels | 0.9938 | 0.9938 | **0.9935** | −0.0002 | 0.9925 |
+| bcftools SNVs | 0.9926 | 0.9937 | **0.9938** | +0.0012 | 0.9916 |
+| bcftools indels | 0.9472 | 0.9464 | **0.9467** | −0.0005 | 0.9454 |
+
+All 4 are within the 0.0010 margin and above BWA-MEM2. Records with MAPQ ≥ 20 fall by 1.10 M
+(0.15 % of 725.8 M reads), and wall time rises by 0.5 %.
 
 **Go / no-go: half met.**
 - **Mutation tests for each bound: met.** Every bound the implementation uses has a mutant, and
