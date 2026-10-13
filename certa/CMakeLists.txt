@@ -68,5 +68,8 @@ add_test(NAME certificate COMMAND test_certa)
 add_executable(verify_lemmas tests/verify_lemmas.cpp)
 target_link_libraries(verify_lemmas PRIVATE certa_core)
 add_test(NAME lemmas COMMAND verify_lemmas)
+# Aim 6: the Lemma L ceiling of long reads against their best known alignment.
+add_executable(lr_ceiling tools/lr_ceiling.cpp)
+target_link_libraries(lr_ceiling PRIVATE certa_core)
 
 message(STATUS "CERTA: CUDA back-end ${USE_CUDA} (archs ${CERTA_CUDA_ARCHS}), zlib ${ZLIB_FOUND}")

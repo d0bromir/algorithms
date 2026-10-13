@@ -48,6 +48,8 @@ else
   "$cxx" "${flags[@]}" "$here/tests/verify_lemmas.cpp" -o "$build/verify_lemmas" &
   wait
   core=("$build/index.o" "$build/seqio.o" "$build/mapper_cpu.o" "$build/check.o")
+  "$cxx" "${flags[@]}" -o "$build/lr_ceiling" "$here/tools/lr_ceiling.cpp" "$build/index.o" "$build/seqio.o" \
+    "${libs[@]}" &
   if [[ "$cuda" != OFF ]] && command -v nvcc >/dev/null; then
     gencode=()
     for a in ${archs//;/ }; do gencode+=(-gencode "arch=compute_$a,code=sm_$a"); done
@@ -60,6 +62,7 @@ else
     "$cxx" -pthread -o "$build/certa" "$build/main.o" "$build/gpu_stub.o" "${core[@]}" "${libs[@]}"
   fi
   "$cxx" -pthread -o "$build/test_certa" "$build/test_certa.o" "$build/gpu_stub.o" "${core[@]}" "${libs[@]}"
+  wait
 fi
 "$build/test_certa"
 echo "== built: $build/certa"

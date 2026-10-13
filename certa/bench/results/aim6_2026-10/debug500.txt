@@ -1,0 +1,12 @@
+# debug set (500 reads of the 10x set, not in the sample), tau 16, --verify
+reads 500, fit 470 (94.00 %), with the trimmed path 471; CIGARs failing the base check 0; tau 16, cmax 4096, verify: all parts and U1 recounted equal
+== debug500.tsv
+reads 500; fit 470 = 94.00 % (95 % CI 91.56-95.77 %); go criterion (>= 90 %): met
+mapped 496 (99.20 %); fit with the trimmed path 471
+read length: median 12797, 10-90 % 11770-14107, max 15519
+margin sigma - U1 (mapped): 1% -7798, 5% -189, 10% 1357, 50% 2284, 90% 2731
+loss L - sigma (mapped): 10% 65, 50% 236, 90% 864, 99% 9568
+ceiling L - U1: 1% 420, 10% 1975, 50% 2595, 90% 2970
+parts on the alignment strand: median 520 (41.0 per kb; 22-base tiling gives 45.5); skipped bases median 11, 99% 118
+enumerated occurrences per read (both strands): 50% 655, 90% 988, 99% 2373, max 3596, mean 742
+misses: repeat-limited 12 (2.40 % of reads); high loss 9 (1.80 % of reads); clipped 5 (1.00 % of reads); unmapped 4 (0.80 % of reads)

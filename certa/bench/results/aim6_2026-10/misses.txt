@@ -1,0 +1,9 @@
+# Aim 6, descriptive: the misses at tau = 16 in minimap2s alignments (bench/aim6_misses.py)
+per class: reads, with >1 primary-type line (split), median largest insertion / deletion, share with a gap >= 500, median identity of matched bases, median MAPQ
+  fit: 226253 reads; split 598 (0.3 %); largest ins 2 / del 2; gap >= 500: 1238 (0.5 %); identity 0.9991; MAPQ 60
+  clipped: 5627 reads; split 4505 (80.1 %); largest ins 12 / del 20; gap >= 500: 1507 (26.8 %); identity 0.9738; MAPQ 49
+  high loss: 4987 reads; split 334 (6.7 %); largest ins 100 / del 340; gap >= 500: 2946 (59.1 %); identity 0.9695; MAPQ 5
+  repeat-limited: 4379 reads; split 86 (2.0 %); largest ins 4 / del 4; gap >= 500: 768 (17.5 %); identity 0.9882; MAPQ 1
+  unmapped: 1288 reads
+misses by contig (share of that contig's mapped reads), top 12:
+  1 1528 (7.6 %), 5 1113 (7.1 %), Y 1090 (50.3 %), 16 1004 (13.5 %), 4 753 (4.8 %), 20 605 (10.9 %), 6 567 (4.0 %), 10 558 (5.0 %), KI270438.1 519 (98.9 %), 19 501 (10.4 %), 17 500 (7.3 %), 18 491 (7.5 %)

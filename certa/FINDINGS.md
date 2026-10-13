@@ -657,6 +657,24 @@ its code, its oracle tests and the mutants that break it.
 - **Open:** review of THEORY.md by a second person. The optional Lean 4
   mechanization needs a toolchain download (not approved).
 
+*Update 2026-10-13, Aim 6 (proposal §6.6, criterion pre-registered).*
+`tools/lr_ceiling` measures whether long reads fit the exact-part
+certificate. For each read it takes the Lemma L ceiling U₁ over greedy
+parts that occur ≤ 16 times, and compares it with the score σ of the read's
+minimap2 alignment.
+- **Sample:** 242,534 real HG002 HiFi reads against GRCh38.
+- **Result:** 93.29 % fit (σ > U₁), against a go threshold of 90 %. A
+  typical read's loss (247 points) is a tenth of its ceiling (2,605).
+- **Checks:** every part count and U₁ was recomputed independently, and
+  every CIGAR checked against the reference. All agree.
+- **Misses:**
+  - 2.3 % clipped (mostly split alignments);
+  - 2.1 % high loss (mostly an SV gap of ≥ 500 bases);
+  - 1.8 % repeat-limited;
+  - 0.5 % unmapped.
+- **Not measured:** the verification cost, i.e. the exact alignment of the
+  candidate loci.
+
 - **Speed in paired mode:** 4.0× faster than BWA-MEM2 but slower than
   minibwa (77 s vs 62 s, 20M pairs). The cost lies in the pair pass (about
   1,050 CPU-s) and in the fallback's hard reads. Sending only the
@@ -666,13 +684,15 @@ its code, its oracle tests and the mutants that break it.
 - **HG001 GATK indels** are the one comparison where CERTA's F1 is lower
   (0.9909 vs 0.9922). Look at the 13 extra FP and 14 extra FN.
 - **Long reads:** the current limits (320 bp, 8 parts, radius 5) exclude
-  them. In principle HiFi fits, with an error rate well below the ~4.5 %
-  limit of 22-base parts. A full long-read CERTA would likely be slower than
-  shmap-rs, which does no base-level alignment: about 11.7 s for 2,000
-  HG002 HiFi reads single-threaded (a2:`~/shmap-rs/profiling/other-mappers/`).
-  A more promising idea is to certify only the reads shmap-rs flags as
-  ambiguous. First step, needing no downloads: measure on a2's HiFi data
-  what fraction of reads fall within the certifiable error range.
+  them. The bound side is measured (Aim 6, below): 93 % of real HiFi reads
+  fit the Lemma L ceiling. Still open:
+  - the verification cost (an exact long-read aligner per candidate locus);
+  - a split-alignment objective for the reads that span SVs.
+
+  A full long-read CERTA would likely be slower than shmap-rs, which does
+  no base-level alignment: about 11.7 s for 2,000 HG002 HiFi reads
+  single-threaded (a2:`~/shmap-rs/profiling/other-mappers/`). A more
+  promising idea is to certify only the reads shmap-rs flags as ambiguous.
 - **Data on the hosts:**
   - galaxy:
     - HG005 FASTQs (52 GB, `~/certa-data/SRR14724528_*`); delete them if

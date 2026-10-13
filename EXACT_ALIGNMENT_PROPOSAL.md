@@ -829,6 +829,41 @@ as all CERTA runs. No new data.
 
 The measuring tool is debugged on 500 reads of the 10× set that are not in the sample.
 
+**Result (measured 2026-10-13): go.** Tool: [`certa/tools/lr_ceiling.cpp`](certa/tools/lr_ceiling.cpp);
+[raw](certa/bench/results/aim6_2026-10/).
+
+| HG002 HiFi, 242,534 reads | **τ = 16 (pre-registered)** | τ = 256 |
+|---|---|---|
+| **Reads that fit (σ > U₁)** | **226,253 = 93.29 %** (95 % CI 93.19–93.39 %) | 227,364 = 93.75 % |
+| Median loss L − σ / median ceiling L − U₁ | 247 / 2,605 | 247 / 2,605 |
+| Median margin σ − U₁ (mapped reads) | 2,289 | 2,291 |
+| Parts on the alignment strand, median | 521 (41 per kb) | 521 |
+| Enumerated occurrences per read: median, 99th percentile | 653, 2,425 | 1,295, 13,645 |
+
+- **The checks:** every part's occurrence count was recounted from a second anchor, and every U₁
+  recomputed by brute force: all equal. Every primary CIGAR's match and mismatch claims were
+  checked against the reference: none failed.
+- **§8's estimate holds: certifying the locus is easy.** A typical read's loss (median 247 points
+  for a 12.8 kb read) is a tenth of its ceiling (median 2,605).
+- **The 6.7 % that miss** fall into the classes §8 anticipated (descriptive classes, defined in
+  `bench/aim6_summary.py`):
+  - *clipped*, 2.32 % of reads: 80 % have split alignments (SV breakpoints, chimeras);
+  - *high loss*, 2.06 %: 59 % contain a gap of ≥ 500 bases. That is an SV inside the alignment,
+    which a single affine alignment charges about 2 points per inserted base;
+  - *repeat-limited*, 1.81 %: median MAPQ 1. Long parts in multi-copy repeats lower the ceiling;
+  - *unmapped*, 0.53 %.
+  - By region: half of the chrY reads miss, and nearly all reads on the satellite contig
+    KI270438.1.
+- **What it does not show.** "Fit" is the bound half of a certificate. A fitting read still needs
+  its candidate chains verified: the true locus by one exact long-read alignment (A*PA or WFA, §8),
+  and every other chain whose Lemma L bound exceeds OPT.
+  - Enumeration is cheap: a median of 653 occurrences per read, mostly one per part at the true
+    locus.
+  - The alignment cost is not measured here.
+  - σ comes from minimap2, so the share of misses is an upper estimate: OPT can only be higher.
+- **Next:** the split-alignment objective of §8 addresses the clipped and high-loss classes
+  (4.4 % of reads).
+
 ## 7. Evaluation plan and aims
 
 | Aim | Deliverable | Measurement | Go / no-go |
@@ -838,7 +873,7 @@ The measuring tool is debugged on 500 reads of the 10× set that are not in the 
 | **3. Interval output and MAPQ** | [ℓ, u], SUB interval, conservative MAPQ, SAM tags (`XL`, `XU`) | interval-width distribution; MAPQ calibration on GIAB stratified regions | Variant F1 non-inferior to the current pipeline with **no** heuristic fallback. **Go (§6.3): HG005 F1 −0.0008 to +0.0011 against CERTA + minibwa, above BWA-MEM2 in all 4.** Calibration was measured on simulated pairs instead (the GIAB stratification files are not downloaded). XQ as MAPQ fails: it is biased toward the reference. |
 | **4. Checker** | independent checker (Theorem V); sampling audit | check time per read; zero disagreements | Checker accepts 100 % of certificates; injected faults all detected. **Go (§6.4): 8 M real records accepted; all 23,733 false-by-construction faults and all 6 mapper mutants detected; 89–134 µs per record.** Gap: pair-level XQ (PR, about 4 % of records) is not re-derived. |
 | **5. Theory** | written proofs of Lemma H, Theorems C, G, R, V; optional Lean 4 mechanization | — | Proofs reviewed; mutation tests for each bound. **Half met (§6.5): every bound's mutants killed (50) or proven equivalent (6); exhaustive lemma checks pass; two S2 bugs found and fixed.** Review by a second person pending; Lean not started (needs a download). |
-| **6. Long reads** | HiFi feasibility on a2's existing data (§8) | share of reads whose loss is below the certifiable ceiling | Go if ≥ 90 % of HiFi reads fit. **Definitions pre-registered in §6.6.** |
+| **6. Long reads** | HiFi feasibility on a2's existing data (§8) | share of reads whose loss is below the certifiable ceiling | Go if ≥ 90 % of HiFi reads fit. **Go (§6.6, definitions pre-registered): 93.29 % of 242,534 HG002 HiFi reads fit (93.75 % at τ = 256).** The misses span SVs (4.4 %), sit in repeats (1.8 %) or are unmapped (0.5 %). Verification cost not yet measured. |
 
 **Ground rules:**
 - **Datasets:** the three GIAB samples already processed (HG001, HG002, HG005) and the existing
@@ -853,7 +888,8 @@ The measuring tool is debugged on 500 reads of the 10× set that are not in the 
 **Bounds.** With P parts, the ceiling is about 5·P points of loss. A 15 kb HiFi read at
 0.1–1 % error has 15–150 edits and about 680 disjoint 22-mers. If even a third of those parts are
 unique, U leaves a margin of about 1,000 points against a loss of a few hundred. **Certifying the
-locus is easy for HiFi** [H, Aim 6].
+locus is easy for HiFi.** Measured in Aim 6 (§6.6): 93.3 % of real HG002 HiFi reads fit, with a
+median margin of 2,289 points. Most of the rest span structural variants.
 - ONT at Q20+ (1–2 % error) is borderline.
 - Older noisy reads (5–15 %) are out of reach of exact-part certificates, by the same arithmetic.
 

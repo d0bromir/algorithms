@@ -1,0 +1,28 @@
+# Aim 6 (proposal 6.6), galaxy, 2026-10-13. minimap2 2.31 -x map-hifi -c --eqx -t 64 on hifi_1x.fa (md5 18fec02a53f9889cb5f7813f4312ee5a, 242,534 reads) vs GRCh38 (Ensembl primary assembly, the CERTA reference); tools/lr_ceiling with the q = 22, s = 1 index; bench/aim6_summary.py.
+# Per-read tables (29 MB each) and the PAF (224 MB) stay on galaxy: ~/certa-lr/a6_tau16.tsv, a6_tau256.tsv, hifi1x.paf.
+[14:30:22] minimap2 start
+[14:31:56] minimap2 done: 241246 reads with a line
+[14:42:58] tau 16 exit 0: reads 242534, fit 226253 (93.29 %), with the trimmed path 226330; CIGARs failing the base check 0; tau 16, cmax 4096, verify: all parts and U1 recounted equal
+[14:44:14] tau 256 exit 0: reads 242534, fit 227364 (93.75 %), with the trimmed path 227443; CIGARs failing the base check 0; tau 256, cmax 4096
+
+== a6_tau16.tsv
+reads 242534; fit 226253 = 93.29 % (95 % CI 93.19-93.39 %); go criterion (>= 90 %): met
+mapped 241246 (99.47 %); fit with the trimmed path 226330
+read length: median 12760, 10-90 % 11833-14011, max 17603
+margin sigma - U1 (mapped): 1% -9210, 5% -722, 10% 1348, 50% 2289, 90% 2724
+loss L - sigma (mapped): 10% 69, 50% 247, 90% 959, 99% 11255
+ceiling L - U1: 1% 410, 10% 2005, 50% 2605, 90% 2950
+parts on the alignment strand: median 521 (41.4 per kb; 22-base tiling gives 45.5); skipped bases median 11, 99% 124
+enumerated occurrences per read (both strands): 50% 653, 90% 957, 99% 2425, max 7212, mean 734
+misses: clipped 5627 (2.32 % of reads); high loss 4987 (2.06 % of reads); repeat-limited 4379 (1.81 % of reads); unmapped 1288 (0.53 % of reads)
+== a6_tau256.tsv
+reads 242534; fit 227364 = 93.75 % (95 % CI 93.65-93.84 %); go criterion (>= 90 %): met
+mapped 241246 (99.47 %); fit with the trimmed path 227443
+read length: median 12760, 10-90 % 11833-14011, max 17603
+margin sigma - U1 (mapped): 1% -9195, 5% -551, 10% 1363, 50% 2291, 90% 2725
+loss L - sigma (mapped): 10% 69, 50% 247, 90% 959, 99% 11255
+ceiling L - U1: 1% 625, 10% 2020, 50% 2605, 90% 2950
+parts on the alignment strand: median 521 (41.4 per kb; 22-base tiling gives 45.5); skipped bases median 11, 99% 87
+enumerated occurrences per read (both strands): 50% 1295, 90% 4015, 99% 13645, max 69604, mean 2070
+misses: clipped 5496 (2.27 % of reads); high loss 5069 (2.09 % of reads); repeat-limited 3317 (1.37 % of reads); unmapped 1288 (0.53 % of reads)
+== a6_tau256.tsv vs a6_tau16.tsv: fit in both 226249, only the first 4, only the second 1115
