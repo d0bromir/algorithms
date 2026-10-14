@@ -918,6 +918,32 @@ aligner, and neither does the rest.
 The DP is a plain scalar Gotoh. A SIMD band or a wavefront aligner would cut its share several-fold,
 so certifying HiFi reads at minimap2-like cost looks reachable.
 
+**Follow-up 2 (2026-10-14): reads that cross structural variants, bound side**
+([raw](certa/bench/results/aim6_2026-10/split.txt); exploratory, not pre-registered).
+- **The objective:** the split (jump) objective lets a read align as pieces in read order, each on
+  its own locus and strand, at a cost P per jump ([certa/THEORY.md](certa/THEORY.md), "Jump (split)
+  alignments"). P = 10 matches how BWA-MEM scores a split read.
+- **Lemma L-J:** it bounds every split alignment with no exact part by U_J, which one pass over the
+  read computes. It equals a brute force on 210,000 random cases.
+- **The lower bound:** lb_J is assembled from minimap2's own lines. Each line is also split at gaps
+  longer than P − 6.
+
+| Share of the 242,534 reads that fit | P = 10 | P = 30 | P = 60 |
+|---|---|---|---|
+| Single piece (the criterion, as above) | 93.29 % | 93.29 % | 93.29 % |
+| **Split objective** | **94.58 %** | **94.39 %** | **94.30 %** |
+| Clipped misses that now fit | 1,419 of 5,627 | 1,307 | 1,211 |
+| High-loss misses that now fit | 1,005 of 4,987 | 837 | 753 |
+
+- **The misses that stay:** unmapped reads, and reads in centromeric satellites, chrY and
+  diverged duplications. There minimap2's identity is 0.87–0.95, so the reference does not hold the
+  read closely enough for any exact-part certificate.
+- **A long novel insertion can never be certified exactly by exact parts.** It is a piece that no
+  part can witness, so such a read keeps an interval.
+- **Not built:** proving the split optimum exactly. That needs a jump DP over the candidate chains
+  in which a piece may start from the best prefix value minus P. It is feasible, but the gain is at
+  most these 1.1 points.
+
 ## 7. Evaluation plan and aims
 
 | Aim | Deliverable | Measurement | Go / no-go |
@@ -959,7 +985,12 @@ too expensive.
 
 **Objective.** Long reads cross structural variants, so the objective needs split or two-piece
 affine alignment. A certified split alignment generalizes Theorem P (k pieces under a chaining
-penalty). That is new theory, and it is listed as future work.
+penalty).
+- **Defined and bounded (§6.6):** the jump objective, with pieces in read order and P per jump.
+  Lemma L-J extends the exact-part ceiling to it, computed in one pass and verified exhaustively.
+- **Measured:** on HiFi it lets 1.1 more points of reads fit at P = 30, about a fifth of the
+  clipped and high-loss reads.
+- **Not built:** the exact certificate of the split optimum (a jump DP over the candidate chains).
 
 **Relation to shmap-rs.** shmap-rs maps in about 5.9 ms per HiFi read without base-level alignment.
 A certifying long-read aligner will not beat it on raw speed. The useful combination: shmap-rs

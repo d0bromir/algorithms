@@ -243,6 +243,7 @@ include/certa/core.h       per-read algorithm (host + device)
 include/certa/pair.h       pair certificate (tier PR)
 include/certa/repeat.h     repeats (tier R)
 include/certa/interval.h   interval output (--intervals)
+include/certa/longread.h   long reads: Lemma L bounds, incl. split (jump) alignments
 src/index.*                FASTA loading, sampled q-mer index, save/load
 src/seqio.*                FASTQ/FASTA reading (plain or gzip)
 src/check.*                independent checker (certa check, check-index)

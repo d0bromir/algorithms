@@ -16,6 +16,10 @@
 //  Thm G    the greedy partition is optimal (random instances, against DP).
 //  XQ       BWA-MEM's MAPQ formula (mapq_se) is non-increasing in SUB and
 //           non-decreasing in the score, so XQ bounds it from below.
+//  Lemma L-J  the one-pass bound of jump (split) alignments, lemma_l_jump,
+//           equals the best decomposition into pieces found by brute force
+//           (random two-strand part layouts), and the single-span bound
+//           when jumps cost too much to use.
 //
 // Transcripts: each read base is a match, a mismatch or inserted; between
 // consecutive bases lies a deletion of 0, 1 or 2 reference bases. Loss
@@ -30,6 +34,7 @@
 #include <vector>
 
 #include "certa/interval.h"
+#include "certa/longread.h"
 #include "certa/pair.h"
 
 namespace {
@@ -364,6 +369,51 @@ int main() {
     }
     EXPECT(bad == 0, "Theorem G: greedy below the optimum in %lld instances", bad);
     std::fprintf(stderr, "Theorem G: %lld random instances, greedy = DP optimum in all: %s\n", n, bad ? "no" : "yes");
+  }
+  // ---- Lemma L-J: lemma_l_jump against a brute force over all
+  // decompositions into pieces (start, end, strand), each bounded by Lemma L.
+  {
+    std::mt19937_64 g(7);
+    long long n = 0, bad = 0, bad1 = 0;
+    for (int it = 0; it < 30000; ++it) {
+      const int L = 3 + static_cast<int>(g() % 22);
+      std::vector<certa::ReadPart> part[2];
+      for (int s = 0; s < 2; ++s) {  // disjoint parts >= 3 long, gaps allowed
+        int x = static_cast<int>(g() % 3);
+        for (;;) {
+          const int len = 3 + static_cast<int>(g() % 4);
+          if (x + len > L) break;
+          if (g() % 4) part[s].push_back({x, x + len, 0});
+          x += len + static_cast<int>(g() % 3);
+        }
+      }
+      auto V = [&](int s, int a, int b) {  // Lemma L for one piece [a, b) on strand s
+        long v = b - a;
+        for (const auto& q : part[s]) v -= 5 * (q.off >= a && q.end <= b);
+        return v;
+      };
+      for (long P : {0L, 3L, 5L, 9L, 10L, 30L, 1000000L}) {
+        // f[b]: the best decomposition whose last piece ends at b; M[a]: max f[e], e <= a.
+        std::vector<long> f(L + 1, LONG_MIN / 4), M(L + 1, LONG_MIN / 4);
+        for (int b = 1; b <= L; ++b) {
+          for (int a = 0; a < b; ++a) {
+            const long pre = std::max(a > 0 ? -5L : 0L, M[a] - P);
+            for (int s = 0; s < 2; ++s) f[b] = std::max(f[b], pre + V(s, a, b));
+          }
+          M[b] = std::max(M[b - 1], f[b]);
+        }
+        long brute = LONG_MIN;
+        for (int b = 1; b <= L; ++b) brute = std::max(brute, f[b] - (b < L ? 5 : 0));
+        ++n;
+        bad += certa::lemma_l_jump(L, part, P) != brute;
+      }
+      bad1 += certa::lemma_l_jump(L, part, 1000000) !=
+              std::max(certa::lemma_l_span(L, part[0]), certa::lemma_l_span(L, part[1]));
+    }
+    EXPECT(bad == 0, "Lemma L-J: the one-pass bound differs from the brute force in %lld cases", bad);
+    EXPECT(bad1 == 0, "Lemma L-J: without jumps, not the single-span bound in %lld cases", bad1);
+    std::fprintf(stderr, "Lemma L-J: %lld (layout, P) cases, one-pass bound = brute force: %s; = single-span bound "
+                 "without jumps: %s\n", n, bad ? "no" : "yes", bad1 ? "no" : "yes");
   }
   // ---- XQ: mapq_se is monotone (non-increasing in SUB, non-decreasing in the score).
   {

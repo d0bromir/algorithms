@@ -1,0 +1,15 @@
+Lemma L, parts >= 3, L = 9: 52829172 transcript-layout pairs, 0 violations
+Lemma L, parts >= 2, L = 8: 17 violations, e.g. L=8 parts [0,2) [2,4) [4,6) states =IIII===: loss 14 < 5 x 3
+Lemma H, parts >= 4 (all layouts, L = 10; three parts of 4, L = 12): 502152696 transcript-layout pairs, 0 violations
+Lemma H, parts of 3, L = 9: 1 violations, e.g. L=9 parts [0,3) [3,6) [6,9) states =IIIIIII=: loss 20 < 7 x 3
+Lemma E, L = 8: 8071264 clipped transcripts, 0 violations; attained for d = 1..4: yes
+Lemma S, parts >= 4: the full span is not the maximum in 3885 cases
+Lemma S, parts >= 5, L = 24: 181860 (layout, counted set, extra) cases, full span always the maximum: yes; span_bound = brute force on all layouts: yes
+Prop. A, e = 0: part (AC)^2 costs 7 (= e + 7); nearest substring 1 edits; nearest ungapped placement 2 mismatches
+Prop. A, e = 1: part (AC)^4 costs 8 (= e + 7); nearest substring 2 edits; nearest ungapped placement 2 mismatches
+Prop. A, e = 2: part (AC)^6 costs 9 (= e + 7); nearest substring 3 edits; nearest ungapped placement 6 mismatches
+Prop. A, e = 3: part (AC)^8 costs 10 (= e + 7); nearest substring 4 edits; nearest ungapped placement 4 mismatches
+Theorem G: 20000 random instances, greedy = DP optimum in all: yes
+Lemma L-J: 210000 (layout, P) cases, one-pass bound = brute force: yes; = single-span bound without jumps: yes
+XQ: mapq_se monotone on 2307254 (L, score, SUB) triples: yes
+all lemma checks passed

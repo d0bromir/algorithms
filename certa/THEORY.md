@@ -260,6 +260,45 @@ part's. A's exactly occurring parts are among C's. ∎
     recomputed by brute force;
   - a full DP around the known locus never exceeds the proven OPT.
 
+**Jump (split) alignments (Aim 6 follow-up; `certa/longread.h`).** A long
+read that crosses a structural variant has no good single local alignment.
+- *The objective:* a jump alignment is a sequence of pieces A₁ … A_k, each a
+  gapped local alignment of a read interval [a_j, b_j) on its own strand and
+  locus, in read order (b_j ≤ a_{j+1}). It scores
+  J = Σ σ(A_j) − P (k − 1) − 5 [a₁ > 0] − 5 [b_k < L], where σ has no clip
+  penalties and read bases outside the pieces score 0.
+  - k = 1 is the local objective.
+  - P = 10 is how BWA-MEM scores a split read: two local alignments, each
+    clipped at the junction.
+  - The default is P = 30, so indels up to 24 bases stay gaps: a gap of k
+    costs 6 + k, a jump P.
+- *Lemma L-J:* if no piece holds an exact occurrence of a part of its strand,
+  J ≤ U_J, the maximum over decompositions of
+  Σ [(b_j − a_j) − 5 (parts of strand s_j inside [a_j, b_j))] − P (k − 1) −
+  the end clips.
+  - *Proof:* each piece is a local alignment of its read interval. Lemma L,
+    applied to it without clip penalties, charges ≥ 5 for each inexact part
+    inside it, disjointly. Summing over the pieces gives a decomposition's
+    value, which is at most U_J. ∎
+- *Computing U_J:* `lemma_l_jump` computes U_J exactly in one pass over the
+  read. Its states are: inside a piece of strand s (with or without its
+  current part covered from its first base), or between pieces.
+  - *Verified:* against a brute force over all decompositions, on 210,000
+    random two-strand part layouts and penalties
+    (`tests/verify_lemmas.cpp`).
+  - *How it compares with U₁:* U_J ≥ U₁. They differ only where the strands'
+    partitions skip different stretches; on HiFi reads U_J − U₁ is 0.4 on
+    average, up to 628.
+- *A limit:* a novel insertion of length g, absent from the reference, can
+  be a piece of its own that no part witnesses. Its bound is about
+  g (1 − 5/ℓ) − 2P, where ℓ is the part length. So a long novel insertion
+  cannot be certified exactly by exact parts; such a read keeps an
+  interval.
+- *Measured (bound side):* see proposal §6.6.
+- *Not built:* the exact certificate of OPT_J, a row-synchronous DP over the
+  candidate chains in which a piece may start from the best prefix value
+  minus P.
+
 **SL's SUB bound (Aim 3).** SUB ≤ max(s2, the best alignment in the chosen
 chain that starts before the reported one or at/after its end).
 - *Proof:* an alignment at another locus outside the chosen chain is bounded

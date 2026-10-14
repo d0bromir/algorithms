@@ -99,6 +99,17 @@ def summary(rows, label):
         cls[c] = cls.get(c, 0) + 1
     print("misses: " + "; ".join(f"{c} {k} ({100 * k / n:.2f} % of reads)" for c, k in
                                  sorted(cls.items(), key=lambda x: -x[1])))
+    # --jump: the split objective (certa/longread.h) at each jump penalty.
+    for P in sorted(int(k[6:]) for k in rows[0] if k.startswith("fitsJ_")):
+        fj = sum(r["fitsJ_%d" % P] for r in rows)
+        new = {}
+        for r in misses:
+            if r["fitsJ_%d" % P]:
+                c = classify(r)
+                new[c] = new.get(c, 0) + 1
+        print(f"split objective, P = {P}: fit {fj} = {100 * fj / n:.2f} %; of the misses above, "
+              + "; ".join(f"{c} {k} of {cls[c]}" for c, k in sorted(new.items(), key=lambda x: -x[1]))
+              + f"; fit single but not split {sum(r['fits'] and not r['fitsJ_%d' % P] for r in rows)}")
     if "cert" not in rows[0]:
         return
     # --certify: OPT proven by banded DP over the candidate chains.

@@ -710,10 +710,12 @@ verifies the XQ of PR mates too.
   (0.9909 vs 0.9922). Look at the 13 extra FP and 14 extra FN.
 - **Long reads:** the mapper's limits (320 bp, 8 parts, radius 5) exclude
   them. `tools/lr_ceiling --certify` certifies them (Aim 6, below): OPT is
-  proven for 93.3 % of real HiFi reads, at about 2.8× minimap2's CPU. Still
-  open:
-  - a split-alignment objective for the reads that span SVs;
-  - building this into the mapper, with a faster DP.
+  proven for 93.3 % of real HiFi reads, at about 2.8× minimap2's CPU.
+  - *Reads that span SVs:* a split (jump) objective is defined, and Lemma
+    L-J bounds it (`certa/longread.h`). With it, 94.4 % of reads fit at
+    P = 30, about a fifth of the clipped and high-loss misses.
+  - *Still open:* the exact certificate of the split optimum, and building
+    all this into the mapper with a faster DP.
 
   A full long-read CERTA would likely be slower than shmap-rs, which does
   no base-level alignment: about 11.7 s for 2,000 HG002 HiFi reads
