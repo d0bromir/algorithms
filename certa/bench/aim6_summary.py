@@ -4,8 +4,10 @@
 
 Prints the pre-registered criterion (share of all reads with sigma > U1),
 then descriptive statistics that are not part of it: the margin, why reads
-miss, the ceiling's parts and the enumerated occurrences per read (a proxy
-for the verification cost), the trimmed-path variant and a second tau.
+miss, the ceiling's parts and the enumerated occurrences per read, the
+trimmed-path variant and a second tau. For a run with --certify, also the
+completed certificates: OPT proven, how often it beats the best known
+alignment, and the cost (DP cells and time per read).
 
 Miss classes (descriptive, defined here):
   unmapped        no primary alignment;
@@ -97,6 +99,28 @@ def summary(rows, label):
         cls[c] = cls.get(c, 0) + 1
     print("misses: " + "; ".join(f"{c} {k} ({100 * k / n:.2f} % of reads)" for c, k in
                                  sorted(cls.items(), key=lambda x: -x[1])))
+    if "cert" not in rows[0]:
+        return
+    # --certify: OPT proven by banded DP over the candidate chains.
+    cert = [r for r in rows if r["cert"] == 1]
+    capped = sum(r["cert"] == 2 for r in rows)
+    print(f"certified (OPT proven): {len(cert)} = {100 * len(cert) / n:.2f} % of reads; over the cell cap {capped}")
+    if not cert:
+        return
+    gain = [r["opt"] - max(r["sigma"], r["sigma_trim"]) for r in cert]
+    up = [g for g in gain if g > 0]
+    print(f"OPT above the best known alignment: {len(up)} reads ({100 * len(up) / len(cert):.1f} %), by "
+          + (", ".join(f"{p}% {q(up, p / 100)}" for p in (50, 90, 99)) + f", max {max(up)}" if up else "-"))
+    cells = [r["cells"] for r in cert]
+    us = [r["us"] for r in cert]
+    print("DP cells per read: " + ", ".join(f"{p}% {q(cells, p / 100):.3g}" for p in (50, 90, 99)) +
+          f", max {max(cells):.3g}, mean {sum(cells) / len(cells):.3g}")
+    print("DP time per read (one thread): " + ", ".join(f"{p}% {q(us, p / 100) / 1000:.1f} ms" for p in (50, 90, 99)) +
+          f", max {max(us) / 1000:.0f} ms, mean {sum(us) / len(us) / 1000:.1f} ms")
+    s = [r["searched"] for r in cert]
+    c = [r["chains"] for r in cert]
+    print(f"chains searched by DP: median {q(s, 0.5)}, 99% {q(s, 0.99)}, max {max(s)} (of chains built: median "
+          f"{q(c, 0.5)}, max {max(c)})")
 
 
 def main():

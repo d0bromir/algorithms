@@ -253,7 +253,7 @@ tests/test_certa.cpp       brute-force oracle tests of every bound
 tests/verify_lemmas.cpp    exhaustive checks of the finite lemmas
 tests/mutants.tsv          one mutant per bound; tests/run_mutants.sh runs them
 tools/simulate.py          synthetic genome/reads and placement evaluation
-tools/lr_ceiling.cpp       long reads: Lemma L ceiling vs best known alignment (Aim 6)
+tools/lr_ceiling.cpp       long reads: Lemma L ceiling vs best known alignment; --certify proves OPT (Aim 6)
 scripts/                   build.sh, demo.sh
 THEORY.md                  the proofs, with code, tests and mutants per statement
 ```

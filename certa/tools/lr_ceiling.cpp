@@ -6,7 +6,13 @@
 // scores). A read "fits" when sigma > U1.
 //
 //   lr_ceiling INDEX.cidx READS.fa ALN.paf [--tau 16] [--cmax 4096]
-//              [--window 40] [--step 8] [-t threads] [--verify] > out.tsv
+//              [--window 40] [--step 8] [-t threads] [--verify]
+//              [--certify [--max-cells 4e9]] > out.tsv
+//
+// --certify completes the certificate of each fitting read (certify_read):
+// OPT is then proven exactly, and the columns cert, opt, chains, searched,
+// cells, us give it and its cost. With --verify, a full DP around the best
+// known alignment's locus must not exceed the proven OPT.
 //
 // The index must have s = 1. Unlike tier R (repeat.h), reads may be of any
 // length, and a stretch where no part of <= tau occurrences starts is skipped
@@ -14,6 +20,7 @@
 // not a tiling.
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
@@ -41,6 +48,8 @@ struct Part {
 struct Opts {
   int tau = 16, cmax = 4096, window = 40, step = 8, threads = 0;
   bool verify = false;
+  bool certify = false;  // complete the certificate of fitting reads (banded DP)
+  double max_cells = 4e9;  // per read; beyond it the read is left uncertified
 };
 
 struct Aln {  // best known alignment of a read (minimap2)
@@ -171,6 +180,9 @@ struct StrandOut {
   long occ_sum = 0;   // enumerated occurrences
   int absent = 0;
   int longest_free = 0;  // longest stretch covered by no part
+  // --certify: every exact occurrence of a rare part, as (diagonal = the
+  // reference position of read base 0, part index).
+  std::vector<std::pair<int64_t, int>> occ;
 };
 
 // Greedy partition of one strand (Theorem G at tau, Lemma R).
@@ -230,9 +242,12 @@ void partition(const IndexView& ix, const uint8_t* rd, int L, const Opts& o, Scr
     const bool rare = b == banc && b < babs;
     uint32_t occ = 0;
     if (rare) {
-      if (sc.ext.empty()) occ = (uint32_t)sc.elig.size();
-      else
-        for (int R : sc.ext) occ += c + q + R >= b;
+      const int part = (int)out.parts.size();
+      for (size_t k = 0; k < sc.elig.size(); ++k)
+        if (sc.ext.empty() || c + q + sc.ext[k] >= b) {
+          ++occ;
+          if (o.certify) out.occ.push_back({sc.elig[k] - c, part});
+        }
     }
     out.parts.push_back({s, b, occ});
     out.occ_sum += occ;
@@ -282,6 +297,111 @@ long u1_brute(int L, const std::vector<Part>& p) {
   return best;
 }
 
+// Lemma L with the parts flagged in `free` uncharged (they may occur exactly
+// in the alignment); every other part inside the span costs >= 5. As u1,
+// with the charge counted per part. O(P).
+long lemma_free(int L, const std::vector<Part>& p, const std::vector<char>& free) {
+  const int P = (int)p.size();
+  const long c5 = kMismatch + kMatch;
+  long G = 0, best = LONG_MIN, C = 0;  // C: charged parts among 0..j-1
+  for (int j = 0; j <= P; ++j) {
+    const long y = j == P ? L : p[j].end - 1;
+    best = std::max(best, y - c5 * C - (y < L ? kClip : 0) + G);
+    if (j < P) {
+      C += !free[j];
+      G = std::max(G, -(long)(p[j].off + 1) + c5 * C - kClip);
+    }
+  }
+  return best;
+}
+
+// The best local score (BWA-MEM's scores, -5 per clipped end) of rd over
+// alignments whose cells all lie on diagonals [dlo, dhi] (reference
+// position minus read position). Gotoh, one row of the band at a time.
+struct Dp {
+  std::vector<int> H, I, Hn, In;
+};
+long band_best(const IndexView& ix, const uint8_t* rd, int L, int64_t dlo, int64_t dhi, Dp& dp, double* cells) {
+  const int B = (int)(dhi - dlo + 1);
+  const int NEG = INT_MIN / 4;
+  dp.H.assign(B + 1, NEG);
+  dp.I.assign(B + 1, NEG);
+  dp.Hn.assign(B + 1, NEG);
+  dp.In.assign(B + 1, NEG);
+  int best = NEG;
+  for (int i = 1; i <= L; ++i) {
+    const uint8_t c = rd[i - 1];
+    const int start = i == 1 ? 0 : -kClip;
+    const int end = i < L ? kClip : 0;
+    int d = NEG, left = NEG;  // deletion state, and H at (i, b - 1)
+    const int64_t j0 = i - 1 + dlo;
+    for (int b = 0; b < B; ++b) {
+      const int m = std::max(dp.H[b], start) + (same(c, ref_at(ix, j0 + b)) ? kMatch : -kMismatch);
+      const int ins = i > 1 ? std::max(dp.H[b + 1] - kGapOpen - kGapExt, dp.I[b + 1] - kGapExt) : NEG;
+      d = std::max(left - kGapOpen - kGapExt, d - kGapExt);
+      const int h = std::max(m, std::max(ins, d));
+      dp.Hn[b] = h;
+      dp.In[b] = ins;
+      left = h;
+      best = std::max(best, m - end);
+    }
+    dp.Hn[B] = dp.In[B] = NEG;
+    std::swap(dp.H, dp.Hn);
+    std::swap(dp.I, dp.In);
+  }
+  *cells += (double)L * B;
+  return best;
+}
+
+// The rest of the certificate of a fitting read (lb = the best known
+// alignment's score > U1): every alignment above lb has gap total <= pad =
+// L - lb - 7 (Lemma W) and, having an exact part (it beats U1), lies in a
+// chain of part occurrences on that strand (split where diagonals are more
+// than pad apart), within its diagonals +- pad (Lemma C), scoring at most
+// the chain's Lemma L bound with its parts free. So OPT = max(lb, the band
+// maxima of the chains whose bound exceeds the best so far).
+struct Cert {
+  int status = 0;  // 0: not attempted (no fit); 1: OPT proven; 2: over the cell cap
+  long opt = 0;
+  int chains = 0, searched = 0;
+  double cells = 0, us = 0;
+};
+Cert certify_read(const IndexView& ix, const uint8_t* const* rd, int L, StrandOut* so, long lb, long U, const Opts& o,
+                  Dp& dp) {
+  Cert c;
+  if (lb <= U) return c;
+  const auto t0 = std::chrono::steady_clock::now();
+  const long pad = std::max(0L, (long)L - lb - 7);
+  long best = lb;
+  std::vector<char> free;
+  for (int st = 0; st < 2; ++st) {
+    auto& occ = so[st].occ;
+    std::sort(occ.begin(), occ.end());
+    const std::vector<Part>& P = so[st].parts;
+    free.assign(P.size(), 0);
+    for (size_t i = 0, j; i < occ.size(); i = j) {
+      j = i + 1;
+      while (j < occ.size() && occ[j].first - occ[j - 1].first <= pad) ++j;
+      ++c.chains;
+      for (size_t k = i; k < j; ++k) free[occ[k].second] = 1;
+      const long ub = lemma_free(L, P, free);
+      for (size_t k = i; k < j; ++k) free[occ[k].second] = 0;
+      if (ub <= best) continue;
+      const int64_t dlo = occ[i].first - pad, dhi = occ[j - 1].first + pad;
+      if (c.cells + (double)L * (double)(dhi - dlo + 1) > o.max_cells) {
+        c.status = 2;
+        return c;
+      }
+      ++c.searched;
+      best = std::max(best, band_best(ix, rd[st], L, dlo, dhi, dp, &c.cells));
+    }
+  }
+  c.status = 1;
+  c.opt = best;
+  c.us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+  return c;
+}
+
 // --verify: recount each rare part from a different anchor (its first
 // q-mer) and check that U1 equals the brute-force maximum.
 int verify_strand(const IndexView& ix, const uint8_t* rd, int L, const StrandOut& so) {
@@ -323,11 +443,13 @@ int main(int argc, char** argv) {
     else if (a == "--step" && i + 1 < argc) o.step = std::atoi(argv[++i]);
     else if (a == "-t" && i + 1 < argc) o.threads = std::atoi(argv[++i]);
     else if (a == "--verify") o.verify = true;
+    else if (a == "--certify") o.certify = true;
+    else if (a == "--max-cells" && i + 1 < argc) o.max_cells = std::atof(argv[++i]);
     else pos.push_back(argv[i]);
   }
   if (pos.size() != 3) {
     std::fprintf(stderr, "usage: lr_ceiling INDEX.cidx READS.fa ALN.paf [--tau 16] [--cmax 4096] "
-                         "[--window 40] [--step 8] [-t threads] [--verify]\n");
+                         "[--window 40] [--step 8] [-t threads] [--verify] [--certify [--max-cells 4e9]]\n");
     return 2;
   }
   Reference ref;
@@ -359,9 +481,11 @@ int main(int argc, char** argv) {
   std::vector<std::string> rows(reads.size());
   std::atomic<size_t> next{0};
   std::atomic<long> fits{0}, verify_bad{0}, path_bad{0}, fits_trim{0};
+  std::atomic<long> certified{0}, capped{0}, improved{0}, local_checked{0}, local_equal{0}, local_above{0};
   auto work = [&]() {
     Scratch sc;
     StrandOut so[2];
+    Dp dp;
     std::vector<uint8_t> rc;
     for (size_t r; (r = next++) < reads.size();) {
       const std::vector<uint8_t>& fw = reads[r];
@@ -389,14 +513,41 @@ int main(int argc, char** argv) {
         }
       }
       fits_trim += a.mapped && trim > U;
+      Cert ct;
+      if (o.certify && a.mapped) {
+        const long lb = std::max<long>(a.sigma, trim);  // the best known real alignment
+        const uint8_t* rds[2] = {fw.data(), rc.data()};
+        ct = certify_read(ix, rds, L, so, lb, U, o, dp);
+        certified += ct.status == 1;
+        capped += ct.status == 2;
+        improved += ct.status == 1 && ct.opt > lb;
+        auto cg = contig.find(a.tname);
+        if (o.verify && ct.status == 1 && cg != contig.end()) {
+          // Every alignment near the best known one, on its strand, by a
+          // full DP: none may beat the proven OPT.
+          const int64_t t0 = cg->second + a.tstart;
+          double cells = 0;
+          const long near = band_best(ix, rds[a.strand], L, t0 - 1000 - L, t0 + L + 1000, dp, &cells);
+          ++local_checked;
+          local_equal += near == ct.opt;
+          if (near > ct.opt) {
+            ++verify_bad;
+            ++local_above;
+            std::fprintf(stderr, "verify: %s: a full DP near the known locus scores %ld, above the proven OPT %ld\n",
+                         names[r].c_str(), near, ct.opt);
+          }
+        }
+      }
       const StrandOut& sa = so[a.mapped ? a.strand : 0];
-      char buf[512];
+      char buf[640];
       std::snprintf(buf, sizeof buf,
-                    "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%ld\t%ld\t%ld\t%zu\t%zu\t%d\t%d\t%ld\t%ld\t%d\t%ld\t%d\t%ld\n",
+                    "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%ld\t%ld\t%ld\t%zu\t%zu\t%d\t%d\t%ld\t%ld\t%d\t%ld\t%d\t%ld"
+                    "\t%d\t%ld\t%d\t%d\t%.0f\t%.0f\n",
                     names[r].c_str(), L, a.mapped, a.strand, a.qs, a.qe, a.mapped ? a.sigma : 0,
                     a.mapped ? a.sigma_all : 0, U, U0, U1, so[0].parts.size(), so[1].parts.size(), so[0].absent,
                     so[1].absent, sa.skipped, so[0].occ_sum + so[1].occ_sum, sa.longest_free,
-                    a.mapped ? (long)a.sigma - U : 0, (int)fit, trim);
+                    a.mapped ? (long)a.sigma - U : 0, (int)fit, trim, ct.status, ct.opt, ct.chains, ct.searched,
+                    ct.cells, ct.us);
       rows[r] = buf;
     }
   };
@@ -404,7 +555,8 @@ int main(int argc, char** argv) {
   for (int t = 0; t < nt; ++t) pool.emplace_back(work);
   for (auto& t : pool) t.join();
   std::printf("read\tlen\tmapped\tstrand\tqs\tqe\tsigma\tsigma_all\tU1\tU1_fwd\tU1_rev\tparts_fwd\tparts_rev"
-              "\tabsent_fwd\tabsent_rev\tskipped\tocc_sum\tlongest_free\tmargin\tfits\tsigma_trim\n");
+              "\tabsent_fwd\tabsent_rev\tskipped\tocc_sum\tlongest_free\tmargin\tfits\tsigma_trim"
+              "\tcert\topt\tchains\tsearched\tcells\tus\n");
   for (const auto& row : rows) std::fputs(row.c_str(), stdout);
   std::fprintf(stderr, "reads %zu, fit %ld (%.2f %%), with the trimmed path %ld; CIGARs failing the base check %ld; "
                "tau %d, cmax %d%s\n", reads.size(), fits.load(),
@@ -412,5 +564,14 @@ int main(int argc, char** argv) {
                o.verify ? (verify_bad == 0 ? ", verify: all parts and U1 recounted equal"
                                            : ", verify: MISMATCHES (see above)")
                         : "");
+  if (o.certify)
+    std::fprintf(stderr, "certify: OPT proven for %ld reads (%.2f %%), above the best known alignment for %ld; over the "
+                 "cell cap %ld%s\n", certified.load(), reads.empty() ? 0.0 : 100.0 * certified.load() / reads.size(),
+                 improved.load(), capped.load(),
+                 o.verify ? (" ; full DP near the known locus: " + std::to_string(local_checked.load()) +
+                             " reads, equal to OPT for " + std::to_string(local_equal.load()) + ", above it for " +
+                             std::to_string(local_above.load()))
+                                .c_str()
+                          : "");
   return (o.verify && verify_bad) || path_bad ? 1 : 0;
 }

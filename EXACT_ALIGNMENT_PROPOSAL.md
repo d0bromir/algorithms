@@ -890,10 +890,33 @@ The measuring tool is debugged on 500 reads of the 10× set that are not in the 
   and every other chain whose Lemma L bound exceeds OPT.
   - Enumeration is cheap: a median of 653 occurrences per read, mostly one per part at the true
     locus.
-  - The alignment cost is not measured here.
+  - The alignment cost is measured in the follow-up below.
   - σ comes from minimap2, so the share of misses is an upper estimate: OPT can only be higher.
 - **Next:** the split-alignment objective of §8 addresses the clipped and high-loss classes
   (4.4 % of reads).
+
+**Follow-up (2026-10-14): the verification cost, and the complete certificate.**
+[raw](certa/bench/results/aim6_2026-10/certify.txt). The bound half needed no exact long-read
+aligner, and neither does the rest.
+- **The idea:** a read that fits has a known alignment scoring lb > U₁. Any alignment scoring more
+  has gap total ≤ L − lb − 7 (Lemma W), about 250 for a median read. So the band is ±250, not
+  ±2,600.
+- **The method:** a banded DP over every chain of part occurrences whose Lemma L bound exceeds the
+  best so far proves OPT exactly (Corollary L-long in [certa/THEORY.md](certa/THEORY.md); tool
+  `lr_ceiling --certify`).
+
+| HG002 HiFi, 242,534 reads | Result |
+|---|---|
+| **OPT proven** | **226,327 reads (93.32 %)**: every read that fits but 3, which hit the per-read cap of 4 × 10⁹ cells |
+| Chains needing a DP per read | median 1 (the true locus), 99th percentile 2, max 83 |
+| DP cells per read | median 6.1 M, 99th percentile 66 M |
+| DP time per read (scalar, one thread) | median 20 ms, mean 35 ms, 99th percentile 217 ms |
+| Whole run, CPU | 11,629 s, about 48 ms per read. minimap2's mapping and alignment take 4,171 s: **certifying costs about 2.8× minimap2** |
+| OPT above minimap2's alignment (CERTA's scores) | 17.8 % of certified reads, median by 1 point. 333 reads by ≥ 50 against every minimap2 line, e.g. an optimum through bases minimap2 clipped |
+| Check on 2,005 reads (every 121st) | parts recounted, U₁ by brute force, and a full DP over ±1 kb around minimap2's locus: never above the proven OPT, equal to it for 1,876 of 1,879 |
+
+The DP is a plain scalar Gotoh. A SIMD band or a wavefront aligner would cut its share several-fold,
+so certifying HiFi reads at minimap2-like cost looks reachable.
 
 ## 7. Evaluation plan and aims
 
@@ -904,7 +927,7 @@ The measuring tool is debugged on 500 reads of the 10× set that are not in the 
 | **3. Interval output and MAPQ** | [ℓ, u], SUB interval, conservative MAPQ, SAM tags (`XL`, `XU`) | interval-width distribution; MAPQ calibration on GIAB stratified regions | Variant F1 non-inferior to the current pipeline with **no** heuristic fallback. **Go (§6.3): HG005 F1 −0.0008 to +0.0011 against CERTA + minibwa, above BWA-MEM2 in all 4.** Calibration was measured on simulated pairs instead (the GIAB stratification files are not downloaded). XQ as MAPQ fails: it is biased toward the reference. |
 | **4. Checker** | independent checker (Theorem V); sampling audit | check time per read; zero disagreements | Checker accepts 100 % of certificates; injected faults all detected. **Go (§6.4): 8 M real records accepted; all 23,733 false-by-construction faults and all 6 mapper mutants detected; 89–134 µs per record.** The gap (pair-level XQ, about 4 % of records) **is closed (§6.4, 2026-10-14): all 303,682 XS claims on 8 M records proven; 181–232 µs per record.** |
 | **5. Theory** | written proofs of Lemma H, Theorems C, G, R, V; optional Lean 4 mechanization | — | Proofs reviewed; mutation tests for each bound. **Half met (§6.5): every bound's mutants killed (50) or proven equivalent (6); exhaustive lemma checks pass; two S2 bugs found and fixed.** Review by a second person pending; Lean not started (needs a download). |
-| **6. Long reads** | HiFi feasibility on a2's existing data (§8) | share of reads whose loss is below the certifiable ceiling | Go if ≥ 90 % of HiFi reads fit. **Go (§6.6, definitions pre-registered): 93.29 % of 242,534 HG002 HiFi reads fit (93.75 % at τ = 256).** The misses span SVs (4.4 %), sit in repeats (1.8 %) or are unmapped (0.5 %). Verification cost not yet measured. |
+| **6. Long reads** | HiFi feasibility on a2's existing data (§8) | share of reads whose loss is below the certifiable ceiling | Go if ≥ 90 % of HiFi reads fit. **Go (§6.6, definitions pre-registered): 93.29 % of 242,534 HG002 HiFi reads fit (93.75 % at τ = 256).** The misses span SVs (4.4 %), sit in repeats (1.8 %) or are unmapped (0.5 %). **Follow-up: the certificate completed for 93.32 % (OPT proven), at about 2.8× minimap2's CPU (§6.6).** |
 
 **Ground rules:**
 - **Datasets:** the three GIAB samples already processed (HG001, HG002, HG005) and the existing
@@ -924,11 +947,15 @@ median margin of 2,289 points. Most of the rest span structural variants.
 - ONT at Q20+ (1–2 % error) is borderline.
 - Older noisy reads (5–15 %) are out of reach of exact-part certificates, by the same arithmetic.
 
-**Verification cost.** This is the real problem. A band of ±1,000 diagonals over 15 kb is too
-expensive. Within a locus, the optimal pairwise alignment should instead be computed by an exact,
-near-linear aligner: A*PA/A*PA2 (Groot Koerkamp & Ivanov 2024), or WFA for small scores. Exact part
-matches serve as its seeds. Certification then costs one exact pairwise alignment per candidate
-locus, plus the bound.
+**Verification cost.** This looked like the real problem: a band of ±1,000 diagonals over 15 kb is
+too expensive.
+- **The proposed route:** compute the optimal pairwise alignment within a locus with an exact,
+  near-linear aligner (A*PA/A*PA2, Groot Koerkamp & Ivanov 2024, or WFA for small scores), seeded
+  by the exact part matches.
+- **The measured route (§6.6):** it turned out simpler. A known alignment of score lb shrinks the
+  band to L − lb − 7, about ±250 for a median HiFi read. Usually one chain needs it. Certification
+  then costs a median of 20 ms of scalar DP per read, and about 2.8× minimap2's CPU in all.
+- **Where an exact near-linear aligner would still help:** in making that DP cheaper.
 
 **Objective.** Long reads cross structural variants, so the objective needs split or two-piece
 affine alignment. A certified split alignment generalizes Theorem P (k pieces under a chaining

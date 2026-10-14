@@ -674,6 +674,15 @@ minimap2 alignment.
   - 0.5 % unmapped.
 - **Not measured:** the verification cost, i.e. the exact alignment of the
   candidate loci.
+  - *Measured on 2026-10-14 (proposal §6.6):* a known alignment of score
+    lb narrows the band to L − lb − 7 (about ±250). A banded DP over the
+    chains that need it (median 1) proves OPT for 226,327 reads (93.32 %).
+  - *Cost:* median 20 ms of scalar DP per read, about 2.8× minimap2's CPU
+    in all.
+  - *OPT vs minimap2:* OPT beats minimap2's alignment under CERTA's scores
+    for 17.8 % of them.
+  - *Check:* on 2,005 reads, a full DP around the known locus never beat
+    the proven OPT.
 
 *Update 2026-10-14 (proposal §6.4).* The Aim 4 gap is closed: `certa check`
 verifies the XQ of PR mates too.
@@ -699,11 +708,12 @@ verifies the XQ of PR mates too.
   improve the fallback.
 - **HG001 GATK indels** are the one comparison where CERTA's F1 is lower
   (0.9909 vs 0.9922). Look at the 13 extra FP and 14 extra FN.
-- **Long reads:** the current limits (320 bp, 8 parts, radius 5) exclude
-  them. The bound side is measured (Aim 6, below): 93 % of real HiFi reads
-  fit the Lemma L ceiling. Still open:
-  - the verification cost (an exact long-read aligner per candidate locus);
-  - a split-alignment objective for the reads that span SVs.
+- **Long reads:** the mapper's limits (320 bp, 8 parts, radius 5) exclude
+  them. `tools/lr_ceiling --certify` certifies them (Aim 6, below): OPT is
+  proven for 93.3 % of real HiFi reads, at about 2.8× minimap2's CPU. Still
+  open:
+  - a split-alignment objective for the reads that span SVs;
+  - building this into the mapper, with a faster DP.
 
   A full long-read CERTA would likely be slower than shmap-rs, which does
   no base-level alignment: about 11.7 s for 2,000 HG002 HiFi reads

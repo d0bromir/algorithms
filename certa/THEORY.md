@@ -238,6 +238,28 @@ part's. A's exactly occurring parts are among C's. ∎
   - If C was skipped, σ(A) ≤ ub(C) ≤ s2 ≤ s1. ∎
 - *Mutants:* L1–L8.
 
+**Corollary L-long (long reads, Aim 6, `tools/lr_ceiling --certify`).**
+- *Setup:*
+  - the parts are Theorem G's partition at τ, with t = 1. Every occurrence
+    is enumerated (Lemma R), and stretches where no part starts are left
+    uncovered;
+  - lb is the score of a known alignment, and lb > U₁;
+  - the chains are built with pad = L − lb − 7;
+  - every chain whose Lemma L bound (its parts free) exceeds the best score
+    so far is evaluated by banded DP over its diagonals ± pad.
+- *Statement:* OPT = max(lb, the best DP score).
+- *Proof:* Theorem L with floor = lb.
+  - An alignment above lb has an exact part, because lb > U₁.
+  - It has gap total ≤ pad (Lemma W), so it lies in a chain (Lemma C).
+  - Either the DP saw it, or it scores at most the chain's bound, which is ≤
+    the best found.
+  - Lemma L needs only disjoint parts of length ≥ 3, not a tiling: uncovered
+    stretches are simply not charged. ∎
+- *Checks* (`--verify`):
+  - every part's occurrence count is recounted from a second anchor, and U₁
+    recomputed by brute force;
+  - a full DP around the known locus never exceeds the proven OPT.
+
 **SL's SUB bound (Aim 3).** SUB ≤ max(s2, the best alignment in the chosen
 chain that starts before the reported one or at/after its end).
 - *Proof:* an alignment at another locus outside the chosen chain is bounded
