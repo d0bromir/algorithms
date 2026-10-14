@@ -145,17 +145,24 @@ build-*/certa check grch38.cidx all.sam --sample 100000  # or an audit sample
 - **`--witness`** adds:
   - `XW`, the probes and support the bounds were proven from;
   - `XH`, the SUB bound behind XQ;
-  - `XV`, the alignment attaining XL when it is not the record's own.
+  - `XV`, the alignment attaining XL when it is not the record's own (for
+    a PR mate: its single-end alignment);
+  - `XY` (PR mates), the proper-pair distance D and each mate's parts of
+    the pair certificate, which prove `XS`, the bound on every other
+    proper pair.
 - **`certa check`** (`src/check.cpp`) shares no alignment, bound or lookup
   code with the mapper. For each record it verifies:
   - AS, by rescoring;
   - XL, by a shown alignment;
   - XU and XH, by recomputing the bound and enumerating every probe
     occurrence itself;
-  - XQ, against BWA-MEM's formula.
+  - XQ, against BWA-MEM's formula. For PR mates it uses BWA-MEM's pairing
+    rule, with XS proven from both records of the pair: every chain of
+    each mate's part occurrences is paired, by exhaustive DP, with every
+    partner placement within D.
 - **It exits** with status 2 if any record fails; `--failures f.txt` lists
-  them.
-- **Not checked yet:** the XQ of PR records (pair certificate).
+  them. The two records of a pair must be adjacent (as `certa map` writes
+  them); `--sample` samples pairs whole.
 
 Results: [EXACT_ALIGNMENT_PROPOSAL.md §6.4](../EXACT_ALIGNMENT_PROPOSAL.md).
 

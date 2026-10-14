@@ -228,7 +228,7 @@ int oracle_pair(const std::vector<uint8_t>& ref, const std::vector<uint8_t>& m1,
 }
 
 // The claims of an interval-output record, as certa check reads them.
-check::Claim claim_of(const Placement& p, const std::vector<uint8_t>& read) {
+check::Claim claim_of(const Placement& p, const std::vector<uint8_t>& read, int pair_dist = -1) {
   check::Claim c;
   c.read = read;
   c.mapped = p.mapped;
@@ -248,7 +248,8 @@ check::Claim claim_of(const Placement& p, const std::vector<uint8_t>& read) {
   c.xu = p.xu;
   c.xq = p.xq;
   c.pair_xq = p.mapped && p.r.tier == kTierPR;
-  if (p.xq > 0 && !c.pair_xq) c.xh = p.sub_hi;
+  if (p.xq > 0 && (!c.pair_xq || p.pr_xh)) c.xh = p.sub_hi;
+  if (c.pair_xq) c.xs = p.r.sub_score;
   if (p.xl_sep) {
     c.has_alt = true;
     c.alt = aln(p.xl_r);
@@ -256,7 +257,93 @@ check::Claim claim_of(const Placement& p, const std::vector<uint8_t>& read) {
   c.t = p.w.t;
   for (int st = 0; st < 2; ++st)
     for (int j = 0; j < p.w.n[st]; ++j) c.probes[st].push_back({p.w.off[st][j], p.w.end[st][j]});
+  if (p.mapped && p.pw.t > 0) {
+    c.pd = pair_dist;
+    c.pt = p.pw.t;
+    for (int st = 0; st < 2; ++st)
+      for (int j = 0; j < p.pw.n[st]; ++j) c.pprobes[st].push_back({p.pw.off[st][j], p.pw.end[st][j]});
+  }
   return c;
+}
+
+// A certified pair (r: both mates, tier PR; se: their single-end results)
+// as certa map --intervals --witness writes it, through the checker's pair
+// check. Honest claims must be accepted. Claims made false must not be:
+// XS one below sub (the best proper pair differing in some mate, from the
+// oracle) with XQ raised to what that margin gives, the pair witness
+// dropped, D too small for the pair to be proper, XQ one above the pairing
+// rule, a mate's alignment moved.
+struct PrCheck {
+  int pairs = 0, needed = 0, proven = 0, tampered = 0, caught = 0;
+};
+void check_pr(const check::Checker& ck, const Result* r, const Result* se, const std::vector<uint8_t>* m, int D,
+              int sub, const char* what, size_t id, PrCheck& st) {
+  check::Claim c[2];
+  for (int x = 0; x < 2; ++x) {
+    const Placement pl = pr_placement(r[x], r[1 - x], se[x], static_cast<int>(m[x].size()), 60, 60);
+    c[x] = claim_of(pl, m[x], D);
+  }
+  check::Work w[2];
+  check::Verdict v[2];
+  ck.check_pair(c[0], c[1], &w[0], &w[1], &v[0], &v[1]);
+  ++st.pairs;
+  for (int x = 0; x < 2; ++x) {
+    st.needed += w[x].needs_pair;
+    st.proven += w[x].xs_checked;
+    CHECK(v[x] == check::kAccepted, "%s %zu mate %d: checker says %s (XQ %d, q_se %d, XS %d, AS %d + %d)", what, id,
+          x + 1, check::kVerdictNames[v[x]], c[x].xq, w[x].q_se, c[x].xs, c[0].as, c[1].as);
+  }
+  auto expect_reject = [&](check::Claim a, check::Claim b, const char* how) {
+    check::Work wa, wb;
+    check::Verdict va, vb;
+    ck.check_pair(a, b, &wa, &wb, &va, &vb);
+    ++st.tampered;
+    const bool caught = va != check::kAccepted || vb != check::kAccepted;
+    st.caught += caught;
+    CHECK(caught, "%s %zu: false pair claim accepted (%s)", what, id, how);
+  };
+  const int R1 = c[0].as + c[1].as;
+  if (sub > INT32_MIN / 2 && sub - 1 < c[0].xs) {
+    check::Claim t[2] = {c[0], c[1]};
+    int raised = 0;
+    for (int x = 0; x < 2; ++x) {
+      t[x].xs = sub - 1;
+      const int q = std::max(w[x].q_se, std::min(mapq_margin(R1 - (sub - 1)), w[x].q_se + 40));
+      if (q > w[x].q_se) {
+        t[x].xq = q;
+        t[x].mapq = 60;
+        ++raised;
+      }
+    }
+    if (raised) expect_reject(t[0], t[1], "XS = the best other pair - 1");  // also ties (XQ 0 honestly)
+  }
+  if (!w[0].needs_pair && !w[1].needs_pair) return;  // XS carries no other claim here
+  {
+    check::Claim t[2] = {c[0], c[1]};
+    t[0].pt = t[1].pt = 0;
+    expect_reject(t[0], t[1], "no pair witness");
+  }
+  {
+    check::Claim t[2] = {c[0], c[1]};
+    const check::Aln& f = t[0].aln.strand ? t[1].aln : t[0].aln;
+    const check::Aln& rv = t[0].aln.strand ? t[0].aln : t[1].aln;
+    t[0].pd = t[1].pd = static_cast<int>(rv.pos - f.pos) - 1;
+    expect_reject(t[0], t[1], "D one below the pair's distance");
+  }
+  for (int x = 0; x < 2; ++x) {
+    if (!w[x].needs_pair) continue;
+    const int q = std::max(w[x].q_se, std::min(mapq_margin(R1 - c[x].xs), w[x].q_se + 40));
+    if (q >= 60) continue;
+    check::Claim t[2] = {c[0], c[1]};
+    t[x].xq = q + 1;
+    t[x].mapq = 60;
+    expect_reject(t[0], t[1], "XQ one above the pairing rule");
+  }
+  {
+    check::Claim t[2] = {c[0], c[1]};
+    t[0].aln.pos += 1;
+    expect_reject(t[0], t[1], "mate 1 moved by one base");
+  }
 }
 
 // The best pair from per-start bests: forward mate starting at f, reverse
@@ -1075,8 +1162,20 @@ int main(int argc, char** argv) {
     const Params cfgs[] = {{5, 256}, {5, 16}};
     std::vector<int> truth_pair(pairs.size(), INT32_MIN);
     int checked = 0, sub_checked = 0;
+    // The mates single-end (the single-end term of a PR mate's XQ).
+    ReadBatch mb;
+    for (const auto& pr : pairs)
+      for (const std::vector<uint8_t>* s : {&pr.a, &pr.b}) {
+        mb.offs.push_back(mb.codes.size());
+        mb.codes.insert(mb.codes.end(), s->begin(), s->end());
+        mb.lens.push_back(static_cast<uint16_t>(s->size()));
+        mb.hashes.push_back(mb.lens.size() * 0x9E3779B97F4A7C15ULL);
+      }
+    PrCheck prc;
     for (const Params& pc : cfgs) {
       pp.se = pc;
+      std::vector<Result> se_res;
+      map_cpu(view, pc, mb, se_res, 4);
       int cert = 0;
       std::unique_ptr<Workspace> w1(new Workspace), w2(new Workspace);
       PairScratch sc;
@@ -1106,11 +1205,16 @@ int main(int argc, char** argv) {
         ++sub_checked;
         CHECK(po.sub >= sub, "budget=%d pair %zu: S2 %d below the best other pair %d (R1 %d)", pc.budget, i, po.sub,
               sub, po.score);
+        const Result rr[2] = {r1, r2}, ss[2] = {se_res[2 * i], se_res[2 * i + 1]};
+        const std::vector<uint8_t> mm[2] = {pairs[i].a, pairs[i].b};
+        check_pr(checker4, rr, ss, mm, D, sub, "PR pair", i, prc);
       }
       std::fprintf(stderr, "pairs budget=%-3d certified %d/%zu\n", pc.budget, cert, pairs.size());
     }
     std::fprintf(stderr, "PR scores checked against the proper-pair oracle for %d pairs; S2 against the other-pair oracle %d times\n",
                  checked, sub_checked);
+    std::fprintf(stderr, "checker on PR pairs: %d pairs, %d mates' XQ resting on XS, %d proven; %d of %d false pair claims rejected\n",
+                 prc.pairs, prc.needed, prc.proven, prc.caught, prc.tampered);
   }
   // ---- Tier PR at its thresholds (Aim 5): pairs built so that one bound of
   // Theorem P is tight, on a reference of their own. A mutant that moves the
@@ -1128,10 +1232,23 @@ int main(int argc, char** argv) {
   //    with a mismatch (bound 145, score 145); the best pair is 290.
   //  F (S2 through R1's own chain): a tandem mate with a non-overlapping
   //    exact copy and a partner without exact parts: a tie at 270.
+  // For the checker's pair proof (check.h, P1-P3), an exact pair (300) and:
+  //  G (k = 3): another pair with a mismatch in each searched part of both
+  //    mates, scoring exactly U1 + U2 = 260: only (P1) refutes XS = 259;
+  //  H: another pair, 900 bp on, whose mate 1 has a 3-bp deletion at a part
+  //    boundary (141 + 150 = 291). XS = 290 gives pad 3, which joins its
+  //    parts into one chain (bound 150). A pad of 1 splits them (bounds 140
+  //    and 130): with the partner's 150 neither exceeds 290, from either
+  //    mate, and the false XS would pass;
+  //  I: F with a mismatch in x's second copy (265 against 270): the other
+  //    pair keeps R1's y (no exact part), so only "x elsewhere in R1's
+  //    chain" finds it;
+  //  J (110-bp mates): R1's x with two partners without exact parts (180
+  //    and 175): only "y elsewhere in R1's window" finds the second.
   {
     std::mt19937_64 h(seed ^ 0xA5A5A5A5ULL);
     Reference tr;
-    const int64_t len = 40000;
+    const int64_t len = 50000;
     tr.seq.owned.assign(kContigPad, 4);
     tr.names.push_back("thr");
     tr.offsets.push_back(kContigPad);
@@ -1214,6 +1331,38 @@ int main(int argc, char** argv) {
       plant(base + 490, change(yf, {20}));
       fam.push_back({'E', x, rcv(yf), 5});
     }
+    for (int n = 0; n < 3; ++n, base += 1300) {  // G: the checker's (P1), U1 + U2
+      const std::vector<uint8_t> x = random_seq(h, 150), yf = random_seq(h, 150);
+      plant(base, x);
+      plant(base + 400, yf);
+      plant(base + 700, change(x, {9, 28, 47, 66}));  // a mismatch in each searched part
+      plant(base + 1100, change(yf, {9, 28, 47, 66}));
+      fam.push_back({'G', x, rcv(yf), 3});
+    }
+    for (int n = 0; n < 3; ++n, base += 1600) {  // H: the checker's pad
+      const std::vector<uint8_t> x = random_seq(h, 150), yf = random_seq(h, 150);
+      plant(base, x);
+      plant(base + 400, yf);
+      plant(base + 900, cat(cat(sub(x, 0, 76), random_seq(h, 3)), sub(x, 76, 150)));  // 76M3D74M: 141
+      plant(base + 1200, yf);
+      fam.push_back({'H', x, rcv(yf), 5});
+    }
+    for (int n = 0; n < 3; ++n, base += 1300) {  // I: the checker's x elsewhere in R1's chain
+      const std::vector<uint8_t> unit = random_seq(h, 20);
+      std::vector<uint8_t> arr;
+      for (int c = 0; c < 16; ++c) arr.insert(arr.end(), unit.begin(), unit.end());
+      plant(base, change(arr, {300}));  // x's copy at shift 160 now has a mismatch: 145
+      const std::vector<uint8_t> yref = random_seq(h, 150);
+      plant(base + 400, yref);
+      fam.push_back({'I', sub(arr, 0, 150), rcv(change(yref, {9, 28, 47, 66, 85, 104})), 5});
+    }
+    for (int n = 0; n < 3; ++n, base += 1300) {  // J: the checker's other partner of R1's x
+      const std::vector<uint8_t> x = random_seq(h, 110), yf = random_seq(h, 110);
+      plant(base, x);
+      plant(base + 290, change(yf, {6, 19, 31, 43, 55, 67, 79, 91}));       // 70
+      plant(base + 450, change(yf, {6, 19, 31, 43, 55, 67, 79, 91, 103}));  // 65
+      fam.push_back({'J', x, rcv(yf), 5});
+    }
     Index tix = Index::build(tr, 14, 4, 4);
     const IndexView tv = tix.view(tr);
     PairParams tp;
@@ -1221,6 +1370,8 @@ int main(int argc, char** argv) {
     std::unique_ptr<Workspace> w1(new Workspace), w2(new Workspace);
     PairScratch tsc;
     int certified = 0, as_designed = 0;
+    const check::Checker tck(tr, tix);
+    PrCheck tprc;
     for (size_t i = 0; i < fam.size(); ++i) {
       const Fam& f = fam[i];
       tp.se = Params{f.k, 256};
@@ -1229,7 +1380,8 @@ int main(int argc, char** argv) {
       const int L1 = static_cast<int>(f.m1.size()), L2 = static_cast<int>(f.m2.size());
       const PairOut po = certify_pair(tv, tp, f.m1.data(), L1, f.m2.data(), L2, *w1, *w2, tsc, r1, r2);
       const int opt = oracle_pair(T, f.m1, f.m2, tp.max_dist);
-      const int expect = f.kind == 'A' ? 260 : f.kind == 'B' ? 248 : f.kind == 'D' ? 180 : f.kind == 'F' ? 270 : 290;
+      const int expect = f.kind == 'A' ? 260 : f.kind == 'B' ? 248 : f.kind == 'D' ? 180 : f.kind == 'F' ? 270
+                         : f.kind == 'G' || f.kind == 'H' ? 300 : f.kind == 'I' ? 270 : f.kind == 'J' ? 180 : 290;
       const bool designed = opt == expect && (f.kind == 'A' ? !po.certified : po.certified);
       as_designed += designed;
       if (!designed)
@@ -1240,9 +1392,16 @@ int main(int argc, char** argv) {
       CHECK(po.score == opt, "threshold pair %c%zu: PR score %d != oracle %d", f.kind, i, po.score, opt);
       const int sub2 = oracle_pair_sub(T, f.m1, f.m2, tp.max_dist, r1, r2);
       CHECK(po.sub >= sub2, "threshold pair %c%zu: S2 %d below the best other pair %d", f.kind, i, po.sub, sub2);
+      // The checker, with no single-end certificate: XQ rests on XS alone.
+      const Result rr[2] = {r1, r2}, ss[2] = {Result{}, Result{}};
+      const std::vector<uint8_t> mm[2] = {f.m1, f.m2};
+      check_pr(tck, rr, ss, mm, tp.max_dist, sub2, "threshold pair", i, tprc);
     }
     std::fprintf(stderr, "threshold pairs: %zu built, %d behave as designed, %d certified and checked\n", fam.size(),
                  as_designed, certified);
+    std::fprintf(stderr, "checker on threshold pairs: %d pairs, %d mates' XQ resting on XS, %d proven; %d of %d false "
+                         "pair claims rejected\n",
+                 tprc.pairs, tprc.needed, tprc.proven, tprc.caught, tprc.tampered);
     // Lemma WS itself: for each mate (reference orientation) and a range of
     // thresholds up to need = L - 2, in windows around its best start
     // (centred, ending there, starting there), window_search returns the

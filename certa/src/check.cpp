@@ -14,7 +14,7 @@ namespace certa {
 namespace check {
 
 const char* const kVerdictNames[kNumVerdicts] = {"accepted",    "malformed",   "wrong_score", "wrong_xl",
-                                                 "xu_unproven", "xh_unproven", "wrong_xq"};
+                                                 "xu_unproven", "xh_unproven", "wrong_xq",    "xs_unproven"};
 
 namespace {
 
@@ -22,6 +22,7 @@ namespace {
 constexpr int kM = 1, kX = 4, kO = 6, kE = 1, kC = 5;
 constexpr int kNeg = -(1 << 28);
 constexpr uint64_t kMaxOccurrences = 1u << 20;  // per record; beyond it the claim counts as unproven
+constexpr uint64_t kMaxPairCells = uint64_t(1) << 27;  // DP cells per pair proof, likewise
 
 uint8_t code_of(char c) {
   switch (c) {
@@ -73,6 +74,26 @@ int mapq_formula(int score, int sub, int L) {
   t *= identity * identity;
   const int q = static_cast<int>(6.02 * (score - sub) / kM * t * t + 0.499);
   return q < 0 ? 0 : (q > 60 ? 60 : q);
+}
+
+// BWA-MEM's raw MAPQ of a pair score margin d (mem_sam_pe), clamped to [0, 60].
+int margin_mapq(int d) {
+  const int q = static_cast<int>(6.02 * d / kM + 0.499);
+  return q < 0 ? 0 : (q > 60 ? 60 : q);
+}
+
+// Probes per strand: at most 32, disjoint, increasing, inside the read, each
+// long enough to be looked up (>= min_len).
+bool probes_ok(const std::vector<Probe>* P, int L, int min_len) {
+  for (int st = 0; st < 2; ++st) {
+    if (P[st].size() > 32) return false;
+    int prev = 0;
+    for (const Probe& p : P[st]) {
+      if (p.off < prev || p.end > L || p.end - p.off < min_len) return false;
+      prev = p.end;
+    }
+  }
+  return true;
 }
 
 bool parse_cigar(const std::string& s, std::vector<uint32_t>& out) {
@@ -228,28 +249,21 @@ int Checker::best_band(const uint8_t* rd, int L, int64_t dlo, int64_t dhi, int64
   return best;
 }
 
-// Whether the witness proves that every alignment (sub: every alignment not
-// overlapping the record's) scores <= bound. See check.h, (i)-(iii).
-bool Checker::proven(const Claim& c, const std::vector<uint8_t>* rd, int bound, bool sub, Work* w) const {
+// Whether the witness proves that every alignment (excl given: every
+// alignment not overlapping excl) scores <= bound. See check.h, (i)-(iii).
+bool Checker::proven(const Claim& c, const std::vector<uint8_t>* rd, int bound, const Aln* excl, Work* w) const {
   const int L = static_cast<int>(c.read.size());
   if (bound >= L * kM) return true;  // no alignment scores more than L
-  if (c.t <= 0) return false;
-  for (int st = 0; st < 2; ++st) {
-    if (c.probes[st].size() > 32) return false;
-    int prev = 0;
-    for (const Probe& p : c.probes[st]) {  // disjoint, increasing, long enough to look up
-      if (p.off < prev || p.end > L || p.end - p.off < q_ + s_ - 1) return false;
-      prev = p.end;
-    }
-  }
+  if (c.t <= 0 || !probes_ok(c.probes, L, q_ + s_ - 1)) return false;
   int ut = kNeg;
   for (int st = 0; st < 2; ++st) ut = std::max(ut, lemma_l(L, c.probes[st], 0, c.t - 1));
   if (ut > bound) return false;  // (i)
   const int pad = std::max(0, L * kM - bound - kO - kE);
+  const bool sub = excl != nullptr;
   int64_t p0 = 0, p1 = 0;
   if (sub) {
-    p0 = c.aln.pos;
-    p1 = p0 + span_of(c.aln.cigar);
+    p0 = excl->pos;
+    p1 = p0 + span_of(excl->cigar);
   }
   std::vector<std::pair<int64_t, int>> occ;
   std::vector<int64_t> tmp;
@@ -275,7 +289,7 @@ bool Checker::proven(const Claim& c, const std::vector<uint8_t>* rd, int bound, 
       if (distinct >= c.t && lemma_l(L, P, mask, 0) > bound) {  // (iii)
         const int64_t dlo = occ[i].first - pad, dhi = occ[j - 1].first + pad;
         std::pair<int64_t, int64_t> win[2] = {{0, ref_len_}, {0, 0}};
-        if (sub && st == c.aln.strand) {  // wholly left or wholly right of the record's interval
+        if (sub && st == excl->strand) {  // wholly left or wholly right of excl's interval
           win[0] = {0, p0};
           win[1] = {p1, ref_len_};
         }
@@ -354,20 +368,231 @@ Verdict Checker::check(const Claim& c, Work* w) const {
   if (c.xu != kNone) {
     if (c.mapped && c.as > c.xu) return kXUUnproven;  // its own alignment refutes it
     w->xu_checked = c.xu < L * kM;
-    if (!proven(c, rd, c.xu, false, w)) return kXUUnproven;
+    if (!proven(c, rd, c.xu, nullptr, w)) return kXUUnproven;
   }
   if (c.xq > 0) {
     if (c.xq > c.mapq) return kWrongXQ;
-    if (c.pair_xq) {
+    if (c.pair_xq) {  // max(q_se, min(q_pe, q_se + 40)): q_se here, q_pe in check_pair
       w->pair_xq = true;
+      w->q_se = 0;
+      if (c.xh != kNone) {
+        const Aln& a = c.has_alt ? c.alt : c.aln;  // the single-end alignment
+        const int s = c.has_alt ? rescore(c.read, c.alt) : (c.mapped ? c.as : kNone);
+        if (s == kNone) return kXHUnproven;
+        w->xh_checked = true;
+        if (!proven(c, rd, c.xh, &a, w)) return kXHUnproven;
+        w->q_se = mapq_formula(s, c.xh, L);
+      }
+      if (c.xq > w->q_se) {
+        w->needs_pair = true;
+        return kXSUnproven;
+      }
     } else {
       if (!c.mapped || c.xh == kNone) return kXHUnproven;
       w->xh_checked = true;
-      if (!proven(c, rd, c.xh, true, w)) return kXHUnproven;
+      if (!proven(c, rd, c.xh, &c.aln, w)) return kXHUnproven;
       if (c.xq > mapq_formula(c.as, c.xh, L)) return kWrongXQ;
     }
   }
   return kAccepted;
+}
+
+// For each reference position j in [j0, j1): the best local score of the
+// read (one strand) over alignments whose first aligned base is j and whose
+// cells all lie in [j0, j1); kNeg where there is none. The Gotoh recurrences
+// of best_band, run on the read and the reference backwards (an alignment's
+// first aligned base is then where it ends).
+void Checker::starts(const uint8_t* rd, int L, int64_t j0, int64_t j1, std::vector<int>& best, Work* w) const {
+  j0 = std::max<int64_t>(j0, 0);
+  j1 = std::min(j1, ref_len_);
+  best.assign(static_cast<size_t>(std::max<int64_t>(0, j1 - j0)), kNeg);
+  std::vector<int> H(L + 1, kNeg), D(L + 1, kNeg), Hn(L + 1), Dn(L + 1);
+  H[0] = 0;
+  for (int64_t j = j1 - 1; j >= j0; --j) {
+    const uint8_t r = ref_[j];
+    Hn[0] = 0;
+    Dn[0] = kNeg;
+    int ins = kNeg;
+    for (int i = 1; i <= L; ++i) {
+      const uint8_t c = rd[L - i];
+      const int start = i == 1 ? 0 : -kC;  // read bases after it are clipped
+      const int m = std::max(H[i - 1], start) + ((c == r && r < 4) ? kM : -kX);
+      ins = i > 1 ? std::max(Hn[i - 1] - kO - kE, ins - kE) : kNeg;
+      Dn[i] = std::max(H[i] - kO - kE, D[i] - kE);
+      Hn[i] = std::max(m, std::max(ins, Dn[i]));
+      best[j - j0] = std::max(best[j - j0], m - (i < L ? kC : 0));  // read bases before it are clipped
+    }
+    std::swap(H, Hn);
+    std::swap(D, Dn);
+    w->cells += static_cast<uint64_t>(L);
+  }
+}
+
+// Every proper pair that differs from the records' pair in some mate scores
+// <= bound, from the pair witness (check.h, P1-P3).
+bool Checker::pair_proven(const Claim& a, const Claim& b, int bound, Work* w) const {
+  const Claim* m[2] = {&a, &b};
+  const int64_t D = a.pd;
+  int L[2], U[2][2];
+  std::vector<uint8_t> rd[2][2];
+  for (int x = 0; x < 2; ++x) {
+    L[x] = static_cast<int>(m[x]->read.size());
+    rd[x][0] = m[x]->read;
+    rd[x][1] = revcomp(m[x]->read);
+    if (m[x]->pt <= 0 || !probes_ok(m[x]->pprobes, L[x], q_ + s_ - 1)) return false;
+  }
+  if (bound >= (L[0] + L[1]) * kM) return true;
+  for (int x = 0; x < 2; ++x)
+    for (int st = 0; st < 2; ++st) U[x][st] = lemma_l(L[x], m[x]->pprobes[st], 0, m[x]->pt - 1);
+  const int u0 = std::max(U[0][0], U[0][1]), u1 = std::max(U[1][0], U[1][1]);
+  if (u0 + u1 > bound) return false;  // (P1)
+  const int pad = std::max(0, (L[0] + L[1]) * kM - bound - kO - kE);
+  // (P2) Chains of each mate's part occurrences, per strand: diagonals
+  // [first, last], the Lemma L bound with their parts free.
+  struct Chain {
+    int64_t first, last;
+    int distinct, ub;
+  };
+  std::vector<Chain> ch[2][2];
+  std::vector<std::pair<int64_t, int>> occ;
+  std::vector<int64_t> tmp;
+  for (int x = 0; x < 2; ++x)
+    for (int st = 0; st < 2; ++st) {
+      const std::vector<Probe>& P = m[x]->pprobes[st];
+      occ.clear();
+      for (size_t k = 0; k < P.size(); ++k) {
+        tmp.clear();
+        occurrences(rd[x][st].data(), P[k], tmp);
+        for (int64_t d : tmp) occ.push_back({d, static_cast<int>(k)});
+        if (occ.size() > kMaxOccurrences) return false;
+      }
+      w->occurrences += occ.size();
+      std::sort(occ.begin(), occ.end());
+      for (size_t i = 0, j; i < occ.size(); i = j) {
+        j = i + 1;
+        uint32_t mask = 1u << occ[i].second;
+        while (j < occ.size() && occ[j].first - occ[j - 1].first <= pad) mask |= 1u << occ[j++].second;
+        int distinct = 0;
+        for (uint32_t u = mask; u; u &= u - 1) ++distinct;
+        if (distinct >= m[x]->pt) ch[x][st].push_back({occ[i].first, occ[j - 1].first, distinct, lemma_l(L[x], P, mask, 0)});
+      }
+      w->chains += ch[x][st].size();
+    }
+  // (P3) A pair above bound in which mate x has t exact parts: x lies in a
+  // chain C of x (its cells on diagonals [first - pad, last + pad], its first
+  // aligned base in [a_lo, a_hi]), y on the other strand starts within D of
+  // it. Every such pair is a real proper pair, so the exact maximum over
+  // them, with the records' pair excluded, must not exceed bound.
+  std::vector<int> xa, xo, ya, yo;
+  for (int x = 0; x < 2; ++x) {
+    const int y = 1 - x;
+    for (int st = 0; st < 2; ++st) {
+      const int sy = 1 - st;
+      for (const Chain& c : ch[x][st]) {
+        const int64_t a_lo = c.first - pad, a_hi = c.last + pad + L[x] - 1;
+        const int64_t s_lo = st == 0 ? a_lo : a_lo - D, s_hi = st == 0 ? a_hi + D : a_hi;
+        // y in [s_lo, s_hi]: no exact part (<= U), or in a chain of y whose
+        // start range meets it (<= its bound).
+        int yub = U[y][sy];
+        for (const Chain& e : ch[y][sy])
+          if (e.first - pad <= s_hi && e.last + pad + L[y] - 1 >= s_lo) yub = std::max(yub, e.ub);
+        if (c.ub + yub <= bound) continue;
+        if (w->cells > kMaxPairCells) return false;
+        ++w->windows;
+        const int64_t x0 = a_lo, x1 = a_hi + L[x] + pad;  // x's cells
+        starts(rd[x][st].data(), L[x], x0, x1, xa, w);
+        int bx = kNeg;
+        for (int v : xa) bx = std::max(bx, v);
+        if (bx + yub <= bound) continue;
+        const int64_t y0 = s_lo, y1 = s_hi + L[y] + pad;  // y's cells
+        starts(rd[y][sy].data(), L[y], y0, y1, ya, w);
+        // The records' pair excluded: x wholly left or right of its record,
+        // or y of its record (when on their strands).
+        const bool ox = st == m[x]->aln.strand, oy = sy == m[y]->aln.strand;
+        auto outside = [&](const uint8_t* r, int len, int64_t j0, int64_t j1, const Aln& ex, std::vector<int>& out) {
+          const int64_t p0 = ex.pos, p1 = p0 + span_of(ex.cigar);
+          std::vector<int> left, right;
+          starts(r, len, j0, std::min(j1, p0), left, w);
+          starts(r, len, std::max(j0, p1), j1, right, w);
+          const int64_t b0 = std::max<int64_t>(j0, 0);
+          out.assign(static_cast<size_t>(std::max<int64_t>(0, std::min(j1, ref_len_) - b0)), kNeg);
+          for (size_t k = 0; k < left.size(); ++k) out[k] = left[k];
+          const int64_t rb = std::max<int64_t>(std::max(j0, p1), 0) - b0;
+          for (size_t k = 0; k < right.size(); ++k) out[static_cast<size_t>(rb) + k] = right[k];
+        };
+        if (ox) outside(rd[x][st].data(), L[x], x0, x1, m[x]->aln, xo);
+        if (oy) outside(rd[y][sy].data(), L[y], y0, y1, m[y]->aln, yo);
+        // For x starting at f, y starts in [f, f + D] (x forward) or
+        // [f - D, f] (x reverse): sliding maxima of ya and yo.
+        const int64_t xb = std::max<int64_t>(x0, 0), yb = std::max<int64_t>(y0, 0);
+        const int64_t ny = static_cast<int64_t>(ya.size());
+        std::vector<int> ma, mo;  // per f
+        auto slide = [&](const std::vector<int>& v, std::vector<int>& out) {
+          out.assign(xa.size(), kNeg);
+          std::vector<int64_t> dq;  // indices into v, values decreasing
+          size_t head = 0;
+          int64_t next = 0;
+          for (size_t f = 0; f < xa.size(); ++f) {
+            const int64_t pf = xb + static_cast<int64_t>(f);
+            const int64_t lo = (st == 0 ? pf : pf - D) - yb, hi = (st == 0 ? pf + D : pf) - yb;
+            while (next < ny && next <= hi) {
+              while (dq.size() > head && v[dq.back()] <= v[next]) dq.pop_back();
+              dq.push_back(next++);
+            }
+            while (head < dq.size() && dq[head] < lo) ++head;
+            if (head < dq.size()) out[f] = v[dq[head]];
+          }
+        };
+        slide(ya, ma);
+        if (ox || oy) slide(oy ? yo : ya, mo);
+        int pairs = kNeg;
+        for (size_t f = 0; f < xa.size(); ++f) {
+          if (!ox) pairs = std::max(pairs, xa[f] + ma[f]);
+          else pairs = std::max(pairs, std::max(xo[f] + ma[f], xa[f] + mo[f]));
+        }
+        if (pairs > bound) return false;
+      }
+    }
+  }
+  return true;
+}
+
+void Checker::check_pair(const Claim& a, const Claim& b, Work* wa, Work* wb, Verdict* va, Verdict* vb) const {
+  *va = check(a, wa);
+  *vb = check(b, wb);
+  const bool need[2] = {*va == kXSUnproven && wa->needs_pair, *vb == kXSUnproven && wb->needs_pair};
+  if (!need[0] && !need[1]) return;
+  // The shown pair: both alignments verified (check got past AS), proper.
+  bool pair = a.mapped && b.mapped && a.pair_xq && b.pair_xq && a.pd >= 0 && a.pd == b.pd &&
+              (*va == kAccepted || need[0]) && (*vb == kAccepted || need[1]) &&
+              a.aln.strand != b.aln.strand && contig_of(a.aln.pos) >= 0 &&
+              contig_of(a.aln.pos) == contig_of(b.aln.pos);
+  if (pair) {
+    const Aln& f = a.aln.strand ? b.aln : a.aln;
+    const Aln& r = a.aln.strand ? a.aln : b.aln;
+    pair = r.pos >= f.pos && r.pos - f.pos <= a.pd;
+  }
+  const Claim* c[2] = {&a, &b};
+  Work* w[2] = {wa, wb};
+  Verdict* v[2] = {va, vb};
+  int done_bound = kNone;
+  bool done_ok = false;
+  for (int x = 0; x < 2; ++x) {
+    if (!need[x]) continue;
+    const int bound = c[x]->xs;
+    bool ok = false;
+    if (pair && bound != kNone) {
+      if (bound != done_bound) {  // both mates normally carry the same XS
+        done_ok = pair_proven(a, b, bound, w[x]);
+        done_bound = bound;
+      }
+      ok = done_ok;
+    }
+    w[x]->xs_checked = ok;
+    const int q_pe = ok ? margin_mapq(a.as + b.as - bound) : 0;
+    const int q = std::max(w[x]->q_se, std::min(q_pe, w[x]->q_se + 40));
+    *v[x] = c[x]->xq <= q ? kAccepted : (ok ? kWrongXQ : kXSUnproven);
+  }
 }
 
 bool Checker::parse_sam(const std::string& line, Claim* c) const {
@@ -376,6 +601,7 @@ bool Checker::parse_sam(const std::string& line, Claim* c) const {
   split(line, '\t', f);
   if (f.size() < 11) return false;
   *c = Claim();
+  c->qname = f[0];
   const int flag = std::atoi(f[1].c_str());
   c->mapped = !(flag & 4);
   c->mapq = std::atoi(f[4].c_str());
@@ -389,6 +615,17 @@ bool Checker::parse_sam(const std::string& line, Claim* c) const {
     if (c->aln.strand) c->read = revcomp(c->read);  // SEQ is reverse-complemented
   }
   std::vector<std::string> parts, iv;
+  // "o-e,o-e,..." -> probes
+  auto probe_list = [&](const std::string& s, std::vector<Probe>& out) {
+    if (s.empty()) return true;
+    split(s, ',', iv);
+    for (const std::string& x : iv) {
+      const size_t d = x.find('-');
+      if (d == std::string::npos) return false;
+      out.push_back({std::atoi(x.substr(0, d).c_str()), std::atoi(x.substr(d + 1).c_str())});
+    }
+    return true;
+  };
   for (size_t k = 11; k < f.size(); ++k) {
     const std::string& t = f[k];
     if (t.size() < 5) continue;
@@ -398,20 +635,21 @@ bool Checker::parse_sam(const std::string& line, Claim* c) const {
     else if (tag == "XU:i:") c->xu = std::atoi(v.c_str());
     else if (tag == "XQ:i:") c->xq = std::atoi(v.c_str());
     else if (tag == "XH:i:") c->xh = std::atoi(v.c_str());
+    else if (tag == "XS:i:") c->xs = std::atoi(v.c_str());
     else if (tag == "XT:Z:") c->pair_xq = v == "PR";
-    else if (tag == "XW:Z:") {
+    else if (tag == "XW:Z:") {  // t;strand 0;strand 1
       split(v, ';', parts);
       if (parts.size() != 3) return false;
       c->t = std::atoi(parts[0].c_str());
-      for (int st = 0; st < 2; ++st) {
-        if (parts[st + 1].empty()) continue;
-        split(parts[st + 1], ',', iv);
-        for (const std::string& x : iv) {
-          const size_t d = x.find('-');
-          if (d == std::string::npos) return false;
-          c->probes[st].push_back({std::atoi(x.substr(0, d).c_str()), std::atoi(x.substr(d + 1).c_str())});
-        }
-      }
+      for (int st = 0; st < 2; ++st)
+        if (!probe_list(parts[st + 1], c->probes[st])) return false;
+    } else if (tag == "XY:Z:") {  // D;t;strand 0;strand 1
+      split(v, ';', parts);
+      if (parts.size() != 4) return false;
+      c->pd = std::atoi(parts[0].c_str());
+      c->pt = std::atoi(parts[1].c_str());
+      for (int st = 0; st < 2; ++st)
+        if (!probe_list(parts[st + 2], c->pprobes[st])) return false;
     } else if (tag == "XV:Z:") {
       split(v, ',', parts);
       if (parts.size() != 4) return false;

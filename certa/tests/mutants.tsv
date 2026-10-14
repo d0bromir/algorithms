@@ -56,3 +56,13 @@ C6	src/check.cpp	s/        const int64_t dlo = occ\[i\].first - pad, dhi = occ\[
 C7	src/check.cpp	s/      if (c.xq > mapq_formula(c.as, c.xh, L)) return kWrongXQ;/      if (false) return kWrongXQ;/	killed	checker: XQ formula not checked (XQ + 5 tamper)
 C8	src/check.cpp	s/  if (total != n) return fail(/  if (false) return fail(/	killed	index validation: count not checked
 C9	src/check.cpp	s/        if (__atomic_fetch_or(\&seen\[p \/ s \/ 64\], bit, __ATOMIC_RELAXED) \& bit)/        if (false)/	killed	index validation: duplicates not checked
+C10	src/check.cpp	s/const int64_t s_lo = st == 0 ? a_lo : a_lo - D, s_hi = st == 0 ? a_hi + D : a_hi;/const int64_t s_lo = a_lo, s_hi = a_hi;/	killed	checker pair: partner window without D
+C11	src/check.cpp	s/          else pairs = std::max(pairs, std::max(xo\[f\] + ma\[f\], xa\[f\] + mo\[f\]));/          else pairs = std::max(pairs, xa[f] + mo[f]);/	killed	checker pair: x elsewhere in R1's chain ignored (family I)
+C12	src/check.cpp	s/          else pairs = std::max(pairs, std::max(xo\[f\] + ma\[f\], xa\[f\] + mo\[f\]));/          else pairs = std::max(pairs, xo[f] + ma[f]);/	killed	checker pair: y elsewhere in R1's window ignored (family J)
+C13	src/check.cpp	s/  if (u0 + u1 > bound) return false;  \/\/ (P1)/  (void)u0; (void)u1;/	killed	checker pair: (P1) U1 + U2 not checked (family G)
+C14	src/check.cpp	s/const int pad = std::max(0, (L\[0\] + L\[1\]) \* kM - bound - kO - kE);/const int pad = std::max(0, (L[0] + L[1]) * kM - bound - kO - kE - 2);/	killed	checker pair: pad 2 too narrow (family H)
+C15	src/check.cpp	s/pair = r.pos >= f.pos \&\& r.pos - f.pos <= a.pd;/pair = r.pos >= f.pos;/	killed	checker pair: D not checked (D tamper)
+C16	src/check.cpp	s/margin_mapq(a.as + b.as - bound)/margin_mapq(a.as + b.as - bound + 1)/	killed	checker pair: q_pe margin one too high (XQ + 1 tamper)
+C17	src/check.cpp	s/        int yub = U\[y\]\[sy\];/        int yub = U[y][sy] - 3;/	killed	checker pair: partner bound U 3 too low (tie tamper, family F)
+C18	src/check.cpp	s/yub = std::max(yub, e.ub);/yub = std::max(yub, e.ub - 3);/	killed	checker pair: partner chain bound 3 too low (tie tamper)
+C19	src/check.cpp	s/        if (bx + yub <= bound) continue;/        if (bx + yub <= bound + 3) continue;/	killed	checker pair: chain skip off by 3 (tie tamper)

@@ -707,6 +707,37 @@ injected fault that falsifies one is detected.
   which the checker does not re-derive yet. These are reported as unchecked; their XL and XU are
   checked.
 
+**Update 2026-10-14: the gap is closed.** `certa check` now verifies the XQ of PR mates as well
+(Theorem V for PR mates, [certa/THEORY.md](certa/THEORY.md) §8;
+[raw](certa/bench/results/aim4_pr_2026-10/)).
+- **What a PR record now carries** (`--witness`):
+  - `XY`: the proper-pair distance D and the pair certificate's own parts for each mate
+    (support 1);
+  - `XH` for the single-end term of its XQ, with `XV` showing the single-end alignment it is
+    about.
+- **How the checker proves XS,** the bound on every other proper pair, from the pair's two
+  records:
+  - pairs with no exact part in either mate are bounded by Lemma L per mate;
+  - for the rest, each chain of a mate's part occurrences is paired, by an exhaustive DP, with every
+    placement of the partner within D, excluding the shown pair.
+- **A first version was too coarse.** It added the best x in a chain to the best partner anywhere in
+  its window, and left 24 honest HG002 records unproven. Exact local oracles confirmed that the
+  mapper's S2 held in every case.
+  - *The fix:* pairing per start. Every pair counted is then a real proper pair, so an honest XS is
+    always provable, up to work caps.
+
+| Test | Result |
+|---|---|
+| Honest records, HG002 2 M pairs | **4,000,000 accepted**; XS proven for all 148,503 PR mates whose XQ rests on it |
+| Honest records, HG005 2 M pairs | **4,000,000 accepted**; XS proven for all 155,179 |
+| Faults false by construction, real HG002 SAM | **24,306 of 24,306 rejected**: the Aim 4 faults, plus PR XQ + 10 (261), pair witness removed (442), D below the pair's distance (421) |
+| Untouched records rejected | **0** |
+| Oracle tests, 4 seeds | every certified pair accepted. All false pair claims rejected: 520–637 per seed in the PR tests, 113–123 more in the threshold families. They are XS one below the oracle's best other pair (ties included), witness removed, D too small, XQ one above the rule, a mate moved |
+| Mutants of the pair check (C10–C19) | **all 10 killed**. Families G–J and a rebuilt H each isolate one bound. With them the suite has 66 mutants: 60 killed, 6 proven equivalent (§6.5) |
+
+**Cost:** 181–232 µs CPU per record, up from 89–134 µs; the pair proofs account for the
+difference. Checking 4 M records takes 23–30 s on 32 threads.
+
 **Speed budget** (CPU per read, paired-end, from §2.2). The exact tiers F, R, H and X replace the
 heuristic fallback and see only the 4.6 % uncertified reads:
 - ≲ 1.2 ms CPU per residual read keeps CERTA's total CPU at or below minibwa's;
@@ -871,7 +902,7 @@ The measuring tool is debugged on 500 reads of the 10× set that are not in the 
 | **1. Ceiling** (no new data needed) | q = 15 second index; PMAX lifted to 16; tier F pass | exact share, occurrence counts, CPU per residual read on HG002, HG001, HG005 | Exact share +1 point at ≤ 1 ms CPU per residual read. **Done for HG002 and HG005: go (§6.1).** HG001 needs its FASTQs re-downloaded. |
 | **2. Repeats** | FM-index counts; Theorem R ties; Theorem R′ collapse | exact share and tie proofs among the 3.6 % repeat-limited reads; DP calls saved | Half of the repeat-limited reads exact or proven ties. **Partial go (§6.2): 50.5–53.2 % on HG002, 43.8–46.0 % on HG005; 79–86 % of near-perfect copies.** Built with the hash index (no FM-index needed); window collapse (R′) not needed so far. |
 | **3. Interval output and MAPQ** | [ℓ, u], SUB interval, conservative MAPQ, SAM tags (`XL`, `XU`) | interval-width distribution; MAPQ calibration on GIAB stratified regions | Variant F1 non-inferior to the current pipeline with **no** heuristic fallback. **Go (§6.3): HG005 F1 −0.0008 to +0.0011 against CERTA + minibwa, above BWA-MEM2 in all 4.** Calibration was measured on simulated pairs instead (the GIAB stratification files are not downloaded). XQ as MAPQ fails: it is biased toward the reference. |
-| **4. Checker** | independent checker (Theorem V); sampling audit | check time per read; zero disagreements | Checker accepts 100 % of certificates; injected faults all detected. **Go (§6.4): 8 M real records accepted; all 23,733 false-by-construction faults and all 6 mapper mutants detected; 89–134 µs per record.** Gap: pair-level XQ (PR, about 4 % of records) is not re-derived. |
+| **4. Checker** | independent checker (Theorem V); sampling audit | check time per read; zero disagreements | Checker accepts 100 % of certificates; injected faults all detected. **Go (§6.4): 8 M real records accepted; all 23,733 false-by-construction faults and all 6 mapper mutants detected; 89–134 µs per record.** The gap (pair-level XQ, about 4 % of records) **is closed (§6.4, 2026-10-14): all 303,682 XS claims on 8 M records proven; 181–232 µs per record.** |
 | **5. Theory** | written proofs of Lemma H, Theorems C, G, R, V; optional Lean 4 mechanization | — | Proofs reviewed; mutation tests for each bound. **Half met (§6.5): every bound's mutants killed (50) or proven equivalent (6); exhaustive lemma checks pass; two S2 bugs found and fixed.** Review by a second person pending; Lean not started (needs a download). |
 | **6. Long reads** | HiFi feasibility on a2's existing data (§8) | share of reads whose loss is below the certifiable ceiling | Go if ≥ 90 % of HiFi reads fit. **Go (§6.6, definitions pre-registered): 93.29 % of 242,534 HG002 HiFi reads fit (93.75 % at τ = 256).** The misses span SVs (4.4 %), sit in repeats (1.8 %) or are unmapped (0.5 %). Verification cost not yet measured. |
 

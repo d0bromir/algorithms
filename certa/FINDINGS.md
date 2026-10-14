@@ -628,7 +628,7 @@ own banded DP.
 - **A real bug found:** records whose alignment runs off the circular chrM
   kept XL and XQ after the alignment was dropped. Fixed.
 - **Gap:** the XQ of PR records (about 4 %) rests on the pair certificate,
-  which the checker does not re-derive yet (open).
+  which the checker did not re-derive. Closed on 2026-10-14 (below).
 
 *Update 2026-10-13, Aim 5 (proposal §6.5).* [THEORY.md](THEORY.md) holds
 written proofs of every bound the implementation uses. Each one is traced to
@@ -674,6 +674,22 @@ minimap2 alignment.
   - 0.5 % unmapped.
 - **Not measured:** the verification cost, i.e. the exact alignment of the
   candidate loci.
+
+*Update 2026-10-14 (proposal §6.4).* The Aim 4 gap is closed: `certa check`
+verifies the XQ of PR mates too.
+- **What it checks:** BWA-MEM's pairing rule, with XS proven from both
+  records. Each mate's pair-certificate parts come in the new witness tag
+  `XY`. Pairs with no exact part are bounded by Lemma L; the rest by
+  exhaustive DP, pairing every chain of a mate's part occurrences with every
+  partner placement within D.
+- **Real data:** 8 M records (2 M pairs each of HG002 and HG005) accepted.
+  All 303,682 XS claims were proven, and 24,306 of 24,306 false-by-
+  construction faults rejected, among them three new pair faults.
+- **Cost:** 181–232 µs CPU per record, up from 89–134 µs.
+- **A coarse first version:** it left 12 honest HG002 pairs unproven. The
+  mapper's S2 held in every case; the check was the problem.
+- **Mutation tests:** 10 new mutants of the pair check (C10–C19), all
+  killed. The suite now has 66 mutants: 60 killed, 6 proven equivalent.
 
 - **Speed in paired mode:** 4.0× faster than BWA-MEM2 but slower than
   minibwa (77 s vs 62 s, 20M pairs). The cost lies in the pair pass (about

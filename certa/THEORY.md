@@ -12,7 +12,7 @@ names:
 
 **Review status.** Written, then cross-checked by:
 - whole-reference oracles (4 seeds, ARM and x86);
-- 56 mutants;
+- 66 mutants;
 - exhaustive verification of the finite lemmas.
 
 It has **not yet been reviewed by a second person**. §11 lists what a
@@ -504,6 +504,90 @@ by recomputation. ∎
   sub_hi ≥ U_eff ≥ U for tier R; s2 ≥ floor for SL).
 - *Tests and mutants:* §6.4 of the proposal, and C1–C9.
 
+**Theorem V, PR mates (closes the Aim 4 gap).** A PR mate's XQ follows
+BWA-MEM's pairing rule. It is accepted only if XQ ≤ MAPQ and
+XQ ≤ max(q_se, min(q_pe, q_se + 40)), where:
+- **q_se** = mapq_se(σ(A), XH, L). A is the mate's single-end alignment (XV if
+  present, else the record's own), and XH is proven as above about loci not
+  overlapping A. Without XH, q_se = 0.
+- **q_pe** is the raw MAPQ of AS + AS(mate) − XS. It counts only if:
+  - both records rescore and form a proper pair: one contig, opposite
+    strands, the reverse mate's first aligned base 0 … D after the forward
+    mate's, with D from the pair witness XY;
+  - the pair witness (each mate's parts per strand, support t) proves
+    S2 ≤ XS, where S2 is the best proper pair that differs from the shown
+    one in some mate (Proposition P2's quantity). With
+    pad = L₁ + L₂ − XS − 7, the witness must satisfy:
+    - **(P1)** U_t(mate 1) + U_t(mate 2) ≤ XS;
+    - **(P2–P3)** for each mate x, take each chain C of its parts'
+      occurrences (split where diagonals are > pad apart) with ≥ t distinct
+      parts. x's first aligned base then lies in [d_lo, d_hi + L_x − 1],
+      where [d_lo, d_hi] are C's diagonals ± pad.
+      - *Skip:* C may be skipped when ub(C) + B_y ≤ XS, or when
+        x_C + B_y ≤ XS, with B_y a bound on y in the window: the larger of
+        U_t(y) and the bounds of y's chains whose start range meets it, and
+        x_C the best x found in C's segment.
+      - *Otherwise:* the exact best proper pair through C must be ≤ XS. Pair
+        x's best score per first aligned base f (an exhaustive DP over C's
+        segment) with y's best per first aligned base r (one over the
+        window), over r within D of f on the other strand (r ∈ [f, f + D]
+        for a forward x, [f − D, f] for a reverse one).
+      - *The exclusion:* when C lies on the shown x's strand, the value is
+        max(x outside A_x paired with any y, any x paired with y outside A_y),
+        "outside" meaning wholly left or right of the record's alignment.
+
+Every accepted XQ is then at most the pairing rule at the true inputs: q_se
+at (σ(A), SUB(A)), and q_pe at the shown pair's true margin over S2.
+
+*Proof.* The rule max(a, min(b, a + 40)) is non-decreasing in a and b.
+- q_se is at most its true value: SUB(A) ≤ XH (the XH case above), and
+  mapq_se falls as SUB rises.
+- q_pe is at most its true value once S2 ≤ XS. Suppose a proper pair P′ =
+  (B_x, B_y) differs from the shown pair in some mate and σ(P′) > XS.
+  - *Neither mate has t exactly occurring parts:* then
+    σ(P′) ≤ U_t + U_t ≤ XS (Lemma L, P1).
+  - *So some mate x has.* σ(B_y) ≤ L_y, so B_x loses less than
+    L₁ + L₂ − XS, and its gap total is ≤ pad (Lemma W). The same holds for
+    B_y.
+  - *B_x is in a chain.* Its exact parts lie in one chain C (Lemma C), with
+    ≥ t distinct parts, and σ(B_x) ≤ ub(C). Its first aligned base f lies in
+    [d_lo, d_hi + L_x − 1], and its cells inside C's segment. So x's
+    per-start best at f is ≥ σ(B_x).
+  - *B_y is in the window.* B_y, on the other strand, starts at r within D
+    of f (properness). Its cells, gap total ≤ pad, lie inside the window. So
+    y's per-start best at r is ≥ σ(B_y).
+  - *The skip is sound.* σ(B_y) ≤ U_t(y) if B_y has fewer than t exact
+    parts. Otherwise B_y lies in a chain of y whose start range contains r.
+    Either way σ(B_y) ≤ B_y's bound used in the skip.
+  - *The exclusion.* If C is not on A_x's strand, B_x does not overlap A_x.
+    Otherwise the shown pair is proper, so A_y lies on B_y's strand. Then
+    "differs in some mate" means B_x lies wholly left or right of A_x, or
+    B_y wholly left or right of A_y: one of the two terms counts it.
+
+  In every case σ(P′) is at most a checked value, which is ≤ XS. ∎
+
+- *Witness sufficiency (honest claims pass):*
+  - The pair witness is exactly the parts Lemma P0's floor used
+    (support 1), so (P1) holds: U₁ + U₂ ≤ floor ≤ S2.
+  - Every pair that (P3) counts is a real proper pair differing from the
+    shown one in some mate. The one exception is a pair across a contig
+    boundary within D. So (P3)'s value is ≤ S2 ≤ XS.
+  - So an honest XS is always proven, up to the work caps.
+  - *An earlier version* added the best x in a chain to the best y anywhere
+    in its window. It combined placements that are not a proper pair, and
+    failed to prove 12 honest HG002 pairs; exact local oracles confirmed
+    that their S2 held. Pairing per start fixed it.
+- *Tests:* every certified pair of the PR oracle tests and of the threshold
+  families goes through the check. Honest claims are accepted. False ones
+  are rejected: XS one below the oracle's best other pair, the pair witness
+  dropped, D below the pair's distance, XQ one above the rule, a mate moved.
+- *Mutants:* C10–C19.
+  - Families G–J make each of (P1), the pad and the two exclusion terms the
+    only thing that refutes a false XS.
+  - The skip bounds are tight only at ties. Ties have XQ 0 honestly, so the
+    tests also claim XS = R1 − 1 there, with XQ raised to what that margin
+    gives.
+
 ## 9. Bounds proposed but not built
 
 **Lemma H (one-mismatch probes).** Let the parts have length ≥ 4. A part is
@@ -545,7 +629,7 @@ guarantees is the interval [XL, XU] at whatever stage it stops.
 ## 9a. Mutants that survive by design
 
 A mutant that changes no claim on any input cannot be killed by a test, so
-it must be argued instead. Six of the 56 survive.
+it must be argued instead. Six of the 66 survive.
 - **L6** (span start candidates shifted): Lemma S, §4.
 - **A2** (Lemma O's term lowered): §4.
 - **P2, P8, P13** (band pad − 2, narrowed band − 3, `relevant` term dropped)
@@ -604,7 +688,7 @@ positions, more than a mate covers.
 | Prop. P2 (S2) | pair.h | other-pair oracle, family F | P11, P12; P13 equivalent (§9a) | — |
 | Thm G, Lemma R, R-int, Thm R | repeat.h | local + SUB oracles, planted reads d and j | R1–R6, A6–A9, A11, A12 | G |
 | Prop. Q (XQ) | interval.h `mapq_se` | — | C7 | XQ |
-| Thm V | check.cpp | falsified claims rejected, real-data fault injection | C1–C9, mapper mutants K1–K6 | — |
+| Thm V (incl. PR mates) | check.cpp | falsified claims rejected (single records and pairs), real-data fault injection | C1–C19, mapper mutants K1–K6 | — |
 | Lemma H, Prop. A | not built | — | — | H, A |
 
 ## 11. For a reviewer

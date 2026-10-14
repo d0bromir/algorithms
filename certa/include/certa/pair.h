@@ -507,6 +507,13 @@ inline PairOut certify_pair(const IndexView& ix, const PairParams& pp, const uin
     o.sub_score = (int16_t)S2;
     o.parts = (uint8_t)M[x].P;
     o.used = (uint8_t)M[x].m;
+    // Witness (Theorem V): the parts this mate enumerated per strand, with
+    // support 1. Lemma P0's floor and S2 rest on them.
+    for (int st = 0; st < 2; ++st) {
+      o.probes[st] = 0;
+      for (int k = 0; k < M[x].m; ++k) o.probes[st] |= (uint16_t)(1u << M[x].ws->order[st][k]);
+    }
+    o.support = 1;
   }
   return po;
 }

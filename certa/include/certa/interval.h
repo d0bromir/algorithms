@@ -116,10 +116,11 @@ struct Witness {
   int16_t off[2][PMAX], end[2][PMAX];
 };
 
-// The parts a certified result enumerated (tiers S0, S1, SL).
+// The parts a certified result enumerated (tiers S0, S1, SL; for PR, the
+// parts of the pair certificate, see pair.h).
 inline Witness witness_of(const Result& r, int L) {
   Witness w;
-  if (r.tier != kTierS0 && r.tier != kTierS1 && r.tier != kTierSL) return w;
+  if (r.tier != kTierS0 && r.tier != kTierS1 && r.tier != kTierSL && r.tier != kTierPR) return w;
   w.t = r.support;
   for (int st = 0; st < 2; ++st)
     for (int j = 0; j < r.parts; ++j)
@@ -155,8 +156,15 @@ struct Placement {
   int xl = kNoSub, xu = 0;   // OPT in [xl, xu]; xl = kNoSub: no alignment found
   int sub_lo = kNoSub, sub_hi = 0;
   Witness w;                 // proves xu and sub_hi
-  bool xl_sep = false;       // xl is attained by xl_r, not by r
+  bool xl_sep = false;       // xl is attained by xl_r, not by r (PR: xl_r is the single-end alignment)
   Result xl_r{};
+  // PR mates: the pair term of XQ (q_pe, from the certified margin R1 - S2;
+  // -1 for other records), and whether sub_hi is the single-end SUB bound
+  // that the single-end term of XQ rests on (relative to xl_r if xl_sep,
+  // else to r).
+  int q_pe = -1;
+  bool pr_xh = false;
+  Witness pw;  // PR mates: the pair certificate's parts, which prove S2
 };
 
 // Single-end bounds of a certified result (tiers S0, S1, SR, SL).
@@ -210,6 +218,48 @@ inline Placement place_single(const Result& r, int cert_mapq, const RepeatOut* i
   o.mapped = true;
   o.mapq = iv->copies >= 2 ? 0 : mapq_se(iv->lo, iv->sub_lo, L);
   o.xq = std::min(o.mapq, mapq_se(iv->lo, iv->sub_hi, L));
+  return o;
+}
+
+inline bool same_alignment(const Result& a, const Result& b) {
+  if (a.ref_pos != b.ref_pos || a.strand != b.strand || a.n_cigar != b.n_cigar) return false;
+  for (int i = 0; i < a.n_cigar; ++i)
+    if (a.cigar[i] != b.cigar[i]) return false;
+  return true;
+}
+
+// A PR mate r (mate: the other mate's alignment; se: its single-end result,
+// whose MAPQ is se_mapq). The single-end bounds come from se when it is
+// certified, else XU = L. XQ follows BWA-MEM's pairing rule,
+// max(q_se, min(q_pe, q_se + 40)):
+//  - q_pe from the certified pair margin R1 - S2 (0 for a tie);
+//  - q_se from se and its proven SUB bound, which is about loci not
+//    overlapping se. So se is shown (xl_r) whenever it is not r itself.
+inline Placement pr_placement(const Result& r, const Result& mate, const Result& se, int L, int mapq,
+                              int se_mapq) {
+  Placement o;
+  o.r = r;
+  o.mapped = true;
+  o.mapq = mapq;
+  int q_se = 0;
+  o.xl = r.score;
+  o.xu = L * kMatch;
+  if (se.certified == 1) {
+    int sh;
+    certified_bounds(se, L, &o.xl, &o.xu, &sh);
+    if (!same_alignment(se, r)) {
+      o.xl_sep = true;
+      o.xl_r = se;
+    }
+    o.xl = std::max<int>(o.xl, r.score);
+    o.sub_hi = sh;
+    o.pr_xh = true;
+    q_se = std::min(se_mapq, mapq_se(se.score, sh, L));
+    o.w = witness_of(se, L);
+  }
+  o.q_pe = r.n_best == 1 ? mapq_margin(r.score + mate.score - r.sub_score) : 0;
+  o.xq = std::min(mapq, std::max(q_se, std::min(o.q_pe, q_se + 40)));
+  o.pw = witness_of(r, L);
   return o;
 }
 

@@ -246,8 +246,8 @@ void sam_line(const Result& r, const FastqRecord& rec, const Reference& ref, int
   int n = std::snprintf(tags, sizeof tags, "\tNM:i:%d\tAS:i:%d\tXE:i:%d\tXT:Z:%s\tXR:i:%d\tXD:i:%d\tXB:i:%d",
                         r.nm, r.score, r.d1, kTierNames[r.tier], r.radius, r.d2, r.n_best);
   if (r.tier == kTierSL) n += std::snprintf(tags + n, sizeof tags - n, "\tXF:i:%d", r.floor);
-  // PR: XP is the certified maximum pair score, XF its threshold, XS a bound
-  // on every other proper pair.
+  // PR: XF is the threshold the certified pair score exceeds, XS a bound on
+  // every other proper pair.
   if (r.tier == kTierPR) std::snprintf(tags + n, sizeof tags - n, "\tXF:i:%d\tXS:i:%d", r.floor, r.sub_score);
   sam += tags;
   if (extra) sam += extra;
@@ -259,10 +259,17 @@ void sam_line(const Result& r, const FastqRecord& rec, const Reference& ref, int
 // --witness adds what certa check needs to verify the claims (Theorem V):
 //   XW:Z:t;o-e,o-e,...;o-e,...  the support t and the probes per strand
 //                               (strand 1: offsets in the reverse complement);
-//   XH:i:  the proven bound on SUB that XQ was computed from (single-end XQ);
+//   XH:i:  the proven bound on SUB that XQ was computed from (single-end XQ;
+//          for a PR mate, the single-end term of XQ, about loci not
+//          overlapping its single-end alignment: XV if present, else its own);
 //   XV:Z:contig,pos,strand,CIGAR  the alignment attaining XL, when it is not
-//                               the record's own.
+//                               the record's own (PR mate: its single-end
+//                               alignment, when it is not the record's own);
+//   XY:Z:D;t;o-e,...;o-e,...    PR mates: the proper-pair distance D and the
+//                               pair certificate's support and parts, which
+//                               prove XS (the bound on every other proper pair).
 bool g_witness = false;
+int g_pair_dist = 0;
 
 void interval_tags(const Placement& p, const Reference& ref, std::string& out) {
   char buf[96];
@@ -274,20 +281,28 @@ void interval_tags(const Placement& p, const Reference& ref, std::string& out) {
   std::snprintf(buf, sizeof buf, "\tXU:i:%d\tXQ:i:%d", p.xu, p.xq);
   out += buf;
   if (!g_witness) return;
-  if (p.xq > 0 && p.r.tier != kTierPR) {
+  if (p.xq > 0 && (p.r.tier != kTierPR || p.pr_xh)) {
     std::snprintf(buf, sizeof buf, "\tXH:i:%d", p.sub_hi);
     out += buf;
   }
-  if (p.w.t > 0) {
-    std::snprintf(buf, sizeof buf, "\tXW:Z:%d", p.w.t);
-    out += buf;
+  auto probes = [&](const Witness& w) {
     for (int st = 0; st < 2; ++st) {
       out += ';';
-      for (int j = 0; j < p.w.n[st]; ++j) {
-        std::snprintf(buf, sizeof buf, "%s%d-%d", j ? "," : "", p.w.off[st][j], p.w.end[st][j]);
+      for (int j = 0; j < w.n[st]; ++j) {
+        std::snprintf(buf, sizeof buf, "%s%d-%d", j ? "," : "", w.off[st][j], w.end[st][j]);
         out += buf;
       }
     }
+  };
+  if (p.w.t > 0) {
+    std::snprintf(buf, sizeof buf, "\tXW:Z:%d", p.w.t);
+    out += buf;
+    probes(p.w);
+  }
+  if (p.mapped && p.pw.t > 0) {
+    std::snprintf(buf, sizeof buf, "\tXY:Z:%d;%d", g_pair_dist, p.pw.t);
+    out += buf;
+    probes(p.pw);
   }
   if (p.xl_sep) {
     const Result& a = p.xl_r;
@@ -334,6 +349,10 @@ void keep_within_contigs(Placement& p, const Reference& ref) {
   if (p.xl_sep && !within_contig(p.xl_r, ref)) {
     p.xl_sep = false;
     p.xl = p.mapped ? p.r.score : kNoSub;
+    if (p.pr_xh) {  // a PR mate's single-end term of XQ rested on it
+      p.pr_xh = false;
+      p.xq = std::min(p.mapq, std::min(p.q_pe, 40));
+    }
   }
   if (!p.mapped || within_contig(p.r, ref)) return;
   p.mapped = false;
@@ -368,32 +387,14 @@ int mapq_pair(const Result& r, const Result& mate, const Result& se, int L) {
 // single-end result se for a PR mate) and XQ. For a PR mate, XQ uses the
 // certified pair margin R1 - S2 the way mapq_pair uses it.
 Placement certified_placement(const Result& r, const Result& mate, const Result& se, int L, int mapq) {
+  if (r.tier == kTierPR) return pr_placement(r, mate, se, L, mapq, se.certified == 1 ? mapq_of(se, L) : 0);
   Placement o;
   o.r = r;
   o.mapped = true;
   o.mapq = mapq;
-  if (r.tier != kTierPR) {
-    certified_bounds(r, L, &o.xl, &o.xu, &o.sub_hi);
-    o.xq = std::min(mapq, mapq_se(r.score, o.sub_hi, L));
-    o.w = witness_of(r, L);
-    return o;
-  }
-  int q_se = 0;
-  o.xl = r.score;
-  o.xu = L * kMatch;
-  if (se.certified == 1) {
-    int sh;
-    certified_bounds(se, L, &o.xl, &o.xu, &sh);
-    if (se.score > r.score) {  // the single-end optimum lies elsewhere
-      o.xl_sep = true;
-      o.xl_r = se;
-    }
-    o.xl = std::max<int>(o.xl, r.score);
-    q_se = std::min(mapq_of(se, L), mapq_se(se.score, sh, L));
-    o.w = witness_of(se, L);
-  }
-  const int q_pe = r.n_best == 1 ? mapq_margin(r.score + mate.score - r.sub_score) : 0;
-  o.xq = std::min(mapq, std::max(q_se, std::min(q_pe, q_se + 40)));
+  certified_bounds(r, L, &o.xl, &o.xu, &o.sub_hi);
+  o.xq = std::min(mapq, mapq_se(r.score, o.sub_hi, L));
+  o.w = witness_of(r, L);
   return o;
 }
 
@@ -691,20 +692,36 @@ int cmd_check(const Args& a) {
     in = &file;
   }
   std::FILE* fails = a.has("--failures") ? std::fopen(a.get("--failures", "").c_str(), "wb") : nullptr;
-  uint64_t verdict[check::kNumVerdicts] = {}, records = 0, xu = 0, xh = 0, pair_xq = 0, occ = 0, windows = 0,
-           cells = 0, lines = 0;
+  uint64_t verdict[check::kNumVerdicts] = {}, records = 0, xu = 0, xh = 0, pair_xq = 0, pair_need = 0,
+           xs = 0, occ = 0, windows = 0, cells = 0, lines = 0, groups = 0;
   double t_check = 0;
   const std::clock_t c0 = std::clock();
-  std::vector<uint64_t> number;  // record number (1-based, headers excluded) of each batch line
-  auto run = [&](std::vector<std::string>& batch) {
-    std::vector<int> v(batch.size());
-    std::vector<check::Work> w(batch.size());
+  // A group: consecutive records with one QNAME (a pair's two records are
+  // checked together: a PR mate's XQ rests on both). Kept whole by batches
+  // and by --sample, which samples groups.
+  struct Group {
+    std::vector<std::string> line;
+    std::vector<uint64_t> number;  // record number (1-based, headers excluded)
+  };
+  auto run = [&](std::vector<Group>& batch) {
+    std::vector<std::vector<check::Verdict>> v(batch.size());
+    std::vector<std::vector<check::Work>> w(batch.size());
     auto t = Clock::now();
     std::atomic<size_t> next{0};
     auto worker = [&] {
-      for (size_t i; (i = next.fetch_add(1)) < batch.size();) {
-        check::Claim c;
-        v[i] = ck.parse_sam(batch[i], &c) ? ck.check(c, &w[i]) : check::kMalformed;
+      for (size_t g; (g = next.fetch_add(1)) < batch.size();) {
+        const size_t n = batch[g].line.size();
+        v[g].assign(n, check::kMalformed);
+        w[g].assign(n, check::Work());
+        std::vector<check::Claim> c(n);
+        std::vector<char> ok(n);
+        for (size_t i = 0; i < n; ++i) ok[i] = ck.parse_sam(batch[g].line[i], &c[i]);
+        if (n == 2 && ok[0] && ok[1]) {
+          ck.check_pair(c[0], c[1], &w[g][0], &w[g][1], &v[g][0], &v[g][1]);
+        } else {
+          for (size_t i = 0; i < n; ++i)
+            if (ok[i]) v[g][i] = ck.check(c[i], &w[g][i]);
+        }
       }
     };
     std::vector<std::thread> pool;
@@ -712,45 +729,58 @@ int cmd_check(const Args& a) {
     worker();
     for (auto& th : pool) th.join();
     t_check += secs(t);
-    for (size_t i = 0; i < batch.size(); ++i) {
-      ++records;
-      ++verdict[v[i]];
-      xu += w[i].xu_checked;
-      xh += w[i].xh_checked;
-      pair_xq += w[i].pair_xq;
-      occ += w[i].occurrences;
-      windows += w[i].windows;
-      cells += w[i].cells;
-      if (v[i] != check::kAccepted && fails)
-        std::fprintf(fails, "%s\t%llu\t%s\n", check::kVerdictNames[v[i]],
-                     static_cast<unsigned long long>(number[i]), batch[i].c_str());
-    }
+    for (size_t g = 0; g < batch.size(); ++g)
+      for (size_t i = 0; i < batch[g].line.size(); ++i) {
+        const check::Work& wi = w[g][i];
+        ++records;
+        ++verdict[v[g][i]];
+        xu += wi.xu_checked;
+        xh += wi.xh_checked;
+        pair_xq += wi.pair_xq;
+        pair_need += wi.needs_pair;
+        xs += wi.xs_checked;
+        occ += wi.occurrences;
+        windows += wi.windows;
+        cells += wi.cells;
+        if (v[g][i] != check::kAccepted && fails)
+          std::fprintf(fails, "%s\t%llu\t%s\n", check::kVerdictNames[v[g][i]],
+                       static_cast<unsigned long long>(batch[g].number[i]), batch[g].line[i].c_str());
+      }
     batch.clear();
-    number.clear();
   };
-  std::vector<std::string> batch;
-  std::string line;
+  std::vector<Group> batch;
+  Group cur;
+  std::string cur_name;
   std::mt19937_64 rng(static_cast<uint64_t>(a.geti("--seed", 1)));
+  auto flush = [&]() {
+    if (cur.line.empty()) return;
+    ++groups;
+    if (sample > 0) {  // reservoir sample of groups
+      if (static_cast<int64_t>(batch.size()) < sample) {
+        batch.push_back(std::move(cur));
+      } else {
+        const uint64_t j = rng() % groups;
+        if (j < static_cast<uint64_t>(sample)) batch[j] = std::move(cur);
+      }
+    } else {
+      batch.push_back(std::move(cur));
+      if (batch.size() == (1u << 17)) run(batch);
+    }
+    cur = Group();
+  };
+  std::string line;
   while (std::getline(*in, line)) {
     if (line.empty() || line[0] == '@') continue;
     ++lines;
-    if (sample > 0) {  // reservoir sample
-      if (static_cast<int64_t>(batch.size()) < sample) {
-        batch.push_back(line);
-        number.push_back(lines);
-      } else {
-        const uint64_t j = rng() % lines;
-        if (j < static_cast<uint64_t>(sample)) {
-          batch[j] = line;
-          number[j] = lines;
-        }
-      }
-    } else {
-      batch.push_back(line);
-      number.push_back(lines);
-      if (batch.size() == (1u << 18)) run(batch);
+    const std::string name = line.substr(0, line.find('\t'));
+    if (name != cur_name) {
+      flush();
+      cur_name = name;
     }
+    cur.line.push_back(line);
+    cur.number.push_back(lines);
   }
+  flush();
   if (!batch.empty()) run(batch);
   if (fails) std::fclose(fails);
   const double cpu = static_cast<double>(std::clock() - c0) / CLOCKS_PER_SEC;
@@ -761,10 +791,11 @@ int cmd_check(const Args& a) {
   for (int i = 1; i < check::kNumVerdicts; ++i)
     std::fprintf(stderr, "[check]   %s: %llu\n", check::kVerdictNames[i], static_cast<unsigned long long>(verdict[i]));
   std::fprintf(stderr,
-               "[check] claims proven from witnesses: XU < L %llu, XH %llu; XQ resting on the pair certificate "
-               "(not re-derived) %llu\n",
+               "[check] claims proven from witnesses: XU < L %llu, XH %llu; PR mates with XQ > 0 %llu, of which "
+               "%llu rest on the pair certificate and %llu have XS proven\n",
                static_cast<unsigned long long>(xu), static_cast<unsigned long long>(xh),
-               static_cast<unsigned long long>(pair_xq));
+               static_cast<unsigned long long>(pair_xq), static_cast<unsigned long long>(pair_need),
+               static_cast<unsigned long long>(xs));
   std::fprintf(stderr,
                "[check] per record: %.1f probe occurrences, %.2f DP windows, %.0f DP cells; %.1f us CPU (%.1f s wall "
                "on %d threads)\n",
@@ -857,6 +888,7 @@ int cmd_map(const Args& a) {
   pp.se.min_support = 1;
   pp.max_dist = a.geti("--max-dist", 850);
   if (pp.max_dist < 0) throw std::runtime_error("--max-dist must be >= 0");
+  g_pair_dist = pp.max_dist;
   g_unc_tags = a.has("--unc-tags");
   // Interval output: no read goes to the fallback; tier R (CPU) for every
   // read still uncertified, pairs placed by certa/interval.h.
