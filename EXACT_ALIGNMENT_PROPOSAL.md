@@ -940,26 +940,41 @@ so certifying HiFi reads at minimap2-like cost looks reachable.
   read closely enough for any exact-part certificate.
 - **A long novel insertion can never be certified exactly by exact parts.** It is a piece that no
   part can witness, so such a read keeps an interval.
-- **The exact split certificate (follow-up 3, 2026-10-14)**
+- **The exact split certificate (follow-up 3, 2026-10-14/15)**
   ([raw](certa/bench/results/aim6_2026-10/split_certify.txt); Theorem L-J in
   [certa/THEORY.md](certa/THEORY.md)).
-  - *How it works:* each kept chain gets an exact banded DP in which a piece may start from the best
-    prefix value minus P. Reverse-strand chains run against the reverse-complemented reference. An
-    upper layer adds Lemma L bounds for pieces that no part witnesses.
+  - *How it works:* each evaluated chain gets an exact banded DP in which a piece may start from the
+    best prefix value minus P. Reverse-strand chains run against the reverse-complemented reference.
+    An upper layer adds Lemma L bounds for pieces that no part witnesses.
+  - *Which chains:* they are evaluated in rounds, pruned against exact prefix and suffix values of
+    the chains evaluated before (the suffix from a pass over the reversed read).
+    - Each chain's DP runs only on a read window where its pieces can matter.
+    - lb is raised to the best alignment found, which shrinks the band.
+    - When the rounds would cost more, one static step prunes against the first round's values.
+    - A read over the cell cap keeps an interval.
   - *Tested:* against an exact brute force of the split objective on a synthetic genome with
     planted SVs. Every proven optimum equals it and every interval contains it, also from the
-    weakest and the tightest admissible lb. Mutants LR1–LR11 are all killed.
-  - *On the 2,674 HiFi reads that fit only the split objective:*
-    - **OPT_J proven for 1,544** (0.64 % of all reads), so exact certification covers 93.96 % of
-      reads;
-    - an interval for 991 (median width 107; diverged or novel insertions keep intervals by
-      design);
-    - over the cell cap for 139.
-  - *The cost is the catch:* a median of 45 s per read. The pruning bound is loose on real reads:
-    it bounds the rest of the read by Lemma L with every occurring part free, which is close to the
-    read length, so 145 of a median 148 chains are kept.
-  - *The fix (not built):* prune iteratively, against exact prefix and suffix values of the chains
-    evaluated first.
+    weakest and the tightest admissible lb, with one chain per round, on the static path and under
+    a small cap. The pruning values are checked against brute force on 20,000 random layouts.
+    Mutants LR1–LR27 are all killed.
+  - *On the 2,674 HiFi reads that fit only the split objective* (the first version, with static
+    pruning only, in brackets):
+
+    | | Result |
+    |---|---|
+    | **OPT_J proven** | **1,551** (1,544): 0.64 % of all reads, so exact certification covers 93.96 % of reads. Same OPT_J on every read both prove |
+    | An interval | 1,043 (991), median width 112; diverged or novel insertions keep intervals by design |
+    | Over the cell cap | 80 (139), each still with an interval |
+    | Time per read (one thread) | median **3.4 s** (45 s), mean 27 s (62 s) |
+    | CPU in all | 88,749 s (170,706 s) |
+    | Chains evaluated | median 48 of 154 (145 of 148 kept) |
+
+  - *On 500 reads (all 476 that fit the split objective):* OPT_J proven for 442, a median of
+    0.14 s per read, one chain evaluated.
+  - *What stays costly:* reads with a long lossy stretch, such as an insertion of repeat sequence.
+    While a chain covering the stretch is unevaluated, the bound lets the prefix cross it almost
+    free, so many chains look viable. The unwitnessed bound (about 0.7 per base) then leaves an
+    interval about 0.7 × the stretch wide.
 
 ## 7. Evaluation plan and aims
 
@@ -970,7 +985,7 @@ so certifying HiFi reads at minimap2-like cost looks reachable.
 | **3. Interval output and MAPQ** | [ℓ, u], SUB interval, conservative MAPQ, SAM tags (`XL`, `XU`) | interval-width distribution; MAPQ calibration on GIAB stratified regions | Variant F1 non-inferior to the current pipeline with **no** heuristic fallback. **Go (§6.3): HG005 F1 −0.0008 to +0.0011 against CERTA + minibwa, above BWA-MEM2 in all 4.** Calibration was measured on simulated pairs instead (the GIAB stratification files are not downloaded). XQ as MAPQ fails: it is biased toward the reference. |
 | **4. Checker** | independent checker (Theorem V); sampling audit | check time per read; zero disagreements | Checker accepts 100 % of certificates; injected faults all detected. **Go (§6.4): 8 M real records accepted; all 23,733 false-by-construction faults and all 6 mapper mutants detected; 89–134 µs per record.** The gap (pair-level XQ, about 4 % of records) **is closed (§6.4, 2026-10-14): all 303,682 XS claims on 8 M records proven; 181–232 µs per record.** |
 | **5. Theory** | written proofs of Lemma H, Theorems C, G, R, V; optional Lean 4 mechanization | — | Proofs reviewed; mutation tests for each bound. **Half met (§6.5): every bound's mutants killed (50) or proven equivalent (6); exhaustive lemma checks pass; two S2 bugs found and fixed.** Review by a second person pending; Lean not started (needs a download). |
-| **6. Long reads** | HiFi feasibility on a2's existing data (§8) | share of reads whose loss is below the certifiable ceiling | Go if ≥ 90 % of HiFi reads fit. **Go (§6.6, definitions pre-registered): 93.29 % of 242,534 HG002 HiFi reads fit (93.75 % at τ = 256).** The misses span SVs (4.4 %), sit in repeats (1.8 %) or are unmapped (0.5 %). **Follow-up: the certificate completed for 93.32 % (OPT proven), at about 2.8× minimap2's CPU (§6.6).** |
+| **6. Long reads** | HiFi feasibility on a2's existing data (§8) | share of reads whose loss is below the certifiable ceiling | Go if ≥ 90 % of HiFi reads fit. **Go (§6.6, definitions pre-registered): 93.29 % of 242,534 HG002 HiFi reads fit (93.75 % at τ = 256).** The misses span SVs (4.4 %), sit in repeats (1.8 %) or are unmapped (0.5 %). **Follow-up: the certificate completed for 93.32 % (OPT proven), at about 2.8× minimap2's CPU; with the split objective, 93.96 % exact (§6.6).** |
 
 **Ground rules:**
 - **Datasets:** the three GIAB samples already processed (HG001, HG002, HG005) and the existing
@@ -1007,8 +1022,9 @@ penalty).
   Lemma L-J extends the exact-part ceiling to it, computed in one pass and verified exhaustively.
 - **Measured:** on HiFi it lets 1.1 more points of reads fit at P = 30, about a fifth of the
   clipped and high-loss reads.
-- **The exact certificate of the split optimum:** built and oracle-tested. It is proven for 1,544
-  more HiFi reads, though still too slow for routine use (§6.6).
+- **The exact certificate of the split optimum:** built and oracle-tested. It is proven for 1,551
+  more HiFi reads, at a median of 3.4 s per SV read. The mean, 27 s, comes from reads with long
+  lossy stretches (§6.6).
 
 **Relation to shmap-rs.** shmap-rs maps in about 5.9 ms per HiFi read without base-level alignment.
 A certifying long-read aligner will not beat it on raw speed. The useful combination: shmap-rs

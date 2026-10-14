@@ -572,10 +572,14 @@ inline void jump_window(int L, const PartTables& tb, const PartTables& tbr, cons
 }
 
 // Given lb <= OPT_J and lb > U_J:
-//  - every jump alignment above lb has gap total <= pad = L - lb - 7 in each
-//    piece (the piece's loss is part of the whole's, Lemma W);
+//  - lbt: lb, raised each round to the best alignment of the evaluated
+//    chains (a real one, so lbt <= OPT_J; every statement below holds with
+//    the current lbt in place of lb);
+//  - every jump alignment above lbt has gap total <= pad = L - lbt - 7 in
+//    each piece (the piece's loss is part of the whole's, Lemma W);
 //  - a piece holding an exact part of its strand lies in a chain of part
-//    occurrences (pad), on the chain's diagonals +- pad (Lemma C);
+//    occurrences (grouped with the first pad, a coarsening of every later
+//    one), on the chain's diagonals +- pad (Lemma C);
 //  - chains are evaluated (banded DP on a read window) iteratively, best
 //    single-piece bound first. pre: a pass over the read, the evaluated
 //    chains exact on their windows, unevaluated chains' pieces by Lemma L
@@ -585,20 +589,25 @@ inline void jump_window(int L, const PartTables& tb, const PartTables& tbr, cons
 //  - an alignment using unevaluated chains is bounded at its last piece of
 //    one, C (the pieces after it are of evaluated chains or unwitnessed):
 //    by pot(C) = the best decomposition holding a piece of C (Lemma L, C's
-//    parts free), pre before it and suf1 after it. A chain with pot > lb is
-//    evaluated (the `batch` best per round; 0: at least 4, or a quarter of
-//    them; the first round: the best single-piece bound), until none is
-//    left: every alignment using an unevaluated chain then scores <= lb;
+//    parts free), pre before it and suf1 after it. A chain with pot > lbt
+//    is evaluated (the `batch` best per round; 0: at least 4, or a quarter
+//    of them; the first round: the best single-piece bound), until none is
+//    left: every alignment using an unevaluated chain then scores <= lbt;
 //  - the window of a chain evaluated in a round holds every [a, b) whose
-//    value with pre before and suf2 after exceeds lb. By induction over the
-//    rounds, every piece of an evaluated chain in an alignment above lb
+//    value with pre before and suf2 after exceeds lbt. By induction over the
+//    rounds, every piece of an evaluated chain in an alignment above lbt
 //    lies in its window (the pieces around it are bounded by pre and suf2,
 //    those of chains evaluated before on their windows);
+//  - the static path: the first round's pre and suf2 bound every
+//    alignment (no chain is evaluated yet), so pot from them prunes at once,
+//    and their windows hold: the chains with that pot above lbt are
+//    evaluated together. Taken when the rounds would cost more than half of
+//    it (batch 0), or at once (batch < 0);
 //  - a final pass combines the evaluated chains' exact pieces, with
 //    (upper) or without (lower) the unwitnessed pieces' Lemma L bounds.
-// OPT_J lies in [max(lb, lower), max(lb, upper)]; equal ends prove it. Over
-// the cell cap (status 2), OPT_J lies in [lb, max(lb, the last pre pass's
-// value)]: that pass bounds every alignment above lb.
+// OPT_J lies in [max(lbt, lower), max(lbt, upper)]; equal ends prove it.
+// Over the cell cap (status 2), OPT_J lies in [lbt, max(lbt, the last pre
+// pass's value)]: that pass bounds every alignment above lbt.
 // (A piece of a chain holds one of its parts exactly, so its read interval
 // contains that part; a piece of the chain's band holding none is
 // unwitnessed.)
@@ -612,7 +621,9 @@ inline LrCert certify_jump(const IndexView& ix, const uint8_t* fw, int L, Strand
   const long UJ = lemma_l_jump(L, fp, P);
   if (lb <= UJ) return c;
   const auto t0 = std::chrono::steady_clock::now();
-  const long pad = std::max(0L, (long)L - lb - 7);
+  long lbt = lb;
+  auto pad_of = [&]() { return std::max(0L, (long)L - lbt - 7); };
+  const long pad0 = pad_of();
   const int64_t N = (int64_t)ix.ref_len;
   const int n1 = (int)so[1].parts.size();
   // The reversed read and its parts (a pass over it gives the suffix values).
@@ -627,15 +638,17 @@ inline LrCert certify_jump(const IndexView& ix, const uint8_t* fw, int L, Strand
   }
   struct Chain {
     int strand;
-    int64_t elo, ehi;  // diagonals of the forward pass
+    int64_t clo, chi;  // the occurrences' diagonals in the forward pass
     std::vector<char> free, free_rev;
     long ub;
     int w0, w1;  // the read window, once evaluated
   };
   // The bands of a chain in the pass over the read and over the reversed read.
-  auto fwd_band = [&](const Chain& ch) { return JumpBand{ch.strand, ch.elo, ch.ehi, ch.w0, ch.w1}; };
-  auto rev_band = [&](const Chain& ch) {
-    return JumpBand{ch.strand + 2, N - L - ch.ehi, N - L - ch.elo, L - ch.w1, L - ch.w0};
+  auto fwd_band = [&](const Chain& ch, long pad) {
+    return JumpBand{ch.strand, ch.clo - pad, ch.chi + pad, ch.w0, ch.w1};
+  };
+  auto rev_band = [&](const Chain& ch, long pad) {
+    return JumpBand{ch.strand + 2, N - L - ch.chi - pad, N - L - ch.clo + pad, L - ch.w1, L - ch.w0};
   };
   std::vector<Chain> chains;
   for (int s = 0; s < 2; ++s) {
@@ -643,12 +656,11 @@ inline LrCert certify_jump(const IndexView& ix, const uint8_t* fw, int L, Strand
     std::sort(occ.begin(), occ.end());
     for (size_t i = 0, j; i < occ.size(); i = j) {
       j = i + 1;
-      while (j < occ.size() && occ[j].first - occ[j - 1].first <= pad) ++j;
+      while (j < occ.size() && occ[j].first - occ[j - 1].first <= pad0) ++j;
       Chain ch;
       ch.strand = s;
-      const int64_t dlo = occ[i].first - pad, dhi = occ[j - 1].first + pad;
-      ch.elo = s == 0 ? dlo : N - L - dhi;  // strand-1 diagonal d is N - L - d here
-      ch.ehi = s == 0 ? dhi : N - L - dlo;
+      ch.clo = s == 0 ? occ[i].first : N - L - occ[j - 1].first;  // strand-1 diagonal d is N - L - d here
+      ch.chi = s == 0 ? occ[j - 1].first : N - L - occ[i].first;
       ch.free.assign(fp[s].size(), 0);
       for (size_t k = i; k < j; ++k) ch.free[s == 0 ? occ[k].second : n1 - 1 - occ[k].second] = 1;
       ch.free_rev.assign(ch.free.rbegin(), ch.free.rend());
@@ -658,25 +670,46 @@ inline LrCert certify_jump(const IndexView& ix, const uint8_t* fw, int L, Strand
     }
   }
   c.chains = (int)chains.size();
-  std::vector<char> evaluated(chains.size(), 0);
+  const size_t K = chains.size();
+  std::vector<char> evaluated(K, 0);
   std::vector<JumpBand> bf, br;
-  std::vector<long> pre, mrev, suf1(L + 1), suf2(L + 1);
+  std::vector<long> pre, mrev, suf1(L + 1), suf2(L + 1), pre0, suf20, pot0(K, LONG_MIN / 4);
   std::vector<char> any[2], any_rev[2];
-  auto band_cost = [&]() {  // the cells of one pass
+  auto band_cost = [&](long pad) {  // the cells of one pass over the evaluated chains
     double x = 0;
-    for (size_t k = 0; k < chains.size(); ++k)
-      if (evaluated[k]) x += (double)(chains[k].w1 - chains[k].w0) * (double)(chains[k].ehi - chains[k].elo + 1);
+    for (size_t k = 0; k < K; ++k)
+      if (evaluated[k])
+        x += (double)(chains[k].w1 - chains[k].w0) * (double)(chains[k].chi - chains[k].clo + 1 + 2 * pad);
+    return x;
+  };
+  auto static_cost = [&](long pad) {  // the final passes over the static set, whole-read windows
+    double x = 0;
+    for (size_t k = 0; k < K; ++k)
+      if (pot0[k] > lbt) x += 2.0 * L * (double)(chains[k].chi - chains[k].clo + 1 + 2 * pad);
     return x;
   };
   long ub_all = L;  // every jump alignment scores <= L
+  auto capped = [&]() {
+    c.status = 2;
+    c.opt = lbt;
+    c.hi = std::max(lbt, ub_all);
+    c.searched = (int)std::count(evaluated.begin(), evaluated.end(), 1);
+    c.us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+    return c;
+  };
   for (int iter = 0;; ++iter) {
-    if (c.cells + 5.0 * band_cost() > max_cells || iter > 64) {
-      c.status = 2;
-      c.opt = lb;
-      c.hi = std::max(lb, ub_all);
-      c.searched = (int)std::count(evaluated.begin(), evaluated.end(), 1);
-      c.us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
-      return c;
+    const long pad = pad_of();
+    if (c.cells + 6.0 * band_cost(pad) > max_cells || iter > 64) return capped();
+    if (iter > 0 && (batch < 0 || (batch == 0 && c.cells + 6.0 * band_cost(pad) > 0.5 * static_cost(pad)))) {
+      // The static path.
+      for (size_t k = 0; k < K; ++k) {
+        Chain& ch = chains[k];
+        evaluated[k] = pot0[k] > lbt;
+        if (evaluated[k])
+          jump_window(L, tb[ch.strand], tbr[ch.strand], ch.free, ch.free_rev, pre0, suf20, P, lbt, &ch.w0, &ch.w1);
+      }
+      if (c.cells + 2.0 * band_cost(pad) > max_cells) return capped();
+      break;
     }
     bf.clear();
     br.clear();
@@ -684,11 +717,11 @@ inline LrCert certify_jump(const IndexView& ix, const uint8_t* fw, int L, Strand
       any[s].assign(fp[s].size(), 0);
       any_rev[s].assign(fp[s].size(), 0);
     }
-    for (size_t k = 0; k < chains.size(); ++k) {
+    for (size_t k = 0; k < K; ++k) {
       const Chain& ch = chains[k];
       if (evaluated[k]) {
-        bf.push_back(fwd_band(ch));
-        br.push_back(rev_band(ch));
+        bf.push_back(fwd_band(ch, pad));
+        br.push_back(rev_band(ch, pad));
       } else {
         for (size_t x = 0; x < ch.free.size(); ++x) {
           any[ch.strand][x] |= ch.free[x];
@@ -696,15 +729,16 @@ inline LrCert certify_jump(const IndexView& ix, const uint8_t* fw, int L, Strand
         }
       }
     }
+    if (!bf.empty()) lbt = std::max(lbt, jump_pass(ix, fw, L, bf, tb, {}, P, nullptr, &c.cells));
     const std::vector<PieceType> vf = {{0, nullptr}, {1, nullptr}, {0, &any[0]}, {1, &any[1]}};
     ub_all = jump_pass(ix, fw, L, bf, tb, vf, P, &pre, &c.cells);
     jump_pass(ix, rv.data(), L, br, tbr, {{0, nullptr}, {1, nullptr}}, P, &mrev, &c.cells);
     for (int b = 0; b <= L; ++b) suf1[b] = mrev[L - b];
     std::vector<std::pair<long, int>> add;
-    for (size_t k = 0; k < chains.size(); ++k) {
+    for (size_t k = 0; k < K; ++k) {
       if (evaluated[k]) continue;
       const long pot = jump_pot(L, tb[chains[k].strand], chains[k].free, pre, suf1, P);
-      if (pot > lb) add.push_back({iter == 0 ? chains[k].ub : pot, (int)k});
+      if (pot > lbt) add.push_back({iter == 0 ? chains[k].ub : pot, (int)k});
     }
     if (add.empty()) break;
     std::sort(add.begin(), add.end(), std::greater<std::pair<long, int>>());
@@ -714,19 +748,25 @@ inline LrCert certify_jump(const IndexView& ix, const uint8_t* fw, int L, Strand
     const std::vector<PieceType> vr = {{0, nullptr}, {1, nullptr}, {0, &any_rev[0]}, {1, &any_rev[1]}};
     jump_pass(ix, rv.data(), L, br, tbr, vr, P, &mrev, &c.cells);
     for (int b = 0; b <= L; ++b) suf2[b] = mrev[L - b];
+    if (iter == 0) {  // the first round's values, for the static path
+      pre0 = pre;
+      suf20 = suf2;
+      for (size_t k = 0; k < K; ++k) pot0[k] = jump_pot(L, tb[chains[k].strand], chains[k].free, pre0, suf20, P);
+    }
     for (size_t x = 0; x < add.size() && x < n_add; ++x) {
       Chain& ch = chains[add[x].second];
-      jump_window(L, tb[ch.strand], tbr[ch.strand], ch.free, ch.free_rev, pre, suf2, P, lb, &ch.w0, &ch.w1);
+      jump_window(L, tb[ch.strand], tbr[ch.strand], ch.free, ch.free_rev, pre, suf2, P, lbt, &ch.w0, &ch.w1);
       evaluated[add[x].second] = 1;
     }
   }
+  const long pad = pad_of();
   bf.clear();
-  for (size_t k = 0; k < chains.size(); ++k)
-    if (evaluated[k]) bf.push_back(fwd_band(chains[k]));
+  for (size_t k = 0; k < K; ++k)
+    if (evaluated[k]) bf.push_back(fwd_band(chains[k], pad));
   c.searched = (int)bf.size();
   const long upper = jump_pass(ix, fw, L, bf, tb, {{0, nullptr}, {1, nullptr}}, P, nullptr, &c.cells);
   const long lower = jump_pass(ix, fw, L, bf, tb, {}, P, nullptr, &c.cells);
-  const long lo = std::max(lb, lower), hi = std::max(lo, upper);
+  const long lo = std::max(lbt, lower), hi = std::max(lo, upper);
   c.status = hi == lo ? 1 : 3;
   c.opt = lo;
   c.hi = hi;

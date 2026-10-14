@@ -12,7 +12,7 @@ names:
 
 **Review status.** Written, then cross-checked by:
 - whole-reference oracles (4 seeds, ARM and x86);
-- 89 mutants;
+- 93 mutants;
 - exhaustive verification of the finite lemmas.
 
 It has **not yet been reviewed by a second person**. §11 lists what a
@@ -298,8 +298,14 @@ read that crosses a structural variant has no good single local alignment.
 
 **Theorem L-J (the split optimum; `certify_jump`).**
 - *Setup:*
-  - lb ≤ OPT_J and lb > U_J; pad = L − lb − 7;
-  - chains of part occurrences are built per strand with that pad. A *piece
+  - lb ≤ OPT_J and lb > U_J;
+  - *raising lb:* each round first combines the evaluated chains' pieces
+    alone, which gives a real alignment. lb is raised to its score, so it
+    stays ≤ OPT_J. Everything below uses the current lb, with
+    pad = L − lb − 7;
+  - chains of part occurrences are built per strand with the first pad. A
+    later, smaller pad only coarsens that grouping, so Lemma C still holds
+    for it. A *piece
     of chain C* holds an exact occurrence of a part of C, so its read
     interval contains that part. A piece holding no exact part of its strand
     is *unwitnessed*;
@@ -327,6 +333,14 @@ read that crosses a structural variant has no good single local alignment.
   by pot. The rounds end when no unevaluated chain has pot(C) > lb.
 - *Windows:* when C is evaluated, W_C is the smallest interval holding every
   [a, b) that contains a part of C and has st(a) + V_C(a, b) + en₂(b) > lb.
+- *The static path:* the first round's pre and suf₂ bound every alignment,
+  because no chain is evaluated yet. So pot from them, with both-sided
+  values, prunes in one step, and windows from them hold.
+  - All chains with that pot above lb are then evaluated together, and the
+    final pass follows.
+  - It is taken when the rounds would cost more than half of it.
+  - For reads where most chains need a DP, it costs the old single pass,
+    instead of rounds that redo the evaluated chains each time.
 - *The final pass:* the evaluated chains' exact pieces, with (upper) or
   without (lower) the unwitnessed pieces' Lemma L bounds.
 - *Statement:* OPT_J ∈ [max(lb, lower), max(lb, upper)]; equal ends prove it.
@@ -356,7 +370,13 @@ read that crosses a structural variant has no good single local alignment.
     or unwitnessed, and A ≤ upper. The lower layer combines real pieces
     only, so it is attained.
   - Under the cap, the last pre pass bounds every piece of A in the same way,
-    so A ≤ U. ∎
+    so A ≤ U.
+  - *Raising lb* only shrinks the set of alignments to bound. A window set
+    at an earlier, lower lb still holds every piece of an alignment above
+    the current one.
+  - *The static path:* every piece around a piece of C is bounded by the
+    first round's values, which need no exact chain. So the window and the
+    pruning arguments apply directly, with no induction. ∎
 - *Why two suffix values:*
   - pruning bounds an alignment at its *last* piece of an unevaluated chain,
     so the unevaluated chains are needed on one side only. suf₁ ≤ suf₂, so it
@@ -376,18 +396,20 @@ read that crosses a structural variant has no good single local alignment.
     genome, both strands: every proven OPT_J equals it, and every interval
     contains it;
   - this holds from the known lb, from the weakest admissible lb (U_J + 1)
-    and from lb = OPT_J − 1 (the narrowest band). Each is run with the
-    default batch and with one chain per round, so that every pruning
+    and from lb = OPT_J − 1 (the narrowest band). Each is run three ways:
+    with the default batch; with one chain per round, so that every pruning
     decision rests on the exact values of the chains evaluated before it;
+    and on the static path;
   - under a small cell cap, the capped interval contains OPT_J;
   - every proven local optimum (Corollary L-long) equals the brute force
     with P = ∞.
-  - *Mutants:* LR1–LR23. They cover pads; pruning; unwitnessed pieces; the
+  - *Mutants:* LR1–LR27. They cover pads; pruning; unwitnessed pieces; the
     strand-1 targets of both passes; the clip and jump penalties; Lemma L's
     charge and free parts; chain splitting; the prefix union type; the
     reversed pass's band, rows, parts and free flags; the suffix index; the
     windows (one-sided values, one base short at either end); the containment
-    state; and the capped interval.
+    state; the capped interval; lb raised to a bound instead of a real
+    alignment; and the static path's pot, set and windows.
 - *Limits:*
   - an unwitnessed piece that pays off (a novel or diverged insertion) leaves
     an interval;
@@ -790,7 +812,7 @@ guarantees is the interval [XL, XU] at whatever stage it stops.
 ## 9a. Mutants that survive by design
 
 A mutant that changes no claim on any input cannot be killed by a test, so
-it must be argued instead. Six of the 89 survive.
+it must be argued instead. Six of the 93 survive.
 - **L6** (span start candidates shifted): Lemma S, §4.
 - **A2** (Lemma O's term lowered): §4.
 - **P2, P8, P13** (band pad − 2, narrowed band − 3, `relevant` term dropped)

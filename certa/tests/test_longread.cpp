@@ -349,7 +349,7 @@ int main(int argc, char** argv) {
   BandDp dp;
   const long P = 30;
   int single_checked = 0, single_proven = 0, jump_proven = 0, jump_interval = 0, jump_none = 0, weak_checked = 0,
-      weak_proven = 0, tight_checked = 0, batch1_checked = 0, capped_checked = 0, capped_hit = 0;
+      weak_proven = 0, tight_checked = 0, variant_checked = 0, capped_checked = 0, capped_hit = 0;
   for (size_t i = 0; i < reads.size(); ++i) {
     const Read& rr = reads[i];
     const int L = static_cast<int>(rr.seq.size());
@@ -392,9 +392,10 @@ int main(int argc, char** argv) {
     const long UJ = lemma_l_jump(L, fp, P);
     const LrCert cj = certify_jump(ix, rr.seq.data(), L, so, lbJ, P, 4e9);
     // Each claim from the weak and the tight lb below, made with the default
-    // batch and with one chain evaluated per round (every pruning decision
-    // then rests on the exact values of the chains evaluated before it).
-    for (int batch = 0; batch < 2; ++batch) {
+    // batch, with one chain evaluated per round (every pruning decision then
+    // rests on the exact values of the chains evaluated before it) and on the
+    // static path (batch -1).
+    for (int batch : {0, 1, -1}) {
       // The weakest admissible lb, U_J + 1 (<= lb_J <= OPT_J): the search
       // and the pruning must then find the optimum themselves.
       if (lbJ > UJ) {
@@ -412,7 +413,7 @@ int main(int argc, char** argv) {
           ++weak_checked;
           weak_proven += cw.status == 1;
         } else {
-          ++batch1_checked;
+          ++variant_checked;
         }
       }
       if (optJ - 1 > UJ) {
@@ -421,7 +422,7 @@ int main(int argc, char** argv) {
               "read %zu (%s): from lb = OPT_J - 1, status %d [%ld, %ld], brute force %ld (batch %d)", i, rr.kind,
               ct.status, ct.opt, ct.hi, optJ, batch);
         if (batch == 0) ++tight_checked;
-        else ++batch1_checked;
+        else ++variant_checked;
       }
     }
     // Over a small cell cap: the interval [lb, the last bound] must hold OPT_J.
@@ -452,10 +453,10 @@ int main(int argc, char** argv) {
   }
   std::fprintf(stderr, "local optimum: %d proven of %d (all equal to the brute force); split optimum: %d proven, %d "
                "intervals (all containing it), %d not attempted; from the weak lb U_J + 1: %d proven of %d; from lb "
-               "= OPT - 1: %d checked; one chain per round: %d checked; under a small cell cap: %d checked (%d "
-               "capped)\n",
+               "= OPT - 1: %d checked; one chain per round and the static path: %d checked; under a small cell "
+               "cap: %d checked (%d capped)\n",
                single_proven, single_checked, jump_proven, jump_interval, jump_none, weak_proven, weak_checked,
-               tight_checked, batch1_checked, capped_checked, capped_hit);
+               tight_checked, variant_checked, capped_checked, capped_hit);
   if (failures) {
     std::fprintf(stderr, "%d check(s) FAILED\n", failures);
     return 1;
