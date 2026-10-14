@@ -7,7 +7,8 @@ then descriptive statistics that are not part of it: the margin, why reads
 miss, the ceiling's parts and the enumerated occurrences per read, the
 trimmed-path variant and a second tau. For a run with --certify, also the
 completed certificates: OPT proven, how often it beats the best known
-alignment, and the cost (DP cells and time per read).
+alignment, and the cost (DP cells and time per read). For a run with
+--jump-certify, the split certificate: OPT_J proven, intervals, cost.
 
 Miss classes (descriptive, defined here):
   unmapped        no primary alignment;
@@ -110,6 +111,8 @@ def summary(rows, label):
         print(f"split objective, P = {P}: fit {fj} = {100 * fj / n:.2f} %; of the misses above, "
               + "; ".join(f"{c} {k} of {cls[c]}" for c, k in sorted(new.items(), key=lambda x: -x[1]))
               + f"; fit single but not split {sum(r['fits'] and not r['fitsJ_%d' % P] for r in rows)}")
+    if "jcert" in rows[0]:
+        jump_certify_summary(rows)
     if "cert" not in rows[0]:
         return
     # --certify: OPT proven by banded DP over the candidate chains.
@@ -132,6 +135,36 @@ def summary(rows, label):
     c = [r["chains"] for r in cert]
     print(f"chains searched by DP: median {q(s, 0.5)}, 99% {q(s, 0.99)}, max {max(s)} (of chains built: median "
           f"{q(c, 0.5)}, max {max(c)})")
+
+
+def jump_certify_summary(rows):
+    """--jump-certify: the split optimum (certify_jump, THEORY.md Theorem L-J),
+    at the one jump penalty in the run (lbJ_P)."""
+    ps = [int(k[6:]) for k in rows[0] if k.startswith("fitsJ_")]
+    P = ps[-1]
+    att = [r for r in rows if r["jcert"] > 0]
+    st = {s: [r for r in att if r["jcert"] == s] for s in (1, 2, 3)}
+    print(f"split certificate, P = {P}: attempted {len(att)}; OPT_J proven {len(st[1])}, an interval {len(st[3])}, "
+          f"over the cell cap {len(st[2])} (an interval from the last round)")
+    if not att:
+        return
+    us = [r["jus"] for r in att]
+    print("time per read (one thread): " + ", ".join(f"{p}% {q(us, p / 100) / 1e6:.2f} s" for p in (50, 90, 99)) +
+          f", max {max(us) / 1e6:.1f} s, mean {sum(us) / len(us) / 1e6:.2f} s, total {sum(us) / 1e6:.0f} s")
+    cells = [r["jcells"] for r in att]
+    print("DP cells per read: " + ", ".join(f"{p}% {q(cells, p / 100):.3g}" for p in (50, 90, 99)) +
+          f", max {max(cells):.3g}")
+    s = [r["jsearched"] for r in att]
+    c = [r["jchains"] for r in att]
+    print(f"chains evaluated: median {q(s, 0.5)}, 90% {q(s, 0.9)}, 99% {q(s, 0.99)} (of chains built: median "
+          f"{q(c, 0.5)}, 99% {q(c, 0.99)})")
+    for k, label in ((3, "interval"), (2, "capped interval")):
+        w = [r["jhi"] - r["jlo"] for r in st[k]]
+        if w:
+            print(f"{label} widths: " + ", ".join(f"{p}% {q(w, p / 100)}" for p in (10, 50, 90)) + f", max {max(w)}")
+    up = [r["jlo"] - r["lbJ_%d" % P] for r in st[1] if r["jlo"] > r["lbJ_%d" % P]]
+    print(f"proven OPT_J above lb_J: {len(up)} reads" +
+          (f", by median {q(up, 0.5)}, 90% {q(up, 0.9)}, max {max(up)}" if up else ""))
 
 
 def main():

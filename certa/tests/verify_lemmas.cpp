@@ -20,6 +20,11 @@
 //           equals the best decomposition into pieces found by brute force
 //           (random two-strand part layouts), and the single-span bound
 //           when jumps cost too much to use.
+//  Thm L-J  the pruning values of certify_jump: the prefix values (a pass
+//           over the read), the suffix values (the same pass over the
+//           reversed read, on the mirrored parts), pot and the read window
+//           of a chain, against their definitions by brute force (random
+//           layouts).
 //
 // Transcripts: each read base is a match, a mismatch or inserted; between
 // consecutive bases lies a deletion of 0, 1 or 2 reference bases. Loss
@@ -453,6 +458,109 @@ int main() {
     std::fprintf(stderr, "Lemma L-J: %lld (layout, P) cases, one-pass bound = brute force: %s; = single-span bound "
                  "without jumps: %s; jump_bound with free parts and a required type = brute force on %lld: %s\n", n,
                  bad ? "no" : "yes", bad1 ? "no" : "yes", n2, bad2 ? "no" : "yes");
+  }
+  // ---- Theorem L-J: the pruning values (pre, suf, pot) against their
+  // definitions over all decompositions, each piece bounded by Lemma L.
+  {
+    std::mt19937_64 g(11);
+    long long n = 0, bad_pre = 0, bad_suf = 0, bad_pot = 0, bad_win = 0;
+    const certa::IndexView ix{};  // no bands: the passes read no reference
+    const long NEG = LONG_MIN / 4;
+    for (int it = 0; it < 20000; ++it) {
+      const int L = 3 + static_cast<int>(g() % 22);
+      std::vector<certa::ReadPart> part[2], rpart[2];
+      for (int s = 0; s < 2; ++s) {
+        int x = static_cast<int>(g() % 3);
+        for (;;) {
+          const int len = 3 + static_cast<int>(g() % 4);
+          if (x + len > L) break;
+          if (g() % 4) part[s].push_back({x, x + len, 0});
+          x += len + static_cast<int>(g() % 3);
+        }
+      }
+      std::vector<char> fr[2], fc;  // the free parts of the any-types; of the chain (strand cs)
+      for (int s = 0; s < 2; ++s)
+        for (size_t k = 0; k < part[s].size(); ++k) fr[s].push_back(static_cast<char>(g() % 2));
+      const int cs = static_cast<int>(g() % 2);
+      for (size_t k = 0; k < part[cs].size(); ++k) fc.push_back(static_cast<char>(g() % 2));
+      const long P = static_cast<long>(g() % 12);
+      certa::PartTables tb[2], tbr[2];
+      for (int s = 0; s < 2; ++s) {
+        tb[s].build(L, part[s]);
+        certa::mirror_parts(L, part[s], rpart[s]);
+        tbr[s].build(L, rpart[s]);
+      }
+      const std::vector<uint8_t> rd(L, 0);
+      std::vector<long> pre, mrev, suf(L + 1);
+      double cells = 0;
+      certa::jump_pass(ix, rd.data(), L, {}, tb, {{0, nullptr}, {1, nullptr}, {0, &fr[0]}, {1, &fr[1]}}, P, &pre,
+                       &cells);
+      certa::jump_pass(ix, rd.data(), L, {}, tbr, {{0, nullptr}, {1, nullptr}}, P, &mrev, &cells);
+      for (int b = 0; b <= L; ++b) suf[b] = mrev[L - b];
+      auto V = [&](int s, const std::vector<char>* fl, int a, int b) {  // Lemma L for a piece [a, b)
+        long v = b - a;
+        for (size_t k = 0; k < part[s].size(); ++k)
+          v -= 5 * (part[s][k].off >= a && part[s][k].end <= b && !(fl && (*fl)[k]));
+        return v;
+      };
+      // M[a]: the best decomposition with every piece ending at or before a
+      // (pieces of all four types); S[b]: with every piece starting at or
+      // after b (unwitnessed pieces only), the last one's clip included.
+      std::vector<long> f(L + 1, NEG), M(L + 1, NEG), h(L + 1, NEG), S(L + 1, NEG);
+      for (int b = 1; b <= L; ++b) {
+        for (int a = 0; a < b; ++a) {
+          const long st = std::max(a > 0 ? -5L : 0L, M[a] - P);
+          for (int s = 0; s < 2; ++s) f[b] = std::max({f[b], st + V(s, nullptr, a, b), st + V(s, &fr[s], a, b)});
+        }
+        M[b] = std::max(M[b - 1], f[b]);
+      }
+      for (int a = L - 1; a >= 0; --a) {
+        for (int b = a + 1; b <= L; ++b) {
+          const long en = std::max(b < L ? -5L : 0L, S[b] - P);
+          for (int s = 0; s < 2; ++s) h[a] = std::max(h[a], V(s, nullptr, a, b) + en);
+        }
+        S[a] = std::max(S[a + 1], h[a]);
+      }
+      // A piece of the chain contains one of its free parts.
+      auto holds = [&](int a, int b) {
+        for (size_t k = 0; k < part[cs].size(); ++k)
+          if (fc[k] && part[cs][k].off >= a && part[cs][k].end <= b) return true;
+        return false;
+      };
+      long pot = NEG;
+      for (int a = 0; a < L; ++a)
+        for (int b = a + 1; b <= L; ++b)
+          if (holds(a, b))
+            pot = std::max(pot, std::max(a > 0 ? -5L : 0L, M[a] - P) + V(cs, &fc, a, b) +
+                                    std::max(b < L ? -5L : 0L, S[b] - P));
+      ++n;
+      bad_pre += pre != M;
+      bad_suf += suf != S;
+      bad_pot += certa::jump_pot(L, tb[cs], fc, pre, suf, P) != pot;
+      // The window: the smallest [w0, w1) holding every [a, b) above lb.
+      const long lb = pot > NEG ? pot - static_cast<long>(g() % 12) : 0;
+      int a0 = L, b1 = -1;
+      for (int a = 0; a < L; ++a)
+        for (int b = a + 1; b <= L; ++b)
+          if (holds(a, b) &&
+              std::max(a > 0 ? -5L : 0L, M[a] - P) + V(cs, &fc, a, b) + std::max(b < L ? -5L : 0L, S[b] - P) > lb) {
+            a0 = std::min(a0, a);
+            b1 = std::max(b1, b);
+          }
+      const std::vector<char> fc_rev(fc.rbegin(), fc.rend());
+      int w0 = -1, w1 = -1;
+      certa::jump_window(L, tb[cs], tbr[cs], fc, fc_rev, pre, suf, P, lb, &w0, &w1);
+      if (b1 < 0) bad_win += !(w0 == 0 && w1 == L);
+      else bad_win += !(w0 == a0 && w1 == b1);
+    }
+    EXPECT(bad_pre == 0, "Theorem L-J: prefix values differ from their definition in %lld cases", bad_pre);
+    EXPECT(bad_suf == 0, "Theorem L-J: suffix values (reversed pass) differ from their definition in %lld cases",
+           bad_suf);
+    EXPECT(bad_pot == 0, "Theorem L-J: pot differs from its definition in %lld cases", bad_pot);
+    EXPECT(bad_win == 0, "Theorem L-J: the read window differs from its definition in %lld cases", bad_win);
+    std::fprintf(stderr, "Theorem L-J: %lld random layouts, prefix values = definition: %s; suffix values (reversed "
+                 "pass, mirrored parts) = definition: %s; pot = definition: %s; read window = definition: %s\n", n,
+                 bad_pre ? "no" : "yes", bad_suf ? "no" : "yes", bad_pot ? "no" : "yes", bad_win ? "no" : "yes");
   }
   // ---- XQ: mapq_se is monotone (non-increasing in SUB, non-decreasing in the score).
   {

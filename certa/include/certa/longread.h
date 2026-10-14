@@ -8,6 +8,7 @@
 #include <chrono>
 #include <climits>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 #include "certa/core.h"
@@ -359,43 +360,284 @@ inline LrCert certify_single(const IndexView& ix, const uint8_t* const* rd, int 
 
 // ---- The certificate of the split (jump) optimum ----------------------------
 
-// Given lb, the score of a known jump alignment, and lb > U_J:
+// The targets of a pass over the read: 0 the reference, 1 its reverse
+// complement (strand-1 pieces of the forward read); for the pass over the
+// reversed read, 2 the reference reversed, 3 the reference complemented.
+inline uint8_t jump_target(const IndexView& ix, int t, int64_t u) {
+  const int64_t N = (int64_t)ix.ref_len;
+  switch (t) {
+    case 0: return ref_at(ix, u);
+    case 1: return lr_comp(ref_at(ix, N - 1 - u));
+    case 2: return ref_at(ix, N - 1 - u);
+    default: return lr_comp(ref_at(ix, u));
+  }
+}
+
+// A chain as a band of a pass: target t, diagonals [elo, ehi] (target
+// position minus read position), read rows [r0, r1) of the pass.
+struct JumpBand {
+  int t;
+  int64_t elo, ehi;
+  int r0, r1;
+};
+
+// Per-strand tables of the parts (forward order of the pass).
+struct PartTables {
+  std::vector<int> first, last, owner, owner_off;
+  void build(int L, const std::vector<ReadPart>& p) {
+    first.assign(L, 0);
+    last.assign(L, 0);
+    owner.assign(L, -1);
+    owner_off.assign(L, -1);
+    for (size_t k = 0; k < p.size(); ++k) {
+      first[p[k].off] = 1;
+      last[p[k].end - 1] = 1;
+      for (int i = p[k].off; i < p[k].end; ++i) {
+        owner[i] = (int)k;
+        owner_off[i] = p[k].off;
+      }
+    }
+  }
+};
+
+// One step of a Lemma L-bounded piece (as in jump_bound) at base i: in[c]
+// continued, a start with value `start`, then +1 and the charge of a part
+// ending here that was covered from its first base and is not free.
+inline void lemma_step(const PartTables& tb, const std::vector<char>* free, int i, long start, long* in) {
+  const long NEGL = LONG_MIN / 4;
+  long nx[2] = {NEGL, NEGL};
+  const long cont = std::max(in[0], in[1]);
+  if (tb.first[i]) nx[0] = cont;
+  else if (tb.owner[i] >= 0) {
+    nx[0] = in[0];
+    nx[1] = in[1];
+  } else {
+    nx[1] = cont;
+  }
+  const int c = tb.owner_off[i] == i ? 0 : 1;
+  nx[c] = std::max(nx[c], start);
+  const bool charge = tb.last[i] && !(free && (*free)[tb.owner[i]]);
+  for (int k = 0; k < 2; ++k) {
+    if (nx[k] <= NEGL) continue;
+    nx[k] += kMatch;
+    if (k == 0 && charge) nx[k] -= kMismatch + kMatch;
+  }
+  in[0] = nx[0];
+  in[1] = nx[1];
+}
+
+// One pass over a read (rd, in the pass's direction): the best decomposition
+// into pieces of the given bands (exact: banded Gotoh on the band's rows, a
+// piece starting from the best prefix value minus P, or 0 / -5 for the first
+// piece) and of the given virtual types (Lemma L bounds). M (if not null) receives, for f =
+// 0..L, the best decomposition whose pieces all end at or before f. Returns
+// the best complete one (-5 if the last piece ends before L).
+inline long jump_pass(const IndexView& ix, const uint8_t* rd, int L, const std::vector<JumpBand>& bands,
+                      const PartTables* tb, const std::vector<PieceType>& virt, long P, std::vector<long>* M,
+                      double* cells) {
+  const long NEGL = LONG_MIN / 4;
+  const int NEG = INT_MIN / 4;
+  const int K = (int)bands.size();
+  std::vector<std::vector<int>> H(K), I(K), Hn(K), In(K);
+  for (int k = 0; k < K; ++k) {
+    const int B = (int)(bands[k].ehi - bands[k].elo + 1);
+    H[k].assign(B + 1, NEG);
+    I[k].assign(B + 1, NEG);
+    Hn[k].assign(B + 1, NEG);
+    In[k].assign(B + 1, NEG);
+  }
+  // The targets of each band, read row f and band cell b at index f - r0 + b.
+  std::vector<std::vector<uint8_t>> tg(K);
+  for (int k = 0; k < K; ++k) {
+    const JumpBand& bd = bands[k];
+    const int64_t n = std::max<int64_t>(0, bd.r1 - bd.r0 + bd.ehi - bd.elo);
+    tg[k].resize(n);
+    for (int64_t x = 0; x < n; ++x) tg[k][x] = jump_target(ix, bd.t, bd.elo + bd.r0 + x);
+  }
+  const int T = (int)virt.size();
+  std::vector<long> vin(2 * T, NEGL);
+  long prefix = NEGL, end_at_L = NEGL;
+  if (M) M->assign(L + 1, NEGL);
+  for (int f = 0; f < L; ++f) {
+    const long G = std::max(f > 0 ? -(long)kClip : 0L, prefix - P);
+    const int g = (int)G;  // >= -5
+    long F = NEGL;
+    const uint8_t rb = rd[f];
+    for (int k = 0; k < K; ++k) {
+      const JumpBand& bd = bands[k];
+      if (f < bd.r0 || f >= bd.r1) continue;
+      const int B = (int)(bd.ehi - bd.elo + 1);
+      const uint8_t* tr = tg[k].data() + (f - bd.r0);
+      int d = NEG, left = NEG, rowbest = NEG;
+      for (int b = 0; b < B; ++b) {
+        const int m = std::max(H[k][b], g) + (lr_same(rb, tr[b]) ? kMatch : -kMismatch);
+        const int ins = f > bd.r0 ? std::max(H[k][b + 1] - kGapOpen - kGapExt, I[k][b + 1] - kGapExt) : NEG;
+        d = std::max(left - kGapOpen - kGapExt, d - kGapExt);
+        const int h = std::max(m, std::max(ins, d));
+        Hn[k][b] = h;
+        In[k][b] = ins;
+        left = h;
+        rowbest = std::max(rowbest, m);
+      }
+      Hn[k][B] = In[k][B] = NEG;
+      std::swap(H[k], Hn[k]);
+      std::swap(I[k], In[k]);
+      F = std::max(F, (long)rowbest);
+      *cells += B;
+    }
+    for (int t = 0; t < T; ++t) {
+      lemma_step(tb[virt[t].strand], virt[t].free, f, G, &vin[2 * t]);
+      F = std::max(F, std::max(vin[2 * t], vin[2 * t + 1]));
+    }
+    prefix = std::max(prefix, F);
+    if (M) (*M)[f + 1] = prefix;
+    if (f == L - 1) end_at_L = F;
+  }
+  return std::max(prefix - kClip, end_at_L);
+}
+
+// The parts of the reversed read: part k of p, [o, e), is part n - 1 - k
+// here, [L - e, L - o).
+inline void mirror_parts(int L, const std::vector<ReadPart>& p, std::vector<ReadPart>& out) {
+  out.clear();
+  for (auto q = p.rbegin(); q != p.rend(); ++q) out.push_back({L - q->end, L - q->off, q->occ});
+}
+
+// pot: the best decomposition holding a piece of a chain (tables tb, the
+// chain's parts free) over some [a, b) containing one of the chain's parts
+// (a piece of the chain holds one exactly; a piece of its band holding none
+// is unwitnessed), every other piece bounded by pre[a] (pieces ending at or
+// before a) or suf[b] (pieces starting at or after b). The piece: Lemma L
+// states as in lemma_step, u = a free part covered. With last_end: the
+// largest b of such a decomposition above lb (-1: none).
+inline long jump_pot(int L, const PartTables& tb, const std::vector<char>& free, const std::vector<long>& pre,
+                     const std::vector<long>& suf, long P, long lb = LONG_MAX, int* last_end = nullptr) {
+  const long NEGL = LONG_MIN / 4;
+  long in[4] = {NEGL, NEGL, NEGL, NEGL}, best = NEGL;  // in[c * 2 + u]
+  if (last_end) *last_end = -1;
+  for (int i = 0; i < L; ++i) {
+    long nx[4] = {NEGL, NEGL, NEGL, NEGL};
+    for (int u = 0; u < 2; ++u) {
+      const long cont = std::max(in[u], in[2 + u]);
+      if (tb.first[i]) nx[u] = cont;
+      else if (tb.owner[i] >= 0) {
+        nx[u] = in[u];
+        nx[2 + u] = in[2 + u];
+      } else {
+        nx[2 + u] = cont;
+      }
+    }
+    const int c = tb.owner_off[i] == i ? 0 : 1;
+    nx[c * 2] = std::max(nx[c * 2], std::max(i > 0 ? -(long)kClip : 0L, pre[i] - P));
+    const bool is_free = tb.last[i] && free[tb.owner[i]];
+    for (int k = 0; k < 4; ++k) {
+      if (nx[k] <= NEGL) continue;
+      nx[k] += kMatch;
+      if (k < 2 && tb.last[i] && !is_free) nx[k] -= kMismatch + kMatch;
+    }
+    if (is_free) nx[1] = std::max(nx[1], nx[0]);  // the part, covered from its first base, is free: u = 1
+    std::copy(nx, nx + 4, in);
+    const long piece = std::max(in[1], in[3]);
+    if (piece <= NEGL) continue;
+    const long v = piece + std::max(i + 1 < L ? -(long)kClip : 0L, suf[i + 1] - P);
+    best = std::max(best, v);
+    if (last_end && v > lb) *last_end = i + 1;
+  }
+  return best;
+}
+
+// The read window of a chain (tables tb / tbr of the read and of the
+// reversed read, free parts free / free_rev): the smallest [w0, w1) holding
+// every [a, b) that contains one of the chain's parts and whose pot value
+// (pre and suf as in jump_pot) exceeds lb. The first piece start comes from
+// the same scan over the reversed read.
+inline void jump_window(int L, const PartTables& tb, const PartTables& tbr, const std::vector<char>& free,
+                        const std::vector<char>& free_rev, const std::vector<long>& pre, const std::vector<long>& suf,
+                        long P, long lb, int* w0, int* w1) {
+  std::vector<long> pre_r(L + 1), suf_r(L + 1);
+  for (int x = 0; x <= L; ++x) {
+    pre_r[x] = suf[L - x];
+    suf_r[x] = pre[L - x];
+  }
+  int b = -1, y = -1;
+  jump_pot(L, tb, free, pre, suf, P, lb, &b);
+  jump_pot(L, tbr, free_rev, pre_r, suf_r, P, lb, &y);
+  if (b < 0 || y < 0) {  // none above lb: the whole read (cannot happen for a chain with pot > lb)
+    *w0 = 0;
+    *w1 = L;
+  } else {
+    *w0 = L - y;
+    *w1 = b;
+  }
+}
+
+// Given lb <= OPT_J and lb > U_J:
 //  - every jump alignment above lb has gap total <= pad = L - lb - 7 in each
 //    piece (the piece's loss is part of the whole's, Lemma W);
 //  - a piece holding an exact part of its strand lies in a chain of part
 //    occurrences (pad), on the chain's diagonals +- pad (Lemma C);
-//  - pot(C), the best decomposition using a piece of chain C (bounded by
-//    Lemma L with C's parts free, every other piece with every occurring
-//    part free), bounds all alignments using C: chains with pot <= lb are
-//    dropped;
-//  - one pass over the read then combines, for the kept chains, the exact
-//    best piece ending at each read position (banded DP, a piece starting
-//    from the best prefix value minus P), and, in an upper layer only, the
-//    pieces holding no exact part (Lemma L).
-// OPT_J lies in [max(lb, lower), max(lb, upper)]; equal ends prove it.
+//  - chains are evaluated (banded DP on a read window) iteratively, best
+//    single-piece bound first. pre: a pass over the read, the evaluated
+//    chains exact on their windows, unevaluated chains' pieces by Lemma L
+//    with their parts free, unwitnessed pieces by Lemma L; suf2: the same
+//    pass over the reversed read; suf1: that pass without the unevaluated
+//    chains;
+//  - an alignment using unevaluated chains is bounded at its last piece of
+//    one, C (the pieces after it are of evaluated chains or unwitnessed):
+//    by pot(C) = the best decomposition holding a piece of C (Lemma L, C's
+//    parts free), pre before it and suf1 after it. A chain with pot > lb is
+//    evaluated (the `batch` best per round; 0: at least 4, or a quarter of
+//    them; the first round: the best single-piece bound), until none is
+//    left: every alignment using an unevaluated chain then scores <= lb;
+//  - the window of a chain evaluated in a round holds every [a, b) whose
+//    value with pre before and suf2 after exceeds lb. By induction over the
+//    rounds, every piece of an evaluated chain in an alignment above lb
+//    lies in its window (the pieces around it are bounded by pre and suf2,
+//    those of chains evaluated before on their windows);
+//  - a final pass combines the evaluated chains' exact pieces, with
+//    (upper) or without (lower) the unwitnessed pieces' Lemma L bounds.
+// OPT_J lies in [max(lb, lower), max(lb, upper)]; equal ends prove it. Over
+// the cell cap (status 2), OPT_J lies in [lb, max(lb, the last pre pass's
+// value)]: that pass bounds every alignment above lb.
+// (A piece of a chain holds one of its parts exactly, so its read interval
+// contains that part; a piece of the chain's band holding none is
+// unwitnessed.)
 // Strand-1 chains run on the forward read against the reverse-complemented
-// reference, so every chain advances with the read.
+// reference (diagonal N - L - d), so every chain advances with the read.
 inline LrCert certify_jump(const IndexView& ix, const uint8_t* fw, int L, StrandParts* so, long lb, long P,
-                           double max_cells) {
+                           double max_cells, int batch = 0) {
   LrCert c;
   std::vector<ReadPart> fp[2];
   forward_parts(L, so, fp);
   const long UJ = lemma_l_jump(L, fp, P);
   if (lb <= UJ) return c;
   const auto t0 = std::chrono::steady_clock::now();
-  const long NEGL = LONG_MIN / 4;
   const long pad = std::max(0L, (long)L - lb - 7);
   const int64_t N = (int64_t)ix.ref_len;
   const int n1 = (int)so[1].parts.size();
-  // Chains, with their free parts in forward order.
+  // The reversed read and its parts (a pass over it gives the suffix values).
+  std::vector<uint8_t> rv(fw, fw + L);
+  std::reverse(rv.begin(), rv.end());
+  std::vector<ReadPart> rp[2];
+  for (int s = 0; s < 2; ++s) mirror_parts(L, fp[s], rp[s]);
+  PartTables tb[2], tbr[2];
+  for (int s = 0; s < 2; ++s) {
+    tb[s].build(L, fp[s]);
+    tbr[s].build(L, rp[s]);
+  }
   struct Chain {
     int strand;
-    int64_t elo, ehi;  // forward-coordinate diagonals (target position minus read position)
-    std::vector<char> free;
+    int64_t elo, ehi;  // diagonals of the forward pass
+    std::vector<char> free, free_rev;
+    long ub;
+    int w0, w1;  // the read window, once evaluated
+  };
+  // The bands of a chain in the pass over the read and over the reversed read.
+  auto fwd_band = [&](const Chain& ch) { return JumpBand{ch.strand, ch.elo, ch.ehi, ch.w0, ch.w1}; };
+  auto rev_band = [&](const Chain& ch) {
+    return JumpBand{ch.strand + 2, N - L - ch.ehi, N - L - ch.elo, L - ch.w1, L - ch.w0};
   };
   std::vector<Chain> chains;
-  std::vector<char> any[2];
-  for (int s = 0; s < 2; ++s) any[s].assign(fp[s].size(), 0);
   for (int s = 0; s < 2; ++s) {
     auto& occ = so[s].occ;
     std::sort(occ.begin(), occ.end());
@@ -405,132 +647,86 @@ inline LrCert certify_jump(const IndexView& ix, const uint8_t* fw, int L, Strand
       Chain ch;
       ch.strand = s;
       const int64_t dlo = occ[i].first - pad, dhi = occ[j - 1].first + pad;
-      if (s == 0) {
-        ch.elo = dlo;
-        ch.ehi = dhi;
-      } else {  // strand-1 diagonal d (ref - rc read position) is N - L - d here
-        ch.elo = N - L - dhi;
-        ch.ehi = N - L - dlo;
-      }
+      ch.elo = s == 0 ? dlo : N - L - dhi;  // strand-1 diagonal d is N - L - d here
+      ch.ehi = s == 0 ? dhi : N - L - dlo;
       ch.free.assign(fp[s].size(), 0);
-      for (size_t k = i; k < j; ++k) {
-        const int idx = s == 0 ? occ[k].second : n1 - 1 - occ[k].second;
-        ch.free[idx] = 1;
-        any[s][idx] = 1;
-      }
+      for (size_t k = i; k < j; ++k) ch.free[s == 0 ? occ[k].second : n1 - 1 - occ[k].second] = 1;
+      ch.free_rev.assign(ch.free.rbegin(), ch.free.rend());
+      ch.ub = lemma_l_span(L, fp[s], &ch.free);
+      ch.w0 = ch.w1 = 0;
       chains.push_back(std::move(ch));
     }
   }
   c.chains = (int)chains.size();
-  // pot(C): drop the chains no alignment above lb can use.
-  std::vector<int> keep;
-  for (size_t k = 0; k < chains.size(); ++k) {
-    const std::vector<PieceType> types = {{chains[k].strand, &chains[k].free}, {0, &any[0]}, {1, &any[1]}};
-    if (jump_bound(L, fp, types, P, 0) > lb) keep.push_back((int)k);
-  }
-  c.searched = (int)keep.size();
-  double need = 0;
-  for (int k : keep) need += 2.0 * L * (double)(chains[k].ehi - chains[k].elo + 1);
-  if (need > max_cells) {
-    c.status = 2;
-    return c;
-  }
-  // The pass over the read: layer 0 upper (real pieces of kept chains and
-  // unwitnessed pieces), layer 1 lower (real pieces only).
-  const int NEG = INT_MIN / 4;
-  struct Band {
-    std::vector<int> H, I, Hn, In;
+  std::vector<char> evaluated(chains.size(), 0);
+  std::vector<JumpBand> bf, br;
+  std::vector<long> pre, mrev, suf1(L + 1), suf2(L + 1);
+  std::vector<char> any[2], any_rev[2];
+  auto band_cost = [&]() {  // the cells of one pass
+    double x = 0;
+    for (size_t k = 0; k < chains.size(); ++k)
+      if (evaluated[k]) x += (double)(chains[k].w1 - chains[k].w0) * (double)(chains[k].ehi - chains[k].elo + 1);
+    return x;
   };
-  const int K = (int)keep.size();
-  std::vector<Band> band(2 * K);
-  for (int k = 0; k < K; ++k)
-    for (int l = 0; l < 2; ++l) {
-      const int B = (int)(chains[keep[k]].ehi - chains[keep[k]].elo + 1);
-      Band& bd = band[2 * k + l];
-      bd.H.assign(B + 1, NEG);
-      bd.I.assign(B + 1, NEG);
-      bd.Hn.assign(B + 1, NEG);
-      bd.In.assign(B + 1, NEG);
+  long ub_all = L;  // every jump alignment scores <= L
+  for (int iter = 0;; ++iter) {
+    if (c.cells + 5.0 * band_cost() > max_cells || iter > 64) {
+      c.status = 2;
+      c.opt = lb;
+      c.hi = std::max(lb, ub_all);
+      c.searched = (int)std::count(evaluated.begin(), evaluated.end(), 1);
+      c.us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+      return c;
     }
-  // Unwitnessed pieces of the upper layer: Lemma L states per strand.
-  std::vector<int> first[2], last[2], owner_off[2];
-  for (int s = 0; s < 2; ++s) {
-    first[s].assign(L, 0);
-    last[s].assign(L, 0);
-    owner_off[s].assign(L, -1);
-    for (const ReadPart& q : fp[s]) {
-      first[s][q.off] = 1;
-      last[s][q.end - 1] = 1;
-      for (int i = q.off; i < q.end; ++i) owner_off[s][i] = q.off;
-    }
-  }
-  long vin[2][2] = {{NEGL, NEGL}, {NEGL, NEGL}};
-  long M[2] = {NEGL, NEGL};  // best decomposition ending at or before the current base, per layer
-  long Fend[2] = {NEGL, NEGL};  // best decomposition ending exactly at L
-  for (int f = 0; f < L; ++f) {
-    long G[2];
-    for (int l = 0; l < 2; ++l) G[l] = std::max(f > 0 ? -(long)kClip : 0L, M[l] - P);
-    long F[2] = {NEGL, NEGL};  // pieces ending after base f
-    const uint8_t rb = fw[f];
-    for (int k = 0; k < K; ++k) {
-      const Chain& ch = chains[keep[k]];
-      const int B = (int)(ch.ehi - ch.elo + 1);
-      const int64_t u0 = f + ch.elo;
-      for (int l = 0; l < 2; ++l) {
-        Band& bd = band[2 * k + l];
-        const int start = G[l] > NEG ? (int)std::max<long>(G[l], NEG) : NEG;
-        int d = NEG, left = NEG, rowbest = NEG;
-        for (int b = 0; b < B; ++b) {
-          const int64_t u = u0 + b;
-          const uint8_t t = ch.strand == 0 ? ref_at(ix, u) : lr_comp(ref_at(ix, N - 1 - u));
-          const int m = std::max(bd.H[b], start) + (lr_same(rb, t) ? kMatch : -kMismatch);
-          const int ins = f > 0 ? std::max(bd.H[b + 1] - kGapOpen - kGapExt, bd.I[b + 1] - kGapExt) : NEG;
-          d = std::max(left - kGapOpen - kGapExt, d - kGapExt);
-          const int h = std::max(m, std::max(ins, d));
-          bd.Hn[b] = h;
-          bd.In[b] = ins;
-          left = h;
-          rowbest = std::max(rowbest, m);
-        }
-        bd.Hn[B] = bd.In[B] = NEG;
-        std::swap(bd.H, bd.Hn);
-        std::swap(bd.I, bd.In);
-        F[l] = std::max(F[l], (long)rowbest);
-      }
-      c.cells += 2.0 * B;
-    }
-    // Unwitnessed pieces (upper layer), as in jump_bound.
-    long nv[2][2] = {{NEGL, NEGL}, {NEGL, NEGL}};
+    bf.clear();
+    br.clear();
     for (int s = 0; s < 2; ++s) {
-      const long cont = std::max(vin[s][0], vin[s][1]);
-      if (first[s][f]) nv[s][0] = std::max(nv[s][0], cont);
-      else if (owner_off[s][f] >= 0) {
-        nv[s][0] = std::max(nv[s][0], vin[s][0]);
-        nv[s][1] = std::max(nv[s][1], vin[s][1]);
+      any[s].assign(fp[s].size(), 0);
+      any_rev[s].assign(fp[s].size(), 0);
+    }
+    for (size_t k = 0; k < chains.size(); ++k) {
+      const Chain& ch = chains[k];
+      if (evaluated[k]) {
+        bf.push_back(fwd_band(ch));
+        br.push_back(rev_band(ch));
       } else {
-        nv[s][1] = std::max(nv[s][1], cont);
-      }
-      const int cc = owner_off[s][f] == f ? 0 : 1;
-      nv[s][cc] = std::max(nv[s][cc], G[0]);
-      for (int k = 0; k < 2; ++k) {
-        if (nv[s][k] <= NEGL) continue;
-        nv[s][k] += kMatch;
-        if (k == 0 && last[s][f]) nv[s][k] -= kMismatch + kMatch;
+        for (size_t x = 0; x < ch.free.size(); ++x) {
+          any[ch.strand][x] |= ch.free[x];
+          any_rev[ch.strand][x] |= ch.free_rev[x];
+        }
       }
     }
-    for (int s = 0; s < 2; ++s)
-      for (int k = 0; k < 2; ++k) {
-        vin[s][k] = nv[s][k];
-        F[0] = std::max(F[0], vin[s][k]);
-      }
-    for (int l = 0; l < 2; ++l) {
-      M[l] = std::max(M[l], F[l]);
-      if (f == L - 1) Fend[l] = F[l];
+    const std::vector<PieceType> vf = {{0, nullptr}, {1, nullptr}, {0, &any[0]}, {1, &any[1]}};
+    ub_all = jump_pass(ix, fw, L, bf, tb, vf, P, &pre, &c.cells);
+    jump_pass(ix, rv.data(), L, br, tbr, {{0, nullptr}, {1, nullptr}}, P, &mrev, &c.cells);
+    for (int b = 0; b <= L; ++b) suf1[b] = mrev[L - b];
+    std::vector<std::pair<long, int>> add;
+    for (size_t k = 0; k < chains.size(); ++k) {
+      if (evaluated[k]) continue;
+      const long pot = jump_pot(L, tb[chains[k].strand], chains[k].free, pre, suf1, P);
+      if (pot > lb) add.push_back({iter == 0 ? chains[k].ub : pot, (int)k});
+    }
+    if (add.empty()) break;
+    std::sort(add.begin(), add.end(), std::greater<std::pair<long, int>>());
+    const size_t n_add = iter == 0 ? 1 : batch > 0 ? (size_t)batch : std::max<size_t>(4, add.size() / 4);
+    // The windows of the chains evaluated now: suf2 bounds unevaluated
+    // chains' pieces too.
+    const std::vector<PieceType> vr = {{0, nullptr}, {1, nullptr}, {0, &any_rev[0]}, {1, &any_rev[1]}};
+    jump_pass(ix, rv.data(), L, br, tbr, vr, P, &mrev, &c.cells);
+    for (int b = 0; b <= L; ++b) suf2[b] = mrev[L - b];
+    for (size_t x = 0; x < add.size() && x < n_add; ++x) {
+      Chain& ch = chains[add[x].second];
+      jump_window(L, tb[ch.strand], tbr[ch.strand], ch.free, ch.free_rev, pre, suf2, P, lb, &ch.w0, &ch.w1);
+      evaluated[add[x].second] = 1;
     }
   }
-  long ends[2];
-  for (int l = 0; l < 2; ++l) ends[l] = std::max(M[l] - kClip, Fend[l]);
-  const long lo = std::max(lb, ends[1]), hi = std::max(lo, ends[0]);
+  bf.clear();
+  for (size_t k = 0; k < chains.size(); ++k)
+    if (evaluated[k]) bf.push_back(fwd_band(chains[k]));
+  c.searched = (int)bf.size();
+  const long upper = jump_pass(ix, fw, L, bf, tb, {{0, nullptr}, {1, nullptr}}, P, nullptr, &c.cells);
+  const long lower = jump_pass(ix, fw, L, bf, tb, {}, P, nullptr, &c.cells);
+  const long lo = std::max(lb, lower), hi = std::max(lo, upper);
   c.status = hi == lo ? 1 : 3;
   c.opt = lo;
   c.hi = hi;

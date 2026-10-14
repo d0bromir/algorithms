@@ -12,7 +12,7 @@ names:
 
 **Review status.** Written, then cross-checked by:
 - whole-reference oracles (4 seeds, ARM and x86);
-- 77 mutants;
+- 89 mutants;
 - exhaustive verification of the finite lemmas.
 
 It has **not yet been reviewed by a second person**. §11 lists what a
@@ -299,51 +299,105 @@ read that crosses a structural variant has no good single local alignment.
 **Theorem L-J (the split optimum; `certify_jump`).**
 - *Setup:*
   - lb ≤ OPT_J and lb > U_J; pad = L − lb − 7;
-  - chains of part occurrences are built per strand with that pad;
-  - pot(C) is the best decomposition that uses a piece of chain C. That
-    piece is bounded by Lemma L with C's parts free; every other piece by
-    Lemma L with every occurring part of its strand free (`jump_bound` with
-    a required type). Chains with pot(C) ≤ lb are dropped.
-- *The pass:* one pass over the read keeps two layers:
-  - the upper layer: for each kept chain, the exact best piece ending at each
-    read position, by a banded DP over its diagonals ± pad in which a piece
-    starts from the best prefix value minus P (or −5 / 0 for the first); and
-    the unwitnessed pieces bounded by Lemma L;
-  - the lower layer: the kept chains' pieces only.
-  - Strand-1 chains run on the forward read against the reverse-complemented
-    reference (diagonal N − L − d), so every chain advances with the read.
-- *Statement:* OPT_J ∈ [max(lb, lower), max(lb, upper)], and the ends meet
-  when no unwitnessed piece pays off.
+  - chains of part occurrences are built per strand with that pad. A *piece
+    of chain C* holds an exact occurrence of a part of C, so its read
+    interval contains that part. A piece holding no exact part of its strand
+    is *unwitnessed*;
+  - chains are *evaluated* in rounds. An evaluated chain C gets a read
+    window W_C. Its pieces are then computed exactly: a banded DP over its
+    diagonals ± pad, on the rows of W_C, in which a piece starts from the
+    best prefix value minus P (or −5 / 0 for the first piece);
+  - strand-1 chains run on the forward read against the reverse-complemented
+    reference (diagonal N − L − d), so every chain advances with the read. A
+    pass over the reversed read runs against the reversed reference and its
+    complement, on the mirrored parts.
+- *The values of a round:*
+  - pre[a]: the best decomposition whose pieces all end at or before a. The
+    evaluated chains' pieces are exact on their windows. The unevaluated
+    chains' pieces are bounded by Lemma L with the union of their parts free
+    (one type per strand). Unwitnessed pieces are bounded by Lemma L;
+  - suf₂[b]: the same over pieces starting at or after b, from the same pass
+    over the reversed read;
+  - suf₁[b]: that pass without the unevaluated chains;
+  - with st(a) = max(−5 [a > 0], pre[a] − P), en_i(b) = max(−5 [b < L],
+    suf_i[b] − P) and V_C(a, b) = Lemma L for [a, b) with C's parts free.
+- *Pruning:* pot(C) = max over [a, b) containing a part of C of
+  st(a) + V_C(a, b) + en₁(b). Each round evaluates chains with pot(C) > lb:
+  in the first round the one with the best single-piece bound, then the best
+  by pot. The rounds end when no unevaluated chain has pot(C) > lb.
+- *Windows:* when C is evaluated, W_C is the smallest interval holding every
+  [a, b) that contains a part of C and has st(a) + V_C(a, b) + en₂(b) > lb.
+- *The final pass:* the evaluated chains' exact pieces, with (upper) or
+  without (lower) the unwitnessed pieces' Lemma L bounds.
+- *Statement:* OPT_J ∈ [max(lb, lower), max(lb, upper)]; equal ends prove it.
+  If a cell cap stops the rounds, OPT_J ∈ [lb, max(lb, U)], where U is the
+  full value of the last pre pass.
 - *Proof:* let A be a jump alignment above lb.
   - Each piece's gap total is ≤ pad: its loss is part of A's, which is
-    < L − lb (Lemma W).
-  - *A piece holding an exact part of its strand:* its exact parts lie in one
-    chain C (Lemma C), so the piece is on C's diagonals ± pad and bounded by
-    Lemma L with C's parts free. If C was dropped, A ≤ pot(C) ≤ lb, a
-    contradiction. So C was kept, and the banded DP holds that piece.
-  - *Any other piece* is bounded by Lemma L with no part free, and the upper
-    layer includes that bound.
-  - So A ≤ upper. The lower layer combines real pieces only, so it is
-    attained. ∎
-- *Tests* (`tests/test_longread.cpp`): a synthetic genome with planted
-  deletions, small deletions, novel and diverged insertions, inversions,
-  translocations, duplications and ragged ends. Against an exact brute-force
-  DP of the jump objective over the whole genome, both strands:
-  - every proven OPT_J equals it, and every interval contains it;
+    < L − lb (Lemma W). A piece holding exact parts of its strand has them all
+    in one chain C (Lemma C). So it lies on C's diagonals ± pad, and Lemma L
+    with C's parts free bounds it.
+  - *Windows, by induction over the rounds.* Claim: every piece of A of an
+    evaluated chain lies in that chain's window. Let C be evaluated in round
+    t, and p = [a, b) a piece of C in A.
+    - The pieces of A before p are of three kinds: of chains evaluated
+      earlier (in their windows by induction, so bounded by the exact DP); of
+      chains unevaluated at t, C among them (Lemma L with the union free); or
+      unwitnessed. So pre[a] bounds them.
+    - Likewise suf₂[b] bounds the pieces after p.
+    - So st(a) + V_C(a, b) + en₂(b) ≥ A > lb, and [a, b) ⊆ W_C.
+  - *The pruned chains.* Suppose A uses a chain left unevaluated. Let p =
+    [a, b) be A's last piece of such a chain C.
+    - pre[a] bounds the pieces before p, as above.
+    - The pieces after p are of evaluated chains (in their windows) or
+      unwitnessed, so suf₁[b] bounds them.
+    - So A ≤ pot(C) ≤ lb, a contradiction.
+  - So every piece of A is either a piece of an evaluated chain in its window
+    or unwitnessed, and A ≤ upper. The lower layer combines real pieces
+    only, so it is attained.
+  - Under the cap, the last pre pass bounds every piece of A in the same way,
+    so A ≤ U. ∎
+- *Why two suffix values:*
+  - pruning bounds an alignment at its *last* piece of an unevaluated chain,
+    so the unevaluated chains are needed on one side only. suf₁ ≤ suf₂, so it
+    prunes more;
+  - a window needs both sides, because an alignment may hold unevaluated
+    pieces after a piece of C.
+- *Verified* against brute force on 20,000 random layouts
+  (`tests/verify_lemmas.cpp`): pre, suf₁ (through the reversed pass on the
+  mirrored parts), pot (containment included) and the window each equal
+  their definition.
+- *Tests* (`tests/test_longread.cpp`):
+  - a synthetic genome with planted deletions, small deletions, novel and
+    diverged insertions, inversions, translocations, duplications, ragged
+    ends, three loci (three chains in the optimum, the middle one
+    reverse-complemented), and two loci joined by a diverged copy;
+  - against an exact brute-force DP of the jump objective over the whole
+    genome, both strands: every proven OPT_J equals it, and every interval
+    contains it;
   - this holds from the known lb, from the weakest admissible lb (U_J + 1)
-    and from lb = OPT_J − 1 (the narrowest band);
+    and from lb = OPT_J − 1 (the narrowest band). Each is run with the
+    default batch and with one chain per round, so that every pruning
+    decision rests on the exact values of the chains evaluated before it;
+  - under a small cell cap, the capped interval contains OPT_J;
   - every proven local optimum (Corollary L-long) equals the brute force
     with P = ∞.
-  - *Mutants:* LR1–LR11 (pads, pruning, unwitnessed pieces, strand 1, clip
-    and jump penalties, Lemma L's charge and free parts, chain splitting).
+  - *Mutants:* LR1–LR23. They cover pads; pruning; unwitnessed pieces; the
+    strand-1 targets of both passes; the clip and jump penalties; Lemma L's
+    charge and free parts; chain splitting; the prefix union type; the
+    reversed pass's band, rows, parts and free flags; the suffix index; the
+    windows (one-sided values, one base short at either end); the containment
+    state; and the capped interval.
 - *Limits:*
   - an unwitnessed piece that pays off (a novel or diverged insertion) leaves
     an interval;
-  - on real HiFi reads the pruning is loose. The bound of the other pieces is
-    close to the read length, so a median of 145 of 148 chains are kept. That
-    makes certification cost a median of 45 s per read (proposal §6.6).
-  - *The fix (not built):* iterative pruning against exact prefix and suffix
-    values of the chains evaluated first.
+  - a read with a long lossy stretch, such as an insertion of repeat
+    sequence:
+    - while any chain covering the stretch is unevaluated, the union bound
+      lets the prefix cross it almost free, so many chains look viable;
+    - the unwitnessed bound (about 0.7 per base for parts of about 16 bases)
+      leaves an interval about 0.7 × the stretch wide;
+  - measured: proposal §6.6.
 
 **SL's SUB bound (Aim 3).** SUB ≤ max(s2, the best alignment in the chosen
 chain that starts before the reported one or at/after its end).
@@ -736,7 +790,7 @@ guarantees is the interval [XL, XU] at whatever stage it stops.
 ## 9a. Mutants that survive by design
 
 A mutant that changes no claim on any input cannot be killed by a test, so
-it must be argued instead. Six of the 77 survive.
+it must be argued instead. Six of the 89 survive.
 - **L6** (span start candidates shifted): Lemma S, §4.
 - **A2** (Lemma O's term lowered): §4.
 - **P2, P8, P13** (band pad − 2, narrowed band − 3, `relevant` term dropped)

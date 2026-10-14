@@ -187,7 +187,9 @@ int main(int argc, char** argv) {
   const IndexView ix = ix_.view(ref);
 
   // Reads: (sequence, planted pieces). Kinds: plain, deletion, novel
-  // insertion, inversion, translocation, duplicated segment.
+  // insertion, inversion, translocation, ragged ends, small deletion,
+  // diverged insertion, duplicated segment, three loci, two loci joined by a
+  // diverged copy.
   struct Read {
     std::vector<uint8_t> seq;
     std::vector<std::pair<std::pair<int, int>, std::pair<int64_t, int>>> pieces;
@@ -297,6 +299,37 @@ int main(int argc, char** argv) {
     r.pieces = {{{0, (int)r.seq.size()}, {a, 0}}};
     reads.push_back(r);
   }
+  for (int n = 0; n < 6; ++n) {  // three loci, the middle one reverse-complemented: three chains in the optimum
+    const int64_t a = o1 + 1000 + static_cast<int64_t>(g() % 14000), b = o2 + 1000 + static_cast<int64_t>(g() % 12000),
+                  c = o1 + 20000 + static_cast<int64_t>(g() % 14000);
+    const int na = 250 + 100 * static_cast<int>(g() % 3), nb = 250 + 100 * static_cast<int>(g() % 3),
+              nc = 250 + 100 * static_cast<int>(g() % 3);
+    Read r;
+    r.kind = "three-loci";
+    std::vector<uint8_t> p1 = noisy(g, from(a, na), rate), p2 = noisy(g, rc(from(b, nb)), rate),
+                         p3 = noisy(g, from(c, nc), rate);
+    r.seq = p1;
+    r.seq.insert(r.seq.end(), p2.begin(), p2.end());
+    r.seq.insert(r.seq.end(), p3.begin(), p3.end());
+    const int b1 = (int)p1.size(), b2 = (int)(p1.size() + p2.size());
+    r.pieces = {{{0, b1}, {a, 0}}, {{b1, b2}, {b, 1}}, {{b2, (int)r.seq.size()}, {c, 0}}};
+    reads.push_back(r);
+  }
+  for (int n = 0; n < 6; ++n) {  // two loci joined by a diverged copy (an unwitnessed piece between two chains)
+    const int64_t a = o1 + 1000 + static_cast<int64_t>(g() % 14000), b = o2 + 1000 + static_cast<int64_t>(g() % 12000),
+                  c = o1 + 20000 + static_cast<int64_t>(g() % 14000);
+    const int na = 250 + 50 * static_cast<int>(g() % 3), I = 200 + 40 * static_cast<int>(g() % 3), nc = 450;
+    Read r;
+    r.kind = "diverged-jump";
+    std::vector<uint8_t> p1 = noisy(g, from(a, na), rate), ins = from(b, I), p3 = noisy(g, from(c, nc), rate);
+    for (int k = 7; k < I; k += 13) ins[k] = static_cast<uint8_t>((ins[k] + 1 + g() % 3) % 4);  // no exact 16-mer
+    r.seq = p1;
+    r.seq.insert(r.seq.end(), ins.begin(), ins.end());
+    r.seq.insert(r.seq.end(), p3.begin(), p3.end());
+    const int b1 = (int)p1.size(), b2 = b1 + I;
+    r.pieces = {{{0, b1}, {a, 0}}, {{b1, b2}, {b, 0}}, {{b2, (int)r.seq.size()}, {c, 0}}};
+    reads.push_back(r);
+  }
   // Half the reads reverse-complemented (their pieces then too).
   for (auto& r : reads)
     if (g() % 2) {
@@ -316,7 +349,7 @@ int main(int argc, char** argv) {
   BandDp dp;
   const long P = 30;
   int single_checked = 0, single_proven = 0, jump_proven = 0, jump_interval = 0, jump_none = 0, weak_checked = 0,
-      weak_proven = 0, tight_checked = 0;
+      weak_proven = 0, tight_checked = 0, batch1_checked = 0, capped_checked = 0, capped_hit = 0;
   for (size_t i = 0; i < reads.size(); ++i) {
     const Read& rr = reads[i];
     const int L = static_cast<int>(rr.seq.size());
@@ -358,26 +391,46 @@ int main(int argc, char** argv) {
     forward_parts(L, so, fp);
     const long UJ = lemma_l_jump(L, fp, P);
     const LrCert cj = certify_jump(ix, rr.seq.data(), L, so, lbJ, P, 4e9);
-    // The same from the weakest admissible lb, U_J + 1 (<= lb_J <= OPT_J):
-    // the search and the pruning must then find the optimum themselves.
-    if (lbJ > UJ) {
-      const LrCert cw = certify_jump(ix, rr.seq.data(), L, so, UJ + 1, P, 4e9);
-      ++weak_checked;
-      CHECK(cw.status == 1 || cw.status == 3, "read %zu (%s): weak lb not certified (status %d)", i, rr.kind, cw.status);
-      if (cw.status == 1)
-        CHECK(cw.opt == optJ, "read %zu (%s): from the weak lb, proven OPT_J %ld, brute force %ld", i, rr.kind, cw.opt,
-              optJ);
-      if (cw.status == 3)
-        CHECK(cw.opt <= optJ && optJ <= cw.hi, "read %zu (%s): from the weak lb, OPT_J %ld outside [%ld, %ld]", i,
-              rr.kind, optJ, cw.opt, cw.hi);
-      weak_proven += cw.status == 1;
+    // Each claim from the weak and the tight lb below, made with the default
+    // batch and with one chain evaluated per round (every pruning decision
+    // then rests on the exact values of the chains evaluated before it).
+    for (int batch = 0; batch < 2; ++batch) {
+      // The weakest admissible lb, U_J + 1 (<= lb_J <= OPT_J): the search
+      // and the pruning must then find the optimum themselves.
+      if (lbJ > UJ) {
+        const LrCert cw = certify_jump(ix, rr.seq.data(), L, so, UJ + 1, P, 4e9, batch);
+        CHECK(cw.status == 1 || cw.status == 3, "read %zu (%s): weak lb not certified (status %d, batch %d)", i,
+              rr.kind, cw.status, batch);
+        if (cw.status == 1)
+          CHECK(cw.opt == optJ, "read %zu (%s): from the weak lb, proven OPT_J %ld, brute force %ld (batch %d)", i,
+                rr.kind, cw.opt, optJ, batch);
+        if (cw.status == 3)
+          CHECK(cw.opt <= optJ && optJ <= cw.hi,
+                "read %zu (%s): from the weak lb, OPT_J %ld outside [%ld, %ld] (batch %d)", i, rr.kind, optJ, cw.opt,
+                cw.hi, batch);
+        if (batch == 0) {
+          ++weak_checked;
+          weak_proven += cw.status == 1;
+        } else {
+          ++batch1_checked;
+        }
+      }
+      if (optJ - 1 > UJ) {
+        const LrCert ct = certify_jump(ix, rr.seq.data(), L, so, optJ - 1, P, 4e9, batch);
+        CHECK((ct.status == 1 && ct.opt == optJ) || (ct.status == 3 && ct.opt <= optJ && optJ <= ct.hi),
+              "read %zu (%s): from lb = OPT_J - 1, status %d [%ld, %ld], brute force %ld (batch %d)", i, rr.kind,
+              ct.status, ct.opt, ct.hi, optJ, batch);
+        if (batch == 0) ++tight_checked;
+        else ++batch1_checked;
+      }
     }
-    if (optJ - 1 > UJ) {
-      const LrCert ct = certify_jump(ix, rr.seq.data(), L, so, optJ - 1, P, 4e9);
-      ++tight_checked;
-      CHECK((ct.status == 1 && ct.opt == optJ) || (ct.status == 3 && ct.opt <= optJ && optJ <= ct.hi),
-            "read %zu (%s): from lb = OPT_J - 1, status %d [%ld, %ld], brute force %ld", i, rr.kind, ct.status, ct.opt,
-            ct.hi, optJ);
+    // Over a small cell cap: the interval [lb, the last bound] must hold OPT_J.
+    if (lbJ > UJ) {
+      const LrCert cc = certify_jump(ix, rr.seq.data(), L, so, lbJ, P, 40.0 * L);
+      ++capped_checked;
+      CHECK(cc.opt <= optJ && optJ <= cc.hi, "read %zu (%s): capped (status %d), OPT_J %ld outside [%ld, %ld]", i,
+            rr.kind, cc.status, optJ, cc.opt, cc.hi);
+      capped_hit += cc.status == 2;
     }
     if (cj.status == 1) {
       ++jump_proven;
@@ -399,9 +452,10 @@ int main(int argc, char** argv) {
   }
   std::fprintf(stderr, "local optimum: %d proven of %d (all equal to the brute force); split optimum: %d proven, %d "
                "intervals (all containing it), %d not attempted; from the weak lb U_J + 1: %d proven of %d; from lb "
-               "= OPT - 1: %d checked\n",
+               "= OPT - 1: %d checked; one chain per round: %d checked; under a small cell cap: %d checked (%d "
+               "capped)\n",
                single_proven, single_checked, jump_proven, jump_interval, jump_none, weak_proven, weak_checked,
-               tight_checked);
+               tight_checked, batch1_checked, capped_checked, capped_hit);
   if (failures) {
     std::fprintf(stderr, "%d check(s) FAILED\n", failures);
     return 1;

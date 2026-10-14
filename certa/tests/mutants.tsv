@@ -68,12 +68,24 @@ C18	src/check.cpp	s/yub = std::max(yub, e.ub);/yub = std::max(yub, e.ub - 3);/	k
 C19	src/check.cpp	s/        if (bx + yub <= bound) continue;/        if (bx + yub <= bound + 3) continue;/	killed	checker pair: chain skip off by 3 (tie tamper)
 LR1	include/certa/longread.h	/^inline LrCert certify_jump/,$ s/(long)L - lb - 7);/(long)L - lb - 9);/	killed	split certificate: pad 2 too narrow (tight lb)
 LR2	include/certa/longread.h	/^inline LrCert certify_single/,/^}/ s/(long)L - lb - 7);/(long)L - lb - 9);/	killed	Corollary L-long: pad 2 too narrow (small-del reads, tight lb)
-LR3	include/certa/longread.h	s/if (jump_bound(L, fp, types, P, 0) > lb) keep.push_back((int)k);/if (jump_bound(L, fp, types, P, 0) > lb + 3) keep.push_back((int)k);/	killed	split certificate: chain pruning 3 too lenient
-LR4	include/certa/longread.h	s/        F\[0\] = std::max(F\[0\], vin\[s\]\[k\]);/        (void)0;/	killed	split certificate: unwitnessed pieces dropped (diverged-ins)
-LR5	include/certa/longread.h	s/lr_comp(ref_at(ix, N - 1 - u))/ref_at(ix, N - 1 - u)/	killed	split certificate: strand-1 target not complemented (inversions)
-LR6	include/certa/longread.h	s/for (int l = 0; l < 2; ++l) G\[l\] = std::max(f > 0 ? -(long)kClip : 0L, M\[l\] - P);/for (int l = 0; l < 2; ++l) G[l] = std::max(0L, M[l] - P);/	killed	split certificate: the first piece's clip penalty omitted
-LR7	include/certa/longread.h	s/G\[l\] = std::max(f > 0 ? -(long)kClip : 0L, M\[l\] - P);/G[l] = std::max(f > 0 ? -(long)kClip : 0L, M[l]);/	killed	split certificate: the jump penalty omitted
+LR3	include/certa/longread.h	s/if (pot > lb) add.push_back/if (pot > lb + 3) add.push_back/	killed	split certificate: chain pruning 3 too lenient
+LR4	include/certa/longread.h	s/const long upper = jump_pass(ix, fw, L, bf, tb, {{0, nullptr}, {1, nullptr}}, P/const long upper = jump_pass(ix, fw, L, bf, tb, {}, P/	killed	split certificate: unwitnessed pieces dropped (diverged-ins)
+LR5	include/certa/longread.h	s/case 1: return lr_comp(ref_at(ix, N - 1 - u));/case 1: return ref_at(ix, N - 1 - u);/	killed	split certificate: strand-1 target not complemented (inversions)
+LR6	include/certa/longread.h	s/const long G = std::max(f > 0 ? -(long)kClip : 0L, prefix - P);/const long G = std::max(0L, prefix - P);/	killed	split certificate: the first piece's clip penalty omitted
+LR7	include/certa/longread.h	s/const long G = std::max(f > 0 ? -(long)kClip : 0L, prefix - P);/const long G = std::max(f > 0 ? -(long)kClip : 0L, prefix);/	killed	split certificate: the jump penalty omitted
 LR8	include/certa/longread.h	s/          if (cc == 0 \&\& charge) v -= c5;/          if (cc == 0 \&\& charge) v -= c5 + 1;/	killed	Lemma L-J: 6 charged per part (verify_lemmas)
 LR9	include/certa/longread.h	s/      C += !(free \&\& (\*free)\[j\]);/      C += 1;/	killed	Lemma L: free parts charged (tight lb)
 LR10	include/certa/longread.h	/^inline LrCert certify_jump/,$ s/occ\[j - 1\].first <= pad) ++j;/occ[j - 1].first <= pad \/ 2) ++j;/	killed	split certificate: chains split at pad / 2
-LR11	include/certa/longread.h	s/{chains\[k\].strand, \&chains\[k\].free}, {0, \&any\[0\]}, {1, \&any\[1\]}/{chains[k].strand, \&chains[k].free}, {0, nullptr}, {1, nullptr}/	killed	split certificate: other pieces bounded as unwitnessed in the pruning (translocations, tight lb)
+LR11	include/certa/longread.h	s/const std::vector<PieceType> vf = {{0, nullptr}, {1, nullptr}, {0, \&any\[0\]}, {1, \&any\[1\]}};/const std::vector<PieceType> vf = {{0, nullptr}, {1, nullptr}};/	killed	split certificate: pieces of unevaluated chains left out of the prefix values (three loci)
+LR12	include/certa/longread.h	s/default: return lr_comp(ref_at(ix, u));/default: return ref_at(ix, u);/	killed	split certificate: strand-1 target of the reversed pass not complemented (suffix values)
+LR13	include/certa/longread.h	s/if (k == 0 \&\& charge) nx\[k\] -= kMismatch + kMatch;/if (k == 0 \&\& charge) nx[k] -= kMismatch + kMatch + 1;/	killed	split certificate: 6 charged per part in the pass and in pot
+LR14	include/certa/longread.h	s/return JumpBand{ch.strand + 2, N - L - ch.ehi, N - L - ch.elo, L - ch.w1, L - ch.w0};/return JumpBand{ch.strand + 2, N - L - ch.elo, N - L - ch.elo, L - ch.w1, L - ch.w0};/	killed	split certificate: the reversed pass on one diagonal of a chain's band
+LR15	include/certa/longread.h	s/suf1\[b\] = mrev\[L - b\];/suf1[b] = mrev[std::max(0, L - b - 1)];/	killed	split certificate: suffix values shifted by one base
+LR16	include/certa/longread.h	s/out.push_back({L - q->end, L - q->off, q->occ});/out.push_back(*q);/	killed	split certificate: parts of the reversed read not mirrored (verify_lemmas)
+LR17	include/certa/longread.h	s/jump_window(L, tb\[ch.strand\], tbr\[ch.strand\], ch.free, ch.free_rev, pre, suf2, P, lb, \&ch.w0, \&ch.w1);/jump_window(L, tb[ch.strand], tbr[ch.strand], ch.free, ch.free_rev, pre, suf1, P, lb, \&ch.w0, \&ch.w1);/	killed	split certificate: windows from the one-sided suffix values (three loci)
+LR18	include/certa/longread.h	s/    \*w1 = b;/    *w1 = b - 1;/	killed	split certificate: read window one base short at its end
+LR19	include/certa/longread.h	s/    \*w0 = L - y;/    *w0 = L - y + 1;/	killed	split certificate: read window one base short at its start
+LR20	include/certa/longread.h	s/ch.free_rev.assign(ch.free.rbegin(), ch.free.rend());/ch.free_rev = ch.free;/	killed	split certificate: free parts of a chain not mirrored for the reversed read
+LR21	include/certa/longread.h	s/return JumpBand{ch.strand + 2, N - L - ch.ehi, N - L - ch.elo, L - ch.w1, L - ch.w0};/return JumpBand{ch.strand + 2, N - L - ch.ehi, N - L - ch.elo, L - ch.w1 + 1, L - ch.w0};/	killed	split certificate: a chain's rows in the reversed pass one short
+LR22	include/certa/longread.h	s/const long piece = std::max(in\[1\], in\[3\]);/const long piece = in[1];/	killed	split certificate: pot ignores pieces ending outside every part (too low)
+LR23	include/certa/longread.h	s/c.hi = std::max(lb, ub_all);/c.hi = lb;/	killed	split certificate: a capped read claimed at lb

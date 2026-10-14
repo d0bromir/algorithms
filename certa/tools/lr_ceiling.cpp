@@ -24,9 +24,10 @@
 //
 // --jump-certify P: certify the split optimum OPT_J at penalty P (also in
 // --jump) from lb_J (certify_jump in certa/longread.h): columns jcert (1
-// proven, 3 an interval, 2 over the cell cap, 0 not attempted), jlo, jhi,
-// jchains, jsearched, jcells, jus. With --jump-certify-new, only for the
-// reads that fit the split objective but not the local one.
+// proven, 3 an interval, 2 over the cell cap: still an interval, 0 not
+// attempted), jlo, jhi, jchains, jsearched, jcells, jus. With
+// --jump-certify-new, only for the reads that fit the split objective but
+// not the local one.
 //
 // The index must have s = 1. The parts, bounds and certificates are in
 // certa/longread.h; this file reads the alignments and writes the table.
@@ -528,7 +529,8 @@ int main(int argc, char** argv) {
                  fits_j_new[k].load());
   if (o.jump_certify >= 0)
     std::fprintf(stderr, "jump-certify P = %ld: OPT_J proven for %ld reads (%.2f %%; %ld of them do not fit the "
-                 "single-piece objective), an interval for %ld, over the cell cap %ld\n", o.jump_certify,
+                 "single-piece objective), an interval for %ld, over the cell cap %ld (an interval from the last "
+                 "round)\n", o.jump_certify,
                  jproven.load(), reads.empty() ? 0.0 : 100.0 * jproven.load() / reads.size(), jproven_new.load(),
                  jinterval.load(), jcapped.load());
   if (o.certify)
