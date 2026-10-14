@@ -50,6 +50,8 @@ else
   core=("$build/index.o" "$build/seqio.o" "$build/mapper_cpu.o" "$build/check.o")
   "$cxx" "${flags[@]}" -o "$build/lr_ceiling" "$here/tools/lr_ceiling.cpp" "$build/index.o" "$build/seqio.o" \
     "${libs[@]}" &
+  "$cxx" "${flags[@]}" -o "$build/test_longread" "$here/tests/test_longread.cpp" "$build/index.o" "$build/seqio.o" \
+    "${libs[@]}" &
   if [[ "$cuda" != OFF ]] && command -v nvcc >/dev/null; then
     gencode=()
     for a in ${archs//;/ }; do gencode+=(-gencode "arch=compute_$a,code=sm_$a"); done

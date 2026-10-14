@@ -27,6 +27,7 @@
 // of k bases 6 + k, clipped end of c bases c + 5. A part occurs exactly when
 // all its bases are matches and no deletion lies between two of them.
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <random>
@@ -374,7 +375,7 @@ int main() {
   // decompositions into pieces (start, end, strand), each bounded by Lemma L.
   {
     std::mt19937_64 g(7);
-    long long n = 0, bad = 0, bad1 = 0;
+    long long n = 0, bad = 0, bad1 = 0, n2 = 0, bad2 = 0;
     for (int it = 0; it < 30000; ++it) {
       const int L = 3 + static_cast<int>(g() % 22);
       std::vector<certa::ReadPart> part[2];
@@ -409,11 +410,49 @@ int main() {
       }
       bad1 += certa::lemma_l_jump(L, part, 1000000) !=
               std::max(certa::lemma_l_span(L, part[0]), certa::lemma_l_span(L, part[1]));
+      // jump_bound in general: piece types with free parts, and a type that
+      // must be used (the pruning bound of certify_jump).
+      std::vector<char> fr[2];
+      for (int s = 0; s < 2; ++s)
+        for (size_t k = 0; k < part[s].size(); ++k) fr[s].push_back(static_cast<char>(g() % 2));
+      const std::vector<certa::PieceType> types = {{0, nullptr}, {1, nullptr}, {0, &fr[0]}, {1, &fr[1]}};
+      auto VT = [&](int t, int a, int b) {
+        const int s = types[t].strand;
+        long v = b - a;
+        for (size_t k = 0; k < part[s].size(); ++k)
+          v -= 5 * (part[s][k].off >= a && part[s][k].end <= b && !(types[t].free && (*types[t].free)[k]));
+        return v;
+      };
+      const int req = static_cast<int>(g() % 5) - 1;
+      const long P = static_cast<long>(g() % 12);
+      // f[b][u]: the best decomposition whose last piece ends at b, u = req used.
+      const long NEG = LONG_MIN / 4;
+      std::vector<std::array<long, 2>> f(L + 1, {NEG, NEG}), M(L + 1, {NEG, NEG});
+      for (int b = 1; b <= L; ++b) {
+        for (int a = 0; a < b; ++a)
+          for (int t = 0; t < 4; ++t)
+            for (int u = 0; u < 2; ++u) {  // u: used before this piece
+              long pre = u == 0 ? (a > 0 ? -5L : 0L) : NEG;
+              if (M[a][u] > NEG) pre = std::max(pre, M[a][u] - P);
+              if (pre <= NEG) continue;
+              const int u2 = u | (t == req);
+              f[b][u2] = std::max(f[b][u2], pre + VT(t, a, b));
+            }
+        for (int u = 0; u < 2; ++u) M[b][u] = std::max(M[b - 1][u], f[b][u]);
+      }
+      long brute = NEG;
+      for (int b = 1; b <= L; ++b)
+        for (int u = 0; u < 2; ++u)
+          if (req < 0 || u == 1) brute = std::max(brute, f[b][u] - (b < L ? 5 : 0));
+      ++n2;
+      bad2 += certa::jump_bound(L, part, types, P, req) != brute;
     }
     EXPECT(bad == 0, "Lemma L-J: the one-pass bound differs from the brute force in %lld cases", bad);
     EXPECT(bad1 == 0, "Lemma L-J: without jumps, not the single-span bound in %lld cases", bad1);
+    EXPECT(bad2 == 0, "jump_bound (free parts, a required type) differs from the brute force in %lld cases", bad2);
     std::fprintf(stderr, "Lemma L-J: %lld (layout, P) cases, one-pass bound = brute force: %s; = single-span bound "
-                 "without jumps: %s\n", n, bad ? "no" : "yes", bad1 ? "no" : "yes");
+                 "without jumps: %s; jump_bound with free parts and a required type = brute force on %lld: %s\n", n,
+                 bad ? "no" : "yes", bad1 ? "no" : "yes", n2, bad2 ? "no" : "yes");
   }
   // ---- XQ: mapq_se is monotone (non-increasing in SUB, non-decreasing in the score).
   {

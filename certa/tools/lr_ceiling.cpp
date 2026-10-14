@@ -7,9 +7,10 @@
 //
 //   lr_ceiling INDEX.cidx READS.fa ALN.paf [--tau 16] [--cmax 4096]
 //              [--window 40] [--step 8] [-t threads] [--verify]
-//              [--certify [--max-cells 4e9]] [--jump 10,30,60] > out.tsv
+//              [--certify [--max-cells 4e9]] [--jump 10,30,60]
+//              [--jump-certify P] > out.tsv
 //
-// --certify completes the certificate of each fitting read (certify_read):
+// --certify completes the certificate of each fitting read (certify_single):
 // OPT is then proven exactly, and the columns cert, opt, chains, searched,
 // cells, us give it and its cost. With --verify, a full DP around the best
 // known alignment's locus must not exceed the proven OPT.
@@ -21,10 +22,14 @@
 // cheaper; in read order, a later piece trimmed where it overlaps the earlier
 // one), and fits_J (lb_J > U_J).
 //
-// The index must have s = 1. Unlike tier R (repeat.h), reads may be of any
-// length, and a stretch where no part of <= tau occurrences starts is skipped
-// instead of ending the partition: Lemma L needs disjoint enumerated parts,
-// not a tiling.
+// --jump-certify P: certify the split optimum OPT_J at penalty P (also in
+// --jump) from lb_J (certify_jump in certa/longread.h): columns jcert (1
+// proven, 3 an interval, 2 over the cell cap, 0 not attempted), jlo, jhi,
+// jchains, jsearched, jcells, jus. With --jump-certify-new, only for the
+// reads that fit the split objective but not the local one.
+//
+// The index must have s = 1. The parts, bounds and certificates are in
+// certa/longread.h; this file reads the alignments and writes the table.
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -46,8 +51,6 @@ using namespace certa;
 
 namespace {
 
-constexpr int kBig = INT_MAX / 2;
-
 using Part = ReadPart;
 
 struct Opts {
@@ -56,6 +59,8 @@ struct Opts {
   bool certify = false;  // complete the certificate of fitting reads (banded DP)
   double max_cells = 4e9;  // per read; beyond it the read is left uncertified
   std::vector<long> jump;  // jump penalties P of the split objective (--jump)
+  long jump_certify = -1;  // certify OPT_J at this P (--jump-certify)
+  bool jump_certify_new = false;  // only for reads that fit J but not the local objective
 };
 
 struct Line {  // one PAF line (an alignment of a read interval [qs, qe))
@@ -74,7 +79,7 @@ struct Aln {  // best known alignment of a read (minimap2)
   std::vector<Line> lines;  // every line (for the jump objective)
 };
 
-inline bool same(uint8_t a, uint8_t b) { return a < 4 && a == b; }
+inline bool same(uint8_t a, uint8_t b) { return lr_same(a, b); }
 
 // CERTA's local score of a PAF line from its --eqx CIGAR: match +1,
 // mismatch -4, gap of k bases -(6 + k), 5 per clipped end.
@@ -287,103 +292,6 @@ long jump_lb(const std::vector<Line>& lines, int L, long P, std::vector<PathBase
   return best;
 }
 
-struct Scratch {
-  std::vector<uint64_t> lo;
-  std::vector<uint32_t> cnt;
-  std::vector<int> nz;
-  std::vector<int64_t> elig;
-  std::vector<int> ext;
-};
-
-struct StrandOut {
-  std::vector<Part> parts;
-  long skipped = 0;   // read bases where no part could start
-  long occ_sum = 0;   // enumerated occurrences
-  int absent = 0;
-  int longest_free = 0;  // longest stretch covered by no part
-  // --certify: every exact occurrence of a rare part, as (diagonal = the
-  // reference position of read base 0, part index).
-  std::vector<std::pair<int64_t, int>> occ;
-};
-
-// Greedy partition of one strand (Theorem G at tau, Lemma R).
-void partition(const IndexView& ix, const uint8_t* rd, int L, const Opts& o, Scratch& sc, StrandOut& out) {
-  const int q = ix.q;
-  out = StrandOut();
-  if (L < q) { out.skipped = L; out.longest_free = L; return; }
-  const int nq = L - q + 1;
-  sc.lo.resize(nq);
-  sc.cnt.resize(nq);
-  sc.nz.resize(nq + 1);
-  for (int i = 0; i < nq; ++i) {
-    uint64_t key, lo = 0, hi = 0;
-    if (kmer_key(rd + i, q, &key)) lookup(ix, key, &lo, &hi);
-    sc.lo[i] = lo;
-    sc.cnt[i] = (uint32_t)std::min<uint64_t>(hi - lo, UINT32_MAX);
-  }
-  sc.nz[nq] = nq;
-  for (int i = nq - 1; i >= 0; --i) sc.nz[i] = sc.cnt[i] == 0 ? i : sc.nz[i + 1];
-  int s = 0;
-  while (s < nq) {
-    const int babs = sc.nz[s] < nq ? sc.nz[s] + q : kBig;
-    int c = -1;
-    for (int i = s; i < nq && i <= s + o.window; ++i)
-      if (sc.cnt[i] > 0 && (int)sc.cnt[i] <= o.cmax && (c < 0 || sc.cnt[i] < sc.cnt[c])) c = i;
-    int banc = kBig;
-    sc.elig.clear();
-    sc.ext.clear();
-    if (c >= 0) {
-      for (uint64_t e = sc.lo[c]; e < sc.lo[c] + sc.cnt[c]; ++e) {
-        const int64_t h = ix.pos[e];
-        bool ok = true;
-        for (int k = c - 1; k >= s && ok; --k) ok = same(rd[k], ref_at(ix, h - (c - k)));
-        if (ok) sc.elig.push_back(h);
-      }
-      if ((int)sc.elig.size() <= o.tau) {
-        banc = c + q;
-      } else {
-        for (int64_t h : sc.elig) {
-          int R = 0;
-          while (c + q + R < L && same(rd[c + q + R], ref_at(ix, h + q + R))) ++R;
-          sc.ext.push_back(R);
-        }
-        std::vector<int> e2(sc.ext);
-        std::nth_element(e2.begin(), e2.begin() + o.tau, e2.end(), std::greater<int>());
-        const int Rt = e2[o.tau];  // the (tau+1)-th longest extension
-        if (c + q + Rt < L) banc = c + q + Rt + 1;
-      }
-    }
-    const int b = std::min(babs, banc);
-    if (b > L) {  // no part of <= tau occurrences starts at s
-      const int nx = std::min(s + o.step, L);
-      out.skipped += nx - s;
-      s = nx;
-      continue;
-    }
-    const bool rare = b == banc && b < babs;
-    uint32_t occ = 0;
-    if (rare) {
-      const int part = (int)out.parts.size();
-      for (size_t k = 0; k < sc.elig.size(); ++k)
-        if (sc.ext.empty() || c + q + sc.ext[k] >= b) {
-          ++occ;
-          if (o.certify) out.occ.push_back({sc.elig[k] - c, part});
-        }
-    }
-    out.parts.push_back({s, b, occ});
-    out.occ_sum += occ;
-    out.absent += !rare;
-    s = b;
-  }
-  if (s < L) out.skipped += L - s;  // a tail shorter than q
-  int prev = 0;
-  for (const Part& p : out.parts) {
-    out.longest_free = std::max(out.longest_free, p.off - prev);
-    prev = p.end;
-  }
-  out.longest_free = std::max(out.longest_free, L - prev);
-}
-
 long u1_brute(int L, const std::vector<Part>& p) {
   std::vector<long> xs{0}, ys{L};
   for (const Part& q : p) { xs.push_back(q.off + 1); ys.push_back(q.end - 1); }
@@ -398,96 +306,9 @@ long u1_brute(int L, const std::vector<Part>& p) {
   return best;
 }
 
-// The best local score (BWA-MEM's scores, -5 per clipped end) of rd over
-// alignments whose cells all lie on diagonals [dlo, dhi] (reference
-// position minus read position). Gotoh, one row of the band at a time.
-struct Dp {
-  std::vector<int> H, I, Hn, In;
-};
-long band_best(const IndexView& ix, const uint8_t* rd, int L, int64_t dlo, int64_t dhi, Dp& dp, double* cells) {
-  const int B = (int)(dhi - dlo + 1);
-  const int NEG = INT_MIN / 4;
-  dp.H.assign(B + 1, NEG);
-  dp.I.assign(B + 1, NEG);
-  dp.Hn.assign(B + 1, NEG);
-  dp.In.assign(B + 1, NEG);
-  int best = NEG;
-  for (int i = 1; i <= L; ++i) {
-    const uint8_t c = rd[i - 1];
-    const int start = i == 1 ? 0 : -kClip;
-    const int end = i < L ? kClip : 0;
-    int d = NEG, left = NEG;  // deletion state, and H at (i, b - 1)
-    const int64_t j0 = i - 1 + dlo;
-    for (int b = 0; b < B; ++b) {
-      const int m = std::max(dp.H[b], start) + (same(c, ref_at(ix, j0 + b)) ? kMatch : -kMismatch);
-      const int ins = i > 1 ? std::max(dp.H[b + 1] - kGapOpen - kGapExt, dp.I[b + 1] - kGapExt) : NEG;
-      d = std::max(left - kGapOpen - kGapExt, d - kGapExt);
-      const int h = std::max(m, std::max(ins, d));
-      dp.Hn[b] = h;
-      dp.In[b] = ins;
-      left = h;
-      best = std::max(best, m - end);
-    }
-    dp.Hn[B] = dp.In[B] = NEG;
-    std::swap(dp.H, dp.Hn);
-    std::swap(dp.I, dp.In);
-  }
-  *cells += (double)L * B;
-  return best;
-}
-
-// The rest of the certificate of a fitting read (lb = the best known
-// alignment's score > U1): every alignment above lb has gap total <= pad =
-// L - lb - 7 (Lemma W) and, having an exact part (it beats U1), lies in a
-// chain of part occurrences on that strand (split where diagonals are more
-// than pad apart), within its diagonals +- pad (Lemma C), scoring at most
-// the chain's Lemma L bound with its parts free. So OPT = max(lb, the band
-// maxima of the chains whose bound exceeds the best so far).
-struct Cert {
-  int status = 0;  // 0: not attempted (no fit); 1: OPT proven; 2: over the cell cap
-  long opt = 0;
-  int chains = 0, searched = 0;
-  double cells = 0, us = 0;
-};
-Cert certify_read(const IndexView& ix, const uint8_t* const* rd, int L, StrandOut* so, long lb, long U, const Opts& o,
-                  Dp& dp) {
-  Cert c;
-  if (lb <= U) return c;
-  const auto t0 = std::chrono::steady_clock::now();
-  const long pad = std::max(0L, (long)L - lb - 7);
-  long best = lb;
-  std::vector<char> free;
-  for (int st = 0; st < 2; ++st) {
-    auto& occ = so[st].occ;
-    std::sort(occ.begin(), occ.end());
-    const std::vector<Part>& P = so[st].parts;
-    free.assign(P.size(), 0);
-    for (size_t i = 0, j; i < occ.size(); i = j) {
-      j = i + 1;
-      while (j < occ.size() && occ[j].first - occ[j - 1].first <= pad) ++j;
-      ++c.chains;
-      for (size_t k = i; k < j; ++k) free[occ[k].second] = 1;
-      const long ub = lemma_l_span(L, P, &free);
-      for (size_t k = i; k < j; ++k) free[occ[k].second] = 0;
-      if (ub <= best) continue;
-      const int64_t dlo = occ[i].first - pad, dhi = occ[j - 1].first + pad;
-      if (c.cells + (double)L * (double)(dhi - dlo + 1) > o.max_cells) {
-        c.status = 2;
-        return c;
-      }
-      ++c.searched;
-      best = std::max(best, band_best(ix, rd[st], L, dlo, dhi, dp, &c.cells));
-    }
-  }
-  c.status = 1;
-  c.opt = best;
-  c.us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
-  return c;
-}
-
 // --verify: recount each rare part from a different anchor (its first
 // q-mer) and check that U1 equals the brute-force maximum.
-int verify_strand(const IndexView& ix, const uint8_t* rd, int L, const StrandOut& so) {
+int verify_strand(const IndexView& ix, const uint8_t* rd, int L, const StrandParts& so) {
   int bad = 0;
   for (const Part& p : so.parts) {
     uint64_t key, lo = 0, hi = 0;
@@ -528,6 +349,8 @@ int main(int argc, char** argv) {
     else if (a == "--verify") o.verify = true;
     else if (a == "--certify") o.certify = true;
     else if (a == "--max-cells" && i + 1 < argc) o.max_cells = std::atof(argv[++i]);
+    else if (a == "--jump-certify" && i + 1 < argc) o.jump_certify = std::atol(argv[++i]);
+    else if (a == "--jump-certify-new") o.jump_certify_new = true;
     else if (a == "--jump" && i + 1 < argc) {
       for (const char* q = argv[++i]; *q;) {
         o.jump.push_back(std::strtol(q, const_cast<char**>(&q), 10));
@@ -539,7 +362,7 @@ int main(int argc, char** argv) {
   }
   if (pos.size() != 3) {
     std::fprintf(stderr, "usage: lr_ceiling INDEX.cidx READS.fa ALN.paf [--tau 16] [--cmax 4096] "
-                         "[--window 40] [--step 8] [-t threads] [--verify] [--certify [--max-cells 4e9]] [--jump P,...]\n");
+                         "[--window 40] [--step 8] [-t threads] [--verify] [--certify [--max-cells 4e9]] [--jump P,...] [--jump-certify P [--jump-certify-new]]\n");
     return 2;
   }
   Reference ref;
@@ -547,6 +370,14 @@ int main(int argc, char** argv) {
   load_index(pos[0], ref, index);
   const IndexView ix = index.view(ref);
   if (ix.s != 1) { std::fprintf(stderr, "the index must have s = 1 (has s = %d)\n", ix.s); return 2; }
+  if (o.jump_certify >= 0 && std::find(o.jump.begin(), o.jump.end(), o.jump_certify) == o.jump.end())
+    o.jump.push_back(o.jump_certify);
+  PartitionParams pp;
+  pp.tau = o.tau;
+  pp.cmax = o.cmax;
+  pp.window = o.window;
+  pp.step = o.step;
+  pp.keep_occ = o.certify || o.jump_certify >= 0;
   const auto alns = read_paf(pos[2]);
   std::unordered_map<std::string, int64_t> contig;
   for (size_t c = 0; c < ref.names.size(); ++c) contig[ref.names[c]] = (int64_t)ref.offsets[c];
@@ -573,10 +404,11 @@ int main(int argc, char** argv) {
   std::atomic<long> fits{0}, verify_bad{0}, path_bad{0}, fits_trim{0};
   std::atomic<long> certified{0}, capped{0}, improved{0}, local_checked{0}, local_equal{0}, local_above{0};
   std::vector<std::atomic<long>> fits_j(o.jump.size()), fits_j_new(o.jump.size());
+  std::atomic<long> jproven{0}, jinterval{0}, jcapped{0}, jproven_new{0};
   auto work = [&]() {
-    Scratch sc;
-    StrandOut so[2];
-    Dp dp;
+    LrScratch sc;
+    StrandParts so[2];
+    BandDp dp;
     std::vector<PathBases> pbs;
     std::vector<Part> jparts[2];
     std::vector<uint8_t> rc;
@@ -585,8 +417,8 @@ int main(int argc, char** argv) {
       const int L = (int)fw.size();
       rc.resize(L);
       for (int i = 0; i < L; ++i) rc[i] = fw[L - 1 - i] < 4 ? 3 - fw[L - 1 - i] : 4;
-      partition(ix, fw.data(), L, o, sc, so[0]);
-      partition(ix, rc.data(), L, o, sc, so[1]);
+      partition_strand(ix, fw.data(), L, pp, sc, so[0]);
+      partition_strand(ix, rc.data(), L, pp, sc, so[1]);
       const long U0 = lemma_l_span(L, so[0].parts), U1 = lemma_l_span(L, so[1].parts), U = std::max(U0, U1);
       if (o.verify) verify_bad += verify_strand(ix, fw.data(), L, so[0]) + verify_strand(ix, rc.data(), L, so[1]);
       auto it = alns.find(names[r]);
@@ -606,11 +438,11 @@ int main(int argc, char** argv) {
         }
       }
       fits_trim += a.mapped && trim > U;
-      Cert ct;
+      LrCert ct;
       if (o.certify && a.mapped) {
         const long lb = std::max<long>(a.sigma, trim);  // the best known real alignment
         const uint8_t* rds[2] = {fw.data(), rc.data()};
-        ct = certify_read(ix, rds, L, so, lb, U, o, dp);
+        ct = certify_single(ix, rds, L, so, lb, U, o.max_cells, dp);
         certified += ct.status == 1;
         capped += ct.status == 2;
         improved += ct.status == 1 && ct.opt > lb;
@@ -632,12 +464,9 @@ int main(int argc, char** argv) {
         }
       }
       std::string jcols;
+      LrCert jc;
       if (!o.jump.empty()) {
-        // Strand 1's parts in forward read coordinates.
-        jparts[0] = so[0].parts;
-        jparts[1].clear();
-        for (auto q = so[1].parts.rbegin(); q != so[1].parts.rend(); ++q)
-          jparts[1].push_back({L - q->end, L - q->off, q->occ});
+        forward_parts(L, so, jparts);
         for (size_t k = 0; k < o.jump.size(); ++k) {
           const long P = o.jump[k];
           const long UJ = lemma_l_jump(L, jparts, P);
@@ -646,12 +475,19 @@ int main(int argc, char** argv) {
           const bool fj = lbJ > UJ;
           fits_j[k] += fj;
           fits_j_new[k] += fj && !fit;
+          if (P == o.jump_certify && fj && !(o.jump_certify_new && fit)) {
+            jc = certify_jump(ix, fw.data(), L, so, lbJ, P, o.max_cells);
+            jproven += jc.status == 1;
+            jinterval += jc.status == 3;
+            jcapped += jc.status == 2;
+            jproven_new += jc.status == 1 && !fit;
+          }
           char jb[96];
           std::snprintf(jb, sizeof jb, "\t%ld\t%ld\t%d", UJ, lbJ > LONG_MIN / 8 ? lbJ : 0L, (int)fj);
           jcols += jb;
         }
       }
-      const StrandOut& sa = so[a.mapped ? a.strand : 0];
+      const StrandParts& sa = so[a.mapped ? a.strand : 0];
       char buf[640];
       std::snprintf(buf, sizeof buf,
                     "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%ld\t%ld\t%ld\t%zu\t%zu\t%d\t%d\t%ld\t%ld\t%d\t%ld\t%d\t%ld"
@@ -661,6 +497,12 @@ int main(int argc, char** argv) {
                     so[1].absent, sa.skipped, so[0].occ_sum + so[1].occ_sum, sa.longest_free,
                     a.mapped ? (long)a.sigma - U : 0, (int)fit, trim, ct.status, ct.opt, ct.chains, ct.searched,
                     ct.cells, ct.us);
+      if (o.jump_certify >= 0) {
+        char jb[160];
+        std::snprintf(jb, sizeof jb, "\t%d\t%ld\t%ld\t%d\t%d\t%.0f\t%.0f", jc.status, jc.opt, jc.hi, jc.chains,
+                      jc.searched, jc.cells, jc.us);
+        jcols += jb;
+      }
       rows[r] = std::string(buf) + jcols + "\n";
     }
   };
@@ -671,6 +513,7 @@ int main(int argc, char** argv) {
               "\tabsent_fwd\tabsent_rev\tskipped\tocc_sum\tlongest_free\tmargin\tfits\tsigma_trim"
               "\tcert\topt\tchains\tsearched\tcells\tus");
   for (long P : o.jump) std::printf("\tUJ_%ld\tlbJ_%ld\tfitsJ_%ld", P, P, P);
+  if (o.jump_certify >= 0) std::printf("\tjcert\tjlo\tjhi\tjchains\tjsearched\tjcells\tjus");
   std::printf("\n");
   for (const auto& row : rows) std::fputs(row.c_str(), stdout);
   std::fprintf(stderr, "reads %zu, fit %ld (%.2f %%), with the trimmed path %ld; CIGARs failing the base check %ld; "
@@ -683,6 +526,11 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "jump P = %ld: fit %ld (%.2f %%), of which %ld do not fit the single-piece objective\n",
                  o.jump[k], fits_j[k].load(), reads.empty() ? 0.0 : 100.0 * fits_j[k].load() / reads.size(),
                  fits_j_new[k].load());
+  if (o.jump_certify >= 0)
+    std::fprintf(stderr, "jump-certify P = %ld: OPT_J proven for %ld reads (%.2f %%; %ld of them do not fit the "
+                 "single-piece objective), an interval for %ld, over the cell cap %ld\n", o.jump_certify,
+                 jproven.load(), reads.empty() ? 0.0 : 100.0 * jproven.load() / reads.size(), jproven_new.load(),
+                 jinterval.load(), jcapped.load());
   if (o.certify)
     std::fprintf(stderr, "certify: OPT proven for %ld reads (%.2f %%), above the best known alignment for %ld; over the "
                  "cell cap %ld%s\n", certified.load(), reads.empty() ? 0.0 : 100.0 * certified.load() / reads.size(),

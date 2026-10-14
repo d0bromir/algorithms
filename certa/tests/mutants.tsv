@@ -66,3 +66,14 @@ C16	src/check.cpp	s/margin_mapq(a.as + b.as - bound)/margin_mapq(a.as + b.as - b
 C17	src/check.cpp	s/        int yub = U\[y\]\[sy\];/        int yub = U[y][sy] - 3;/	killed	checker pair: partner bound U 3 too low (tie tamper, family F)
 C18	src/check.cpp	s/yub = std::max(yub, e.ub);/yub = std::max(yub, e.ub - 3);/	killed	checker pair: partner chain bound 3 too low (tie tamper)
 C19	src/check.cpp	s/        if (bx + yub <= bound) continue;/        if (bx + yub <= bound + 3) continue;/	killed	checker pair: chain skip off by 3 (tie tamper)
+LR1	include/certa/longread.h	/^inline LrCert certify_jump/,$ s/(long)L - lb - 7);/(long)L - lb - 9);/	killed	split certificate: pad 2 too narrow (tight lb)
+LR2	include/certa/longread.h	/^inline LrCert certify_single/,/^}/ s/(long)L - lb - 7);/(long)L - lb - 9);/	killed	Corollary L-long: pad 2 too narrow (small-del reads, tight lb)
+LR3	include/certa/longread.h	s/if (jump_bound(L, fp, types, P, 0) > lb) keep.push_back((int)k);/if (jump_bound(L, fp, types, P, 0) > lb + 3) keep.push_back((int)k);/	killed	split certificate: chain pruning 3 too lenient
+LR4	include/certa/longread.h	s/        F\[0\] = std::max(F\[0\], vin\[s\]\[k\]);/        (void)0;/	killed	split certificate: unwitnessed pieces dropped (diverged-ins)
+LR5	include/certa/longread.h	s/lr_comp(ref_at(ix, N - 1 - u))/ref_at(ix, N - 1 - u)/	killed	split certificate: strand-1 target not complemented (inversions)
+LR6	include/certa/longread.h	s/for (int l = 0; l < 2; ++l) G\[l\] = std::max(f > 0 ? -(long)kClip : 0L, M\[l\] - P);/for (int l = 0; l < 2; ++l) G[l] = std::max(0L, M[l] - P);/	killed	split certificate: the first piece's clip penalty omitted
+LR7	include/certa/longread.h	s/G\[l\] = std::max(f > 0 ? -(long)kClip : 0L, M\[l\] - P);/G[l] = std::max(f > 0 ? -(long)kClip : 0L, M[l]);/	killed	split certificate: the jump penalty omitted
+LR8	include/certa/longread.h	s/          if (cc == 0 \&\& charge) v -= c5;/          if (cc == 0 \&\& charge) v -= c5 + 1;/	killed	Lemma L-J: 6 charged per part (verify_lemmas)
+LR9	include/certa/longread.h	s/      C += !(free \&\& (\*free)\[j\]);/      C += 1;/	killed	Lemma L: free parts charged (tight lb)
+LR10	include/certa/longread.h	/^inline LrCert certify_jump/,$ s/occ\[j - 1\].first <= pad) ++j;/occ[j - 1].first <= pad \/ 2) ++j;/	killed	split certificate: chains split at pad / 2
+LR11	include/certa/longread.h	s/{chains\[k\].strand, \&chains\[k\].free}, {0, \&any\[0\]}, {1, \&any\[1\]}/{chains[k].strand, \&chains[k].free}, {0, nullptr}, {1, nullptr}/	killed	split certificate: other pieces bounded as unwitnessed in the pruning (translocations, tight lb)

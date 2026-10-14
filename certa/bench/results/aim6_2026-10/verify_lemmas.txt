@@ -10,6 +10,6 @@ Prop. A, e = 1: part (AC)^4 costs 8 (= e + 7); nearest substring 2 edits; neares
 Prop. A, e = 2: part (AC)^6 costs 9 (= e + 7); nearest substring 3 edits; nearest ungapped placement 6 mismatches
 Prop. A, e = 3: part (AC)^8 costs 10 (= e + 7); nearest substring 4 edits; nearest ungapped placement 4 mismatches
 Theorem G: 20000 random instances, greedy = DP optimum in all: yes
-Lemma L-J: 210000 (layout, P) cases, one-pass bound = brute force: yes; = single-span bound without jumps: yes
+Lemma L-J: 210000 (layout, P) cases, one-pass bound = brute force: yes; = single-span bound without jumps: yes; jump_bound with free parts and a required type = brute force on 30000: yes
 XQ: mapq_se monotone on 2307254 (L, score, SUB) triples: yes
 all lemma checks passed

@@ -12,7 +12,7 @@ names:
 
 **Review status.** Written, then cross-checked by:
 - whole-reference oracles (4 seeds, ARM and x86);
-- 66 mutants;
+- 77 mutants;
 - exhaustive verification of the finite lemmas.
 
 It has **not yet been reviewed by a second person**. §11 lists what a
@@ -295,9 +295,55 @@ read that crosses a structural variant has no good single local alignment.
   cannot be certified exactly by exact parts; such a read keeps an
   interval.
 - *Measured (bound side):* see proposal §6.6.
-- *Not built:* the exact certificate of OPT_J, a row-synchronous DP over the
-  candidate chains in which a piece may start from the best prefix value
-  minus P.
+
+**Theorem L-J (the split optimum; `certify_jump`).**
+- *Setup:*
+  - lb ≤ OPT_J and lb > U_J; pad = L − lb − 7;
+  - chains of part occurrences are built per strand with that pad;
+  - pot(C) is the best decomposition that uses a piece of chain C. That
+    piece is bounded by Lemma L with C's parts free; every other piece by
+    Lemma L with every occurring part of its strand free (`jump_bound` with
+    a required type). Chains with pot(C) ≤ lb are dropped.
+- *The pass:* one pass over the read keeps two layers:
+  - the upper layer: for each kept chain, the exact best piece ending at each
+    read position, by a banded DP over its diagonals ± pad in which a piece
+    starts from the best prefix value minus P (or −5 / 0 for the first); and
+    the unwitnessed pieces bounded by Lemma L;
+  - the lower layer: the kept chains' pieces only.
+  - Strand-1 chains run on the forward read against the reverse-complemented
+    reference (diagonal N − L − d), so every chain advances with the read.
+- *Statement:* OPT_J ∈ [max(lb, lower), max(lb, upper)], and the ends meet
+  when no unwitnessed piece pays off.
+- *Proof:* let A be a jump alignment above lb.
+  - Each piece's gap total is ≤ pad: its loss is part of A's, which is
+    < L − lb (Lemma W).
+  - *A piece holding an exact part of its strand:* its exact parts lie in one
+    chain C (Lemma C), so the piece is on C's diagonals ± pad and bounded by
+    Lemma L with C's parts free. If C was dropped, A ≤ pot(C) ≤ lb, a
+    contradiction. So C was kept, and the banded DP holds that piece.
+  - *Any other piece* is bounded by Lemma L with no part free, and the upper
+    layer includes that bound.
+  - So A ≤ upper. The lower layer combines real pieces only, so it is
+    attained. ∎
+- *Tests* (`tests/test_longread.cpp`): a synthetic genome with planted
+  deletions, small deletions, novel and diverged insertions, inversions,
+  translocations, duplications and ragged ends. Against an exact brute-force
+  DP of the jump objective over the whole genome, both strands:
+  - every proven OPT_J equals it, and every interval contains it;
+  - this holds from the known lb, from the weakest admissible lb (U_J + 1)
+    and from lb = OPT_J − 1 (the narrowest band);
+  - every proven local optimum (Corollary L-long) equals the brute force
+    with P = ∞.
+  - *Mutants:* LR1–LR11 (pads, pruning, unwitnessed pieces, strand 1, clip
+    and jump penalties, Lemma L's charge and free parts, chain splitting).
+- *Limits:*
+  - an unwitnessed piece that pays off (a novel or diverged insertion) leaves
+    an interval;
+  - on real HiFi reads the pruning is loose. The bound of the other pieces is
+    close to the read length, so a median of 145 of 148 chains are kept. That
+    makes certification cost a median of 45 s per read (proposal §6.6).
+  - *The fix (not built):* iterative pruning against exact prefix and suffix
+    values of the chains evaluated first.
 
 **SL's SUB bound (Aim 3).** SUB ≤ max(s2, the best alignment in the chosen
 chain that starts before the reported one or at/after its end).
@@ -690,7 +736,7 @@ guarantees is the interval [XL, XU] at whatever stage it stops.
 ## 9a. Mutants that survive by design
 
 A mutant that changes no claim on any input cannot be killed by a test, so
-it must be argued instead. Six of the 66 survive.
+it must be argued instead. Six of the 77 survive.
 - **L6** (span start candidates shifted): Lemma S, §4.
 - **A2** (Lemma O's term lowered): §4.
 - **P2, P8, P13** (band pad − 2, narrowed band − 3, `relevant` term dropped)

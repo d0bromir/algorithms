@@ -1,0 +1,14 @@
+# The split-optimum certificate (certa/longread.h certify_jump, THEORY.md), P = 30, on the reads that fit the split objective but not the local one (lr_ceiling --jump 30 --jump-certify 30 --jump-certify-new --max-cells 3e10), galaxy 64 threads, 2026-10-14.
+
+reads 242534, fit 226253 (93.29 %), with the trimmed path 226330; CIGARs failing the base check 0; tau 16, cmax 4096
+jump P = 30: fit 228925 (94.39 %), of which 2674 do not fit the single-piece objective
+jump-certify P = 30: OPT_J proven for 1544 reads (0.64 %; 1544 of them do not fit the single-piece objective), an interval for 991, over the cell cap 139
+2775.04 s wall, 170706.14 s user
+
+attempted 2674: OPT_J proven 1544, an interval 991, over the cell cap 139
+time per read (one thread): median 44.7 s, 90% 144.8 s, 99% 235.4 s, max 274 s, mean 61.7 s
+DP cells per read: median 5.06e+09, 99% 2.83e+10; chains kept after pruning: median 145 of 148
+interval widths: median 107, 90% 913, max 2039
+proven OPT_J above lb_J for 748 reads (median gain 25)
+
+The pruning bound (pot(C), each other piece bounded by Lemma L with every occurring part free) is loose on real reads: that bound is close to the read length, so most chains are kept. Iterative pruning against exact prefix and suffix values of the main chains is the fix (not built).

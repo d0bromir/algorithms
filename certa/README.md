@@ -252,6 +252,7 @@ src/mapper_gpu.cu          CUDA driver (one thread per read)
 src/main.cpp               CLI, SAM/FASTQ output, statistics
 tests/test_certa.cpp       brute-force oracle tests of every bound
 tests/verify_lemmas.cpp    exhaustive checks of the finite lemmas
+tests/test_longread.cpp    long-read certificates against a brute-force DP (planted SVs)
 tests/mutants.tsv          one mutant per bound; tests/run_mutants.sh runs them
 tools/simulate.py          synthetic genome/reads and placement evaluation
 tools/lr_ceiling.cpp       long reads: Lemma L ceiling vs best known alignment; --certify proves OPT (Aim 6)

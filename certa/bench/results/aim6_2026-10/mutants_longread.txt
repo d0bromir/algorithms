@@ -1,0 +1,12 @@
+LR9	OK	killed	Lemma L: free parts charged (tight lb)	(lemmas: all lemma checks passed, seed 1: 22 check(s) FAILED, seed 2: 22 check(s) FAILED)
+LR7	OK	killed	split certificate: the jump penalty omitted	(lemmas: all lemma checks passed, seed 1: 115 check(s) FAILED, seed 2: 115 check(s) FAILED)
+LR4	OK	killed	split certificate: unwitnessed pieces dropped (diverged-ins)	(lemmas: all lemma checks passed, seed 1: 12 check(s) FAILED, seed 2: 12 check(s) FAILED)
+LR6	OK	killed	split certificate: the first piece's clip penalty omitted	(lemmas: all lemma checks passed, seed 1: 12 check(s) FAILED, seed 2: 9 check(s) FAILED)
+LR2	OK	killed	Corollary L-long: pad 2 too narrow (small-del reads, tight lb)	(lemmas: all lemma checks passed, seed 1: 4 check(s) FAILED, seed 2: 4 check(s) FAILED)
+LR5	OK	killed	split certificate: strand-1 target not complemented (inversions)	(lemmas: all lemma checks passed, seed 1: 52 check(s) FAILED, seed 2: 60 check(s) FAILED)
+LR11	OK	killed	split certificate: other pieces bounded as unwitnessed in the pruning (translocations, tight lb)	(lemmas: all lemma checks passed, seed 1: 19 check(s) FAILED, seed 2: 20 check(s) FAILED)
+LR3	OK	killed	split certificate: chain pruning 3 too lenient	(lemmas: all lemma checks passed, seed 1: 3 check(s) FAILED, seed 2: 5 check(s) FAILED)
+LR1	OK	killed	split certificate: pad 2 too narrow (tight lb)	(lemmas: all lemma checks passed, seed 1: 4 check(s) FAILED, seed 2: 4 check(s) FAILED)
+LR10	OK	killed	split certificate: chains split at pad / 2	(lemmas: all lemma checks passed, seed 1: 4 check(s) FAILED, seed 2: 4 check(s) FAILED)
+LR8	OK	killed	Lemma L-J: 6 charged per part (verify_lemmas)	(lemmas: 3 check(s) FAILED, seed 1: 2 check(s) FAILED, seed 2: 1 check(s) FAILED)
+mutants: 11, unexpected: 0

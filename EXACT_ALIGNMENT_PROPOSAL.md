@@ -940,9 +940,26 @@ so certifying HiFi reads at minimap2-like cost looks reachable.
   read closely enough for any exact-part certificate.
 - **A long novel insertion can never be certified exactly by exact parts.** It is a piece that no
   part can witness, so such a read keeps an interval.
-- **Not built:** proving the split optimum exactly. That needs a jump DP over the candidate chains
-  in which a piece may start from the best prefix value minus P. It is feasible, but the gain is at
-  most these 1.1 points.
+- **The exact split certificate (follow-up 3, 2026-10-14)**
+  ([raw](certa/bench/results/aim6_2026-10/split_certify.txt); Theorem L-J in
+  [certa/THEORY.md](certa/THEORY.md)).
+  - *How it works:* each kept chain gets an exact banded DP in which a piece may start from the best
+    prefix value minus P. Reverse-strand chains run against the reverse-complemented reference. An
+    upper layer adds Lemma L bounds for pieces that no part witnesses.
+  - *Tested:* against an exact brute force of the split objective on a synthetic genome with
+    planted SVs. Every proven optimum equals it and every interval contains it, also from the
+    weakest and the tightest admissible lb. Mutants LR1–LR11 are all killed.
+  - *On the 2,674 HiFi reads that fit only the split objective:*
+    - **OPT_J proven for 1,544** (0.64 % of all reads), so exact certification covers 93.96 % of
+      reads;
+    - an interval for 991 (median width 107; diverged or novel insertions keep intervals by
+      design);
+    - over the cell cap for 139.
+  - *The cost is the catch:* a median of 45 s per read. The pruning bound is loose on real reads:
+    it bounds the rest of the read by Lemma L with every occurring part free, which is close to the
+    read length, so 145 of a median 148 chains are kept.
+  - *The fix (not built):* prune iteratively, against exact prefix and suffix values of the chains
+    evaluated first.
 
 ## 7. Evaluation plan and aims
 
@@ -990,7 +1007,8 @@ penalty).
   Lemma L-J extends the exact-part ceiling to it, computed in one pass and verified exhaustively.
 - **Measured:** on HiFi it lets 1.1 more points of reads fit at P = 30, about a fifth of the
   clipped and high-loss reads.
-- **Not built:** the exact certificate of the split optimum (a jump DP over the candidate chains).
+- **The exact certificate of the split optimum:** built and oracle-tested. It is proven for 1,544
+  more HiFi reads, though still too slow for routine use (§6.6).
 
 **Relation to shmap-rs.** shmap-rs maps in about 5.9 ms per HiFi read without base-level alignment.
 A certifying long-read aligner will not beat it on raw speed. The useful combination: shmap-rs

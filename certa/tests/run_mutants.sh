@@ -1,9 +1,11 @@
 #!/bin/bash
 # Mutation tests of every bound (Aim 5): for each line of tests/mutants.tsv,
 # a copy of the tree with one sed-applied mutation, built and run through the
-# oracle test (tests/test_certa.cpp) on two seeds. A mutant expected "killed"
-# must fail a check on some seed; one expected "equivalent" (proven not to
-# change any claim, THEORY.md) must pass both.
+# oracle test on two seeds: tests/test_certa.cpp, or, for a mutant of
+# include/certa/longread.h, tests/test_longread.cpp and the exhaustive lemma
+# checks (tests/verify_lemmas.cpp). A mutant expected "killed" must fail a
+# check on some run; one expected "equivalent" (proven not to change any
+# claim, THEORY.md) must pass them all.
 #
 #   tests/run_mutants.sh [parallel jobs = 8] [id regex = .] [seeds = "1 2"]
 #
@@ -26,16 +28,32 @@ run_one() {
   ( cd "$d" || exit
     sed -i "$expr" "$file"
     if cmp -s "$file" "$here/$file"; then echo "$id	NOT_APPLIED	$what"; exit; fi
-    if ! "$cxx" -O2 -std=c++17 -Iinclude -Isrc tests/test_certa.cpp src/check.cpp src/gpu_stub.cpp \
-         src/index.cpp src/seqio.cpp src/mapper_cpu.cpp -pthread -o t 2> build.log; then
-      echo "$id	BUILD_FAILED	$what"; exit
+    local runs
+    if [[ "$file" == include/certa/longread.h ]]; then
+      if ! "$cxx" -O2 -std=c++17 -Iinclude -Isrc tests/test_longread.cpp src/index.cpp src/seqio.cpp -pthread -o t \
+           2> build.log || ! "$cxx" -O2 -std=c++17 -Iinclude -Isrc tests/verify_lemmas.cpp -pthread -o v 2>> build.log; then
+        echo "$id	BUILD_FAILED	$what"; exit
+      fi
+      runs="lemmas $seeds"
+    else
+      if ! "$cxx" -O2 -std=c++17 -Iinclude -Isrc tests/test_certa.cpp src/check.cpp src/gpu_stub.cpp \
+           src/index.cpp src/seqio.cpp src/mapper_cpu.cpp -pthread -o t 2> build.log; then
+        echo "$id	BUILD_FAILED	$what"; exit
+      fi
+      runs="$seeds"
     fi
     local res="" killed=0
-    for s in $seeds; do
+    for s in $runs; do
       local r
-      r=$(./t "$s" 2>&1 | grep -oE '[0-9]+ check\(s\) FAILED|all certificate checks passed' | tail -1)
+      if [[ "$s" == lemmas ]]; then
+        r=$(./v 2>&1 | grep -oE '[0-9]+ check\(s\) FAILED|all lemma checks passed' | tail -1)
+      else
+        r=$(./t "$s" 2>&1 | grep -oE '[0-9]+ check\(s\) FAILED|all certificate checks passed|all long-read checks passed' | tail -1)
+      fi
       [[ "$r" == *FAILED* ]] && killed=1
-      res="$res${res:+, }seed $s: ${r:-crashed}"
+      local label="seed $s"
+      [[ "$s" == lemmas ]] && label=lemmas
+      res="$res${res:+, }$label: ${r:-crashed}"
       [[ -z "$r" ]] && killed=1
     done
     local got=equivalent

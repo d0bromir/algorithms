@@ -714,8 +714,12 @@ verifies the XQ of PR mates too.
   - *Reads that span SVs:* a split (jump) objective is defined, and Lemma
     L-J bounds it (`certa/longread.h`). With it, 94.4 % of reads fit at
     P = 30, about a fifth of the clipped and high-loss misses.
-  - *Still open:* the exact certificate of the split optimum, and building
-    all this into the mapper with a faster DP.
+  - *The exact certificate of the split optimum* (`certify_jump`) is
+    oracle-tested. On the reads that fit only the split objective it proves
+    OPT_J for 1,544 (0.64 % of all reads), so 93.96 % are now certified
+    exact.
+  - *Still open:* its loose pruning, which makes it cost a median of 45 s
+    per read, and building all this into the mapper with a faster DP.
 
   A full long-read CERTA would likely be slower than shmap-rs, which does
   no base-level alignment: about 11.7 s for 2,000 HG002 HiFi reads
