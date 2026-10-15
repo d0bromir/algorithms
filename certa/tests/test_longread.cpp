@@ -164,6 +164,35 @@ int main(int argc, char** argv) {
   const uint64_t seed = argc > 1 ? std::strtoull(argv[1], nullptr, 10) : 1;
   std::mt19937_64 g(seed);
   std::fprintf(stderr, "seed %llu\n", static_cast<unsigned long long>(seed));
+  // The row kernel of the banded DP (vectorized where the compiler allows)
+  // against its scalar reference on random rows, sentinels, N bases and
+  // first rows included: every H, I and the row's best must be equal.
+  {
+    std::mt19937_64 gr(seed * 7 + 1);
+    const int NEG = INT_MIN / 4;
+    int rows = 0, bad = 0;
+    for (int it = 0; it < 20000; ++it) {
+      const int B = 1 + static_cast<int>(gr() % 70);
+      std::vector<int> H(B + 1), I(B + 1);
+      for (int b = 0; b < B; ++b) {
+        H[b] = gr() % 8 == 0 ? NEG : static_cast<int>(gr() % 200) - 20;
+        I[b] = gr() % 3 == 0 ? NEG : static_cast<int>(gr() % 200) - 30;
+      }
+      H[B] = I[B] = NEG;
+      std::vector<int> tr(B);
+      for (auto& x : tr) x = gr() % 9 == 0 ? 4 : static_cast<int>(gr() % 4);
+      const uint8_t rb = static_cast<uint8_t>(gr() % 9 == 0 ? 4 : gr() % 4);
+      const int g = static_cast<int>(gr() % 50) - 5;
+      const bool ins_ok = gr() % 5 != 0;
+      std::vector<int> H2 = H, I2 = I;
+      const int r1 = band_row(H.data(), I.data(), B, g, rb, tr.data(), ins_ok);
+      const int r2 = band_row_scalar(H2.data(), I2.data(), B, g, rb, tr.data(), ins_ok);
+      ++rows;
+      bad += r1 != r2 || H != H2 || I != I2;
+    }
+    CHECK(bad == 0, "band_row differs from band_row_scalar on %d of %d random rows", bad, rows);
+    std::fprintf(stderr, "band_row = band_row_scalar on %d random rows: %s\n", rows, bad ? "no" : "yes");
+  }
   // A genome of two contigs, with a segment duplicated (two loci for some reads).
   std::vector<uint8_t> c1 = random_seq(g, 40000), c2 = random_seq(g, 25000);
   {

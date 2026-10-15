@@ -8,6 +8,7 @@
 #include <chrono>
 #include <climits>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <vector>
 
@@ -266,8 +267,117 @@ inline void forward_parts(int L, const StrandParts* so, std::vector<ReadPart>* o
 
 // ---- Banded local DP ---------------------------------------------------------
 
+// One row of a banded Gotoh DP, in place. Band cell b (0 <= b < B) is a
+// diagonal; the cell above it on the previous row is the same b, the one
+// that inserts into it is b + 1, the one that deletes into it is b - 1 on
+// this row. H, I (size B + 1, H[B] = I[B] = NEG): the previous row in, this
+// row out; g: the value a piece starting at this row adds to (>= -5, so
+// every m below is a real score); rb: the read base; tr[b]: cell b's target;
+// ins_ok: false on a band's first row. Returns the best cell ending in a
+// match or mismatch. The scalar reference:
+inline int band_row_scalar(int* H, int* I, int B, int g, uint8_t rb, const int* tr, bool ins_ok) {
+  const int NEG = INT_MIN / 4;
+  int d = NEG, left = NEG, best = NEG;  // the deletion state, and H at b - 1 on this row
+  for (int b = 0; b < B; ++b) {
+    const int m = std::max(H[b], g) + (lr_same(rb, (uint8_t)tr[b]) ? kMatch : -kMismatch);
+    const int ins = ins_ok ? std::max(H[b + 1] - kGapOpen - kGapExt, I[b + 1] - kGapExt) : NEG;
+    d = std::max(left - kGapOpen - kGapExt, d - kGapExt);
+    const int h = std::max(m, std::max(ins, d));
+    H[b] = h;  // H[b + 1] and I[b + 1] are still the previous row's
+    I[b] = ins;
+    left = h;
+    best = std::max(best, m);
+  }
+  return best;
+}
+
+#if defined(__GNUC__) && !defined(CERTA_NO_VEC) && (defined(__clang__) || __GNUC__ >= 12)
+// The same row, W cells at a time (GCC / Clang vector extensions): W = 8
+// with AVX2, else 4 (one NEON or SSE register). m and ins depend
+// only on the previous row. The deletion chain unrolls (a deletion never
+// follows its own opening better than it extends it) to
+//   D[b] = max over b' < b of (h0[b'] + b') - b - 6,  h0 = max(m, ins).
+// Taking b' <= b instead adds h0[b] - 6, which never beats h0[b], so
+//   h = max(h0, max over b' <= b of (h0[b'] + b') - b - 6):
+// an inclusive prefix maximum, within a vector by log2(W) shifts (each lane
+// filled from itself, harmless under max) and across vectors by a carry.
+// h and ins equal the scalar values exactly (every h0 is a real score, so
+// the two only differ in unreachable sentinel values of D).
+namespace band_vec {
+#if !defined(__AVX2__)
+constexpr int W = 4;
+typedef int32_t vi __attribute__((vector_size(16)));
+inline vi splat(int x) { return vi{x, x, x, x}; }
+inline vi lanes() { return vi{0, 1, 2, 3}; }
+inline vi last(vi x) { return __builtin_shufflevector(x, x, 3, 3, 3, 3); }
+inline vi vmax(vi a, vi b) { return a > b ? a : b; }
+inline vi prefix_max(vi x) {
+  x = vmax(x, __builtin_shufflevector(x, x, 0, 0, 1, 2));
+  return vmax(x, __builtin_shufflevector(x, x, 0, 1, 0, 1));
+}
+#else
+constexpr int W = 8;
+typedef int32_t vi __attribute__((vector_size(32)));
+inline vi splat(int x) { return vi{x, x, x, x, x, x, x, x}; }
+inline vi lanes() { return vi{0, 1, 2, 3, 4, 5, 6, 7}; }
+inline vi last(vi x) { return __builtin_shufflevector(x, x, 7, 7, 7, 7, 7, 7, 7, 7); }
+inline vi vmax(vi a, vi b) { return a > b ? a : b; }
+inline vi prefix_max(vi x) {
+  x = vmax(x, __builtin_shufflevector(x, x, 0, 0, 1, 2, 3, 4, 5, 6));
+  x = vmax(x, __builtin_shufflevector(x, x, 0, 1, 0, 1, 2, 3, 4, 5));
+  return vmax(x, __builtin_shufflevector(x, x, 0, 1, 2, 3, 0, 1, 2, 3));
+}
+#endif
+inline vi load(const int* p) {
+  vi v;
+  std::memcpy(&v, p, sizeof v);
+  return v;
+}
+inline void store(int* p, vi v) { std::memcpy(p, &v, sizeof v); }
+}  // namespace band_vec
+
+inline int band_row(int* H, int* I, int B, int g, uint8_t rb, const int* tr, bool ins_ok) {
+  using namespace band_vec;
+  const int NEG = INT_MIN / 4;
+  const vi neg = splat(NEG), gv = splat(g), lane = lanes();
+  const vi rbv = splat(rb < 4 ? (int)rb : -1);  // an N in the read matches nothing
+  const vi open_ext = splat(kGapOpen + kGapExt), ext = splat(kGapExt), del0 = splat(kGapOpen);
+  const vi hit = splat(kMatch), miss = splat(-kMismatch);
+  vi bestv = neg;
+  vi carry = neg;  // in every lane: max over the cells left of the vector of h0[b'] + b'
+  int b = 0;
+  for (; b + W <= B; b += W) {
+    const vi m = vmax(load(H + b), gv) + (load(tr + b) == rbv ? hit : miss);
+    const vi ins = ins_ok ? vmax(load(H + b + 1) - open_ext, load(I + b + 1) - ext) : neg;
+    const vi h0 = vmax(m, ins);
+    const vi idx = lane + splat(b);
+    const vi incl = vmax(prefix_max(h0 + idx), carry);
+    store(H + b, vmax(h0, incl - idx - del0));
+    store(I + b, ins);
+    bestv = vmax(bestv, m);
+    carry = last(incl);
+  }
+  int best = NEG, cs = (int)carry[0];
+  for (int k = 0; k < W; ++k) best = std::max(best, (int)bestv[k]);
+  for (; b < B; ++b) {  // the tail, the same recurrence in scalar form
+    const int m = std::max(H[b], g) + (lr_same(rb, (uint8_t)tr[b]) ? kMatch : -kMismatch);
+    const int ins = ins_ok ? std::max(H[b + 1] - kGapOpen - kGapExt, I[b + 1] - kGapExt) : NEG;
+    const int h0 = std::max(m, ins);
+    cs = std::max(cs, h0 + b);
+    H[b] = std::max(h0, cs - b - kGapOpen);
+    I[b] = ins;
+    best = std::max(best, m);
+  }
+  return best;
+}
+#else
+inline int band_row(int* H, int* I, int B, int g, uint8_t rb, const int* tr, bool ins_ok) {
+  return band_row_scalar(H, I, B, g, rb, tr, ins_ok);
+}
+#endif
+
 struct BandDp {
-  std::vector<int> H, I, Hn, In;
+  std::vector<int> H, I, T;
 };
 
 // The best local score (-5 per clipped end) of rd over alignments whose cells
@@ -279,28 +389,14 @@ inline long band_best(const IndexView& ix, const uint8_t* rd, int L, int64_t dlo
   const int NEG = INT_MIN / 4;
   dp.H.assign(B + 1, NEG);
   dp.I.assign(B + 1, NEG);
-  dp.Hn.assign(B + 1, NEG);
-  dp.In.assign(B + 1, NEG);
+  // The targets: read base f, cell b at index f + b.
+  dp.T.resize((size_t)L + B - 1);
+  for (int64_t x = 0; x < (int64_t)L + B - 1; ++x) dp.T[x] = ref_at(ix, dlo + x);
   int best = NEG;
-  for (int i = 1; i <= L; ++i) {
-    const uint8_t c = rd[i - 1];
-    const int start = i == 1 ? 0 : -kClip;
-    const int end = i < L ? kClip : 0;
-    int d = NEG, left = NEG;  // deletion state, and H at (i, b - 1)
-    const int64_t j0 = i - 1 + dlo;
-    for (int b = 0; b < B; ++b) {
-      const int m = std::max(dp.H[b], start) + (lr_same(c, ref_at(ix, j0 + b)) ? kMatch : -kMismatch);
-      const int ins = i > 1 ? std::max(dp.H[b + 1] - kGapOpen - kGapExt, dp.I[b + 1] - kGapExt) : NEG;
-      d = std::max(left - kGapOpen - kGapExt, d - kGapExt);
-      const int h = std::max(m, std::max(ins, d));
-      dp.Hn[b] = h;
-      dp.In[b] = ins;
-      left = h;
-      best = std::max(best, m - end);
-    }
-    dp.Hn[B] = dp.In[B] = NEG;
-    std::swap(dp.H, dp.Hn);
-    std::swap(dp.I, dp.In);
+  for (int f = 0; f < L; ++f) {
+    const int start = f == 0 ? 0 : -kClip;
+    const int end = f + 1 < L ? kClip : 0;
+    best = std::max(best, band_row(dp.H.data(), dp.I.data(), B, start, rd[f], dp.T.data() + f, f > 0) - end);
   }
   *cells += (double)L * B;
   return best;
@@ -438,16 +534,14 @@ inline long jump_pass(const IndexView& ix, const uint8_t* rd, int L, const std::
   const long NEGL = LONG_MIN / 4;
   const int NEG = INT_MIN / 4;
   const int K = (int)bands.size();
-  std::vector<std::vector<int>> H(K), I(K), Hn(K), In(K);
+  std::vector<std::vector<int>> H(K), I(K);
   for (int k = 0; k < K; ++k) {
     const int B = (int)(bands[k].ehi - bands[k].elo + 1);
     H[k].assign(B + 1, NEG);
     I[k].assign(B + 1, NEG);
-    Hn[k].assign(B + 1, NEG);
-    In[k].assign(B + 1, NEG);
   }
   // The targets of each band, read row f and band cell b at index f - r0 + b.
-  std::vector<std::vector<uint8_t>> tg(K);
+  std::vector<std::vector<int>> tg(K);
   for (int k = 0; k < K; ++k) {
     const JumpBand& bd = bands[k];
     const int64_t n = std::max<int64_t>(0, bd.r1 - bd.r0 + bd.ehi - bd.elo);
@@ -467,22 +561,7 @@ inline long jump_pass(const IndexView& ix, const uint8_t* rd, int L, const std::
       const JumpBand& bd = bands[k];
       if (f < bd.r0 || f >= bd.r1) continue;
       const int B = (int)(bd.ehi - bd.elo + 1);
-      const uint8_t* tr = tg[k].data() + (f - bd.r0);
-      int d = NEG, left = NEG, rowbest = NEG;
-      for (int b = 0; b < B; ++b) {
-        const int m = std::max(H[k][b], g) + (lr_same(rb, tr[b]) ? kMatch : -kMismatch);
-        const int ins = f > bd.r0 ? std::max(H[k][b + 1] - kGapOpen - kGapExt, I[k][b + 1] - kGapExt) : NEG;
-        d = std::max(left - kGapOpen - kGapExt, d - kGapExt);
-        const int h = std::max(m, std::max(ins, d));
-        Hn[k][b] = h;
-        In[k][b] = ins;
-        left = h;
-        rowbest = std::max(rowbest, m);
-      }
-      Hn[k][B] = In[k][B] = NEG;
-      std::swap(H[k], Hn[k]);
-      std::swap(I[k], In[k]);
-      F = std::max(F, (long)rowbest);
+      F = std::max(F, (long)band_row(H[k].data(), I[k].data(), B, g, rb, tg[k].data() + (f - bd.r0), f > bd.r0));
       *cells += B;
     }
     for (int t = 0; t < T; ++t) {

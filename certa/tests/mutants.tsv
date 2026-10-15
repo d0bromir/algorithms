@@ -93,3 +93,7 @@ LR24	include/certa/longread.h	s/lbt = std::max(lbt, jump_pass(ix, fw, L, bf, tb,
 LR25	include/certa/longread.h	s/chains\[k\].free, pre0, suf20, P);/chains[k].free, pre0, suf1, P);/	killed	split certificate: the static pot from one-sided suffix values
 LR26	include/certa/longread.h	s/evaluated\[k\] = pot0\[k\] > lbt;/evaluated[k] = pot0[k] > lbt + 3;/	killed	split certificate: the static set 3 too lenient
 LR27	include/certa/longread.h	s/ch.free, ch.free_rev, pre0, suf20, P, lbt/ch.free, ch.free_rev, pre0, suf1, P, lbt/	killed	split certificate: static windows from one-sided suffix values
+LR28	include/certa/longread.h	s/  return vmax(x, __builtin_shufflevector(x, x, 0, 1, 0, 1));/  return x;/	killed	band_row: the 4-lane prefix maximum without its 2-lane step
+LR29	include/certa/longread.h	s/store(H + b, vmax(h0, incl - idx - del0));/store(H + b, vmax(h0, incl - idx - del0 + splat(1)));/	killed	band_row: a deletion 1 too cheap
+LR30	include/certa/longread.h	s/    carry = last(incl);/    carry = incl;/	killed	band_row: the carry lane by lane, not the last lane
+LR31	include/certa/longread.h	s/H\[b\] = std::max(h0, cs - b - kGapOpen);/H[b] = std::max(h0, cs - b - kGapOpen + 1);/	killed	band_row: the tail's deletion 1 too cheap

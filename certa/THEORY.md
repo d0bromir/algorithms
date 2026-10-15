@@ -12,7 +12,7 @@ names:
 
 **Review status.** Written, then cross-checked by:
 - whole-reference oracles (4 seeds, ARM and x86);
-- 93 mutants;
+- 97 mutants;
 - exhaustive verification of the finite lemmas.
 
 It has **not yet been reviewed by a second person**. §11 lists what a
@@ -259,6 +259,25 @@ part's. A's exactly occurring parts are among C's. ∎
   - every part's occurrence count is recounted from a second anchor, and U₁
     recomputed by brute force;
   - a full DP around the known locus never exceeds the proven OPT.
+
+**The band DP row (`band_row`; both long-read certificates).** One row of the
+banded Gotoh DP, W cells at a time (W = 8 with AVX2, else 4; NEON on
+aarch64). With h0 = max(m, ins), the deletion state unrolls to
+D[b] = max over b' < b of (h0[b'] + b') − b − 6, because a deletion never
+follows its own opening better than it extends it.
+- Taking b' ≤ b adds h0[b] − 6, which never beats h0[b]. So
+  H[b] = max(h0[b], max over b' ≤ b of (h0[b'] + b') − b − 6): an inclusive
+  prefix maximum, computed by log₂ W shifts within a vector and a carry
+  across vectors.
+- H, I and the row's best m equal the scalar recurrence's values exactly.
+  Every h0 is a real score (a piece's start value is ≥ −5), so the two can
+  differ only in unreachable sentinel values of D.
+- *Tests:* exact equality with `band_row_scalar` on 20,000 random rows
+  (sentinels, N bases and first rows included), on x86 with AVX2, x86 with
+  SSE and aarch64. The certificates' outputs on 500 HiFi reads are
+  identical with and without it.
+- *Mutants:* LR28–LR31 (a missing shift step, a deletion 1 too cheap in the
+  vector body and in the tail, the carry kept per lane).
 
 **Jump (split) alignments (Aim 6 follow-up; `certa/longread.h`).** A long
 read that crosses a structural variant has no good single local alignment.
@@ -812,7 +831,7 @@ guarantees is the interval [XL, XU] at whatever stage it stops.
 ## 9a. Mutants that survive by design
 
 A mutant that changes no claim on any input cannot be killed by a test, so
-it must be argued instead. Six of the 93 survive.
+it must be argued instead. Six of the 97 survive.
 - **L6** (span start candidates shifted): Lemma S, §4.
 - **A2** (Lemma O's term lowered): §4.
 - **P2, P8, P13** (band pad − 2, narrowed band − 3, `relevant` term dropped)

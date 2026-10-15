@@ -1,4 +1,4 @@
-# Mutants of include/certa/longread.h (tests/run_mutants.sh 28 '^LR', a2, 2026-10-15): tests/test_longread.cpp seeds 1, 2 and tests/verify_lemmas.cpp; the split certificate with iterative pruning, read windows, capped intervals, lb raising and the static path (THEORY.md Theorem L-J).
+# Mutants of include/certa/longread.h (tests/run_mutants.sh 32 '^LR', a2, 2026-10-15): tests/test_longread.cpp seeds 1, 2 and tests/verify_lemmas.cpp; the split certificate (THEORY.md Theorem L-J) and the vectorized band DP row (band_row).
 
 
 LR1	OK	killed	split certificate: pad 2 too narrow (tight lb)	(lemmas: all lemma checks passed, seed 1: 12 check(s) FAILED, seed 2: 12 check(s) FAILED)
@@ -28,4 +28,8 @@ LR24	OK	killed	split certificate: lb raised to a bound with unwitnessed pieces, 
 LR25	OK	killed	split certificate: the static pot from one-sided suffix values	(lemmas: all lemma checks passed, seed 1: 62 check(s) FAILED, seed 2: 63 check(s) FAILED)
 LR26	OK	killed	split certificate: the static set 3 too lenient	(lemmas: all lemma checks passed, seed 1: 6 check(s) FAILED, seed 2: 14 check(s) FAILED)
 LR27	OK	killed	split certificate: static windows from one-sided suffix values	(lemmas: all lemma checks passed, seed 1: 8 check(s) FAILED, seed 2: 10 check(s) FAILED)
-mutants: 27, unexpected: 0
+LR28	OK	killed	band_row: the 4-lane prefix maximum without its 2-lane step	(lemmas: all lemma checks passed, seed 1: 19 check(s) FAILED, seed 2: 17 check(s) FAILED)
+LR29	OK	killed	band_row: a deletion 1 too cheap	(lemmas: all lemma checks passed, seed 1: 204 check(s) FAILED, seed 2: 211 check(s) FAILED)
+LR30	OK	killed	band_row: the carry lane by lane, not the last lane	(lemmas: all lemma checks passed, seed 1: 56 check(s) FAILED, seed 2: 34 check(s) FAILED)
+LR31	OK	killed	band_row: the tail's deletion 1 too cheap	(lemmas: all lemma checks passed, seed 1: 1 check(s) FAILED, seed 2: 1 check(s) FAILED)
+mutants: 31, unexpected: 0

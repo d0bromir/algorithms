@@ -677,8 +677,9 @@ minimap2 alignment.
   - *Measured on 2026-10-14 (proposal §6.6):* a known alignment of score
     lb narrows the band to L − lb − 7 (about ±250). A banded DP over the
     chains that need it (median 1) proves OPT for 226,327 reads (93.32 %).
-  - *Cost:* median 20 ms of scalar DP per read, about 2.8× minimap2's CPU
-    in all.
+  - *Cost:* median 7.9 ms of DP per read, about 1.6× minimap2's CPU in
+    all, with the DP row vectorized (2026-10-15; scalar: 20 ms, 2.8×). The
+    results are identical to the scalar DP's for every read.
   - *OPT vs minimap2:* OPT beats minimap2's alignment under CERTA's scores
     for 17.8 % of them.
   - *Check:* on 2,005 reads, a full DP around the known locus never beat
@@ -710,7 +711,7 @@ verifies the XQ of PR mates too.
   (0.9909 vs 0.9922). Look at the 13 extra FP and 14 extra FN.
 - **Long reads:** the mapper's limits (320 bp, 8 parts, radius 5) exclude
   them. `tools/lr_ceiling --certify` certifies them (Aim 6, below): OPT is
-  proven for 93.3 % of real HiFi reads, at about 2.8× minimap2's CPU.
+  proven for 93.3 % of real HiFi reads, at about 1.6× minimap2's CPU.
   - *Reads that span SVs:* a split (jump) objective is defined, and Lemma
     L-J bounds it (`certa/longread.h`). With it, 94.4 % of reads fit at
     P = 30, about a fifth of the clipped and high-loss misses.
@@ -722,7 +723,8 @@ verifies the XQ of PR mates too.
     chains evaluated first, read windows, lb raised to the best alignment
     found, and a static step when rounds cost more. That cut the median from
     45 s to 3.4 s per read and the CPU in half. The first version had used a
-    single loose bound.
+    single loose bound. The vectorized DP row then took the median to 1.4 s
+    (39 % of the first version's CPU).
   - *Still open:* reads with a long lossy stretch (for example an insertion
     of repeat sequence) stay costly and keep wide intervals; and building
     all this into the mapper with a faster DP.
