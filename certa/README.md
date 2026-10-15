@@ -259,6 +259,7 @@ tools/lr_ceiling.cpp       long reads: Lemma L ceiling vs best known alignment; 
 scripts/                   build.sh, demo.sh
 THEORY.md                  the proofs, with code, tests and mutants per statement
 lean/                      machine-checked proofs (Lean 4; lake build): Lemmas L, E, H, S, W, C; Theorem G; band pruning, DP row
+paper/                     the paper (LaTeX); make_numbers.py and make_figures.py regenerate every number and figure from bench/results
 ```
 
 **Mutation tests** (from `certa/`; about an hour on 12 cores):
