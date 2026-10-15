@@ -30,6 +30,33 @@ jobs:
       - name: End-to-end demo
         run: BUILD_DIR=certa/build WORK=demo bash certa/scripts/demo.sh 5000000 100000
 
+  lean:
+    # The machine-checked proofs (certa/lean): elan installs the toolchain
+    # pinned in certa/lean/lean-toolchain, lake build checks every proof, and
+    # Axioms.lean fails the job on a sorry or a non-standard axiom.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install elan
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o "$RUNNER_TEMP/elan-init.sh"
+          sh "$RUNNER_TEMP/elan-init.sh" -y --default-toolchain none --no-modify-path
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Check the proofs
+        working-directory: certa/lean
+        run: lake build
+      - name: No sorry, standard axioms only
+        working-directory: certa/lean
+        run: |
+          lake env lean Axioms.lean > axioms.txt 2>&1 || { cat axioms.txt; exit 1; }
+          cat axioms.txt
+          n=$(grep -c "^#print axioms" Axioms.lean)
+          test "$(grep -cE "depends on axioms|does not depend on any axioms" axioms.txt)" -eq "$n"
+          if grep -q sorryAx axioms.txt; then echo "a proof uses sorry"; exit 1; fi
+          extra=$(grep "depends on axioms" axioms.txt | sed -E 's/.*\[(.*)\]/\1/' | tr ',' '\n' |
+            tr -d ' ' | grep -vxE 'propext|Classical\.choice|Quot\.sound' || true)
+          if [ -n "$extra" ]; then echo "non-standard axioms: $extra"; exit 1; fi
+
   cuda-compile:
     # No GPU on hosted runners: this only checks that the CUDA back-end
     # compiles for A100 (sm_80) and Ampere consumer GPUs (sm_86).

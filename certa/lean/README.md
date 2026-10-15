@@ -5,10 +5,14 @@ Lean 4 proofs of the lemmas behind CERTA's bounds ([THEORY.md](../THEORY.md)).
 here they hold for every size. The toolchain is pinned in `lean-toolchain`
 (Lean 4.35.0); no Mathlib.
 
-    lake build    # checks every proof (about 2 s)
+    lake build                    # checks every proof (about 2 s)
+    lake env lean Axioms.lean     # the axioms of every headline theorem
 
 Install the toolchain with [elan](https://github.com/leanprover/elan); `lake`
-then picks the pinned version.
+then picks the pinned version. CI (the `lean` job of
+`.github/workflows/certa.yml`) runs both, and fails on a `sorry` (which
+`lake build` only warns about) or on any axiom besides Lean's standard three
+(`propext`, `Classical.choice`, `Quot.sound`).
 
 | File | Statement | THEORY.md | Finite check |
 |---|---|---|---|
