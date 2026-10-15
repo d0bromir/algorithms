@@ -655,8 +655,9 @@ its code, its oracle tests and the mutants that break it.
 - **Checker:** it now also rejects a record whose own alignment scores above
   its XU.
 - **Open:** review of THEORY.md by a second person. The optional Lean 4
-  mechanization has started: Lemmas L, E, H and S, Theorem G and the
-  long-read band pruning are machine-checked (`lean/`, 2026-10-15).
+  mechanization has started: Lemmas L, E, H, S and W, Lemma C's core,
+  Theorem G, the long-read band pruning and the vector DP row are
+  machine-checked (`lean/`, 2026-10-15).
 
 *Update 2026-10-13, Aim 6 (proposal §6.6, criterion pre-registered).*
 `tools/lr_ceiling` measures whether long reads fit the exact-part

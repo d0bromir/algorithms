@@ -830,7 +830,8 @@ All 4 are within the 0.0010 margin and above BWA-MEM2. Records with MAPQ ≥ 20 
   Lemma H, 4 for Lemma S), and Lemma E's bound attained for every d. Lemma S makes mutant L6
   equivalent by proof. Theorem G is proved for F_τ with occurrences counted in a reference text.
   The band pruning that brought HiFi certification under minimap2's cost is proved for alignment
-  paths. Theorem L-J's pruning remains.
+  paths, as are Lemma W (the pad), Lemma C's diagonal geometry and the vectorized DP row's
+  identity. Theorem L-J's pruning remains.
 
 ### 6.6 Aim 6: long reads (criterion pre-registered 2026-10-13, before the run)
 

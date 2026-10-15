@@ -221,6 +221,9 @@ alignment scoring above b has G ≤ pad(b) = max(0, L − b − 7).
 - *Proof:* a gap run of k costs ≥ 6 + k. ∎
 - *Note:* pad(b) = 0 when b ≥ L − 7: such an alignment has no gap at all.
   The window search in pair.h missed this clamp (§5).
+- *Mechanized* in Lean 4 ([`lean/Certa/LemmaW.lean`](lean/Certa/LemmaW.lean),
+  `lemmaW`): on Lemma E's alignments, a score above b gives gap total
+  ≤ max(0, L − b − 7).
 
 **Lemma C (chains).** Let all occurrences of the parts of S be enumerated,
 sorted by diagonal, and split where consecutive diagonals differ by more
@@ -232,6 +235,12 @@ than pad. Let A have ≥ 1 exactly occurring part and gap total ≤ pad. Then:
 *Proof.* A's exact parts lie on diagonals within G ≤ pad of each other, so
 no split falls between them. A's diagonals stay within G of each exact
 part's. A's exactly occurring parts are among C's. ∎
+
+*Mechanized* in Lean 4 ([`lean/Certa/LemmaC.lean`](lean/Certa/LemmaC.lean)),
+its geometric core: `diag_drift` (two aligned bases of A lie on diagonals at
+most G apart; a diagonal moves only at gaps), `diag_within_pad` (with Lemma
+W, at most pad(b) apart when A scores above b) and `no_split_within` (no
+split falls between two sorted diagonals at most pad apart).
 
 *Mutants:* L7, C3.
 
@@ -291,6 +300,10 @@ follows its own opening better than it extends it.
   identical with and without it.
 - *Mutants:* LR28–LR31 (a missing shift step, a deletion 1 too cheap in the
   vector body and in the tail, the carry kept per lane).
+- *Mechanized* in Lean 4 ([`lean/Certa/BandRow.lean`](lean/Certa/BandRow.lean),
+  `vec_eq_scalar`): the scalar recurrence and the vector form (the inclusive
+  prefix maximum with a carry) give the same row, for rows of any width,
+  whenever every h0 is at least the sentinel.
 
 **Pruning the band (`band_best` with a floor; Corollary L-long).** The DP
 needs only alignments above the best score so far, the floor. A cell (or
@@ -977,7 +990,8 @@ Points worth checking first:
    that was wrong.
 4. **The equivalence arguments** for the mutants that survive by design
    (L6, A2), and their stated preconditions (parts ≥ 5; reads ≥ 98 bp).
-5. **Mechanization.** Lemmas L, E, H and S (its second claim, which makes
-   mutant L6 equivalent), Theorem G and the band pruning's two path facts
-   are machine-checked in Lean 4 ([`lean/`](lean/README.md)). Theorem L-J's
+5. **Mechanization.** Lemmas L, E, H, S (its second claim, which makes
+   mutant L6 equivalent) and W, Lemma C's geometric core, Theorem G, the
+   band pruning's two path facts and the vector DP row's identity are
+   machine-checked in Lean 4 ([`lean/`](lean/README.md)). Theorem L-J's
    pruning (rounds, windows) is not.
