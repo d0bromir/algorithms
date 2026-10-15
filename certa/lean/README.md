@@ -17,7 +17,8 @@ then picks the pinned version.
 
 The model is `verify_lemmas.cpp`'s: each read base is a match, a mismatch or
 inserted, and may be followed by a deletion; the loss is 5 per mismatch, 2 per
-inserted base plus 6 per run of them, and 6 + k per deletion of k. The proof
-credits every base with its own loss, splitting a run's opening cost of 6 as 3
-to its first base and 3 to its last; the credits sum to at most the loss, and
-every inexact part of length ≥ 3 collects at least 5.
+inserted base plus 6 per run of them, and 6 + k per deletion of k. Lemma L's
+proof credits every base with its own loss, splitting a run's opening cost of 6
+as 3 to its first base and 3 to its last; the credits sum to at most the loss,
+and every inexact part of length ≥ 3 collects at least 5. Lemma E's carries the
+loss beyond the edits through the transcript.
