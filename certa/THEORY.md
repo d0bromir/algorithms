@@ -318,6 +318,14 @@ floor, the cell is dead.
   unchanged.
 - *Mutants:* LR34–LR37 (the live test 1 too strict; the row range one cell
   short on either side; new pieces cut off 3 rows early).
+- *Mechanized* in Lean 4 for alignment paths
+  ([`lean/Certa/Prune.lean`](lean/Certa/Prune.lean)): `prefix_live` (every
+  cell on a path to a live cell is live) and `above_live` (in a row where no
+  new piece can lead above the floor, a live cell's path has two aligned
+  pairs, and dropping one, `remove_pair`, gives a live path to the cell
+  above). The scores are band_best's: start 0 or −5, pairs +1 / −4, a gap
+  opening −7 and extending −1. That the DP's cell value is the best path
+  ending there is Gotoh's recurrence, and is not mechanized.
 
 **Jump (split) alignments (Aim 6 follow-up; `certa/longread.h`).** A long
 read that crosses a structural variant has no good single local alignment.
@@ -970,5 +978,6 @@ Points worth checking first:
 4. **The equivalence arguments** for the mutants that survive by design
    (L6, A2), and their stated preconditions (parts ≥ 5; reads ≥ 98 bp).
 5. **Mechanization.** Lemmas L, E, H and S (its second claim, which makes
-   mutant L6 equivalent) and Theorem G are machine-checked in Lean 4
-   ([`lean/`](lean/README.md)). The long-read pruning lemmas come next.
+   mutant L6 equivalent), Theorem G and the band pruning's two path facts
+   are machine-checked in Lean 4 ([`lean/`](lean/README.md)). Theorem L-J's
+   pruning (rounds, windows) is not.
