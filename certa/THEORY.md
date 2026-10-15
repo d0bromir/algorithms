@@ -653,6 +653,17 @@ s. ∎
 
 *Verified* against a DP optimum on 20,000 random instances.
 
+*Mechanized* in Lean 4 ([`lean/Certa/TheoremG.lean`](lean/Certa/TheoremG.lean)):
+- `greedy_max`: for any family of intervals of [0, L) closed under
+  extension, the greedy picks are disjoint intervals of the family, and no
+  such family is larger. The proof: the first interval [i, j) of any family
+  starting at or after s extends to [s, j), so the greedy interval at s
+  ends at or before j, and the rest follows by induction.
+- `greedy_max_tau`: the same for F_τ itself, with occurrences counted in a
+  reference text. A superstring occurs at most as often as the string
+  (`occ_super`): extending to the right removes matches at each position,
+  and one character to the left maps each match to the next position.
+
 **Lemma R (anchor extension, tier R's implementation of Theorem G).** The
 occurrences of [s, b) are exactly the hits h of an anchor q-mer at c, with
 s ≤ c and c + q ≤ b, whose exact match extends left to s and right to b.
@@ -959,6 +970,5 @@ Points worth checking first:
 4. **The equivalence arguments** for the mutants that survive by design
    (L6, A2), and their stated preconditions (parts ≥ 5; reads ≥ 98 bp).
 5. **Mechanization.** Lemmas L, E, H and S (its second claim, which makes
-   mutant L6 equivalent) are machine-checked in Lean 4
-   ([`lean/`](lean/README.md)). Theorem G and the long-read pruning lemmas
-   come next.
+   mutant L6 equivalent) and Theorem G are machine-checked in Lean 4
+   ([`lean/`](lean/README.md)). The long-read pruning lemmas come next.

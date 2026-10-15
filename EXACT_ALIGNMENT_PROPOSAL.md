@@ -824,11 +824,12 @@ All 4 are within the 0.0010 margin and above BWA-MEM2. Records with MAPQ ≥ 20 
   every mutant is killed or proven equivalent.
 - **Proofs reviewed: not yet.** THEORY.md has not been reviewed by a second person; its §11 lists
   where to start.
-- **Lean 4 (optional): started (2026-10-15).** Lemmas L, E, H and S are machine-checked for
-  reads of any length ([certa/lean](certa/lean/README.md); Lean 4.35, no Mathlib), with the
-  counterexamples showing the part lengths are needed (2 for Lemma L, 3 for Lemma H, 4 for
-  Lemma S), and Lemma E's bound attained for every d. Lemma S makes mutant L6 equivalent by
-  proof. Theorem G and the long-read pruning lemmas remain.
+- **Lean 4 (optional): started (2026-10-15).** Lemmas L, E, H and S and Theorem G are
+  machine-checked for reads of any length ([certa/lean](certa/lean/README.md); Lean 4.35, no
+  Mathlib), with the counterexamples showing the part lengths are needed (2 for Lemma L, 3 for
+  Lemma H, 4 for Lemma S), and Lemma E's bound attained for every d. Lemma S makes mutant L6
+  equivalent by proof. Theorem G is proved for F_τ with occurrences counted in a reference text.
+  The long-read pruning lemmas remain.
 
 ### 6.6 Aim 6: long reads (criterion pre-registered 2026-10-13, before the run)
 
@@ -998,7 +999,7 @@ certificate.
 | **2. Repeats** | FM-index counts; Theorem R ties; Theorem R′ collapse | exact share and tie proofs among the 3.6 % repeat-limited reads; DP calls saved | Half of the repeat-limited reads exact or proven ties. **Partial go (§6.2): 50.5–53.2 % on HG002, 43.8–46.0 % on HG005; 79–86 % of near-perfect copies.** Built with the hash index (no FM-index needed); window collapse (R′) not needed so far. |
 | **3. Interval output and MAPQ** | [ℓ, u], SUB interval, conservative MAPQ, SAM tags (`XL`, `XU`) | interval-width distribution; MAPQ calibration on GIAB stratified regions | Variant F1 non-inferior to the current pipeline with **no** heuristic fallback. **Go (§6.3): HG005 F1 −0.0008 to +0.0011 against CERTA + minibwa, above BWA-MEM2 in all 4.** Calibration was measured on simulated pairs instead (the GIAB stratification files are not downloaded). XQ as MAPQ fails: it is biased toward the reference. |
 | **4. Checker** | independent checker (Theorem V); sampling audit | check time per read; zero disagreements | Checker accepts 100 % of certificates; injected faults all detected. **Go (§6.4): 8 M real records accepted; all 23,733 false-by-construction faults and all 6 mapper mutants detected; 89–134 µs per record.** The gap (pair-level XQ, about 4 % of records) **is closed (§6.4, 2026-10-14): all 303,682 XS claims on 8 M records proven; 181–232 µs per record.** |
-| **5. Theory** | written proofs of Lemma H, Theorems C, G, R, V; optional Lean 4 mechanization | — | Proofs reviewed; mutation tests for each bound. **Half met (§6.5): every bound's mutants killed (50) or proven equivalent (6); exhaustive lemma checks pass; two S2 bugs found and fixed.** Review by a second person pending; Lean started: Lemmas L, E, H and S machine-checked. |
+| **5. Theory** | written proofs of Lemma H, Theorems C, G, R, V; optional Lean 4 mechanization | — | Proofs reviewed; mutation tests for each bound. **Half met (§6.5): every bound's mutants killed (50) or proven equivalent (6); exhaustive lemma checks pass; two S2 bugs found and fixed.** Review by a second person pending; Lean started: Lemmas L, E, H, S and Theorem G machine-checked. |
 | **6. Long reads** | HiFi feasibility on a2's existing data (§8) | share of reads whose loss is below the certifiable ceiling | Go if ≥ 90 % of HiFi reads fit. **Go (§6.6, definitions pre-registered): 93.29 % of 242,534 HG002 HiFi reads fit (93.75 % at τ = 256).** The misses span SVs (4.4 %), sit in repeats (1.8 %) or are unmapped (0.5 %). **Follow-up: the certificate completed for 93.32 % (OPT proven), at 0.86× minimap2's CPU; with the split objective, 93.96 % exact (§6.6).** |
 
 **Ground rules:**
