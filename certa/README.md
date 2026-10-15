@@ -258,7 +258,7 @@ tools/simulate.py          synthetic genome/reads and placement evaluation
 tools/lr_ceiling.cpp       long reads: Lemma L ceiling vs best known alignment; --certify proves OPT (Aim 6)
 scripts/                   build.sh, demo.sh
 THEORY.md                  the proofs, with code, tests and mutants per statement
-lean/                      machine-checked proofs (Lean 4; lake build): Lemma L
+lean/                      machine-checked proofs (Lean 4; lake build): Lemmas L, E
 ```
 
 **Mutation tests** (from `certa/`; about an hour on 12 cores):

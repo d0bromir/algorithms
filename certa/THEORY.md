@@ -502,6 +502,13 @@ carrying ≥ 2 edits, which is a gap or a clip (extra ≥ 5). ∎
 - *Tight:* one mismatch (d = 1), or a clipped end of d bases (d ≥ 2).
 - *Verified* exhaustively: 8.1 M clipped transcripts of 8-base reads,
   attained for d = 1 … 4.
+- *Mechanized* in Lean 4 for reads of any length
+  ([`lean/Certa/LemmaE.lean`](lean/Certa/LemmaE.lean)): `lemmaE` (with the
+  score defined as BWA-MEM's and shown equal to span − loss, `span_eq`),
+  and `lemmaE_attained`, the bound attained for every d ≥ 1 by an alignment
+  with an aligned base. The proof carries the "extra" through the
+  transcript: ≥ 4 beyond the edits for one edit, ≥ 5 for two or more, and
+  1 per further base of an insertion run already open.
 - *Mutants:* A1, A5.
 
 **Lemma O (overlap inside one band).** Let A and B be alignments whose
@@ -940,6 +947,6 @@ Points worth checking first:
    that was wrong.
 4. **The equivalence arguments** for the mutants that survive by design
    (L6, A2), and their stated preconditions (parts ≥ 5; reads ≥ 98 bp).
-5. **Mechanization.** Lemma L is machine-checked in Lean 4
-   ([`lean/`](lean/README.md)). Lemmas E, H and S and Theorem G are finite
+5. **Mechanization.** Lemmas L and E are machine-checked in Lean 4
+   ([`lean/`](lean/README.md)). Lemmas H and S and Theorem G are finite
    combinatorial statements of the same kind, and come next.
