@@ -209,6 +209,12 @@ alone attains the maximum.
   Parts of length 4 give 3,885 counterexamples.
 - *So:* mutant L6, which shifts the span start candidates, is
   **equivalent**. CERTA's parts are ≥ 17 bases.
+- *Mechanized* (the second claim) in Lean 4 for reads of any length
+  ([`lean/Certa/LemmaS.lean`](lean/Certa/LemmaS.lean)): `lemmaS`, every
+  span's bound at most the full span's for disjoint parts of length ≥ 5,
+  any counted set and any extra; `lemmaS_length_four`, three parts of 4
+  where a shorter span wins. The proof counts the parts dropped at each
+  end: at most (x + 4) / 5 start before x.
 
 **Lemma W (gaps).** An alignment with gap total G ≥ 1 has λ ≥ 6 + G. So an
 alignment scoring above b has G ≤ pad(b) = max(0, L − b − 7).
@@ -952,6 +958,7 @@ Points worth checking first:
    that was wrong.
 4. **The equivalence arguments** for the mutants that survive by design
    (L6, A2), and their stated preconditions (parts ≥ 5; reads ≥ 98 bp).
-5. **Mechanization.** Lemmas L, E and H are machine-checked in Lean 4
-   ([`lean/`](lean/README.md)). Lemma S and Theorem G are finite
-   combinatorial statements of the same kind, and come next.
+5. **Mechanization.** Lemmas L, E, H and S (its second claim, which makes
+   mutant L6 equivalent) are machine-checked in Lean 4
+   ([`lean/`](lean/README.md)). Theorem G and the long-read pruning lemmas
+   come next.
