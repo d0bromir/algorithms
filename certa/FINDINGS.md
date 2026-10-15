@@ -655,7 +655,8 @@ its code, its oracle tests and the mutants that break it.
 - **Checker:** it now also rejects a record whose own alignment scores above
   its XU.
 - **Open:** review of THEORY.md by a second person. The optional Lean 4
-  mechanization needs a toolchain download (not approved).
+  mechanization has started: Lemma L is machine-checked for transcripts of
+  any length (`lean/`, 2026-10-15).
 
 *Update 2026-10-13, Aim 6 (proposal §6.6, criterion pre-registered).*
 `tools/lr_ceiling` measures whether long reads fit the exact-part

@@ -181,6 +181,13 @@ cost. ∎
   costs 14 < 15; `verify_lemmas` finds it.
 - *Verified* exhaustively for parts ≥ 3: all layouts, all transcripts of
   9-base reads, 52.8 M cases.
+- *Mechanized* in Lean 4 for transcripts of any length
+  ([`lean/Certa/LemmaL.lean`](lean/Certa/LemmaL.lean), `lemmaL`), with a
+  simpler charging: every base is credited with its own loss, and an
+  insertion run's opening cost of 6 is split as 3 to its first base and 3 to
+  its last. The credits sum to at most the loss, and every inexact part of
+  length ≥ 3 collects at least 5. The length-2 counterexample is
+  `lemmaL_length_two`.
 - *Corollary (U_t):* an alignment with fewer than t exactly occurring parts
   (of a set S of m parts) scores at most
 
@@ -933,6 +940,6 @@ Points worth checking first:
    that was wrong.
 4. **The equivalence arguments** for the mutants that survive by design
    (L6, A2), and their stated preconditions (parts ≥ 5; reads ≥ 98 bp).
-5. **Mechanization.** Lemmas L, E, H and S and Theorem G are finite
-   combinatorial statements, suitable for Lean 4. That needs the Lean
-   toolchain, which is not installed.
+5. **Mechanization.** Lemma L is machine-checked in Lean 4
+   ([`lean/`](lean/README.md)). Lemmas E, H and S and Theorem G are finite
+   combinatorial statements of the same kind, and come next.
