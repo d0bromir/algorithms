@@ -246,12 +246,12 @@ CERTA_HD inline bool kmer_key(const uint8_t* s, int q, uint64_t* key) {
   return true;
 }
 
-// Half-open range [*lo, *hi) of index entries whose key equals `key`.
-CERTA_HD inline void lookup(const IndexView& ix, uint64_t key, uint64_t* lo,
-                            uint64_t* hi) {
+// Half-open range [*lo, *hi) of the entries whose key equals `key` within
+// its bucket [l, r) = [dir[b], dir[b + 1]), b = key >> (2q - dir_bits).
+CERTA_HD inline void lookup_bucket(const IndexView& ix, uint64_t key, uint64_t l, uint64_t r, uint64_t* lo,
+                                   uint64_t* hi) {
   const int shift = 2 * ix.q - ix.dir_bits;
-  uint64_t b = key >> shift;
-  uint64_t l = ix.dir[b], r = ix.dir[b + 1];
+  const uint64_t r0 = r;
   if (ix.keys16) {  // within a bucket, keys are ordered by their low bits
     const uint16_t k = (uint16_t)(key & ((1ull << shift) - 1));
     while (l < r) {
@@ -259,7 +259,7 @@ CERTA_HD inline void lookup(const IndexView& ix, uint64_t key, uint64_t* lo,
       if (ix.keys16[m] < k) l = m + 1; else r = m;
     }
     *lo = l;
-    r = ix.dir[b + 1];
+    r = r0;
     while (l < r) {
       uint64_t m = l + (r - l) / 2;
       if (ix.keys16[m] <= k) l = m + 1; else r = m;
@@ -272,12 +272,19 @@ CERTA_HD inline void lookup(const IndexView& ix, uint64_t key, uint64_t* lo,
     if (ix.keys[m] < key) l = m + 1; else r = m;
   }
   *lo = l;
-  r = ix.dir[b + 1];
+  r = r0;
   while (l < r) {
     uint64_t m = l + (r - l) / 2;
     if (ix.keys[m] <= key) l = m + 1; else r = m;
   }
   *hi = l;
+}
+
+// Half-open range [*lo, *hi) of index entries whose key equals `key`.
+CERTA_HD inline void lookup(const IndexView& ix, uint64_t key, uint64_t* lo,
+                            uint64_t* hi) {
+  const uint64_t b = key >> (2 * ix.q - ix.dir_bits);
+  lookup_bucket(ix, key, ix.dir[b], ix.dir[b + 1], lo, hi);
 }
 
 // Part j of P parts over a read of length L: offset and length.

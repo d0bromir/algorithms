@@ -214,6 +214,35 @@ int main(int argc, char** argv) {
   const int64_t o1 = static_cast<int64_t>(ref.offsets[0]), o2 = static_cast<int64_t>(ref.offsets[1]);
   Index ix_ = Index::build(ref, 16, 1, 4);
   const IndexView ix = ix_.view(ref);
+  // qmer_keys and lookup_batch (the partition's lookups) against kmer_key and
+  // lookup, at every q-mer of a stretch of the reference with substitutions
+  // and N bases.
+  {
+    std::mt19937_64 gl(seed * 11 + 3);
+    std::vector<uint8_t> sq(R.begin() + o1 + 3000, R.begin() + o1 + 23000);
+    for (auto& x : sq) {
+      const uint64_t u = gl() % 200;
+      if (u < 2) x = 4;
+      else if (u < 4) x = static_cast<uint8_t>(gl() % 4);
+    }
+    const int q = ix.q, n = static_cast<int>(sq.size()) - q + 1;
+    std::vector<uint64_t> key(n), lo(n);
+    std::vector<uint8_t> ok(n);
+    std::vector<uint32_t> cnt(n);
+    qmer_keys(sq.data(), static_cast<int>(sq.size()), q, key.data(), ok.data());
+    lookup_batch(ix, key.data(), ok.data(), n, lo.data(), cnt.data());
+    int bad = 0, hits = 0;
+    for (int i = 0; i < n; ++i) {
+      uint64_t k = 0, l = 0, h = 0;
+      const bool v = kmer_key(sq.data() + i, q, &k);
+      if (v) lookup(ix, k, &l, &h);
+      bad += v != (ok[i] != 0) || (v && k != key[i]) || l != lo[i] || h - l != cnt[i];
+      hits += h > l;
+    }
+    CHECK(bad == 0, "qmer_keys / lookup_batch differ from kmer_key / lookup at %d of %d q-mers", bad, n);
+    std::fprintf(stderr, "qmer_keys + lookup_batch = kmer_key + lookup at %d q-mers (%d occurring): %s\n", n, hits,
+                 bad ? "no" : "yes");
+  }
 
   // Reads: (sequence, planted pieces). Kinds: plain, deletion, novel
   // insertion, inversion, translocation, ragged ends, small deletion,
@@ -371,6 +400,36 @@ int main(int argc, char** argv) {
       }
       std::reverse(r.pieces.begin(), r.pieces.end());
     }
+
+  // band_best with a floor (pruning the cells that cannot lead above it)
+  // against the full DP: equal when the full best exceeds the floor, else at
+  // most the floor. Bands around each read's planted forward pieces, of
+  // random widths and offsets, floors around the best.
+  {
+    std::mt19937_64 gp(seed * 13 + 5);
+    BandDp d1, d2;
+    int checked = 0, bad = 0;
+    for (const Read& rr : reads)
+      for (const auto& pc : rr.pieces) {
+        if (pc.second.second != 0) continue;
+        const int L = static_cast<int>(rr.seq.size());
+        const int64_t d = pc.second.first - pc.first.first;
+        for (int t = 0; t < 4; ++t) {
+          const int64_t w = static_cast<int64_t>(gp() % 300), off = static_cast<int64_t>(gp() % 41) - 20;
+          double c1 = 0, c2 = 0;
+          const long full = band_best(ix, rr.seq.data(), L, d + off - w, d + off + w, d1, &c1);
+          for (long k : {-1L, 0L, 1L, 2L, 7L, 30L, 200L}) {
+            const long fl = full - k;
+            const long pr = band_best(ix, rr.seq.data(), L, d + off - w, d + off + w, d2, &c2, fl);
+            ++checked;
+            bad += full > fl ? pr != full : pr > fl;
+          }
+        }
+      }
+    CHECK(bad == 0, "band_best with a floor differs from the full DP in %d of %d cases", bad, checked);
+    std::fprintf(stderr, "band_best with a floor = the full DP above it, in %d cases: %s\n", checked,
+                 bad ? "no" : "yes");
+  }
 
   PartitionParams pp;
   pp.keep_occ = true;

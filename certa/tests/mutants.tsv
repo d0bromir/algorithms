@@ -97,3 +97,9 @@ LR28	include/certa/longread.h	s/  return vmax(x, __builtin_shufflevector(x, x, 0
 LR29	include/certa/longread.h	s/store(H + b, vmax(h0, incl - idx - del0));/store(H + b, vmax(h0, incl - idx - del0 + splat(1)));/	killed	band_row: a deletion 1 too cheap
 LR30	include/certa/longread.h	s/    carry = last(incl);/    carry = incl;/	killed	band_row: the carry lane by lane, not the last lane
 LR31	include/certa/longread.h	s/H\[b\] = std::max(h0, cs - b - kGapOpen);/H[b] = std::max(h0, cs - b - kGapOpen + 1);/	killed	band_row: the tail's deletion 1 too cheap
+LR32	include/certa/longread.h	s/      l = ix.dir\[b\];/      l = ix.dir[b] + 1;/	killed	lookup_batch: a bucket searched from its second entry
+LR33	include/certa/longread.h	s/      ok\[i - q + 1\] = run >= q;/      ok[i - q + 1] = run >= q - 1;/	killed	qmer_keys: a q-mer holding an N taken as valid
+LR34	include/certa/longread.h	s/) <= thr) {/) <= thr + 1) {/g	killed	band_best: cells that can reach floor + 1 pruned
+LR35	include/certa/longread.h	s/      r0 = c0;/      r0 = c0 + 1;/	killed	band_best: a row's range one cell short on the left
+LR36	include/certa/longread.h	s/if (start + kMatch + rem <= floor) {/if (start + kMatch + rem <= floor + 3) {/	killed	band_best: new pieces cut off 3 rows early
+LR37	include/certa/longread.h	s/      r1 = c1;/      r1 = c1 - 1;/	killed	band_best: a row's range one cell short on the right

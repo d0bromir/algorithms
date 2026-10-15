@@ -153,7 +153,9 @@ struct PartitionParams {
 };
 
 struct LrScratch {
-  std::vector<uint64_t> lo;
+  std::vector<uint64_t> lo, key;
+  std::vector<int64_t> occ_pos;
+  std::vector<uint8_t> ok;
   std::vector<uint32_t> cnt;
   std::vector<int> nz;
   std::vector<int64_t> elig;
@@ -170,6 +172,68 @@ struct StrandParts {
   // reference position of read base 0, part index), on this strand.
   std::vector<std::pair<int64_t, int>> occ;
 };
+
+// The index ranges of n q-mers (key[i], valid where ok[i]; else lo = cnt =
+// 0), as lookup() gives them. Each lookup costs two dependent random
+// accesses into the index (the bucket directory, then the bucket), so they
+// are pipelined over groups of G keys: the directory entries of group g + 2
+// and the buckets of group g + 1 are prefetched while group g is searched.
+inline void lookup_batch(const IndexView& ix, const uint64_t* key, const uint8_t* ok, int n, uint64_t* lo,
+                         uint32_t* cnt) {
+  constexpr int G = 16;
+  const int shift = 2 * ix.q - ix.dir_bits;
+  const int ng = (n + G - 1) / G;
+  uint64_t bl[2][G], br[2][G];  // the buckets of groups g and g + 1
+  auto dir_prefetch = [&](int g) {
+    for (int i = g * G; i < std::min(n, g * G + G); ++i)
+      if (ok[i]) __builtin_prefetch(ix.dir + (key[i] >> shift));
+  };
+  auto bucket_load = [&](int g) {  // read the directory, prefetch the bucket
+    for (int i = g * G; i < std::min(n, g * G + G); ++i) {
+      if (!ok[i]) continue;
+      const uint64_t b = key[i] >> shift;
+      uint64_t& l = bl[g & 1][i - g * G];
+      l = ix.dir[b];
+      br[g & 1][i - g * G] = ix.dir[b + 1];
+      if (ix.keys16) __builtin_prefetch(ix.keys16 + l);
+      else __builtin_prefetch(ix.keys + l);
+    }
+  };
+  dir_prefetch(0);
+  dir_prefetch(1);
+  if (ng > 0) bucket_load(0);
+  for (int g = 0; g < ng; ++g) {
+    if (g + 2 < ng) dir_prefetch(g + 2);
+    if (g + 1 < ng) bucket_load(g + 1);
+    for (int i = g * G; i < std::min(n, g * G + G); ++i) {
+      uint64_t l = 0, h = 0;
+      if (ok[i]) lookup_bucket(ix, key[i], bl[g & 1][i - g * G], br[g & 1][i - g * G], &l, &h);
+      lo[i] = l;
+      cnt[i] = (uint32_t)std::min<uint64_t>(h - l, UINT32_MAX);
+    }
+  }
+}
+
+// The keys of every q-mer of rd (kmer_key, rolling): key[i] for rd[i, i + q),
+// ok[i] when it holds no N.
+inline void qmer_keys(const uint8_t* rd, int L, int q, uint64_t* key, uint8_t* ok) {
+  const uint64_t mask = q >= 32 ? ~0ull : (1ull << (2 * q)) - 1;
+  uint64_t v = 0;
+  int run = 0;  // bases since the last N
+  for (int i = 0; i < L; ++i) {
+    if (rd[i] > 3) {
+      run = 0;
+      v = 0;
+    } else {
+      v = ((v << 2) | rd[i]) & mask;
+      ++run;
+    }
+    if (i >= q - 1) {
+      key[i - q + 1] = v;
+      ok[i - q + 1] = run >= q;
+    }
+  }
+}
 
 // The greedy partition of one strand of a read (rd: that strand's sequence):
 // at each position s the shortest prefix occurring <= tau times, found by
@@ -189,12 +253,10 @@ inline void partition_strand(const IndexView& ix, const uint8_t* rd, int L, cons
   sc.lo.resize(nq);
   sc.cnt.resize(nq);
   sc.nz.resize(nq + 1);
-  for (int i = 0; i < nq; ++i) {
-    uint64_t key, lo = 0, hi = 0;
-    if (kmer_key(rd + i, q, &key)) lookup(ix, key, &lo, &hi);
-    sc.lo[i] = lo;
-    sc.cnt[i] = (uint32_t)std::min<uint64_t>(hi - lo, UINT32_MAX);
-  }
+  sc.key.resize(nq);
+  sc.ok.resize(nq);
+  qmer_keys(rd, L, q, sc.key.data(), sc.ok.data());
+  lookup_batch(ix, sc.key.data(), sc.ok.data(), nq, sc.lo.data(), sc.cnt.data());
   sc.nz[nq] = nq;
   for (int i = nq - 1; i >= 0; --i) sc.nz[i] = sc.cnt[i] == 0 ? i : sc.nz[i + 1];
   int s = 0;
@@ -207,8 +269,15 @@ inline void partition_strand(const IndexView& ix, const uint8_t* rd, int L, cons
     sc.elig.clear();
     sc.ext.clear();
     if (c >= 0) {
-      for (uint64_t e = sc.lo[c]; e < sc.lo[c] + sc.cnt[c]; ++e) {
-        const int64_t h = ix.pos[e];
+      // The occurrences' left contexts are random reads of the reference:
+      // gather the positions and prefetch every context first.
+      sc.occ_pos.resize(sc.cnt[c]);
+      for (uint32_t x = 0; x < sc.cnt[c]; ++x) {
+        const int64_t h = ix.pos[sc.lo[c] + x];
+        sc.occ_pos[x] = h;
+        if (h - (c - s) >= 0) __builtin_prefetch(ix.ref + (h - (c - s)));
+      }
+      for (const int64_t h : sc.occ_pos) {
         bool ok = true;
         for (int k = c - 1; k >= s && ok; --k) ok = lr_same(rd[k], ref_at(ix, h - (c - k)));
         if (ok) sc.elig.push_back(h);
@@ -216,6 +285,7 @@ inline void partition_strand(const IndexView& ix, const uint8_t* rd, int L, cons
       if ((int)sc.elig.size() <= o.tau) {
         banc = c + q;
       } else {
+        for (int64_t h : sc.elig) __builtin_prefetch(ix.ref + h + q);
         for (int64_t h : sc.elig) {
           int R = 0;
           while (c + q + R < L && lr_same(rd[c + q + R], ref_at(ix, h + q + R))) ++R;
@@ -381,10 +451,25 @@ struct BandDp {
 };
 
 // The best local score (-5 per clipped end) of rd over alignments whose cells
-// all lie on diagonals [dlo, dhi] (reference position minus read position).
-// Gotoh, one row of the band at a time.
+// all lie on diagonals [dlo, dhi] (reference position minus read position),
+// if it exceeds `floor`; otherwise some value <= floor. Gotoh, one row of the
+// band at a time, on the cells that can still lead above floor:
+//  - a cell or insertion state of value v at read base f leads at most to
+//    v + (L - 1 - f), each later base adding at most 1. If that is <= floor,
+//    the cell is dead;
+//  - every cell on the best path to a live cell is live (its value is lower
+//    by at most the bases between them), so dropping dead cells (as NEG)
+//    leaves every live cell's value exact, and the best path's end is live;
+//  - while a new piece can still lead above floor (start + 1 + bases after
+//    f > floor), the whole band is computed. After that, a live cell's best
+//    path holds two aligned pairs (one, and a gap, is already below a new
+//    piece). Removing its last aligned pair moves what follows up one row,
+//    on the same diagonals, and loses at most 1: so the cell above is live,
+//    and row f's live cells lie in the previous row's live range [c0, c1).
+// Each row is computed on that range, and the dead cells at its ends are
+// dropped. With the default floor, every cell.
 inline long band_best(const IndexView& ix, const uint8_t* rd, int L, int64_t dlo, int64_t dhi, BandDp& dp,
-                      double* cells) {
+                      double* cells, long floor = LONG_MIN / 4) {
   const int B = (int)(dhi - dlo + 1);
   const int NEG = INT_MIN / 4;
   dp.H.assign(B + 1, NEG);
@@ -393,12 +478,33 @@ inline long band_best(const IndexView& ix, const uint8_t* rd, int L, int64_t dlo
   dp.T.resize((size_t)L + B - 1);
   for (int64_t x = 0; x < (int64_t)L + B - 1; ++x) dp.T[x] = ref_at(ix, dlo + x);
   int best = NEG;
+  int c0 = 0, c1 = 0;  // the previous row's live range (outside it, H = I = NEG)
   for (int f = 0; f < L; ++f) {
     const int start = f == 0 ? 0 : -kClip;
     const int end = f + 1 < L ? kClip : 0;
-    best = std::max(best, band_row(dp.H.data(), dp.I.data(), B, start, rd[f], dp.T.data() + f, f > 0) - end);
+    const long rem = L - 1 - f;  // the most the bases after f add
+    int r0 = 0, r1 = B;
+    if (start + kMatch + rem <= floor) {  // no new piece can lead above floor
+      if (c0 >= c1) break;
+      r0 = c0;
+      r1 = c1;
+    }
+    const int mrow = band_row(dp.H.data() + r0, dp.I.data() + r0, r1 - r0, start, rd[f], dp.T.data() + f + r0, f > 0);
+    *cells += r1 - r0;
+    best = std::max(best, mrow - end);
+    const long thr = floor - rem;
+    int n0 = r0, n1 = r1;
+    while (n0 < n1 && std::max(dp.H[n0], dp.I[n0]) <= thr) {
+      dp.H[n0] = dp.I[n0] = NEG;
+      ++n0;
+    }
+    while (n1 > n0 && std::max(dp.H[n1 - 1], dp.I[n1 - 1]) <= thr) {
+      --n1;
+      dp.H[n1] = dp.I[n1] = NEG;
+    }
+    c0 = n0;
+    c1 = n1;
   }
-  *cells += (double)L * B;
   return best;
 }
 
@@ -445,7 +551,7 @@ inline LrCert certify_single(const IndexView& ix, const uint8_t* const* rd, int 
         return c;
       }
       ++c.searched;
-      best = std::max(best, band_best(ix, rd[st], L, dlo, dhi, dp, &c.cells));
+      best = std::max(best, band_best(ix, rd[st], L, dlo, dhi, dp, &c.cells, best));
     }
   }
   c.status = 1;

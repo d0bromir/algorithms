@@ -907,23 +907,27 @@ aligner, and neither does the rest.
 
 | HG002 HiFi, 242,534 reads | Result |
 |---|---|
-| **OPT proven** | **226,327 reads (93.32 %)**: every read that fits but 3, which hit the per-read cap of 4 × 10⁹ cells |
+| **OPT proven** | **226,330 reads (93.32 %)**: every read that fits (with the trimmed path) |
 | Chains needing a DP per read | median 1 (the true locus), 99th percentile 2, max 83 |
-| DP cells per read | median 6.1 M, 99th percentile 66 M |
-| DP time per read (one thread) | median 7.9 ms, mean 13.5 ms, 99th percentile 83 ms (scalar DP: 20, 35, 217 ms) |
-| Whole run, CPU | 6,836 s, about 28 ms per read (scalar DP: 11,629 s). minimap2's mapping and alignment take 4,171 s: **certifying costs about 1.6× minimap2** (scalar DP: 2.8×) |
+| DP cells per read | median 2.1 M computed, of a 6.1 M band |
+| DP time per read (one thread) | median 3.1 ms, mean 5.0 ms, 99th percentile 30 ms (the first, scalar DP: 20, 35, 217 ms) |
+| Whole run, CPU | 3,575 s, about 15 ms per read (the first version: 11,629 s). minimap2's mapping and alignment take 4,171 s: **certifying costs less than minimap2 (0.86×)**; the first version cost 2.8× |
 | OPT above minimap2's alignment (CERTA's scores) | 17.8 % of certified reads, median by 1 point. 333 reads by ≥ 50 against every minimap2 line, e.g. an optimum through bases minimap2 clipped |
 | Check on 2,005 reads (every 121st) | parts recounted, U₁ by brute force, and a full DP over ±1 kb around minimap2's locus: never above the proven OPT, equal to it for 1,876 of 1,879 |
 
-**The DP row is vectorized** (`band_row`, 2026-10-15; [raw](certa/bench/results/aim6_2026-10/vector_dp.txt)).
-- *How:* the deletion chain of a Gotoh row is a prefix maximum, computed with a few in-register
-  shifts per vector.
-- *Exact:* the results are identical to the scalar DP's for all 242,534 reads (and for the split
-  certificate below).
-- *Speed of the kernel alone:* 2.3× on galaxy's NEON (4 lanes) and 8× on x86 with AVX2 (8 lanes).
-- *What remains:* about 55 % of the run's CPU is now outside the DP (the partition into parts,
-  index lookups, chains, I/O; not profiled yet). Even with a free DP, that part alone is about
-  0.9× minimap2, so minimap2-like cost needs work there too.
+**From 2.8× to 0.86× minimap2's CPU (2026-10-15)**
+([raw](certa/bench/results/aim6_2026-10/certify_cost.txt),
+[kernel](certa/bench/results/aim6_2026-10/vector_dp.txt)). Three changes; none changes a
+certificate.
+- *The DP row is vectorized* (`band_row`). The deletion chain of a Gotoh row is a prefix
+  maximum, computed with a few in-register shifts per vector. The kernel alone is 2.3× faster on
+  galaxy's NEON (4 lanes) and 8× on x86 with AVX2 (8 lanes). This took the cost to 1.6×.
+- *Batched index lookups.* A profile then showed half the CPU in partitioning the read into
+  parts, mostly in the index lookups: two dependent random reads into a 23 GB index per q-mer.
+  They are now pipelined in groups, with prefetches.
+- *The DP pruned to cells that can beat lb* (THEORY.md, "Pruning the band"). A cell's value plus
+  the bases after it bounds every alignment through it. Only 35.5 % of the band's cells pass, and
+  35 % are computed. The 3 reads that used to hit the cell cap now fit under it (OPT = lb).
 
 **Follow-up 2 (2026-10-14): reads that cross structural variants, bound side**
 ([raw](certa/bench/results/aim6_2026-10/split.txt); exploratory, not pre-registered).
@@ -992,7 +996,7 @@ aligner, and neither does the rest.
 | **3. Interval output and MAPQ** | [ℓ, u], SUB interval, conservative MAPQ, SAM tags (`XL`, `XU`) | interval-width distribution; MAPQ calibration on GIAB stratified regions | Variant F1 non-inferior to the current pipeline with **no** heuristic fallback. **Go (§6.3): HG005 F1 −0.0008 to +0.0011 against CERTA + minibwa, above BWA-MEM2 in all 4.** Calibration was measured on simulated pairs instead (the GIAB stratification files are not downloaded). XQ as MAPQ fails: it is biased toward the reference. |
 | **4. Checker** | independent checker (Theorem V); sampling audit | check time per read; zero disagreements | Checker accepts 100 % of certificates; injected faults all detected. **Go (§6.4): 8 M real records accepted; all 23,733 false-by-construction faults and all 6 mapper mutants detected; 89–134 µs per record.** The gap (pair-level XQ, about 4 % of records) **is closed (§6.4, 2026-10-14): all 303,682 XS claims on 8 M records proven; 181–232 µs per record.** |
 | **5. Theory** | written proofs of Lemma H, Theorems C, G, R, V; optional Lean 4 mechanization | — | Proofs reviewed; mutation tests for each bound. **Half met (§6.5): every bound's mutants killed (50) or proven equivalent (6); exhaustive lemma checks pass; two S2 bugs found and fixed.** Review by a second person pending; Lean not started (needs a download). |
-| **6. Long reads** | HiFi feasibility on a2's existing data (§8) | share of reads whose loss is below the certifiable ceiling | Go if ≥ 90 % of HiFi reads fit. **Go (§6.6, definitions pre-registered): 93.29 % of 242,534 HG002 HiFi reads fit (93.75 % at τ = 256).** The misses span SVs (4.4 %), sit in repeats (1.8 %) or are unmapped (0.5 %). **Follow-up: the certificate completed for 93.32 % (OPT proven), at about 1.6× minimap2's CPU; with the split objective, 93.96 % exact (§6.6).** |
+| **6. Long reads** | HiFi feasibility on a2's existing data (§8) | share of reads whose loss is below the certifiable ceiling | Go if ≥ 90 % of HiFi reads fit. **Go (§6.6, definitions pre-registered): 93.29 % of 242,534 HG002 HiFi reads fit (93.75 % at τ = 256).** The misses span SVs (4.4 %), sit in repeats (1.8 %) or are unmapped (0.5 %). **Follow-up: the certificate completed for 93.32 % (OPT proven), at 0.86× minimap2's CPU; with the split objective, 93.96 % exact (§6.6).** |
 
 **Ground rules:**
 - **Datasets:** the three GIAB samples already processed (HG001, HG002, HG005) and the existing
@@ -1019,7 +1023,8 @@ too expensive.
   by the exact part matches.
 - **The measured route (§6.6):** it turned out simpler. A known alignment of score lb shrinks the
   band to L − lb − 7, about ±250 for a median HiFi read. Usually one chain needs it. Certification
-  then costs a median of 7.9 ms of (vectorized) DP per read, and about 1.6× minimap2's CPU in all.
+  then costs a median of 3.1 ms of (vectorized, pruned) DP per read, and 0.86× minimap2's CPU in
+  all.
 - **Where an exact near-linear aligner would still help:** in making that DP cheaper.
 
 **Objective.** Long reads cross structural variants, so the objective needs split or two-piece

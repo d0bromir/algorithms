@@ -676,10 +676,12 @@ minimap2 alignment.
   candidate loci.
   - *Measured on 2026-10-14 (proposal §6.6):* a known alignment of score
     lb narrows the band to L − lb − 7 (about ±250). A banded DP over the
-    chains that need it (median 1) proves OPT for 226,327 reads (93.32 %).
-  - *Cost:* median 7.9 ms of DP per read, about 1.6× minimap2's CPU in
-    all, with the DP row vectorized (2026-10-15; scalar: 20 ms, 2.8×). The
-    results are identical to the scalar DP's for every read.
+    chains that need it (median 1) proves OPT for 226,330 reads (93.32 %),
+    every read that fits.
+  - *Cost:* median 3.1 ms of DP per read, 0.86× minimap2's CPU in all.
+    Three changes on 2026-10-15 took it there from 20 ms and 2.8×:
+    a vectorized DP row, batched index lookups, and pruning the DP to the
+    cells that can beat lb. None changes a certificate.
   - *OPT vs minimap2:* OPT beats minimap2's alignment under CERTA's scores
     for 17.8 % of them.
   - *Check:* on 2,005 reads, a full DP around the known locus never beat
@@ -711,7 +713,7 @@ verifies the XQ of PR mates too.
   (0.9909 vs 0.9922). Look at the 13 extra FP and 14 extra FN.
 - **Long reads:** the mapper's limits (320 bp, 8 parts, radius 5) exclude
   them. `tools/lr_ceiling --certify` certifies them (Aim 6, below): OPT is
-  proven for 93.3 % of real HiFi reads, at about 1.6× minimap2's CPU.
+  proven for 93.3 % of real HiFi reads, at 0.86× minimap2's CPU.
   - *Reads that span SVs:* a split (jump) objective is defined, and Lemma
     L-J bounds it (`certa/longread.h`). With it, 94.4 % of reads fit at
     P = 30, about a fifth of the clipped and high-loss misses.

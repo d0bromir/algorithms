@@ -12,7 +12,7 @@ names:
 
 **Review status.** Written, then cross-checked by:
 - whole-reference oracles (4 seeds, ARM and x86);
-- 97 mutants;
+- 103 mutants;
 - exhaustive verification of the finite lemmas.
 
 It has **not yet been reviewed by a second person**. §11 lists what a
@@ -278,6 +278,33 @@ follows its own opening better than it extends it.
   identical with and without it.
 - *Mutants:* LR28–LR31 (a missing shift step, a deletion 1 too cheap in the
   vector body and in the tail, the carry kept per lane).
+
+**Pruning the band (`band_best` with a floor; Corollary L-long).** The DP
+needs only alignments above the best score so far, the floor. A cell (or
+insertion state) of value v at read base f leads at most to
+v + (L − 1 − f), since each later base adds at most 1; if that is ≤ the
+floor, the cell is dead.
+- Every cell on the best path to a live cell is live: its value is lower by
+  at most the bases between them, and the bound grows by as many. So
+  dropping dead cells leaves every live cell's value exact, and the end of
+  any alignment above the floor is live. The DP's result is exact when it
+  exceeds the floor, else at most the floor; max(floor, result) is
+  unchanged.
+- *The rows computed:* while a new piece can still lead above the floor
+  (start + 1 + (L − 1 − f) > floor), the whole band. After that, a live
+  cell's best path holds at least two aligned pairs (one pair and a gap is
+  already below a new piece). Removing its last aligned pair moves the rest
+  of the path up one row on the same diagonals and loses at most 1. So the
+  cell above is live, and row f's live cells lie in the previous row's live
+  range [c0, c1). Each row is computed on that range, and the dead cells at
+  its ends are dropped.
+- On HiFi, 35.5 % of the band's cells are live, and 35 % are computed.
+- *Tests:* against the full DP on bands of random widths and offsets around
+  each planted piece, with floors around the best (equal above the floor,
+  at most the floor otherwise); every certificate on 242,534 HiFi reads is
+  unchanged.
+- *Mutants:* LR34–LR37 (the live test 1 too strict; the row range one cell
+  short on either side; new pieces cut off 3 rows early).
 
 **Jump (split) alignments (Aim 6 follow-up; `certa/longread.h`).** A long
 read that crosses a structural variant has no good single local alignment.
@@ -831,7 +858,7 @@ guarantees is the interval [XL, XU] at whatever stage it stops.
 ## 9a. Mutants that survive by design
 
 A mutant that changes no claim on any input cannot be killed by a test, so
-it must be argued instead. Six of the 97 survive.
+it must be argued instead. Six of the 103 survive.
 - **L6** (span start candidates shifted): Lemma S, §4.
 - **A2** (Lemma O's term lowered): §4.
 - **P2, P8, P13** (band pad − 2, narrowed band − 3, `relevant` term dropped)
