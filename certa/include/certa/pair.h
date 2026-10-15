@@ -63,7 +63,23 @@ constexpr int kWinParts = 24;
 
 // Lemma L bound for parts [off[k], end[k]) of a read of length L: the best
 // score of an alignment in which no part in `counted` occurs exactly.
+// When the counted parts are disjoint, in order, in [0, L) and each >= 5
+// long, the full span attains the maximum (Lemma S; lean/Certa/LemmaS.lean,
+// lemmaS), so the bound is L - 5 per counted part. Otherwise every span
+// candidate is tried.
 inline int span_bound(int L, int n, const int* off, const int* end, uint32_t counted) {
+  static_assert(kMatch == 1 && kMatch + kMismatch == 5, "Lemma S is stated for +1 / -4");
+  {
+    int c = 0, prev = 0;
+    bool ok = true;
+    for (int k = 0; k < n && ok; ++k)
+      if ((counted >> k) & 1) {
+        ok = off[k] >= prev && end[k] - off[k] >= 5 && end[k] <= L;
+        prev = end[k];
+        ++c;
+      }
+    if (ok) return L * kMatch - (kMatch + kMismatch) * c;
+  }
   int xs[kWinParts + 1], ys[kWinParts + 1], nx = 0, ny = 0;
   xs[nx++] = 0;
   ys[ny++] = L;
@@ -139,6 +155,20 @@ inline int window_search(const IndexView& ix, const uint8_t* rd, int L, int64_t 
     if (ok) sc.keys.push_back({key, k});
   }
   std::sort(sc.keys.begin(), sc.keys.end());
+  // The first index of each key in sc.keys, by open addressing: most window
+  // positions match no part and cost one probe.
+  constexpr int kH = 64;
+  int16_t hidx[kH];
+  uint32_t hkey[kH];
+  for (int h = 0; h < kH; ++h) hidx[h] = -1;
+  auto slot = [](uint32_t key) { return (int)((key * 2654435761u) >> 26); };
+  for (size_t x = 0; x < sc.keys.size(); ++x) {
+    if (x > 0 && sc.keys[x].first == sc.keys[x - 1].first) continue;
+    int h = slot(sc.keys[x].first);
+    while (hidx[h] >= 0) h = (h + 1) & (kH - 1);
+    hidx[h] = (int16_t)x;
+    hkey[h] = sc.keys[x].first;
+  }
   // Scan [smin, smax + L + pad): an alignment starting in [smin, smax] lies there.
   const int64_t lo = smin < 0 ? 0 : smin;
   const int64_t hi = std::min<int64_t>((int64_t)ix.ref_len, smax + L + pad);
@@ -152,8 +182,10 @@ inline int window_search(const IndexView& ix, const uint8_t* rd, int L, int64_t 
     key = ((key << 2) | c) & mask;
     if (++valid < wq) continue;
     const int64_t s = j - wq + 1;  // occurrence start
-    auto it = std::lower_bound(sc.keys.begin(), sc.keys.end(), std::make_pair(key, -1));
-    for (; it != sc.keys.end() && it->first == key; ++it) {
+    int h = slot(key);
+    while (hidx[h] >= 0 && hkey[h] != key) h = (h + 1) & (kH - 1);
+    if (hidx[h] < 0) continue;
+    for (auto it = sc.keys.begin() + hidx[h]; it != sc.keys.end() && it->first == key; ++it) {
       const int k = it->second;
       bool ok = s + (end[k] - off[k]) <= hi;
       for (int i = wq; ok && i < end[k] - off[k]; ++i) ok = ix.ref[s + i] == rd[off[k] + i];

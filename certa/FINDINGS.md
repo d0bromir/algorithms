@@ -429,6 +429,22 @@ threads, one run; `results/hg002_2026-10/galaxy_timing_pe.tsv`):
 - *Options:* send only the uncertified mate, with no mate rescue in the
   fallback; restrict the pair pass to the one-uncertified pairs; or move
   the pair pass to the GPU.
+- *Update 2026-10-15 (`results/hg002_2026-10/galaxy_timing_pe_v2.tsv`):*
+  a profile of the pair pass showed its time in the window search (an
+  O(n³) span bound, a binary search per reference position) and in two
+  DPs. Four changes, with byte-identical SAM and fallback output:
+  - Lemma S's closed form for the span bound, used only when its
+    hypotheses hold (the lemma is machine-checked);
+  - a hash for the window's part keys;
+  - band_score's deletion pass vectorized (16-bit lanes);
+  - affine_align's per-cell bounds checks and branches hoisted.
+
+  CERTA's own side at 32 threads drops from 56.7 s to 47.7 s, and the
+  pipeline's CPU from 2,984 s to 2,680 s. End to end, the best split (CERTA
+  24 threads, minibwa 40) takes 72.8 s, against 77.0 s before and 61.6 s
+  for minibwa. The rest is the fallback: minibwa on the 12.9 % of reads in
+  pairs with an uncertified mate costs about 460 µs per read. Paired mode
+  closes on minibwa only by sending fewer or cheaper reads to it.
 
 **Variant-calling accuracy on chr20 vs GIAB v4.2.1, same caller for both
 pipelines.** Both are single-end, 22×. Precision / recall / F1:

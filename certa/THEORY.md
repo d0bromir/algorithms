@@ -12,7 +12,7 @@ names:
 
 **Review status.** Written, then cross-checked by:
 - whole-reference oracles (4 seeds, ARM and x86);
-- 103 mutants;
+- 107 mutants;
 - exhaustive verification of the finite lemmas.
 
 It has **not yet been reviewed by a second person**. §11 lists what a
@@ -209,6 +209,10 @@ alone attains the maximum.
   Parts of length 4 give 3,885 counterexamples.
 - *So:* mutant L6, which shifts the span start candidates, is
   **equivalent**. CERTA's parts are ≥ 17 bases.
+- *Used:* `span_bound` (pair.h) returns the closed form L − 5 per counted
+  part whenever the counted parts are disjoint, in order, in [0, L) and
+  ≥ 5 long, and tries every span candidate otherwise (mutant P15, the
+  closed form for parts of 4, is killed by `verify_lemmas`).
 - *Mechanized* (the second claim) in Lean 4 for reads of any length
   ([`lean/Certa/LemmaS.lean`](lean/Certa/LemmaS.lean)): `lemmaS`, every
   span's bound at most the full span's for disjoint parts of length ≥ 5,
@@ -915,7 +919,7 @@ guarantees is the interval [XL, XU] at whatever stage it stops.
 ## 9a. Mutants that survive by design
 
 A mutant that changes no claim on any input cannot be killed by a test, so
-it must be argued instead. Six of the 103 survive.
+it must be argued instead. Six of the 107 survive.
 - **L6** (span start candidates shifted): Lemma S, §4.
 - **A2** (Lemma O's term lowered): §4.
 - **P2, P8, P13** (band pad − 2, narrowed band − 3, `relevant` term dropped)

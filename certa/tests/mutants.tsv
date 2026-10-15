@@ -103,3 +103,7 @@ LR34	include/certa/longread.h	s/) <= thr) {/) <= thr + 1) {/g	killed	band_best: 
 LR35	include/certa/longread.h	s/      r0 = c0;/      r0 = c0 + 1;/	killed	band_best: a row's range one cell short on the left
 LR36	include/certa/longread.h	s/if (start + kMatch + rem <= floor) {/if (start + kMatch + rem <= floor + 3) {/	killed	band_best: new pieces cut off 3 rows early
 LR37	include/certa/longread.h	s/      r1 = c1;/      r1 = c1 - 1;/	killed	band_best: a row's range one cell short on the right
+P15	include/certa/pair.h	s/ok = off\[k\] >= prev \&\& end\[k\] - off\[k\] >= 5 \&\& end\[k\] <= L;/ok = off[k] >= prev \&\& end[k] - off[k] >= 4 \&\& end[k] <= L;/	killed	span_bound: Lemma S's closed form for parts of length 4 (false: verify_lemmas)
+P16	include/certa/pair.h	s/while (hidx\[h\] >= 0 \&\& hkey\[h\] != key) h = (h + 1) \& (kH - 1);/while (hidx[h] >= 0 \&\& hkey[h] != key) h = (h + 2) \& (kH - 1);/	killed	window_search: the key lookup probes with the wrong step (parts missed in the window)
+E8	include/certa/core.h	s/    x = vmax(x, __builtin_shufflevector(x, x, 0, 1, 2, 3, 0, 1, 2, 3));//	killed	band_del16: the deletion pass's prefix maximum without its 4-lane step
+E9	include/certa/core.h	s/if (start >= diag \&\& b >= blo \&\& b <= bhi)/if (start >= diag \&\& b > blo \&\& b <= bhi)/	killed	affine_align: the start range one cell short

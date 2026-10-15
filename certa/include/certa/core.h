@@ -29,6 +29,7 @@
 #pragma once
 #include <climits>
 #include <cstdint>
+#include <cstring>
 #ifndef __CUDA_ARCH__
 #include <algorithm>
 #endif
@@ -587,16 +588,26 @@ CERTA_HD inline bool affine_align(const IndexView& ix, const uint8_t* rd, int L,
   // 3 E extends E, 4 F extends F.
   for (int b = 0; b < B; ++b) { hp[b] = NEG; ep[b] = NEG; }
   int best = NEG, best_i = 0, best_b = 0;
+  // The band's reference window, read directly when it lies inside the
+  // reference (ref_at's bounds check otherwise).
+  const bool inside = lo >= 0 && lo + L - 1 + B <= (int64_t)ix.ref_len;
   for (int i = 1; i <= L; ++i) {
     const uint8_t c = rd[i - 1];
     const int start = i == 1 ? 0 : -kClip;
+    const int clip_end = i < L ? kClip : 0;
+    // Cells b in [blo, bhi] put their first aligned base in [smin, smax].
+    const int64_t base = (int64_t)i - 1 + lo;
+    const int64_t blo64 = smin == INT64_MIN ? 0 : smin - base, bhi64 = smax == INT64_MAX ? B : smax - base;
+    const int blo = blo64 < 0 ? 0 : (blo64 > B ? B : (int)blo64);
+    const int bhi = bhi64 < -1 ? -1 : (bhi64 >= B ? B - 1 : (int)bhi64);
+    const uint8_t* rw = inside ? ix.ref + base : nullptr;
     int f = NEG;
     for (int b = 0; b < B; ++b) {
       uint8_t bits = 0;
       int diag = hp[b];
-      const int64_t pos = (int64_t)i - 1 + lo + b;
-      if (start >= diag && pos >= smin && pos <= smax) { diag = start; bits |= 4; }
-      const int m = diag + (sub_cost(c, ref_at(ix, pos)) ? -kMismatch : kMatch);
+      if (start >= diag && b >= blo && b <= bhi) { diag = start; bits |= 4; }
+      const uint8_t t = rw ? rw[b] : ref_at(ix, base + b);
+      const int m = diag + (sub_cost(c, t) ? -kMismatch : kMatch);
       int e = NEG;
       if (b + 1 < B && i > 1) {  // no alignment may start with a gap
         const int open = hp[b + 1] - kGapOpen - kGapExt, ext = ep[b + 1] - kGapExt;
@@ -616,10 +627,10 @@ CERTA_HD inline bool affine_align(const IndexView& ix, const uint8_t* rd, int L,
       hc[b] = h;
       ec[b] = e;
       ws.tb[i * B + b] = bits;
-      if ((bits & 3) == 0) {  // an alignment may end after a match/mismatch
-        const int end = h - (i < L ? kClip : 0);
-        if (end > best) { best = end; best_i = i; best_b = b; }
-      }
+      // An alignment may end after a match/mismatch (a select, not a branch
+      // on the cell's state; the first best cell still wins).
+      const int end = (bits & 3) == 0 ? h - clip_end : NEG;
+      if (end > best) { best = end; best_i = i; best_b = b; }
     }
     int* t = hp; hp = hc; hc = t;
     t = ep; ep = ec; ec = t;
@@ -950,6 +961,59 @@ inline void band_row16(int B, int blo, int bhi, int16_t start, int16_t eopen, in
   }
 }
 
+// The deletion pass of band_score's row: hn[b] = max(hq[b], F(b)), F(b) =
+// max over b' < b of hq[b'] + b' (and NEG), minus kGapOpen + b (kGapExt = 1).
+// The scalar reference:
+inline void band_del16_scalar(int B, const int16_t* hq, int16_t* hn, int16_t NEG) {
+  int pm = NEG;
+  hn[0] = hq[0];
+  for (int b = 1; b < B; ++b) {
+    const int g = hq[b - 1] + kGapExt * (b - 1);
+    pm = pm > g ? pm : g;
+    const int f = pm - kGapOpen - kGapExt * b;
+    hn[b] = (int16_t)(hq[b] > f ? hq[b] : f);
+  }
+}
+
+#if defined(__GNUC__) && !defined(__CUDACC__) && !defined(CERTA_NO_VEC) && (defined(__clang__) || __GNUC__ >= 12)
+// The same, 8 cells at a time (16-bit lanes; NEON or SSE). Taking b' <= b
+// adds hq[b] - kGapOpen, which never beats hq[b], so F is an inclusive prefix
+// maximum: three in-register shifts per vector and a carry across vectors
+// (as band_row in longread.h; lean/Certa/BandRow.lean proves the identity).
+// The values stay in int16: hq >= NEG = -16000, b < BMAX.
+inline void band_del16(int B, const int16_t* hq, int16_t* hn, int16_t NEG) {
+  static_assert(kGapExt == 1, "band_del16 assumes kGapExt = 1");
+  typedef int16_t v8 __attribute__((vector_size(16)));
+  auto vmax = [](v8 a, v8 b) { return a > b ? a : b; };
+  const v8 lane = {0, 1, 2, 3, 4, 5, 6, 7};
+  v8 carry = {NEG, NEG, NEG, NEG, NEG, NEG, NEG, NEG};
+  int b = 0;
+  for (; b + 8 <= B; b += 8) {
+    v8 h;
+    std::memcpy(&h, hq + b, sizeof h);
+    const v8 idx = lane + (int16_t)b;
+    v8 x = h + idx;
+    x = vmax(x, __builtin_shufflevector(x, x, 0, 0, 1, 2, 3, 4, 5, 6));
+    x = vmax(x, __builtin_shufflevector(x, x, 0, 1, 0, 1, 2, 3, 4, 5));
+    x = vmax(x, __builtin_shufflevector(x, x, 0, 1, 2, 3, 0, 1, 2, 3));
+    x = vmax(x, carry);
+    const v8 f = x - idx - (int16_t)kGapOpen;
+    const v8 out = vmax(h, f);
+    std::memcpy(hn + b, &out, sizeof out);
+    carry = __builtin_shufflevector(x, x, 7, 7, 7, 7, 7, 7, 7, 7);
+  }
+  int pm = carry[0];
+  for (; b < B; ++b) {
+    const int g = hq[b] + b;
+    pm = pm > g ? pm : g;
+    const int f = pm - kGapOpen - b;
+    hn[b] = (int16_t)(hq[b] > f ? hq[b] : f);
+  }
+}
+#else
+inline void band_del16(int B, const int16_t* hq, int16_t* hn, int16_t NEG) { band_del16_scalar(B, hq, hn, NEG); }
+#endif
+
 inline int band_score(const IndexView& ix, const uint8_t* rd, int L, int64_t lo, int B,
                       int64_t smin = INT64_MIN, int64_t smax = INT64_MAX) {
   static_assert(LMAX * (kMismatch + kGapOpen + kGapExt) < 16000, "16-bit band scores");
@@ -972,14 +1036,7 @@ inline int band_score(const IndexView& ix, const uint8_t* rd, int L, int64_t lo,
     const uint8_t cc = c < 4 ? c : 0xFF;                      // N never matches
     for (int b = 0; b < B; ++b) sub[b] = rw[b] == cc ? kMatch : -kMismatch;
     band_row16(B, blo, bhi, start, eopen, NEG, hp, ep, sub, m, hq, en);
-    int pm = NEG;
-    hn[0] = hq[0];
-    for (int b = 1; b < B; ++b) {
-      const int g = hq[b - 1] + kGapExt * (b - 1);
-      pm = pm > g ? pm : g;
-      const int f = pm - kGapOpen - kGapExt * b;
-      hn[b] = (int16_t)(hq[b] > f ? hq[b] : f);
-    }
+    band_del16(B, hq, hn, NEG);
     int16_t rb = NEG;
     for (int b = 0; b < B; ++b) rb = rb > m[b] ? rb : m[b];
     const int clip = i < L ? kClip : 0;

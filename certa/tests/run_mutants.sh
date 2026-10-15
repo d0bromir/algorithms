@@ -2,8 +2,8 @@
 # Mutation tests of every bound (Aim 5): for each line of tests/mutants.tsv,
 # a copy of the tree with one sed-applied mutation, built and run through the
 # oracle test on two seeds: tests/test_certa.cpp, or, for a mutant of
-# include/certa/longread.h, tests/test_longread.cpp and the exhaustive lemma
-# checks (tests/verify_lemmas.cpp). A mutant expected "killed" must fail a
+# include/certa/longread.h, tests/test_longread.cpp; a mutant of any header
+# also faces the exhaustive lemma checks (tests/verify_lemmas.cpp). A mutant expected "killed" must fail a
 # check on some run; one expected "equivalent" (proven not to change any
 # claim, THEORY.md) must pass them all.
 #
@@ -41,6 +41,14 @@ run_one() {
         echo "$id	BUILD_FAILED	$what"; exit
       fi
       runs="$seeds"
+      # A header's mutant also faces the exhaustive lemma checks (span_bound in
+      # pair.h is checked against the brute force there).
+      if [[ "$file" == include/certa/*.h ]]; then
+        if ! "$cxx" -O2 -std=c++17 -Iinclude -Isrc tests/verify_lemmas.cpp -pthread -o v 2>> build.log; then
+          echo "$id	BUILD_FAILED	$what"; exit
+        fi
+        runs="lemmas $seeds"
+      fi
     fi
     local res="" killed=0
     for s in $runs; do

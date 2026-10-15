@@ -1,0 +1,8 @@
+# Paired 20M-pair timing after the pair-pass speedups (2026-10-15; galaxy, A100 device 1, 64 threads in all; run_bench_pe.sh, REPS=1).
+# certa-gpu-pe-pipe rows: CERTA with PIPE_CERTA_THREADS = 16, 24, 32 (in that order) and minibwa on the rest; the previous binary (32 / 32) took 76.96 s, 2,984 CPU-s (galaxy_timing_pe.tsv).
+# CERTA's own side at 16 / 24 / 32 threads: 77.93 / 59.03 / 47.70 s (previous binary at 32: 56.68 s). SAM and fallback FASTQs byte-identical to the previous binary on 2M pairs.
+tool	certa_threads	pairs	wall_s	user_s	sys_s	max_rss_kb
+certa-gpu-pe-pipe	16	20001073	89.59	2662.14	110.08	36918072
+certa-gpu-pe-pipe	24	20001073	72.81	2680.68	37.65	39548248
+certa-gpu-pe-pipe	32	20001073	74.43	2680.49	22.71	39629644
+minibwa	-	20001073	61.60	3595.58	6.92	9491900

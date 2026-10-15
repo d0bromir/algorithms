@@ -36,6 +36,8 @@
 #include <tuple>
 #include <vector>
 
+#include <unistd.h>
+
 #include "index.h"
 #include "certa/interval.h"
 #include "check.h"
@@ -755,7 +757,8 @@ int main(int argc, char** argv) {
   const IndexView view = ix.view(ref);
   // Round trip through the on-disk format: with q = 14 the file stores only
   // 16-bit key suffixes and is memory-mapped; results must not change.
-  const std::string tmp = "test_certa.tmp.cidx";
+  // Per process: parallel runs in one directory must not share the file.
+  const std::string tmp = "test_certa." + std::to_string(getpid()) + ".tmp.cidx";
   save_index(tmp, ref, ix);
   Reference ref_m;
   Index ix_m;
@@ -1082,6 +1085,23 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "%s%s %d", v > 1 ? ", " : "", check::kVerdictNames[v], caught_by[v]);
   std::fprintf(stderr, ")\n");
 
+  // ---- band_del16 (vectorized where the compiler allows) must equal its
+  // scalar reference on random rows, sentinels included.
+  {
+    std::mt19937_64 gd(seed * 3 + 1);
+    int rows = 0, bad = 0;
+    for (int it = 0; it < 20000; ++it) {
+      const int B = 1 + static_cast<int>(gd() % BMAX);
+      std::vector<int16_t> hq(B), h1(B), h2(B);
+      for (auto& x : hq) x = gd() % 6 == 0 ? (int16_t)-16000 : (int16_t)((int)(gd() % 400) - 200);
+      band_del16(B, hq.data(), h1.data(), (int16_t)-16000);
+      band_del16_scalar(B, hq.data(), h2.data(), (int16_t)-16000);
+      ++rows;
+      bad += h1 != h2;
+    }
+    CHECK(bad == 0, "band_del16 differs from its scalar reference on %d of %d rows", bad, rows);
+    std::fprintf(stderr, "band_del16 = band_del16_scalar on %d random rows: %s\n", rows, bad ? "no" : "yes");
+  }
   // ---- band_score must equal affine_align's score on any band and start range.
   {
     std::unique_ptr<Workspace> ws(new Workspace);
@@ -1658,7 +1678,7 @@ int main(int argc, char** argv) {
       // Index validation: the in-memory, the memory-mapped (16-bit keys) and
       // the s = 1 index are valid, with the reference written as FASTA;
       // corruptions are not.
-      const std::string fa = "test_certa.tmp.fa";
+      const std::string fa = "test_certa." + std::to_string(getpid()) + ".tmp.fa";
       {
         std::ofstream out(fa);
         for (size_t c = 0; c < ref.names.size(); ++c) {
