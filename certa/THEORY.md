@@ -857,6 +857,11 @@ Then every unwitnessed part inside the span costs ≥ 7, disjointly.
   L = 12, 502 M cases.
 - *Parts of length 3 fail:* a 7-base insertion over three parts costs
   20 < 21.
+- *Mechanized* in Lean 4 for transcripts of any length
+  ([`lean/Certa/LemmaH.lean`](lean/Certa/LemmaH.lean)): `lemmaH`, with
+  `Witnessed` read off the transcript as `verify_lemmas`' `witnessed1`, and
+  `lemmaH_length_three`, the counterexample above. Lemma L's credits
+  suffice: every unwitnessed part of length ≥ 4 collects at least 7.
 - *Witnessing:* the check reads it off the transcript. Coincidental extra
   witnesses only help.
 
@@ -947,6 +952,6 @@ Points worth checking first:
    that was wrong.
 4. **The equivalence arguments** for the mutants that survive by design
    (L6, A2), and their stated preconditions (parts ≥ 5; reads ≥ 98 bp).
-5. **Mechanization.** Lemmas L and E are machine-checked in Lean 4
-   ([`lean/`](lean/README.md)). Lemmas H and S and Theorem G are finite
+5. **Mechanization.** Lemmas L, E and H are machine-checked in Lean 4
+   ([`lean/`](lean/README.md)). Lemma S and Theorem G are finite
    combinatorial statements of the same kind, and come next.
