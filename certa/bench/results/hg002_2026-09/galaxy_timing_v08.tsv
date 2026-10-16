@@ -1,0 +1,14 @@
+# Single-end 20M-read timing with 1f99e5b (stage overlap, vectorized affine_align fill), galaxy, 2026-10-16; run_bench.sh, REPS=3, GPU device 1, CERTA 16 threads + minibwa 48 in the pipe; 64 threads per tool. Compare galaxy_timing_v06.tsv (22.94 s, same tools).
+host	tool	rep	reads	wall_s	user_s	sys_s	max_rss_kb
+galaxy	minibwa	1	20001073	26.54	1362.38	3.67	9547276
+galaxy	minibwa	2	20001073	26.7	1362.64	3.55	9521864
+galaxy	minibwa	3	20001073	26.58	1362.44	3.74	9561860
+galaxy	certa-gpu	1	20001073	10.86	64.50	8.53	33881344
+galaxy	certa-gpu	2	20001073	10.59	65.31	8.04	34055416
+galaxy	certa-gpu	3	20001073	10.87	64.47	8.45	33987160
+galaxy	certa-gpu+fallback	1	20001073	23.77	711.51	10.83	34000896
+galaxy	certa-gpu+fallback	2	20001073	23.35	711.36	10.58	33942300
+galaxy	certa-gpu+fallback	3	20001073	23.58	710.61	10.63	34000400
+galaxy	certa-gpu-pipe	1	20001073	22.41	702.66	10.73	34251976
+galaxy	certa-gpu-pipe	2	20001073	22.22	700.80	10.61	33655432
+galaxy	certa-gpu-pipe	3	20001073	22.35	702.16	10.78	33943984
