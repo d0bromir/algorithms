@@ -72,4 +72,34 @@ theorem no_split_within (ds : Nat → Int) (mono : ∀ a b, a ≤ b → ds a ≤
   have h2 := mono i (k - 1) (by omega)
   omega
 
+/-- Parts marked free (the parts of chain C) that cover every exactly
+occurring part leave at least as many inexact parts as there are parts not
+free. -/
+theorem notFree_le_inexact :
+    ∀ segs : List (Bool × (List Base × List Base)),
+      (∀ x ∈ segs, exact x.2.2 = true → x.1 = true) →
+      (segs.filter (fun x => !x.1)).length ≤
+        ((segs.map Prod.snd).filter (fun gp => !exact gp.2)).length
+  | [], _ => by simp
+  | x :: t, h => by
+    have ih := notFree_le_inexact t (fun y hy => h y (by simp [hy]))
+    obtain ⟨f, g, p⟩ := x
+    have hx : exact p = true → f = true := h (f, g, p) (by simp)
+    cases f <;> cases hp : exact p <;> simp_all <;> omega
+
+/-- **Lemma C's bound** (σ(A) ≤ ub(C)). If every exactly occurring part of
+an alignment is among the free parts (the parts of the chain C it lies in),
+it loses at least 5 for each part of its span that is not free: Lemma L with
+C's parts treated as free. -/
+theorem lemmaC_bound (segs : List (Bool × (List Base × List Base))) (tail : List Base)
+    (hlen : ∀ x ∈ segs, 3 ≤ x.2.2.length)
+    (hfree : ∀ x ∈ segs, exact x.2.2 = true → x.1 = true) :
+    5 * (segs.filter (fun x => !x.1)).length ≤ loss (assemble (segs.map Prod.snd) tail) := by
+  have hL := lemmaL (segs.map Prod.snd) tail (by
+    intro gp hgp
+    obtain ⟨x, hx, rfl⟩ := List.mem_map.mp hgp
+    exact hlen x hx)
+  have hc := notFree_le_inexact segs hfree
+  omega
+
 end Certa

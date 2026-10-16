@@ -240,11 +240,14 @@ than pad. Let A have ≥ 1 exactly occurring part and gap total ≤ pad. Then:
 no split falls between them. A's diagonals stay within G of each exact
 part's. A's exactly occurring parts are among C's. ∎
 
-*Mechanized* in Lean 4 ([`lean/Certa/LemmaC.lean`](lean/Certa/LemmaC.lean)),
-its geometric core: `diag_drift` (two aligned bases of A lie on diagonals at
+*Mechanized* in Lean 4 ([`lean/Certa/LemmaC.lean`](lean/Certa/LemmaC.lean)):
+its geometric core, `diag_drift` (two aligned bases of A lie on diagonals at
 most G apart; a diagonal moves only at gaps), `diag_within_pad` (with Lemma
 W, at most pad(b) apart when A scores above b) and `no_split_within` (no
-split falls between two sorted diagonals at most pad apart).
+split falls between two sorted diagonals at most pad apart); and its bound,
+`lemmaC_bound` (if every exactly occurring part of A is among C's parts, A
+loses at least 5 for each part of its span that is not C's: Lemma L with C's
+parts free, so σ(A) ≤ ub(C)).
 
 *Mutants:* L7, C3.
 

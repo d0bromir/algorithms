@@ -19,6 +19,7 @@ standard three (propext, Classical.choice, Quot.sound).
 #print axioms Certa.diag_drift
 #print axioms Certa.diag_within_pad
 #print axioms Certa.no_split_within
+#print axioms Certa.lemmaC_bound
 #print axioms Certa.Greedy.greedy_max
 #print axioms Certa.Greedy.greedy_max_tau
 #print axioms Certa.Prune.prefix_live
