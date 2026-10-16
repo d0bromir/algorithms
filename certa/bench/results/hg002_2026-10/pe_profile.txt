@@ -1,0 +1,26 @@
+# Where paired-mode time goes (galaxy: Ampere Altra + A100 device 1; 2026-10-16; build of 474ad90).
+
+== Which pairs reach the minibwa fallback, and what they cost it (first 2,000,000 HG002 pairs)
+CERTA (GPU, 32 threads): 7.65 s wall, 91.95 s user, 4.99 s sys; -u/-U to files
+pairs with both mates uncertified:      55,101 (2.76 % of pairs)
+pairs with one mate uncertified:        73,149 (3.66 % of pairs; both mates go to minibwa so it can pair them)
+fallback reads in all:                 256,500 (6.41 % of reads)
+minibwa -t 64 on each set (CPU user s, per read):
+  both-uncertified pairs   123.25 s   1,118 us per read
+  one-uncertified pairs     67.43 s     461 us per read
+  all 2,000,000 pairs      353.40 s      88 us per read
+So the fallback is 6.4 % of reads but 54 % of minibwa's CPU for the whole sample.
+minibwa -K (batch size) changes its pairing statistics per batch: -K 20m changed 18,658 of the
+fallback's records (first 9 SAM fields), so the fallback keeps minibwa's defaults.
+
+== CERTA's own phases, 20,001,073 pairs, before overlapping them (one batch after another)
+24 threads: GPU pass 1 5.48 s, GPU pass 2 8.10 s, CPU pair pass 33.71 s, output 4.86 s; total 56.40 s
+32 threads: GPU pass 1 5.51 s, GPU pass 2 8.35 s, CPU pair pass 25.57 s, output 3.28 s; total 45.44 s
+The GPU stage (passes 1 and 2) and the CPU stage (the pair pass and output) never ran at the same time.
+
+== The pair pass (perf, 500,000 pairs, 8 threads, -g build; flat profile over the whole run)
+affine_align 31.0 % (the traceback DP of `locate`), window_search 20.3 % (band_score inside it 11.8 %),
+certify_pair itself 16.5 % (chain_best and the band DPs inlined), prepare_mate 4.6 %, sam_line 3.0 %,
+memcpy 7.6 % (all of it the one-time index upload to the GPU).
+On 2,000,000 pairs: 236,482 pairs tried, 888,671 anchors evaluated (3.76 per pair), 898,439 traceback
+DPs of 5,019 cells on average; only 4.5 % of them repeat an earlier call's arguments.

@@ -566,26 +566,21 @@ CERTA_HD inline void evaluate_clusters(const IndexView& ix, int L, int nclust, i
   *pb2 = b2;
 }
 
-// Affine-optimal alignment of the read within diagonals [lo, lo + B) with
-// BWA-MEM's default scores (+1 / -4 / gap -6 - 1 per base / clip -5 per end),
-// reference ends free. Gotoh recurrences on the same band indexing as
-// band_distance: cell (i, b) aligns read base i-1 to reference i-1+lo+b.
-// Writes CIGAR (with soft clips), ref_pos, nm and score into `r`; returns
-// false (leaving `r` unchanged) if the CIGAR would not fit. Optionally only
-// alignments whose first aligned reference base lies in [smin, smax] count
-// (false if there is none).
-CERTA_HD inline bool affine_align(const IndexView& ix, const uint8_t* rd, int L,
-                                  int64_t lo, int B, Workspace& ws, Result& r,
-                                  bool score_only = false, int64_t smin = INT64_MIN,
-                                  int64_t smax = INT64_MAX) {
+// The DP fill of affine_align (below): Gotoh recurrences on the same band
+// indexing as band_distance, cell (i, b) aligning read base i-1 to reference
+// i-1+lo+b. Writes ws.tb[i * B + b] for every cell and returns the best end
+// score (NEG if there is none), with its cell in (*pbi, *pbb), the first in
+// row-major order.
+// tb bits: 0-1 H source (0 match/mismatch, 1 insertion E, 2 deletion F),
+// 2 the diagonal step starts the alignment (read prefix clipped or none),
+// 3 E extends E, 4 F extends F.
+CERTA_HD inline int affine_fill_scalar(const IndexView& ix, const uint8_t* rd, int L, int64_t lo, int B,
+                                       Workspace& ws, int64_t smin, int64_t smax, int* pbi, int* pbb) {
   const int NEG = -(1 << 20);
   int* hp = ws.aff[0];
   int* hc = ws.aff[1];
   int* ep = ws.aff[2];
   int* ec = ws.aff[3];
-  // tb bits: 0-1 H source (0 match/mismatch, 1 insertion E, 2 deletion F),
-  // 2 the diagonal step starts the alignment (read prefix clipped or none),
-  // 3 E extends E, 4 F extends F.
   for (int b = 0; b < B; ++b) { hp[b] = NEG; ep[b] = NEG; }
   int best = NEG, best_i = 0, best_b = 0;
   // The band's reference window, read directly when it lies inside the
@@ -635,6 +630,145 @@ CERTA_HD inline bool affine_align(const IndexView& ix, const uint8_t* rd, int L,
     int* t = hp; hp = hc; hc = t;
     t = ep; ep = ec; ec = t;
   }
+  *pbi = best_i;
+  *pbb = best_b;
+  return best;
+}
+
+#if defined(__GNUC__) && !defined(__CUDACC__) && !defined(CERTA_NO_VEC) && (defined(__clang__) || __GNUC__ >= 12)
+#define CERTA_AFFINE_VEC 1
+// The same fill, 4 cells at a time (32-bit lanes; NEON or SSE), for a band
+// whose padded reference window lies inside the reference. Every cell gets
+// the scalar loop's values and traceback bits, sentinels included:
+// - E and the match term depend on the previous row only.
+// - F, the deletion state, satisfies F[b] = max(hc[b-1] - 7, F[b-1] - 1)
+//   with hc = max(h0, F) and h0 = max(m, E); opening from an F cell is
+//   dominated by extending it, so F[b] = max(h0[b-1] - 7, F[b-1] - 1), and
+//   unrolled with F[0] = NEG: F[b] = max(NEG + 6, max over b' < b of
+//   h0[b'] + b') - b - 6, an exclusive prefix maximum (two in-register shifts
+//   per vector and a carry across vectors; as band_row in longread.h).
+// - "F extends F" at b is F[b-1] - 1 > hc[b-1] - 7, from the previous lane.
+// The best end cell is taken lane by lane, in order, so ties resolve as in
+// the scalar loop.
+inline int affine_fill_vec(const IndexView& ix, const uint8_t* rd, int L, int64_t lo, int B, Workspace& ws,
+                           int64_t smin, int64_t smax, int* pbi, int* pbb) {
+  static_assert(kMatch == 1 && kGapExt == 1, "affine_fill_vec assumes +1 matches and gap extension 1");
+  static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, "affine_fill_vec packs the low byte of each lane");
+  typedef int32_t v4 __attribute__((vector_size(16)));
+  typedef uint8_t u8x16 __attribute__((vector_size(16)));
+  typedef uint64_t u64x2 __attribute__((vector_size(16)));
+  typedef uint32_t u32x4 __attribute__((vector_size(16)));
+  // Unaligned loads and stores as plain accesses (memcpy at a variable
+  // offset becomes a checked library call under _FORTIFY_SOURCE).
+  typedef int32_t v4u __attribute__((vector_size(16), aligned(4), may_alias));
+  typedef uint32_t u32u __attribute__((aligned(1), may_alias));
+  constexpr int W = 4;
+  const int NEG = -(1 << 20);
+  auto vmax = [](v4 a, v4 b) { return a > b ? a : b; };
+  auto splat = [](int x) { return v4{x, x, x, x}; };
+  const v4 vneg = splat(NEG), lane = {0, 1, 2, 3};
+  const int Bp = (B + W - 1) / W * W;
+  int32_t hb[2][BMAX + 2 * W], eb[2][BMAX + 2 * W];
+  int32_t* hp = hb[0];
+  int32_t* hc = hb[1];
+  int32_t* ep = eb[0];
+  int32_t* ec = eb[1];
+  for (int b = 0; b < Bp + W; ++b) hp[b] = hc[b] = ep[b] = ec[b] = NEG;
+  // The band's reference window as 32-bit lanes, once: row i reads it from i - 1.
+  int32_t refw[LMAX + BMAX + W];
+  for (int k = 0; k < L - 1 + Bp; ++k) refw[k] = ix.ref[lo + k];
+  int best = NEG, best_i = 0, best_b = 0;
+  for (int i = 1; i <= L; ++i) {
+    const v4 c = splat(rd[i - 1]);
+    const v4 start = splat(i == 1 ? 0 : -kClip);
+    const int clip_end = i < L ? kClip : 0;
+    const int64_t base = (int64_t)i - 1 + lo;
+    const int64_t blo64 = smin == INT64_MIN ? 0 : smin - base, bhi64 = smax == INT64_MAX ? B : smax - base;
+    const int blo = blo64 < 0 ? 0 : (blo64 > B ? B : (int)blo64);
+    const int bhi = bhi64 < -1 ? -1 : (bhi64 >= B ? B - 1 : (int)bhi64);
+    const int32_t* rw = refw + (i - 1);
+    v4 carry = splat(NEG + 6);  // running max of h0[b'] + b'
+    v4 fprev = vneg, hprev = vneg;  // the previous vector's F and H (lane 3 used)
+    for (int b = 0; b < Bp; b += W) {
+      const v4 bv = lane + splat(b);
+      const v4 hpv = *(const v4u*)(hp + b), hp1 = *(const v4u*)(hp + b + 1), ep1 = *(const v4u*)(ep + b + 1);
+      const v4 st = (start >= hpv) & (bv >= splat(blo)) & (bv <= splat(bhi));
+      const v4 diag = st ? start : hpv;
+      const v4 t = *(const v4u*)(rw + b);
+      const v4 mis = (t != c) | (c >= splat(4));
+      const v4 m = diag + (mis ? splat(-kMismatch) : splat(kMatch));
+      v4 e = vneg, ebit = splat(0);
+      if (i > 1) {
+        const v4 open = hp1 - splat(kGapOpen + kGapExt), ext = ep1 - splat(kGapExt);
+        const v4 valid = bv + splat(1) < splat(B);
+        e = valid ? (open >= ext ? open : ext) : vneg;
+        ebit = (ext > open) & valid & splat(8);
+      }
+      const v4 esel = e > m;
+      const v4 h0 = esel ? e : m;
+      v4 src = esel & splat(1);
+      // F from the exclusive prefix maximum of h0[b] + b.
+      const v4 ninf = splat(INT32_MIN);
+      const v4 g = h0 + bv;
+      v4 inc = vmax(g, __builtin_shufflevector(g, ninf, 4, 0, 1, 2));
+      inc = vmax(inc, __builtin_shufflevector(inc, ninf, 4, 5, 0, 1));
+      inc = vmax(inc, carry);
+      const v4 excl = __builtin_shufflevector(carry, inc, 3, 4, 5, 6);
+      carry = __builtin_shufflevector(inc, inc, 3, 3, 3, 3);
+      const v4 f = bv > splat(0) ? excl - bv - splat(kGapOpen + kGapExt - 1) : vneg;
+      const v4 fsel = f > h0;
+      const v4 h = fsel ? f : h0;
+      src = fsel ? splat(2) : src;
+      const v4 fm1 = __builtin_shufflevector(fprev, f, 3, 4, 5, 6);
+      const v4 hm1 = __builtin_shufflevector(hprev, h, 3, 4, 5, 6);
+      const v4 fbit = (fm1 + splat(kGapOpen + kGapExt - 1) > hm1) & (bv > splat(0)) & splat(16);
+      fprev = f;
+      hprev = h;
+      *(v4u*)(hc + b) = h;
+      *(v4u*)(ec + b) = e;
+      const v4 bits = (st & splat(4)) | ebit | fbit | src;
+      // The low byte of each lane (little-endian), packed into the first four
+      // and stored whole: past the row's end it lands on cells of row i + 1,
+      // written later, or, after row L, past the cells the traceback reads
+      // (tb holds (LMAX + 1) * BMAX bytes and B < BMAX whenever B is not a
+      // multiple of 4).
+      const u8x16 bytes = (u8x16)bits;
+      const u8x16 b8 = __builtin_shufflevector(bytes, bytes, 0, 4, 8, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+      *(u32u*)(ws.tb + (size_t)i * B + b) = ((u32x4)b8)[0];
+      // An alignment may end after a match/mismatch.
+      const v4 end = (src == splat(0)) & (bv < splat(B)) ? h - splat(clip_end) : vneg;
+      const u64x2 over = (u64x2)(end > splat(best));
+      if (over[0] | over[1])
+        for (int l = 0; l < W; ++l)
+          if (end[l] > best) { best = end[l]; best_i = i; best_b = b + l; }
+    }
+    int32_t* tmp = hp; hp = hc; hc = tmp;
+    tmp = ep; ep = ec; ec = tmp;
+  }
+  *pbi = best_i;
+  *pbb = best_b;
+  return best;
+}
+#endif
+
+// Affine-optimal alignment of the read within diagonals [lo, lo + B) with
+// BWA-MEM's default scores (+1 / -4 / gap -6 - 1 per base / clip -5 per end),
+// reference ends free. Writes CIGAR (with soft clips), ref_pos, nm and score
+// into `r`; returns false (leaving `r` unchanged) if the CIGAR would not fit.
+// Optionally only alignments whose first aligned reference base lies in
+// [smin, smax] count (false if there is none).
+CERTA_HD inline bool affine_align(const IndexView& ix, const uint8_t* rd, int L,
+                                  int64_t lo, int B, Workspace& ws, Result& r,
+                                  bool score_only = false, int64_t smin = INT64_MIN,
+                                  int64_t smax = INT64_MAX) {
+  const int NEG = -(1 << 20);
+  int best_i = 0, best_b = 0, best;
+#ifdef CERTA_AFFINE_VEC
+  if (lo >= 0 && lo + L - 1 + (B + 3) / 4 * 4 <= (int64_t)ix.ref_len)
+    best = affine_fill_vec(ix, rd, L, lo, B, ws, smin, smax, &best_i, &best_b);
+  else
+#endif
+    best = affine_fill_scalar(ix, rd, L, lo, B, ws, smin, smax, &best_i, &best_b);
   if (best < NEG / 2) return false;  // no allowed start
   if (score_only) {
     r.score = (int16_t)best;

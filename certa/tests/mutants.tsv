@@ -107,3 +107,7 @@ P15	include/certa/pair.h	s/ok = off\[k\] >= prev \&\& end\[k\] - off\[k\] >= 5 \
 P16	include/certa/pair.h	s/while (hidx\[h\] >= 0 \&\& hkey\[h\] != key) h = (h + 1) \& (kH - 1);/while (hidx[h] >= 0 \&\& hkey[h] != key) h = (h + 2) \& (kH - 1);/	killed	window_search: the key lookup probes with the wrong step (parts missed in the window)
 E8	include/certa/core.h	s/    x = vmax(x, __builtin_shufflevector(x, x, 0, 1, 2, 3, 0, 1, 2, 3));//	killed	band_del16: the deletion pass's prefix maximum without its 4-lane step
 E9	include/certa/core.h	s/if (start >= diag \&\& b >= blo \&\& b <= bhi)/if (start >= diag \&\& b > blo \&\& b <= bhi)/	killed	affine_align: the start range one cell short
+E10	include/certa/core.h	s/const v4 f = bv > splat(0) ? excl - bv - splat(kGapOpen + kGapExt - 1) : vneg;/const v4 f = bv > splat(0) ? excl - bv - splat(kGapOpen + kGapExt - 2) : vneg;/	killed	affine_fill_vec: a deletion one point too cheap
+E11	include/certa/core.h	s/const v4 fbit = (fm1 + splat(kGapOpen + kGapExt - 1) > hm1)/const v4 fbit = (fm1 + splat(kGapOpen + kGapExt) > hm1)/	killed	affine_fill_vec: the 'F extends F' traceback bit off by one point
+E12	include/certa/core.h	s/if (end\[l\] > best) { best = end\[l\]; best_i = i; best_b = b + l; }/if (end[l] >= best) { best = end[l]; best_i = i; best_b = b + l; }/	killed	affine_fill_vec: ties for the best end cell resolved to the last one
+E13	include/certa/core.h	s/const v4 st = (start >= hpv) \& (bv >= splat(blo))/const v4 st = (start >= hpv) \& (bv > splat(blo))/	killed	affine_fill_vec: the start range one cell short

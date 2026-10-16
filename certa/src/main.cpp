@@ -988,26 +988,34 @@ int cmd_map(const Args& a) {
                  gm->device_name().c_str(), t_upload);
   };
 
-  // Double buffering: a reader thread parses and encodes batch n+1 while
-  // batch n is mapped and written, so input parsing overlaps with mapping.
-  std::vector<FastqRecord> recs_buf[2];
-  ReadBatch batch_buf[2];
+  // Batches in flight: a reader thread parses and encodes batch n+2 while,
+  // with a GPU, the GPU stage (passes 1 and 2) maps batch n+1 and the CPU
+  // stage (the CPU passes, formatting and writing) finishes batch n. One CPU
+  // stage runs at a time, in input order, so the output does not depend on
+  // the overlap. Without a GPU the two stages run one after the other.
+  struct Slot {
+    std::vector<FastqRecord> recs;
+    ReadBatch batch;
+    std::vector<Result> res;
+    std::vector<Result> se_res;  // single-end results (paired mode, for MAPQ)
+    std::vector<RepeatOut> iv_store;
+    std::vector<int> iv_slot;    // per read: index into iv_store, or -1
+  };
+  constexpr int kSlots = 3;
+  Slot slots[kSlots];
   std::exception_ptr read_error;
-  double t_io = 0, t_wait = 0, t_map = 0, t_out = 0;
+  double t_io = 0, t_wait = 0, t_map_gpu = 0, t_map_cpu = 0, t_out = 0;
   uint64_t escalated = 0;  // reads re-run with --budget2
   uint64_t third = 0;      // reads re-run on the CPU with --budget3
   uint64_t local = 0;      // reads re-run on the CPU for tier SL
   uint64_t pair_tried = 0; // pairs given to the pair certificate
-  std::vector<Result> se_res;  // single-end results (paired mode, for MAPQ)
-  uint64_t iv_reads = 0;       // reads given to tier R (interval mode)
-  std::vector<RepeatOut> iv_store;
-  std::vector<int> iv_slot;    // per read: index into iv_store, or -1
+  uint64_t iv_reads = 0;   // reads given to tier R (interval mode)
   auto load = [&](int slot) {
     try {
       auto t = Clock::now();
       if (!paired) {
-        if (mapped) mapped->next_batch(recs_buf[slot], batch_size, io_threads);
-        else read_fastq_batch(*stream, recs_buf[slot], batch_size, io_threads);
+        if (mapped) mapped->next_batch(slots[slot].recs, batch_size, io_threads);
+        else read_fastq_batch(*stream, slots[slot].recs, batch_size, io_threads);
       } else {
         // Mates interleaved: read 2i is mate 1, read 2i + 1 its mate 2.
         std::vector<FastqRecord> m1, m2;
@@ -1017,7 +1025,7 @@ int cmd_map(const Args& a) {
         if (mapped2) mapped2->next_batch(m2, half, io_threads);
         else read_fastq_batch(*stream2, m2, half, io_threads);
         if (m1.size() != m2.size()) throw std::runtime_error("mate files have different numbers of reads");
-        std::vector<FastqRecord>& out = recs_buf[slot];
+        std::vector<FastqRecord>& out = slots[slot].recs;
         out.resize(2 * m1.size());
         for (size_t i = 0; i < m1.size(); ++i) {
           if (m1[i].name != m2[i].name)
@@ -1026,62 +1034,61 @@ int cmd_map(const Args& a) {
           out[2 * i + 1] = std::move(m2[i]);
         }
       }
-      encode_batch(recs_buf[slot], batch_buf[slot], io_threads);
+      encode_batch(slots[slot].recs, slots[slot].batch, io_threads);
       t_io += secs(t);
     } catch (...) {
-      recs_buf[slot].clear();
+      slots[slot].recs.clear();
       read_error = std::current_exception();
     }
   };
-  std::vector<Result> res;
   Stats total;
-  load(0);
-  wait_for_gpu();
-  for (int cur = 0; !recs_buf[cur].empty(); cur ^= 1) {
-    std::thread prefetch(load, cur ^ 1);
-    // Join the reader even if mapping throws, so the error is reported
-    // instead of std::terminate on a joinable thread.
-    struct Joiner {
-      std::thread& t;
-      ~Joiner() {
-        if (t.joinable()) t.join();
-      }
-    } joiner{prefetch};
-    const std::vector<FastqRecord>& recs = recs_buf[cur];
-    const ReadBatch& batch = batch_buf[cur];
-
+  // Re-runs the selected reads of a batch as a compacted batch with other parameters.
+  auto rerun = [&](Slot& S, const std::vector<size_t>& redo, const Params& pp, bool on_gpu) {
+    const ReadBatch& batch = S.batch;
+    if (redo.empty()) return;
+    ReadBatch sub;
+    sub.offs.resize(redo.size());
+    sub.lens.resize(redo.size());
+    sub.hashes.resize(redo.size());
+    for (size_t x = 0; x < redo.size(); ++x) {
+      const size_t i = redo[x];
+      sub.offs[x] = sub.codes.size();
+      sub.lens[x] = batch.lens[i];
+      sub.hashes[x] = batch.hashes[i];
+      sub.codes.insert(sub.codes.end(), batch.codes.begin() + batch.offs[i],
+                       batch.codes.begin() + batch.offs[i] + batch.lens[i]);
+    }
+    std::vector<Result> res2;
+    if (on_gpu) gm->map(pp, sub, res2);
+    else map_cpu(view, pp, sub, res2, threads);
+    for (size_t x = 0; x < redo.size(); ++x) S.res[redo[x]] = res2[x];
+  };
+  // Passes 1 and 2 (on the GPU when there is one).
+  auto gpu_stage = [&](Slot& S) {
     auto t = Clock::now();
-    if (gm) gm->map(p, batch, res);
-    else map_cpu(view, p, batch, res, threads);
-    // Re-runs the selected reads as a compacted batch with other parameters.
-    auto rerun = [&](const std::vector<size_t>& redo, const Params& pp, bool on_gpu) {
-      if (redo.empty()) return;
-      ReadBatch sub;
-      sub.offs.resize(redo.size());
-      sub.lens.resize(redo.size());
-      sub.hashes.resize(redo.size());
-      for (size_t x = 0; x < redo.size(); ++x) {
-        const size_t i = redo[x];
-        sub.offs[x] = sub.codes.size();
-        sub.lens[x] = batch.lens[i];
-        sub.hashes[x] = batch.hashes[i];
-        sub.codes.insert(sub.codes.end(), batch.codes.begin() + batch.offs[i],
-                         batch.codes.begin() + batch.offs[i] + batch.lens[i]);
-      }
-      std::vector<Result> res2;
-      if (on_gpu) gm->map(pp, sub, res2);
-      else map_cpu(view, pp, sub, res2, threads);
-      for (size_t x = 0; x < redo.size(); ++x) res[redo[x]] = res2[x];
-    };
+    std::vector<Result>& res = S.res;
+    if (gm) gm->map(p, S.batch, res);
+    else map_cpu(view, p, S.batch, res, threads);
     if (second_pass) {
       // Pass 2: every read pass 1 could not certify (except too-long/short
       // reads). Certified reads keep pass-1 results.
       std::vector<size_t> redo;
       for (size_t i = 0; i < res.size(); ++i)
         if (res[i].certified == 0 && res[i].reason != kBadLength) redo.push_back(i);
-      rerun(redo, p2, gm != nullptr);
+      rerun(S, redo, p2, gm != nullptr);
       escalated += redo.size();
     }
+    t_map_gpu += secs(t);
+  };
+  // The CPU passes, then formatting and writing, in input order.
+  auto cpu_stage = [&](Slot& S) {
+    auto t = Clock::now();
+    const std::vector<FastqRecord>& recs = S.recs;
+    const ReadBatch& batch = S.batch;
+    std::vector<Result>& res = S.res;
+    std::vector<Result>& se_res = S.se_res;
+    std::vector<RepeatOut>& iv_store = S.iv_store;
+    std::vector<int>& iv_slot = S.iv_slot;
     if (p3.budget > p2.budget) {
       // Pass 3, always on the CPU (identical in CPU and GPU runs): reads that
       // failed because the budget limited how many parts they could search.
@@ -1092,7 +1099,7 @@ int cmd_map(const Args& a) {
         if (r.certified == 0 && (r.reason == kRadiusNegative || r.reason == kNotFound) && r.used < want)
           redo.push_back(i);
       }
-      rerun(redo, p3, false);
+      rerun(S, redo, p3, false);
       third += redo.size();
     }
     if (pl.local > 0) {
@@ -1101,7 +1108,7 @@ int cmd_map(const Args& a) {
       for (size_t i = 0; i < res.size(); ++i)
         if (res[i].certified == 0 && (res[i].reason == kNotFound || res[i].reason == kClusterTooWide))
           redo.push_back(i);
-      rerun(redo, pl, false);
+      rerun(S, redo, pl, false);
       local += redo.size();
     }
     if (paired) {
@@ -1165,7 +1172,7 @@ int cmd_map(const Args& a) {
       for (auto& th : pw) th.join();
     }
     auto iv_of = [&](size_t i) -> const RepeatOut* { return intervals && iv_slot[i] >= 0 ? &iv_store[iv_slot[i]] : nullptr; };
-    t_map += secs(t);
+    t_map_cpu += secs(t);
 
     // Format in parallel over contiguous slices, then write in input order.
     t = Clock::now();
@@ -1284,11 +1291,50 @@ int cmd_map(const Args& a) {
       total.add(st[w]);
     }
     t_out += secs(t);
-
-    t = Clock::now();
+  };
+  // Join a thread even if mapping throws, so the error is reported
+  // instead of std::terminate on a joinable thread.
+  struct Joiner {
+    std::thread& t;
+    ~Joiner() {
+      if (t.joinable()) t.join();
+    }
+  };
+  std::thread cpu_thread;
+  std::exception_ptr cpu_error;
+  Joiner cpu_joiner{cpu_thread};
+  auto finish_cpu = [&] {
+    if (cpu_thread.joinable()) cpu_thread.join();
+    if (cpu_error) std::rethrow_exception(cpu_error);
+  };
+  load(0);
+  wait_for_gpu();
+  const bool overlap = gm != nullptr;  // set by the upload thread
+  for (int cur = 0; !slots[cur].recs.empty(); cur = (cur + 1) % kSlots) {
+    // The slot read into is neither the one the GPU stage maps nor the
+    // one the CPU stage may still be writing (three slots).
+    std::thread prefetch(load, (cur + 1) % kSlots);
+    Joiner joiner{prefetch};
+    gpu_stage(slots[cur]);
+    finish_cpu();  // the previous batch's CPU stage: batches are written in order
+    if (overlap) {
+      cpu_thread = std::thread([&, cur] {
+        try {
+          cpu_stage(slots[cur]);
+        } catch (...) {
+          cpu_error = std::current_exception();
+        }
+      });
+    } else {
+      cpu_stage(slots[cur]);
+    }
+    auto t = Clock::now();
     prefetch.join();
     t_wait += secs(t);
   }
+  finish_cpu();
+  // Mapping time summed over both stages (with a GPU they overlap).
+  const double t_map = t_map_gpu + t_map_cpu;
   if (read_error) std::rethrow_exception(read_error);
   if (sam != stdout) std::fclose(sam);
   if (fq) std::fclose(fq);

@@ -1102,6 +1102,44 @@ int main(int argc, char** argv) {
     CHECK(bad == 0, "band_del16 differs from its scalar reference on %d of %d rows", bad, rows);
     std::fprintf(stderr, "band_del16 = band_del16_scalar on %d random rows: %s\n", rows, bad ? "no" : "yes");
   }
+#ifdef CERTA_AFFINE_VEC
+  // ---- affine_fill_vec must equal the scalar fill cell for cell: every
+  // traceback byte (sentinel cells included) and the best end cell, on
+  // random bands, start ranges and reads with N.
+  {
+    std::unique_ptr<Workspace> w1(new Workspace), w2(new Workspace);
+    std::mt19937_64 ga(seed * 5 + 3);
+    int bands = 0, bad = 0;
+    for (int it = 0; it < 4000; ++it) {
+      const int B = 1 + static_cast<int>(ga() % BMAX);
+      const int64_t lo = static_cast<int64_t>(ga() % (ref.seq.size() - 600));
+      std::vector<uint8_t> rd = reads[ga() % reads.size()].seq;
+      if (it % 4 >= 2) {  // a read from this very place, so scores are high
+        rd.assign(ref.seq.owned.begin() + lo + B / 2, ref.seq.owned.begin() + lo + B / 2 + 160);
+        mutate(ga, rd, static_cast<int>(ga() % 8));
+        rd.resize(150, 0);
+      }
+      if (it % 8 == 1) rd[ga() % rd.size()] = 4;  // an N in the read
+      const int L = static_cast<int>(rd.size());
+      int64_t smin = INT64_MIN, smax = INT64_MAX;
+      if (it % 2) {
+        smin = lo + static_cast<int64_t>(ga() % 200) - 50;
+        smax = smin + static_cast<int64_t>(ga() % 120);
+      }
+      if (lo + L - 1 + (B + 3) / 4 * 4 > static_cast<int64_t>(view.ref_len)) continue;
+      int i1 = -1, b1 = -1, i2 = -2, b2 = -2;
+      const int s1 = affine_fill_vec(view, rd.data(), L, lo, B, *w1, smin, smax, &i1, &b1);
+      const int s2 = affine_fill_scalar(view, rd.data(), L, lo, B, *w2, smin, smax, &i2, &b2);
+      const bool same = s1 == s2 && i1 == i2 && b1 == b2 &&
+                        std::memcmp(w1->tb + B, w2->tb + B, static_cast<size_t>(L) * B) == 0;
+      ++bands;
+      bad += !same;
+    }
+    CHECK(bad == 0, "affine_fill_vec differs from affine_fill_scalar on %d of %d bands", bad, bands);
+    std::fprintf(stderr, "affine_fill_vec = affine_fill_scalar (every traceback byte) on %d random bands: %s\n",
+                 bands, bad ? "no" : "yes");
+  }
+#endif
   // ---- band_score must equal affine_align's score on any band and start range.
   {
     std::unique_ptr<Workspace> ws(new Workspace);

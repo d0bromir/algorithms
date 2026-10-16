@@ -442,9 +442,37 @@ threads, one run; `results/hg002_2026-10/galaxy_timing_pe.tsv`):
   CERTA's own side at 32 threads drops from 56.7 s to 47.7 s, and the
   pipeline's CPU from 2,984 s to 2,680 s. End to end, the best split (CERTA
   24 threads, minibwa 40) takes 72.8 s, against 77.0 s before and 61.6 s
-  for minibwa. The rest is the fallback: minibwa on the 12.9 % of reads in
-  pairs with an uncertified mate costs about 460 µs per read. Paired mode
-  closes on minibwa only by sending fewer or cheaper reads to it.
+  for minibwa.
+- *Update 2026-10-16 (`results/hg002_2026-10/galaxy_timing_pe_v3.tsv`,
+  `pe_profile.txt`): level with minibwa.* A profile showed two things.
+  - *The GPU and the CPU took turns.* Each batch ran its GPU passes
+    (13.9 s in all), then the CPU pair pass and output (29 s at 32 threads),
+    then the next batch. Now the GPU stage of batch n + 1 runs while the CPU
+    stage writes batch n. Three batches are in flight; one CPU stage at a
+    time, in input order, so the output does not change.
+  - *The pair pass was 40 % traceback DP.* `affine_align`'s fill is now
+    vectorized (4 lanes; THEORY.md "The traceback DP, vectorized"), with
+    every traceback byte equal to the scalar fill's. A first version was
+    slower than scalar: under Ubuntu's `_FORTIFY_SOURCE`, its `memcpy`s at a
+    variable offset into stack arrays became checked library calls. With
+    plain vector accesses it is 1.65× faster per cell.
+
+  CERTA's own side at 24 threads: 56.9 s → 39.0 s (CPU 909 s → 801 s). End
+  to end, CERTA 20 threads + minibwa 44: **60.6 s, against 61.4 s for
+  minibwa** in the same session, with 28 % less CPU (2,603 s vs 3,595 s).
+  SAM and fallback files are byte-identical to the previous build.
+- *What is left is the fallback.* On 2 M pairs, 6.4 % of pairs go to minibwa
+  (an earlier note here said 12.9 % of reads; it is 6.4 % of reads):
+  - 2.8 % of pairs have both mates uncertified; minibwa spends 1,118 µs per
+    read on them;
+  - 3.7 % have one, at 461 µs per read;
+  - the average over all reads is 88 µs.
+
+  The fallback is 6.4 % of reads but 54 % of minibwa's own CPU for the whole
+  sample. A smaller minibwa batch (`-K`) would overlap better, but it changes
+  minibwa's per-batch insert-size estimate: with `-K 20m`, 18,658 fallback
+  records change. So the fallback keeps minibwa's defaults until an
+  accuracy run says otherwise.
 
 **Variant-calling accuracy on chr20 vs GIAB v4.2.1, same caller for both
 pipelines.** Both are single-end, 22×. Precision / recall / F1:
@@ -721,12 +749,13 @@ verifies the XQ of PR mates too.
 - **Mutation tests:** 10 new mutants of the pair check (C10–C19), all
   killed. The suite now has 66 mutants: 60 killed, 6 proven equivalent.
 
-- **Speed in paired mode:** 4.0× faster than BWA-MEM2 but slower than
-  minibwa (77 s vs 62 s, 20M pairs). The cost lies in the pair pass (about
-  1,050 CPU-s) and in the fallback's hard reads. Sending only the
-  uncertified mate (`--fallback-mates single`) barely helps. Candidates:
-  move the pair pass to the GPU; restrict it to the one-uncertified pairs;
-  improve the fallback.
+- **Speed in paired mode:** 5.1× faster than BWA-MEM2 and level with minibwa
+  since 2026-10-16 (60.6 s vs 61.4 s, 20M pairs; it was 77 s). What is left
+  is the fallback's hard reads, 6.4 % of reads at about 54 % of minibwa's
+  whole-sample CPU. Sending only the uncertified mate
+  (`--fallback-mates single`) barely helps. Candidates: certify more of
+  those reads; a smaller minibwa batch, once an accuracy run shows its
+  changed pairing statistics do no harm.
 - **HG001 GATK indels** are the one comparison where CERTA's F1 is lower
   (0.9909 vs 0.9922). Look at the 13 extra FP and 14 extra FN.
 - **Long reads:** the mapper's limits (320 bp, 8 parts, radius 5) exclude

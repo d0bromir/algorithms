@@ -12,7 +12,7 @@ names:
 
 **Review status.** Written, then cross-checked by:
 - whole-reference oracles (4 seeds, ARM and x86);
-- 107 mutants;
+- 111 mutants;
 - exhaustive verification of the finite lemmas.
 
 It has **not yet been reviewed by a second person**. §11 lists what a
@@ -308,6 +308,48 @@ follows its own opening better than it extends it.
   `vec_eq_scalar`): the scalar recurrence and the vector form (the inclusive
   prefix maximum with a carry) give the same row, for rows of any width,
   whenever every h0 is at least the sentinel.
+
+**The traceback DP, vectorized (`affine_fill_vec`; tiers PR and SL, the
+reported CIGAR).** `affine_align` fills a band of B diagonals with
+traceback bits, then traces back. Its fill runs 4 cells at a time (32-bit
+lanes) when the padded band lies inside the reference, and must give the
+scalar fill's (`affine_fill_scalar`) values and traceback bytes in every
+cell, sentinel cells included, so the traceback, and therefore every CIGAR,
+is unchanged.
+- *E and the match term* read only the previous row, so they are
+  computed lane-wise as in the scalar loop.
+- *F, the deletion state,* is F[b] = max(hc[b−1] − 7, F[b−1] − 1) with
+  hc = max(h0, F) and F[0] = NEG. Opening from an F cell
+  (F[b−1] − 7) is dominated by extending it (F[b−1] − 1), so
+  F[b] = max(h0[b−1] − 7, F[b−1] − 1). Unrolled, this is exactly
+  F[b] = max(NEG + 6, max over b' < b of (h0[b'] + b')) − b − 6 for every
+  integer input, so unlike the band DP row above no "real score" premise is
+  needed. It is an exclusive prefix maximum: two shifts within a vector and
+  a carry that starts at NEG + 6.
+- *The bits.* "F extends F" at b is F[b−1] − 1 > hc[b−1] − 7, read from the
+  previous lane. The H source compares the same values in the same order as
+  the scalar loop. The best end cell is taken lane by lane, in order, so ties
+  go to the same, first cell.
+- *Memory:* each vector stores its four traceback bytes whole. Past a row's
+  end they land on the first cells of the next row, which is written later;
+  after the last row they land past every cell the traceback reads, still
+  inside `tb` ((LMAX + 1) · BMAX bytes; a band whose width is not a multiple
+  of 4 is narrower than BMAX = 96).
+- *Tests:* every traceback byte and the best cell equal the scalar fill on
+  4,000 random bands per seed (reads with N, start ranges, bands up to
+  BMAX). On 2 M HG002 pairs the SAM and fallback files are byte-identical.
+- *Mutants:* E10–E13 (a deletion one point too cheap, the F-extension bit
+  off by one point, ties to the last cell, the start range one cell short).
+  E9, the same start-range fault in the scalar fill, is caught by the same
+  test. An inclusive prefix (b' ≤ b) would change F but no cell value and no
+  bit: it adds h0[b] − 6 to F[b], which never exceeds h0[b] (so neither hc[b]
+  nor the H source changes), and when it raises F[b] the next lane's
+  "F extends F" test, F[b] + 6 > hc[b] = h0[b], stays false. A first mutant
+  of that form survived the tests for this reason and was replaced.
+- *Mechanized* in Lean 4 ([`lean/Certa/AffineFill.lean`](lean/Certa/AffineFill.lean),
+  `vec_eq_scalar`): within a row of any width, the scalar loop and the
+  vector form give the same F, the same cell value and the same "F extends
+  F" bit in every cell, for any integers.
 
 **Pruning the band (`band_best` with a floor; Corollary L-long).** The DP
 needs only alignments above the best score so far, the floor. A cell (or
@@ -919,7 +961,7 @@ guarantees is the interval [XL, XU] at whatever stage it stops.
 ## 9a. Mutants that survive by design
 
 A mutant that changes no claim on any input cannot be killed by a test, so
-it must be argued instead. Six of the 107 survive.
+it must be argued instead. Six of the 111 survive.
 - **L6** (span start candidates shifted): Lemma S, §4.
 - **A2** (Lemma O's term lowered): §4.
 - **P2, P8, P13** (band pad − 2, narrowed band − 3, `relevant` term dropped)

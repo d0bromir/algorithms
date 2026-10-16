@@ -25,3 +25,4 @@ standard three (propext, Classical.choice, Quot.sound).
 #print axioms Certa.Prune.remove_pair
 #print axioms Certa.Prune.above_live
 #print axioms Certa.BandRow.vec_eq_scalar
+#print axioms Certa.AffineFill.vec_eq_scalar

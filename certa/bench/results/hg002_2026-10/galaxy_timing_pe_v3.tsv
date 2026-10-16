@@ -1,0 +1,10 @@
+# Paired 20M-pair timing after overlapping the GPU and CPU stages and vectorizing affine_align's fill (2026-10-16; galaxy, A100 device 1, 64 threads in all; run_bench_pe.sh, REPS=1, same session as the minibwa row).
+# certa-gpu-pe-pipe rows: CERTA with PIPE_CERTA_THREADS = 16, 20, 24 (in that order) and minibwa on the rest. The previous build (galaxy_timing_pe_v2.tsv) took 72.81 s at 24 / 40.
+# CERTA's own side (-u/-U to /dev/null) at 16 / 24 / 32 threads: 53.35 / 39.00 / 29.71 s wall, 787 / 801 / 813 s user (previous build: 77.93 / 59.03 / 47.70 s).
+# The overlap alone (vector fill not yet in): 24 / 40 split 62.72 s; CERTA's side 43.64 s at 24 threads, 33.18 s at 32 (pe_profile.txt).
+# SAM and fallback FASTQs byte-identical to the previous build on 2M pairs (also single-end, interval mode and CPU-only).
+tool	certa_threads	pairs	wall_s	user_s	sys_s	max_rss_kb
+certa-gpu-pe-pipe	16	20001073	66.12	2561.28	22.38	41044252
+certa-gpu-pe-pipe	20	20001073	60.55	2578.57	24.35	41176556
+certa-gpu-pe-pipe	24	20001073	61.74	2580.68	34.66	41290804
+minibwa	-	20001073	61.37	3588.26	6.56	9506044

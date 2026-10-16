@@ -7,3 +7,4 @@ import Certa.LemmaC
 import Certa.TheoremG
 import Certa.Prune
 import Certa.BandRow
+import Certa.AffineFill
