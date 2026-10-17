@@ -1130,14 +1130,103 @@ int main(int argc, char** argv) {
       int i1 = -1, b1 = -1, i2 = -2, b2 = -2;
       const int s1 = affine_fill_vec(view, rd.data(), L, lo, B, *w1, smin, smax, &i1, &b1);
       const int s2 = affine_fill_scalar(view, rd.data(), L, lo, B, *w2, smin, smax, &i2, &b2);
-      const bool same = s1 == s2 && i1 == i2 && b1 == b2 &&
-                        std::memcmp(w1->tb + B, w2->tb + B, static_cast<size_t>(L) * B) == 0;
+      bool same = s1 == s2 && i1 == i2 && b1 == b2 &&
+                  std::memcmp(w1->tb + B, w2->tb + B, static_cast<size_t>(L) * B) == 0;
+      if (lo + L - 1 + (B + 7) / 8 * 8 <= static_cast<int64_t>(view.ref_len)) {  // the 16-bit fill too
+        int i3 = -3, b3 = -3;
+        const int s3 = affine_fill_vec16(view, rd.data(), L, lo, B, *w1, smin, smax, &i3, &b3);
+        same = same && s3 == s2 && i3 == i2 && b3 == b2 &&
+               std::memcmp(w1->tb + B, w2->tb + B, static_cast<size_t>(L) * B) == 0;
+      }
       ++bands;
       bad += !same;
     }
     CHECK(bad == 0, "affine_fill_vec differs from affine_fill_scalar on %d of %d bands", bad, bands);
-    std::fprintf(stderr, "affine_fill_vec = affine_fill_scalar (every traceback byte) on %d random bands: %s\n",
+    std::fprintf(stderr, "affine_fill_vec (32- and 16-bit) = affine_fill_scalar (every traceback byte) on %d random bands: %s\n",
                  bands, bad ? "no" : "yes");
+  }
+#endif
+  // ---- repeat_detail::match_run must count the leading same_base positions
+  // as the scalar loop does: reads copied from the reference with a few
+  // mismatches and N, windows reaching past either end.
+  {
+    std::mt19937_64 gm(seed * 11 + 7);
+    const int64_t n = static_cast<int64_t>(view.ref_len);
+    int runs = 0, bad = 0;
+    for (int it = 0; it < 20000; ++it) {
+      const int len = 1 + static_cast<int>(gm() % 200);
+      int64_t j = static_cast<int64_t>(gm() % static_cast<uint64_t>(n));
+      if (it % 10 == 0) j = n - static_cast<int64_t>(gm() % 60);
+      if (it % 10 == 1) j = -static_cast<int64_t>(gm() % 20);
+      std::vector<uint8_t> rd(len);
+      for (int i = 0; i < len; ++i) rd[i] = ref_at(view, j + i) < 4 ? ref_at(view, j + i) : static_cast<uint8_t>(gm() % 4);
+      if (it % 3) rd[gm() % len] = static_cast<uint8_t>(gm() % 4);  // a mismatch, or not
+      if (it % 7 == 2) rd[gm() % len] = 4;                          // an N in the read
+      int want = 0;
+      while (want < len && repeat_detail::same_base(rd[want], ref_at(view, j + want))) ++want;
+      ++runs;
+      bad += repeat_detail::match_run(view, rd.data(), j, len) != want;
+    }
+    CHECK(bad == 0, "match_run differs from the scalar count on %d of %d windows", bad, runs);
+    std::fprintf(stderr, "match_run = scalar same_base count on %d windows: %s\n", runs, bad ? "no" : "yes");
+  }
+#ifdef CERTA_EDIT_VEC
+  // ---- band_distance_vec and hamming_vec must equal their scalar versions on
+  // any band, limit and start: reads with N, bands reaching past either end of
+  // the reference, early stops (limit + 1) included.
+  {
+    std::mt19937_64 ge(seed * 7 + 5);
+    std::vector<int> pa(BMAX + 2), pb(BMAX + 2);
+    const int64_t n = static_cast<int64_t>(view.ref_len);
+    int bands = 0, bad_b = 0, windows = 0, bad_h = 0;
+    for (int it = 0; it < 20000; ++it) {
+      const int B = 1 + static_cast<int>(ge() % BAND_E2E);
+      std::vector<uint8_t> rd = reads[ge() % reads.size()].seq;
+      int64_t lo;
+      if (it % 10 == 0) lo = -static_cast<int64_t>(ge() % 60);                            // before the start
+      else if (it % 10 == 1) lo = n - static_cast<int64_t>(rd.size()) + static_cast<int64_t>(ge() % 60) - 30;  // past the end
+      else lo = static_cast<int64_t>(ge() % static_cast<uint64_t>(n - 400));
+      if (it % 4 >= 2 && lo >= 0 && lo + 200 < n) {  // a read from this very place: small distances
+        rd.assign(ref.seq.owned.begin() + lo + B / 2, ref.seq.owned.begin() + lo + B / 2 + 160);
+        mutate(ge, rd, static_cast<int>(ge() % 8));
+        rd.resize(150, 0);
+      }
+      if (it % 8 == 1) rd[ge() % rd.size()] = 4;  // an N in the read
+      if (it % 16 == 3 && ref.offsets.size() > 1) {
+        // The read copies a window across a contig's N padding: N facing N
+        // must still cost 1.
+        lo = static_cast<int64_t>(ref.offsets[1]) - 40 - static_cast<int64_t>(ge() % 40);
+        rd.assign(ref.seq.owned.begin() + lo + B / 2, ref.seq.owned.begin() + lo + B / 2 + 150);
+      }
+      int limit = static_cast<int>(ge() % 12) - 1;
+      int Bt = B;
+      if (it % 16 == 7) {
+        // A long deletion: the optimum needs the deletion chain across many
+        // lanes of one vector (every step of the prefix minimum), so the read
+        // starts on diagonal 1 or 2 and the deletion keeps it in the first.
+        const int dl = 5 + static_cast<int>(ge() % 9), b0 = 1 + static_cast<int>(ge() % 2);
+        Bt = std::min(BAND_E2E, b0 + dl + 2 + static_cast<int>(ge() % 8));
+        lo = static_cast<int64_t>(ge() % static_cast<uint64_t>(n - 400));
+        const int64_t s0 = lo + b0, cut = 40 + static_cast<int64_t>(ge() % 70);
+        rd.assign(ref.seq.owned.begin() + s0, ref.seq.owned.begin() + s0 + cut);
+        rd.insert(rd.end(), ref.seq.owned.begin() + s0 + cut + dl, ref.seq.owned.begin() + s0 + 150 + dl);
+        limit = dl + static_cast<int>(ge() % 3);
+      }
+      const int L = static_cast<int>(rd.size());
+      const int d1 = band_distance_vec(view, rd.data(), L, lo, Bt, limit);      // the 8-bit form where it applies
+      const int d3 = band_distance_vec16(view, rd.data(), L, lo, Bt, limit);
+      const int d2 = band_distance_scalar(view, rd.data(), L, lo, Bt, limit, pa.data(), pb.data());
+      ++bands;
+      bad_b += d1 != d2 || d3 != d2;
+      const int64_t st = it % 16 == 3 ? lo + B / 2 : lo + static_cast<int64_t>(ge() % static_cast<uint64_t>(B));
+      const int h1 = hamming_vec(view, rd.data(), L, st, limit), h2 = hamming_scalar(view, rd.data(), L, st, limit);
+      ++windows;
+      bad_h += h1 != h2;
+    }
+    CHECK(bad_b == 0, "band_distance_vec differs from band_distance_scalar on %d of %d bands", bad_b, bands);
+    CHECK(bad_h == 0, "hamming_vec differs from hamming_scalar on %d of %d windows", bad_h, windows);
+    std::fprintf(stderr, "band_distance_vec (8- and 16-bit) = band_distance_scalar on %d random bands, hamming_vec = hamming_scalar on %d: %s\n",
+                 bands, windows, bad_b || bad_h ? "no" : "yes");
   }
 #endif
   // ---- band_score must equal affine_align's score on any band and start range.
@@ -1159,11 +1248,19 @@ int main(int argc, char** argv) {
         smin = lo + static_cast<int64_t>(g() % 200) - 50;
         smax = smin + static_cast<int64_t>(g() % 120);
       }
+      if (n % 8 == 5) rd[g() % rd.size()] = 4;  // an N in the read
       Result tmp;
       const bool ok = affine_align(view, rd.data(), L, lo, B, *ws, tmp, true, smin, smax);
       const int v = band_score(view, rd.data(), L, lo, B, smin, smax);
       CHECK(ok ? v == tmp.score : v == kNoSub, "band_score %d vs affine_align %d (ok %d) lo %lld B %d", v,
             ok ? tmp.score : 0, ok, static_cast<long long>(lo), B);
+      const int vs = band_score_scalar(view, rd.data(), L, lo, B, smin, smax);
+      CHECK(v == vs, "band_score %d vs band_score_scalar %d lo %lld B %d", v, vs, static_cast<long long>(lo), B);
+      // With a threshold: exact above it, at or below it otherwise.
+      const int theta = (vs == kNoSub ? L - 40 : vs) + static_cast<int>(g() % 21) - 10;
+      const int vt = band_score(view, rd.data(), L, lo, B, smin, smax, theta);
+      CHECK(vs != kNoSub && vs > theta ? vt == vs : (vt == kNoSub || vt <= theta),
+            "band_score with theta %d gives %d, exact %d (lo %lld B %d)", theta, vt, vs, static_cast<long long>(lo), B);
 
       ++compared;
     }

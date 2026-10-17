@@ -182,6 +182,7 @@ Parameters:
 | `-k` (map) | 2 | edit budget, 0–5; reads need length ≥ (k+1)(q+s−1) (87 bp for k=2 with the defaults; 145 bp for k=4) |
 | `--cap` | 32 | max hits enumerated per part (≤ 32) |
 | `--batch` | 200 000 CPU / 1 000 000 GPU | reads per batch |
+| `--serial-stages` | off | without a GPU, run the two mapping stages of a batch one after the other instead of overlapping them with the next batch's (same output either way) |
 
 ## Results on real data: GIAB HG002, NovaSeq X
 

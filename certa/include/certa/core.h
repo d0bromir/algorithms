@@ -255,6 +255,19 @@ CERTA_HD inline void lookup_bucket(const IndexView& ix, uint64_t key, uint64_t l
   const uint64_t r0 = r;
   if (ix.keys16) {  // within a bucket, keys are ordered by their low bits
     const uint16_t k = (uint16_t)(key & ((1ull << shift) - 1));
+#ifndef __CUDA_ARCH__
+    // A small bucket (most are; they fit a cache line or two): a linear scan
+    // finds the same first key >= k and first key > k without the binary
+    // search's unpredictable branches.
+    if (r - l <= 64) {
+      uint64_t a = l;
+      while (a < r && ix.keys16[a] < k) ++a;
+      *lo = a;
+      while (a < r && ix.keys16[a] == k) ++a;
+      *hi = a;
+      return;
+    }
+#endif
     while (l < r) {
       uint64_t m = l + (r - l) / 2;
       if (ix.keys16[m] < k) l = m + 1; else r = m;
@@ -377,9 +390,9 @@ CERTA_HD inline void enumerate_parts(const IndexView& ix, int L, int P, int m,
 // Semi-global unit-cost edit distance of the whole read against the
 // reference, restricted to diagonals [lo, lo + B). Returns `limit + 1` as
 // soon as every cell exceeds `limit` (exact whenever the result <= limit).
-CERTA_HD inline int band_distance(const IndexView& ix, const uint8_t* rd, int L,
-                                  int64_t lo, int B, int limit, int* prev,
-                                  int* cur) {
+CERTA_HD inline int band_distance_scalar(const IndexView& ix, const uint8_t* rd, int L,
+                                         int64_t lo, int B, int limit, int* prev,
+                                         int* cur) {
   for (int b = 0; b < B; ++b) prev[b] = 0;
   for (int i = 1; i <= L; ++i) {
     const uint8_t c = rd[i - 1];
@@ -399,12 +412,196 @@ CERTA_HD inline int band_distance(const IndexView& ix, const uint8_t* rd, int L,
   return best;
 }
 
-CERTA_HD inline int hamming(const IndexView& ix, const uint8_t* rd, int L,
-                            int64_t start, int limit) {
+CERTA_HD inline int hamming_scalar(const IndexView& ix, const uint8_t* rd, int L,
+                                   int64_t start, int limit) {
   int d = 0;
   for (int i = 0; i < L && d <= limit; ++i)
     d += sub_cost(rd[i], ref_at(ix, start + i));
   return d;
+}
+
+#if defined(__GNUC__) && !defined(__CUDACC__) && !defined(CERTA_NO_VEC) && (defined(__clang__) || __GNUC__ >= 12)
+#define CERTA_EDIT_VEC 1
+// band_distance_scalar, 8 cells at a time (16-bit lanes; NEON or SSE), with
+// the same result for every input, early stop included:
+// - the match and insertion terms depend on the previous row only;
+// - the deletion step cur[b] = min(v[b], cur[b-1] + 1) unrolls to
+//   cur[b] = b + min over b' <= b of (v[b'] - b'), an inclusive prefix
+//   minimum: three in-register shifts per vector and a carry across vectors
+//   (the minimum form of band_row's identity, lean/Certa/BandRow.lean);
+// - the row's minimum is min_b v[b], since cur[b] >= that minimum and the
+//   cell that attains it keeps it.
+// Distances stay below L + B, far under the 16-bit sentinel.
+inline int band_distance_vec16(const IndexView& ix, const uint8_t* rd, int L, int64_t lo, int B, int limit) {
+  typedef int16_t v8 __attribute__((vector_size(16)));
+  typedef uint8_t u8x8 __attribute__((vector_size(8)));
+  typedef int16_t v8u __attribute__((vector_size(16), aligned(2), may_alias));
+  typedef uint8_t u8x8u __attribute__((vector_size(8), aligned(1), may_alias));
+  constexpr int W = 8;
+  constexpr int16_t HI = 16000;
+  auto vmin = [](v8 a, v8 b) { return a < b ? a : b; };
+  const v8 hi = {HI, HI, HI, HI, HI, HI, HI, HI}, one = {1, 1, 1, 1, 1, 1, 1, 1};
+  const v8 lane = {0, 1, 2, 3, 4, 5, 6, 7};
+  const int Bp = (B + W - 1) / W * W;
+  // Rows: lanes [0, B) hold distances; [B, Bp + W) the sentinel, so no
+  // insertion enters from beyond the band and padding lanes never win.
+  int16_t rows[2][BMAX + 2 * W];
+  int16_t* prev = rows[0];
+  int16_t* cur = rows[1];
+  for (int b = 0; b < Bp + W; ++b) { prev[b] = b < B ? 0 : HI; cur[b] = HI; }
+  // The band's reference window, once: row i reads it from i - 1 (4 outside the reference).
+  uint8_t refw[LMAX + BMAX + 2 * W];
+  const int nw = L - 1 + Bp;
+  for (int k = 0; k < nw; ++k) refw[k] = ref_at(ix, lo + k);
+  for (int k = nw; k < nw + W; ++k) refw[k] = 4;
+  for (int i = 1; i <= L; ++i) {
+    const uint8_t c = rd[i - 1];
+    const int16_t cc = c < 4 ? (int16_t)c : (int16_t)-1;  // an N matches nothing
+    const v8 cv = {cc, cc, cc, cc, cc, cc, cc, cc};
+    v8 carry = hi, rmin = hi;
+    for (int b = 0; b < Bp; b += W) {
+      const int16_t b16 = (int16_t)b;
+    const v8 bv = lane + v8{b16, b16, b16, b16, b16, b16, b16, b16};
+      const v8 p = *(const v8u*)(prev + b), pn = *(const v8u*)(prev + b + 1);
+      const v8 r = __builtin_convertvector(*(const u8x8u*)(refw + (i - 1) + b), v8);
+      v8 v = p + one + (r == cv);  // a match adds 0 (the comparison is -1), anything else 1
+      v = vmin(v, pn + one);
+      v8 x = v - bv;
+      x = vmin(x, __builtin_shufflevector(x, hi, 8, 0, 1, 2, 3, 4, 5, 6));
+      x = vmin(x, __builtin_shufflevector(x, hi, 8, 9, 0, 1, 2, 3, 4, 5));
+      x = vmin(x, __builtin_shufflevector(x, hi, 8, 9, 10, 11, 0, 1, 2, 3));
+      x = vmin(x, carry);
+      carry = __builtin_shufflevector(x, x, 7, 7, 7, 7, 7, 7, 7, 7);
+      v8 out = x + bv;
+      if (b + W > B) {
+        const int16_t bb = (int16_t)B;
+        const v8 in = bv < v8{bb, bb, bb, bb, bb, bb, bb, bb};
+        out = in ? out : hi;
+        v = in ? v : hi;
+      }
+      *(v8u*)(cur + b) = out;
+      rmin = vmin(rmin, v);
+    }
+    int row_min = HI;
+    for (int l = 0; l < W; ++l) row_min = rmin[l] < row_min ? rmin[l] : row_min;
+    if (row_min > limit) return limit + 1;
+    int16_t* t = prev; prev = cur; cur = t;
+  }
+  int best = BIG;
+  for (int b = 0; b < B; ++b) if (prev[b] < best) best = prev[b];
+  return best;
+}
+
+// The same DP on values capped at cap = limit + 1, 16 cells at a time (8-bit
+// lanes), for small limits and a band whose reference window lies inside the
+// reference. The result is unchanged:
+// - every recurrence term is non-decreasing in its argument and adds >= 0,
+//   so min(D, cap) satisfies the recurrence with every term capped, and
+//   cells outside the band (infinite) count as cap;
+// - band_distance_scalar returns min(final row minimum, limit + 1), since
+//   row minima never decrease (each cell is >= some cell of the row above),
+//   and so does this.
+// It stops once every cell of a row is at the cap.
+inline int band_distance_vec8(const IndexView& ix, const uint8_t* rd, int L, int64_t lo, int B, int limit) {
+  typedef int8_t v16 __attribute__((vector_size(16)));
+  typedef int8_t v16u __attribute__((vector_size(16), aligned(1), may_alias));
+  typedef uint64_t u64x2 __attribute__((vector_size(16)));
+  constexpr int W = 16;
+  auto vmin = [](v16 a, v16 b) { return a < b ? a : b; };
+  auto splat = [](int x) {
+    const int8_t s = (int8_t)x;
+    return v16{s, s, s, s, s, s, s, s, s, s, s, s, s, s, s, s};
+  };
+  const int cap = limit + 1;
+  const v16 capv = splat(cap), one = splat(1);
+  const v16 lane = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+  const int Bp = (B + W - 1) / W * W;
+  int8_t rows[2][BMAX + 2 * W];
+  int8_t* prev = rows[0];
+  int8_t* cur = rows[1];
+  for (int b = 0; b < Bp + W; ++b) { prev[b] = (int8_t)(b < B ? 0 : cap); cur[b] = (int8_t)cap; }
+  const uint8_t* rf = ix.ref + lo;  // row i compares rd[i - 1] with rf[i - 1 + b]
+  for (int i = 1; i <= L; ++i) {
+    const uint8_t c = rd[i - 1];
+    const v16 cv = splat(c < 4 ? c : -1);  // an N matches nothing
+    v16 carry = capv, rmin = capv;
+    for (int b = 0; b < Bp; b += W) {
+      const v16 bv = lane + splat(b);
+      const v16 p = *(const v16u*)(prev + b), pn = *(const v16u*)(prev + b + 1);
+      const v16 r = *(const v16u*)(rf + (i - 1) + b);
+      v16 v = p + one + (r == cv);  // a match adds 0 (the comparison is -1), anything else 1
+      v = vmin(v, pn + one);
+      v16 x = v - bv;
+      x = vmin(x, __builtin_shufflevector(x, capv, 16, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14));
+      x = vmin(x, __builtin_shufflevector(x, capv, 16, 17, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13));
+      x = vmin(x, __builtin_shufflevector(x, capv, 16, 17, 18, 19, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11));
+      x = vmin(x, __builtin_shufflevector(x, capv, 16, 17, 18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4, 5, 6, 7));
+      x = vmin(x, carry);
+      carry = __builtin_shufflevector(x, x, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15);
+      v16 out = vmin(x + bv, capv);
+      if (b + W > B) out = bv < splat(B) ? out : capv;
+      *(v16u*)(cur + b) = out;
+      rmin = vmin(rmin, out);
+    }
+    const u64x2 below = (u64x2)(rmin < capv);
+    if ((below[0] | below[1]) == 0) return cap;  // every cell at the cap: the result is limit + 1
+    int8_t* t = prev; prev = cur; cur = t;
+  }
+  int best = cap;
+  for (int b = 0; b < B; ++b) if (prev[b] < best) best = prev[b];
+  return best;
+}
+
+// Dispatch: the 8-bit form when its window fits the reference and the cap
+// fits its lanes (every caller's limit is <= S2_MAX), else the 16-bit form.
+inline int band_distance_vec(const IndexView& ix, const uint8_t* rd, int L, int64_t lo, int B, int limit) {
+  constexpr int W = 16;
+  const int Bp = (B + W - 1) / W * W;
+  if (limit >= 0 && limit <= 60 && lo >= 0 && (uint64_t)(lo + L - 1 + Bp + W) <= ix.ref_len)
+    return band_distance_vec8(ix, rd, L, lo, B, limit);
+  return band_distance_vec16(ix, rd, L, lo, B, limit);
+}
+
+// hamming_scalar, 16 positions at a time when the window lies inside the
+// reference, with the same result: the exact count while it stays <= limit,
+// else limit + 1.
+inline int hamming_vec(const IndexView& ix, const uint8_t* rd, int L, int64_t start, int limit) {
+  if (start < 0 || (uint64_t)(start + L) > ix.ref_len) return hamming_scalar(ix, rd, L, start, limit);
+  typedef uint8_t u8x16 __attribute__((vector_size(16)));
+  typedef uint8_t u8x16u __attribute__((vector_size(16), aligned(1), may_alias));
+  const uint8_t* rf = ix.ref + start;
+  const u8x16 four = {4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4};
+  int d = 0, i = 0;
+  for (; i + 16 <= L; i += 16) {
+    const u8x16 a = *(const u8x16u*)(rd + i), b = *(const u8x16u*)(rf + i);
+    const auto ok = (a == b) & (a < four);  // -1 where the bases match
+    int m = 0;
+    for (int l = 0; l < 16; ++l) m += ok[l] ? 0 : 1;
+    d += m;
+    if (d > limit) return limit + 1;
+  }
+  for (; i < L && d <= limit; ++i) d += sub_cost(rd[i], rf[i]);
+  return d <= limit ? d : limit + 1;
+}
+#endif
+
+CERTA_HD inline int band_distance(const IndexView& ix, const uint8_t* rd, int L,
+                                  int64_t lo, int B, int limit, int* prev, int* cur) {
+#ifdef CERTA_EDIT_VEC
+  (void)prev; (void)cur;
+  return band_distance_vec(ix, rd, L, lo, B, limit);
+#else
+  return band_distance_scalar(ix, rd, L, lo, B, limit, prev, cur);
+#endif
+}
+
+CERTA_HD inline int hamming(const IndexView& ix, const uint8_t* rd, int L,
+                            int64_t start, int limit) {
+#ifdef CERTA_EDIT_VEC
+  return hamming_vec(ix, rd, L, start, limit);
+#else
+  return hamming_scalar(ix, rd, L, start, limit);
+#endif
 }
 
 CERTA_HD inline void push_op(Result& r, uint32_t op) {
@@ -749,6 +946,113 @@ inline int affine_fill_vec(const IndexView& ix, const uint8_t* rd, int L, int64_
   *pbb = best_b;
   return best;
 }
+
+// affine_fill_vec with 16-bit lanes, 8 cells at a time, and the same values
+// relative to "minus infinity": NEG is -16000 here instead of -(1 << 20).
+// Every value the fill compares is either a real score (above -9 LMAX - 5: a
+// cell loses at most 9 points per row) or NEG plus a bounded offset (below
+// NEG + LMAX, and above NEG - 9 LMAX - BMAX, so no lane wraps), and the same operations give the same offsets from either
+// NEG; so every comparison, traceback bit and best cell is the same. A best
+// derived from NEG (no allowed start) is mapped back to the 32-bit NEG plus
+// its offset, as the 32-bit fill returns it.
+inline int affine_fill_vec16(const IndexView& ix, const uint8_t* rd, int L, int64_t lo, int B, Workspace& ws,
+                             int64_t smin, int64_t smax, int* pbi, int* pbb) {
+  static_assert(kMatch == 1 && kGapExt == 1, "affine_fill_vec16 assumes +1 matches and gap extension 1");
+  static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, "affine_fill_vec16 packs the low byte of each lane");
+  static_assert(-16000 - 9 * LMAX - BMAX > INT16_MIN && LMAX * 9 + 5 < 16000 / 2, "16-bit affine fill");
+  typedef int16_t v8 __attribute__((vector_size(16)));
+  typedef uint8_t u8x16 __attribute__((vector_size(16)));
+  typedef uint64_t u64x2 __attribute__((vector_size(16)));
+  typedef int16_t v8u __attribute__((vector_size(16), aligned(2), may_alias));
+  typedef uint8_t u8x8u __attribute__((vector_size(8), aligned(1), may_alias));
+  typedef uint64_t u64u __attribute__((aligned(1), may_alias));
+  constexpr int W = 8;
+  const int NEG = -16000;
+  auto vmax = [](v8 a, v8 b) { return a > b ? a : b; };
+  auto splat = [](int x) {
+    const int16_t s = (int16_t)x;
+    return v8{s, s, s, s, s, s, s, s};
+  };
+  const v8 vneg = splat(NEG), lane = {0, 1, 2, 3, 4, 5, 6, 7};
+  const v8 ninf = splat(INT16_MIN);
+  const int Bp = (B + W - 1) / W * W;
+  int16_t hb[2][BMAX + 2 * W], eb[2][BMAX + 2 * W];
+  int16_t* hp = hb[0];
+  int16_t* hc = hb[1];
+  int16_t* ep = eb[0];
+  int16_t* ec = eb[1];
+  for (int b = 0; b < Bp + W; ++b) hp[b] = hc[b] = ep[b] = ec[b] = (int16_t)NEG;
+  const uint8_t* refw = ix.ref + lo;  // row i reads it from i - 1 (inside the reference: see the caller)
+  int best = NEG, best_i = 0, best_b = 0;
+  for (int i = 1; i <= L; ++i) {
+    const v8 c = splat(rd[i - 1]);
+    const v8 start = splat(i == 1 ? 0 : -kClip);
+    const int clip_end = i < L ? kClip : 0;
+    const int64_t base = (int64_t)i - 1 + lo;
+    const int64_t blo64 = smin == INT64_MIN ? 0 : smin - base, bhi64 = smax == INT64_MAX ? B : smax - base;
+    const int blo = blo64 < 0 ? 0 : (blo64 > B ? B : (int)blo64);
+    const int bhi = bhi64 < -1 ? -1 : (bhi64 >= B ? B - 1 : (int)bhi64);
+    const uint8_t* rw = refw + (i - 1);
+    v8 carry = splat(NEG + 6);  // running max of h0[b'] + b'
+    v8 fprev = vneg, hprev = vneg;  // the previous vector's F and H (lane 7 used)
+    for (int b = 0; b < Bp; b += W) {
+      const v8 bv = lane + splat(b);
+      const v8 hpv = *(const v8u*)(hp + b), hp1 = *(const v8u*)(hp + b + 1), ep1 = *(const v8u*)(ep + b + 1);
+      const v8 st = (start >= hpv) & (bv >= splat(blo)) & (bv <= splat(bhi));
+      const v8 diag = st ? start : hpv;
+      const v8 t = __builtin_convertvector(*(const u8x8u*)(rw + b), v8);
+      const v8 mis = (t != c) | (c >= splat(4));
+      const v8 m = diag + (mis ? splat(-kMismatch) : splat(kMatch));
+      v8 e = vneg, ebit = splat(0);
+      if (i > 1) {
+        const v8 open = hp1 - splat(kGapOpen + kGapExt), ext = ep1 - splat(kGapExt);
+        const v8 valid = bv + splat(1) < splat(B);
+        e = valid ? (open >= ext ? open : ext) : vneg;
+        ebit = (ext > open) & valid & splat(8);
+      }
+      const v8 esel = e > m;
+      const v8 h0 = esel ? e : m;
+      v8 src = esel & splat(1);
+      // F from the exclusive prefix maximum of h0[b] + b.
+      const v8 g = h0 + bv;
+      v8 inc = vmax(g, __builtin_shufflevector(g, ninf, 8, 0, 1, 2, 3, 4, 5, 6));
+      inc = vmax(inc, __builtin_shufflevector(inc, ninf, 8, 9, 0, 1, 2, 3, 4, 5));
+      inc = vmax(inc, __builtin_shufflevector(inc, ninf, 8, 9, 10, 11, 0, 1, 2, 3));
+      inc = vmax(inc, carry);
+      const v8 excl = __builtin_shufflevector(carry, inc, 7, 8, 9, 10, 11, 12, 13, 14);
+      carry = __builtin_shufflevector(inc, inc, 7, 7, 7, 7, 7, 7, 7, 7);
+      const v8 f = bv > splat(0) ? excl - bv - splat(kGapOpen + kGapExt - 1) : vneg;
+      const v8 fsel = f > h0;
+      const v8 h = fsel ? f : h0;
+      src = fsel ? splat(2) : src;
+      const v8 fm1 = __builtin_shufflevector(fprev, f, 7, 8, 9, 10, 11, 12, 13, 14);
+      const v8 hm1 = __builtin_shufflevector(hprev, h, 7, 8, 9, 10, 11, 12, 13, 14);
+      const v8 fbit = (fm1 + splat(kGapOpen + kGapExt - 1) > hm1) & (bv > splat(0)) & splat(16);
+      fprev = f;
+      hprev = h;
+      *(v8u*)(hc + b) = h;
+      *(v8u*)(ec + b) = e;
+      const v8 bits = (st & splat(4)) | ebit | fbit | src;
+      // The low byte of each lane, packed into 8 bytes and stored whole (past
+      // the row's end it lands on cells of row i + 1, written later, or after
+      // row L inside tb's (LMAX + 1) * BMAX bytes, past what traceback reads).
+      const u8x16 bytes = (u8x16)bits;
+      const u8x16 b8 = __builtin_shufflevector(bytes, bytes, 0, 2, 4, 6, 8, 10, 12, 14, 0, 0, 0, 0, 0, 0, 0, 0);
+      *(u64u*)(ws.tb + (size_t)i * B + b) = ((u64x2)b8)[0];
+      // An alignment may end after a match/mismatch.
+      const v8 end = (src == splat(0)) & (bv < splat(B)) ? h - splat(clip_end) : vneg;
+      const u64x2 over = (u64x2)(end > splat(best));
+      if (over[0] | over[1])
+        for (int l = 0; l < W; ++l)
+          if (end[l] > best) { best = end[l]; best_i = i; best_b = b + l; }
+    }
+    int16_t* tmp = hp; hp = hc; hc = tmp;
+    tmp = ep; ep = ec; ec = tmp;
+  }
+  *pbi = best_i;
+  *pbb = best_b;
+  return best < NEG / 2 ? best - NEG - (1 << 20) : best;
+}
 #endif
 
 // Affine-optimal alignment of the read within diagonals [lo, lo + B) with
@@ -764,7 +1068,9 @@ CERTA_HD inline bool affine_align(const IndexView& ix, const uint8_t* rd, int L,
   const int NEG = -(1 << 20);
   int best_i = 0, best_b = 0, best;
 #ifdef CERTA_AFFINE_VEC
-  if (lo >= 0 && lo + L - 1 + (B + 3) / 4 * 4 <= (int64_t)ix.ref_len)
+  if (lo >= 0 && lo + L - 1 + (B + 7) / 8 * 8 <= (int64_t)ix.ref_len)
+    best = affine_fill_vec16(ix, rd, L, lo, B, ws, smin, smax, &best_i, &best_b);
+  else if (lo >= 0 && lo + L - 1 + (B + 3) / 4 * 4 <= (int64_t)ix.ref_len)
     best = affine_fill_vec(ix, rd, L, lo, B, ws, smin, smax, &best_i, &best_b);
   else
 #endif
@@ -1148,8 +1454,8 @@ inline void band_del16(int B, const int16_t* hq, int16_t* hn, int16_t NEG) {
 inline void band_del16(int B, const int16_t* hq, int16_t* hn, int16_t NEG) { band_del16_scalar(B, hq, hn, NEG); }
 #endif
 
-inline int band_score(const IndexView& ix, const uint8_t* rd, int L, int64_t lo, int B,
-                      int64_t smin = INT64_MIN, int64_t smax = INT64_MAX) {
+inline int band_score_scalar(const IndexView& ix, const uint8_t* rd, int L, int64_t lo, int B,
+                             int64_t smin = INT64_MIN, int64_t smax = INT64_MAX) {
   static_assert(LMAX * (kMismatch + kGapOpen + kGapExt) < 16000, "16-bit band scores");
   const int16_t NEG = -16000;
   alignas(16) int16_t buf[4][BMAX + 8], m[BMAX + 8], sub[BMAX + 8], hq[BMAX + 8];
@@ -1181,6 +1487,105 @@ inline int band_score(const IndexView& ix, const uint8_t* rd, int L, int64_t lo,
     t = ep; ep = en; en = t;
   }
   return best < NEG / 2 ? kNoSub : best;
+}
+
+#if defined(__GNUC__) && !defined(__CUDACC__) && !defined(CERTA_NO_VEC) && (defined(__clang__) || __GNUC__ >= 12)
+#define CERTA_BAND_SCORE_VEC 1
+// band_score_scalar with each row in one pass, 8 cells at a time: the same
+// int16 values in every cell (substitution, start, insertion, the deletion
+// prefix maximum of band_del16, the row's best), so the same result. Lanes
+// past the band compute values nothing reads: the insertion term of the
+// band's last cell takes cell B, reset to minus infinity every row, the
+// deletion maximum runs left to right, and the row's best masks them.
+// With `theta`, only scores above theta need to be exact: the DP stops after
+// row i once no alignment can still exceed it. One continuing from a cell
+// gains at most a point per remaining base, so it ends at most H + (L - i);
+// one starting later starts at -kClip, so it ends at most L - i - kClip.
+// The result is then the exact score when that is above theta, and some
+// value at or below theta (the best so far) otherwise.
+inline int band_score_vec(const IndexView& ix, const uint8_t* rd, int L, int64_t lo, int B,
+                          int64_t smin, int64_t smax, int theta) {
+  static_assert(kGapExt == 1, "band_score_vec assumes kGapExt = 1");
+  typedef int16_t v8 __attribute__((vector_size(16)));
+  typedef int16_t v8u __attribute__((vector_size(16), aligned(2), may_alias));
+  typedef uint8_t u8x8u __attribute__((vector_size(8), aligned(1), may_alias));
+  constexpr int W = 8;
+  const int16_t NEG = -16000;
+  auto vmax = [](v8 a, v8 b) { return a > b ? a : b; };
+  auto splat = [](int x) {
+    const int16_t s = (int16_t)x;
+    return v8{s, s, s, s, s, s, s, s};
+  };
+  const v8 lane = {0, 1, 2, 3, 4, 5, 6, 7}, vneg = splat(NEG);
+  const int Bp = (B + W - 1) / W * W;
+  int16_t buf[4][BMAX + 2 * W];
+  int16_t *hp = buf[0], *hn = buf[1], *ep = buf[2], *en = buf[3];
+  for (int b = 0; b < Bp + W; ++b) hp[b] = hn[b] = ep[b] = en[b] = NEG;
+  uint8_t refw[LMAX + BMAX + 2 * W];
+  for (int j = 0; j < L - 1 + B; ++j) refw[j] = ref_at(ix, lo + j);
+  for (int j = L - 1 + B; j < L - 1 + Bp + W; ++j) refw[j] = 4;
+  int best = NEG;
+  for (int i = 1; i <= L; ++i) {
+    const uint8_t c = rd[i - 1];
+    const int16_t start = i == 1 ? 0 : -kClip;
+    const int64_t base = (int64_t)i - 1 + lo;
+    const int64_t blo64 = smin == INT64_MIN ? 0 : smin - base, bhi64 = smax == INT64_MAX ? B : smax - base;
+    const int blo = blo64 < 0 ? 0 : (blo64 > B ? B : (int)blo64);
+    const int bhi = bhi64 < -1 ? -1 : (bhi64 >= B ? B - 1 : (int)bhi64);
+    const uint8_t* rw = refw + (i - 1);
+    const v8 eopen = splat(i > 1 ? kGapOpen + kGapExt : 8000);  // no alignment starts with a gap
+    const v8 cv = splat(c < 4 ? c : -1);                         // N never matches
+    const v8 st0 = splat(start), vlo = splat(blo), vhi = splat(bhi), vB = splat(B);
+    v8 carry = vneg, rbv = vneg, hbv = vneg;
+    for (int b = 0; b < Bp; b += W) {
+      const v8 bv = lane + splat(b);
+      const v8 p = *(const v8u*)(hp + b), pn = *(const v8u*)(hp + b + 1), epn = *(const v8u*)(ep + b + 1);
+      const v8 r = __builtin_convertvector(*(const u8x8u*)(rw + b), v8);
+      const v8 sub = r == cv ? splat(kMatch) : splat(-kMismatch);
+      const v8 st = (bv >= vlo) & (bv <= vhi) ? st0 : vneg;
+      const v8 m = vmax(p, st) + sub;
+      const v8 e = vmax(pn - eopen, epn - splat(kGapExt));
+      const v8 h0 = vmax(m, e);
+      v8 x = h0 + bv;
+      x = vmax(x, __builtin_shufflevector(x, x, 0, 0, 1, 2, 3, 4, 5, 6));
+      x = vmax(x, __builtin_shufflevector(x, x, 0, 1, 0, 1, 2, 3, 4, 5));
+      x = vmax(x, __builtin_shufflevector(x, x, 0, 1, 2, 3, 0, 1, 2, 3));
+      x = vmax(x, carry);
+      carry = __builtin_shufflevector(x, x, 7, 7, 7, 7, 7, 7, 7, 7);
+      const v8 h = vmax(h0, x - bv - splat(kGapOpen));
+      *(v8u*)(hn + b) = h;
+      *(v8u*)(en + b) = e;
+      const v8 in = bv < vB;
+      rbv = vmax(rbv, in ? m : vneg);
+      hbv = vmax(hbv, in ? h : vneg);
+    }
+    int16_t rb = NEG, hb = NEG;
+    for (int l = 0; l < W; ++l) {
+      rb = rb > rbv[l] ? rb : rbv[l];
+      hb = hb > hbv[l] ? hb : hbv[l];
+    }
+    const int clip = i < L ? kClip : 0;
+    if (rb - clip > best) best = rb - clip;
+    if (hb + (L - i) <= theta && L - i - kClip <= theta) break;  // nothing can still exceed theta
+    hn[B] = NEG;
+    en[B] = NEG;
+    int16_t* t = hp; hp = hn; hn = t;
+    t = ep; ep = en; en = t;
+  }
+  return best < NEG / 2 ? kNoSub : best;
+}
+#endif
+
+// theta (optional): only a score above theta must be exact; at or below it,
+// any value <= theta may come back (band_score_vec stops early).
+inline int band_score(const IndexView& ix, const uint8_t* rd, int L, int64_t lo, int B,
+                      int64_t smin = INT64_MIN, int64_t smax = INT64_MAX, int theta = INT_MIN) {
+#ifdef CERTA_BAND_SCORE_VEC
+  return band_score_vec(ix, rd, L, lo, B, smin, smax, theta);
+#else
+  (void)theta;
+  return band_score_scalar(ix, rd, L, lo, B, smin, smax);
+#endif
 }
 
 // Best local score in a chain: its member diagonals are covered by bands

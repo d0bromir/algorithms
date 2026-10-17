@@ -353,6 +353,67 @@ is unchanged.
   `vec_eq_scalar`): within a row of any width, the scalar loop and the
   vector form give the same F, the same cell value and the same "F extends
   F" bit in every cell, for any integers.
+- *16-bit lanes (`affine_fill_vec16`, 8 cells at a time; used whenever the
+  band padded to 8 lies inside the reference).* The same operations with
+  NEG = −16000 instead of −2²⁰. Every value the fill compares is either a
+  real score, above −9 LMAX − 5 (a cell loses at most 9 points a row), or
+  NEG plus an offset in (−9 LMAX − BMAX, LMAX); so no lane wraps, real scores
+  stay above every NEG-derived value, and two NEG-derived values compare as
+  their offsets do, whichever NEG they start from. Every comparison, bit and
+  best cell is therefore the same; a best derived from NEG (no allowed
+  start) is returned shifted back to the 32-bit NEG. *Tests:* the same 4,000
+  bands per seed, every byte. *Mutants:* E22 (the prefix maximum without its
+  4-lane step), E23 (NEG returned in 16-bit form).
+
+**The edit-distance band (`band_distance_vec`; tiers S0/S1 and S2's
+search).** `band_distance_scalar` is the unit-cost semi-global DP of a read
+on a band of B ≤ 48 diagonals, stopping with limit + 1 once a whole row
+exceeds the limit. Two vector forms give its result for every input.
+- *16-bit lanes, 8 cells:* match and insertion read the previous row; the
+  deletion step cur[b] = min(v[b], cur[b−1] + 1) unrolls to
+  cur[b] = b + min over b' ≤ b of (v[b'] − b'), an inclusive prefix minimum.
+  The row minimum is min v (every cell is at least it, and its cell keeps it).
+- *8-bit lanes, 16 cells, capped at cap = limit + 1* (limit ≤ 60, the
+  band's window inside the reference; every caller's limit is ≤ S2_MAX).
+  Each recurrence term is non-decreasing in its argument and adds ≥ 0, so
+  min(D, cap) satisfies the recurrence with every term capped (cells outside
+  the band count as cap). Row minima never decrease (each cell is at least
+  some cell of the row above), so the scalar result is
+  min(final row minimum, limit + 1), and so is the capped one. It stops once
+  every cell is at the cap.
+- *`hamming_vec`:* 16 positions at a time, the count clamped to limit + 1
+  as the scalar loop leaves it.
+- *Tests:* 20,000 random bands and windows per seed against the scalar
+  forms: reads with N, bands past either end of the reference, reads copying
+  a window across a contig's N padding (N facing N costs 1), reads with a
+  5–13-base deletion starting on diagonal 1 or 2 (the deletion chain crosses
+  most lanes of one vector), limits up to 14.
+- *Mutants:* E14 and E15 (a prefix-minimum step dropped), E16 (the cap one
+  too high), E17 (lanes past the band not reset), E18 and E19 (N matching N).
+
+**The score-only band (`band_score_vec`; pair windows, chains, tier R).**
+Each row in one 8-lane pass: the same int16 values as `band_score_scalar`
+(substitution, start range, insertion, band_del16's deletion maximum, the
+row's best), lanes past the band masked out of the best. With a threshold
+θ, only scores above θ must be exact: an alignment continuing from row i
+gains at most a point per remaining base (≤ H + L − i), and one starting
+later starts at −kClip (≤ L − i − kClip), so the DP stops once both bounds
+are ≤ θ, returning the exact score when it is above θ and the best so far
+(≤ θ) otherwise. `window_search` passes θ = max(best band so far, its
+threshold t): a band at or below θ can change neither its result nor the
+band it reports, which callers read only when the result is above t.
+*Tests:* equality with the scalar form, and the threshold contract, on
+4,000 random bands per seed. *Mutants:* E20 (a prefix-maximum step
+dropped), E21 (stopping one point early).
+
+**Other kernels, same results.** `repeat_detail::match_run` (tier R's
+exact-copy checks) counts matching bases 8 at a time with a word test that
+cannot carry between bytes (bases are 0–4); tested against the scalar count
+on 20,000 windows, mutant E24. `lookup_bucket` scans a bucket of at most 64
+entries linearly for the first key ≥ k and the first > k (the keys are sorted
+within a bucket), mutant E25. Tier R's lookups go through `lookup_batch`
+(the same ranges, prefetched), and `map_cpu` prefetches the next reads'
+directory entries and buckets.
 
 **Pruning the band (`band_best` with a floor; Corollary L-long).** The DP
 needs only alignments above the best score so far, the floor. A cell (or

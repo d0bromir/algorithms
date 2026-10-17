@@ -52,6 +52,7 @@
 #include <vector>
 
 #include "certa/core.h"
+#include "certa/longread.h"
 #include "certa/pair.h"
 
 namespace certa {
@@ -93,6 +94,9 @@ struct RepeatOut {
 
 struct RepeatScratch {
   std::vector<uint64_t> clo, chi;            // q-mer index ranges per read position
+  std::vector<uint64_t> keys;                // q-mer keys per read position
+  std::vector<uint8_t> kok;                  // ... and whether each is N-free
+  std::vector<uint32_t> kcnt;                // ... and its occurrence count
   std::vector<std::pair<int, int64_t>> elig;  // (right extension, hit position)
   struct Samp { int len; int64_t diag; };
   std::vector<Samp> samp[2];
@@ -107,6 +111,32 @@ constexpr int kUnset = -BIG;
 namespace repeat_detail {
 
 inline bool same_base(uint8_t a, uint8_t b) { return a < 4 && a == b; }
+
+// How many leading positions i < n have same_base(rd[i], ref[j + i]), as the
+// scalar loop counts them; 8 positions per step where the window lies inside
+// the reference (the first mismatching byte of a word is its lowest set byte
+// on little-endian hosts).
+inline int match_run(const IndexView& ix, const uint8_t* rd, int64_t j, int n) {
+  int i = 0;
+#if defined(__GNUC__) && !defined(__CUDACC__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+  if (j >= 0 && (uint64_t)(j + n) <= ix.ref_len) {
+    const uint8_t* rf = ix.ref + j;
+    const uint64_t high = 0x8080808080808080ull;
+    for (; i + 8 <= n; i += 8) {
+      uint64_t a, b;
+      std::memcpy(&a, rd + i, 8);
+      std::memcpy(&b, rf + i, 8);
+      // Per byte (bases are 0..4, so no sum carries into the next byte):
+      // (a ^ b) + 0x7f has bit 7 set when the bases differ, a + 0x7c when
+      // the read base is N.
+      const uint64_t bad = (((a ^ b) + 0x7f7f7f7f7f7f7f7full) | (a + 0x7c7c7c7c7c7c7c7cull)) & high;
+      if (bad) return i + (__builtin_ctzll(bad) >> 3);
+    }
+  }
+#endif
+  for (; i < n && same_base(rd[i], ref_at(ix, j + i)); ++i) {}
+  return i;
+}
 
 // Exact non-overlapping copies of w (length n) in the reference, beside
 // [p, p + n) on its own strand; stops once `need` are found. Copies on the
@@ -134,9 +164,7 @@ inline int find_copies(const IndexView& ix, const std::vector<uint8_t>& w, int64
     for (uint64_t e = blo; e < bhi && found < need; ++e) {
       const int64_t start = (int64_t)ix.pos[e] - best;
       if (orient == 0 && start + n > p && p + n > start) continue;  // overlaps A*'s own interval
-      bool ok = start >= 0;
-      for (int i = 0; ok && i < n; ++i) ok = same_base(tmp[i], ref_at(ix, start + i));
-      if (!ok) continue;
+      if (start < 0 || match_run(ix, tmp.data(), start, n) < n) continue;
       bool dup = false;
       for (int k = 0; k < found; ++k)
         dup |= strand[k] == (orient == 0 ? strand_of_w : 1 - strand_of_w) && start + n > pos[k] &&
@@ -174,11 +202,14 @@ inline RepeatOut repeat_tier(const IndexView& ix, const RepeatParams& rp, const 
     const uint8_t* rd = ws.seq[st];
     sc.samp[st].clear();
     ws.ncand[st] = 0;
-    for (int i = 0; i < nq; ++i) {
-      uint64_t key;
-      if (kmer_key(rd + i, q, &key)) lookup(ix, key, &sc.clo[i], &sc.chi[i]);
-      else sc.clo[i] = sc.chi[i] = 0;  // contains N: count 0, never occurs exactly
-    }
+    // Every q-mer's index range, the lookups pipelined (lookup_batch gives
+    // lookup's ranges; a q-mer with N: count 0, it never occurs exactly).
+    sc.keys.resize(nq);
+    sc.kok.resize(nq);
+    sc.kcnt.resize(nq);
+    qmer_keys(rd, L, q, sc.keys.data(), sc.kok.data());
+    lookup_batch(ix, sc.keys.data(), sc.kok.data(), nq, sc.clo.data(), sc.kcnt.data());
+    for (int i = 0; i < nq; ++i) sc.chi[i] = sc.clo[i] + sc.kcnt[i];
     auto cnt = [&](int i) { return sc.chi[i] - sc.clo[i]; };
     for (int i = 0; i < nq; ++i)
       if (cnt(i) > 0 && (fb_i[st] < 0 || cnt(i) < fb_n[st])) { fb_i[st] = i; fb_n[st] = cnt(i); fb_lo[st] = sc.clo[i]; }
@@ -195,11 +226,9 @@ inline RepeatOut repeat_tier(const IndexView& ix, const RepeatParams& rp, const 
       if (c >= 0) {
         for (uint64_t e = sc.clo[c]; e < sc.chi[c]; ++e) {
           const int64_t h = ix.pos[e];
-          bool ok = true;
-          for (int k = c - 1; k >= s && ok; --k) ok = same_base(rd[k], ref_at(ix, h - (c - k)));
-          if (!ok) continue;
-          int R = 0;
-          while (c + q + R < L && same_base(rd[c + q + R], ref_at(ix, h + q + R))) ++R;
+          // The copy must match rd[s, c) exactly to its left; then extend right.
+          if (c > s && match_run(ix, rd + s, h - (c - s), c - s) < c - s) continue;
+          const int R = c + q < L ? match_run(ix, rd + c + q, h + q, L - c - q) : 0;
           sc.elig.push_back({R, h});
         }
         std::sort(sc.elig.begin(), sc.elig.end(),

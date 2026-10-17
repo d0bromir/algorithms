@@ -111,3 +111,15 @@ E10	include/certa/core.h	s/const v4 f = bv > splat(0) ? excl - bv - splat(kGapOp
 E11	include/certa/core.h	s/const v4 fbit = (fm1 + splat(kGapOpen + kGapExt - 1) > hm1)/const v4 fbit = (fm1 + splat(kGapOpen + kGapExt) > hm1)/	killed	affine_fill_vec: the 'F extends F' traceback bit off by one point
 E12	include/certa/core.h	s/if (end\[l\] > best) { best = end\[l\]; best_i = i; best_b = b + l; }/if (end[l] >= best) { best = end[l]; best_i = i; best_b = b + l; }/	killed	affine_fill_vec: ties for the best end cell resolved to the last one
 E13	include/certa/core.h	s/const v4 st = (start >= hpv) \& (bv >= splat(blo))/const v4 st = (start >= hpv) \& (bv > splat(blo))/	killed	affine_fill_vec: the start range one cell short
+E14	include/certa/core.h	s/      x = vmin(x, __builtin_shufflevector(x, hi, 8, 9, 10, 11, 0, 1, 2, 3));//	killed	band_distance_vec16: the deletion pass's prefix minimum without its 4-lane step
+E15	include/certa/core.h	s/      x = vmin(x, __builtin_shufflevector(x, capv, 16, 17, 18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4, 5, 6, 7));//	killed	band_distance_vec8: the deletion pass's prefix minimum without its 8-lane step
+E16	include/certa/core.h	s/  const int cap = limit + 1;/  const int cap = limit + 2;/	killed	band_distance_vec8: values capped one above limit + 1
+E17	include/certa/core.h	s/      if (b + W > B) out = bv < splat(B) ? out : capv;/      if (false) out = capv;/	killed	band_distance_vec8: lanes past the band not reset to the cap
+E18	include/certa/core.h	s/    const v16 cv = splat(c < 4 ? c : -1);  \/\/ an N matches nothing/    const v16 cv = splat(c);/	killed	band_distance_vec8: an N in the read matches an N in the reference
+E19	include/certa/core.h	s/    const auto ok = (a == b) \& (a < four);  \/\/ -1 where the bases match/    const auto ok = (a == b);/	killed	hamming_vec: an N in the read matches an N in the reference
+E20	include/certa/core.h	s/      x = vmax(x, __builtin_shufflevector(x, x, 0, 1, 2, 3, 0, 1, 2, 3));//	killed	band_score_vec: the deletion pass's prefix maximum without its 4-lane step
+E21	include/certa/core.h	s/    if (hb + (L - i) <= theta \&\& L - i - kClip <= theta) break;/    if (hb + (L - i) - 1 <= theta \&\& L - i - kClip <= theta) break;/	killed	band_score_vec: stops one point too early under a threshold
+E22	include/certa/core.h	s/      inc = vmax(inc, __builtin_shufflevector(inc, ninf, 8, 9, 10, 11, 0, 1, 2, 3));//	killed	affine_fill_vec16: the deletion's prefix maximum without its 4-lane step
+E23	include/certa/core.h	s/  return best < NEG \/ 2 ? best - NEG - (1 << 20) : best;/  return best;/	killed	affine_fill_vec16: 'no allowed start' returned in 16-bit form
+E24	include/certa/repeat.h	s/      const uint64_t bad = (((a ^ b) + 0x7f7f7f7f7f7f7f7full) | (a + 0x7c7c7c7c7c7c7c7cull)) \& high;/      const uint64_t bad = ((a ^ b) + 0x7f7f7f7f7f7f7f7full) \& high;/	killed	match_run: an N in the read matches an N in the reference
+E25	include/certa/core.h	s/      while (a < r \&\& ix.keys16\[a\] == k) ++a;/      while (a + 1 < r \&\& ix.keys16[a] == k) ++a;/	killed	lookup_bucket: the linear scan misses the bucket's last entry

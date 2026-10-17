@@ -224,7 +224,8 @@ inline int window_search(const IndexView& ix, const uint8_t* rd, int L, int64_t 
       while (e < (size_t)ch.end && sc.hits[e].first - d0 <= BMAX - 2 * pad - 1) ++e;
       const int64_t blo = d0 - pad;
       const int B = (int)(sc.hits[e - 1].first - d0) + 2 * pad + 1;
-      const int v = band_score(ix, rd, L, blo, B, smin, smax);
+      // Only a band beating both the best so far and t can change the result.
+      const int v = band_score(ix, rd, L, blo, B, smin, smax, std::max(best, t));
       if (v > best) {
         best = v;
         out->lo = blo;

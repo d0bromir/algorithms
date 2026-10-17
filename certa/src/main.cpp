@@ -14,15 +14,18 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <deque>
 #include <exception>
 #include <fstream>
 #include <iostream>
 #include <random>
 #include <map>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -44,6 +47,66 @@ using Clock = std::chrono::steady_clock;
 double secs(Clock::time_point a) {
   return std::chrono::duration<double>(Clock::now() - a).count();
 }
+
+// Writes a FILE from its own thread, in the order chunks are put, so mapping
+// never waits on a slow reader: a fallback aligner reading a pipe only a
+// batch ahead would otherwise stall the mapper on every full pipe. Up to
+// `cap` bytes queue in memory; past that, put() waits.
+class AsyncWriter {
+ public:
+  AsyncWriter(std::FILE* f, size_t cap) : f_(f), cap_(cap) { th_ = std::thread([this] { run(); }); }
+  AsyncWriter(const AsyncWriter&) = delete;
+  AsyncWriter& operator=(const AsyncWriter&) = delete;
+  ~AsyncWriter() { finish(); }
+  void put(std::string&& s) {
+    if (s.empty()) return;
+    std::unique_lock<std::mutex> lk(m_);
+    room_.wait(lk, [&] { return queued_ < cap_ || q_.empty(); });
+    queued_ += s.size();
+    q_.push_back(std::move(s));
+    ready_.notify_one();
+  }
+  // Writes everything queued and stops; false if a write failed.
+  bool finish() {
+    {
+      std::lock_guard<std::mutex> lk(m_);
+      done_ = true;
+    }
+    ready_.notify_one();
+    if (th_.joinable()) th_.join();
+    return !failed_;
+  }
+
+ private:
+  void run() {
+    for (;;) {
+      std::string s;
+      {
+        std::unique_lock<std::mutex> lk(m_);
+        ready_.wait(lk, [&] { return !q_.empty() || done_; });
+        if (q_.empty()) return;
+        s = std::move(q_.front());
+        q_.pop_front();
+      }
+      if (std::fwrite(s.data(), 1, s.size(), f_) != s.size()) failed_ = true;
+      std::fflush(f_);
+      {
+        std::lock_guard<std::mutex> lk(m_);
+        queued_ -= s.size();
+      }
+      room_.notify_all();
+    }
+  }
+  std::FILE* f_;
+  size_t cap_;
+  size_t queued_ = 0;
+  bool done_ = false;
+  bool failed_ = false;
+  std::deque<std::string> q_;
+  std::mutex m_;
+  std::condition_variable ready_, room_;
+  std::thread th_;
+};
 
 const char* const kReasonNames[kNumReasons] = {
     "certified", "bad_length", "radius_negative", "not_found",
@@ -212,46 +275,95 @@ int emit(const Result& r0, const FastqRecord& rec, const Reference& ref,
   return kOk;
 }
 
+// Decimal digits of v at p (as printf's %d / %lld / %u); returns the end.
+char* put_int(char* p, int64_t v) {
+  uint64_t u = v < 0 ? 0 - static_cast<uint64_t>(v) : static_cast<uint64_t>(v);
+  if (v < 0) *p++ = '-';
+  char t[20];
+  int n = 0;
+  do {
+    t[n++] = static_cast<char>('0' + u % 10);
+    u /= 10;
+  } while (u);
+  while (n) *p++ = t[--n];
+  return p;
+}
+
+char* put_str(char* p, const char* s, size_t n) {
+  std::memcpy(p, s, n);
+  return p + n;
+}
+
+// One record, formatted into a buffer and appended once (SAM formatting is
+// a tenth of the CPU pass otherwise).
 void sam_line(const Result& r, const FastqRecord& rec, const Reference& ref, int mapq,
               const MateInfo& mi, std::string& sam, const char* extra) {
-  int c = ref.contig_of(r.ref_pos);
-  char buf[96];
-  sam += rec.name;
-  std::snprintf(buf, sizeof buf, "\t%d\t", mi.flag | (r.strand ? 16 : 0));
-  sam += buf;
-  sam += ref.names[c];
-  std::snprintf(buf, sizeof buf, "\t%lld\t%d\t",
-                static_cast<long long>(r.ref_pos - ref.offsets[c] + 1), mapq);
-  sam += buf;
+  const int c = ref.contig_of(r.ref_pos);
+  const size_t L = rec.seq.size();
+  const size_t nx = extra ? std::strlen(extra) : 0;
+  const size_t need = rec.name.size() + ref.names[c].size() + mi.rnext.size() + L + rec.qual.size() + nx +
+                      static_cast<size_t>(r.n_cigar) * 12 + 256;
+  char local[2048];
+  std::vector<char> big;
+  char* const buf = need <= sizeof local ? local : (big.resize(need), big.data());
+  char* p = buf;
+  p = put_str(p, rec.name.data(), rec.name.size());
+  *p++ = '\t';
+  p = put_int(p, mi.flag | (r.strand ? 16 : 0));
+  *p++ = '\t';
+  p = put_str(p, ref.names[c].data(), ref.names[c].size());
+  *p++ = '\t';
+  p = put_int(p, r.ref_pos - static_cast<int64_t>(ref.offsets[c]) + 1);
+  *p++ = '\t';
+  p = put_int(p, mapq);
+  *p++ = '\t';
   for (int i = 0; i < r.n_cigar; ++i) {
-    std::snprintf(buf, sizeof buf, "%u%c", r.cigar[i] >> 4, "MIDNS"[r.cigar[i] & 0xF]);
-    sam += buf;
+    p = put_int(p, r.cigar[i] >> 4);
+    *p++ = "MIDNS"[r.cigar[i] & 0xF];
   }
-  std::snprintf(buf, sizeof buf, "\t%s\t%lld\t%lld\t", mi.rnext.c_str(),
-                static_cast<long long>(mi.pnext), static_cast<long long>(mi.tlen));
-  sam += buf;
+  *p++ = '\t';
+  p = put_str(p, mi.rnext.data(), mi.rnext.size());
+  *p++ = '\t';
+  p = put_int(p, mi.pnext);
+  *p++ = '\t';
+  p = put_int(p, mi.tlen);
+  *p++ = '\t';
   if (r.strand) {
-    for (size_t i = rec.seq.size(); i-- > 0;) sam += comp(rec.seq[i]);
-    sam += '\t';
-    sam.append(rec.qual.rbegin(), rec.qual.rend());
+    for (size_t i = L; i-- > 0;) *p++ = comp(rec.seq[i]);
+    *p++ = '\t';
+    for (size_t i = rec.qual.size(); i-- > 0;) *p++ = rec.qual[i];
   } else {
-    sam += rec.seq; sam += '\t'; sam += rec.qual;
+    p = put_str(p, rec.seq.data(), L);
+    *p++ = '\t';
+    p = put_str(p, rec.qual.data(), rec.qual.size());
   }
   static const char* const kTierNames[] = {"S0", "S1", "SR", "S2", "SL", "PR", "R", "IV", "MR"};
   // NM: edits in the reported (affine, possibly clipped) alignment.
   // XE: the certified minimum end-to-end edit distance over the reference
   // (-1 for SL). SL: AS (clip penalties included) is the certified maximum
   // local score over the reference, and XF the threshold it exceeds.
-  char tags[160];
-  int n = std::snprintf(tags, sizeof tags, "\tNM:i:%d\tAS:i:%d\tXE:i:%d\tXT:Z:%s\tXR:i:%d\tXD:i:%d\tXB:i:%d",
-                        r.nm, r.score, r.d1, kTierNames[r.tier], r.radius, r.d2, r.n_best);
-  if (r.tier == kTierSL) n += std::snprintf(tags + n, sizeof tags - n, "\tXF:i:%d", r.floor);
+  auto tag = [&](const char* name, int64_t v) {
+    p = put_str(p, name, 6);  // "\tXX:i:"
+    p = put_int(p, v);
+  };
+  tag("\tNM:i:", r.nm);
+  tag("\tAS:i:", r.score);
+  tag("\tXE:i:", r.d1);
+  p = put_str(p, "\tXT:Z:", 6);
+  p = put_str(p, kTierNames[r.tier], std::strlen(kTierNames[r.tier]));
+  tag("\tXR:i:", r.radius);
+  tag("\tXD:i:", r.d2);
+  tag("\tXB:i:", r.n_best);
+  if (r.tier == kTierSL) tag("\tXF:i:", r.floor);
   // PR: XF is the threshold the certified pair score exceeds, XS a bound on
   // every other proper pair.
-  if (r.tier == kTierPR) std::snprintf(tags + n, sizeof tags - n, "\tXF:i:%d\tXS:i:%d", r.floor, r.sub_score);
-  sam += tags;
-  if (extra) sam += extra;
-  sam += '\n';
+  if (r.tier == kTierPR) {
+    tag("\tXF:i:", r.floor);
+    tag("\tXS:i:", r.sub_score);
+  }
+  if (nx) p = put_str(p, extra, nx);
+  *p++ = '\n';
+  sam.append(buf, static_cast<size_t>(p - buf));
 }
 
 // Interval mode: the tags every record carries. XL/XU: OPT in [XL, XU]
@@ -553,7 +665,7 @@ struct Args {
 };
 
 Args parse(int argc, char** argv, int start) {
-  static const char* flags[] = {"--gpu", "--unc-tags", "--intervals", "--witness"};
+  static const char* flags[] = {"--gpu", "--unc-tags", "--intervals", "--witness", "--serial-stages"};
   Args a;
   for (int i = start; i < argc; ++i) {
     std::string s = argv[i];
@@ -830,7 +942,7 @@ int cmd_map(const Args& a) {
     throw std::runtime_error(
         "usage: certa map ref.cidx reads.fq[.gz] [mates.fq[.gz]] [-k 5] [--k1 2] [--budget 16] [--budget2 256] "
         "[--budget3 0] [--support3 2] [--local 0] [--mapq-limit 8] [-t N] [--gpu] [--device 0] [-o out.sam] "
-        "[-u uncertified.fq] [-U uncertified_mates.fq] [--fallback-mates pair|single -S single_mates.fq] [--max-dist 850] [--stats s.json] [--batch N] [--io-threads N]");
+        "[-u uncertified.fq] [-U uncertified_mates.fq] [--fallback-mates pair|single -S single_mates.fq] [--max-dist 850] [--stats s.json] [--batch N] [--io-threads N] [--serial-stages]");
   Params p;
   p.k = a.geti("-k", 5);
   p.budget = a.geti("--budget", a.geti("--cap", 16));  // --cap: the v0.1 name
@@ -962,6 +1074,14 @@ int cmd_map(const Args& a) {
                  static_cast<unsigned long long>(ref.lengths[c]));
   std::fprintf(sam, "@PG\tID:certa\tPN:certa\tVN:0.5\tCL:certa map -k %d --k1 %d --budget %d --budget2 %d --s2 %d%s\n",
                p2.k, p.k, p.budget, p2.budget, p2.s2_limit, gpu ? " --gpu" : "");
+  // From here on each output is written by its own thread. Two mate files
+  // read in lockstep by one consumer cannot deadlock: each writer moves on as
+  // soon as its own pipe has room.
+  constexpr size_t kWriteQueue = size_t(2) << 30;
+  std::unique_ptr<AsyncWriter> w_sam(new AsyncWriter(sam, kWriteQueue));
+  std::unique_ptr<AsyncWriter> w_fq(fq ? new AsyncWriter(fq, kWriteQueue) : nullptr);
+  std::unique_ptr<AsyncWriter> w_fq2(fq2 ? new AsyncWriter(fq2, kWriteQueue) : nullptr);
+  std::unique_ptr<AsyncWriter> w_fqs(fqs ? new AsyncWriter(fqs, kWriteQueue) : nullptr);
 
   // The GPU upload runs in the background, overlapped with reading the
   // first batch; the first map call waits for it.
@@ -988,11 +1108,13 @@ int cmd_map(const Args& a) {
                  gm->device_name().c_str(), t_upload);
   };
 
-  // Batches in flight: a reader thread parses and encodes batch n+2 while,
-  // with a GPU, the GPU stage (passes 1 and 2) maps batch n+1 and the CPU
-  // stage (the CPU passes, formatting and writing) finishes batch n. One CPU
-  // stage runs at a time, in input order, so the output does not depend on
-  // the overlap. Without a GPU the two stages run one after the other.
+  // Batches in flight: a reader thread parses and encodes batch n+2 while
+  // the first stage (passes 1 and 2, on the GPU when there is one) maps
+  // batch n+1 and the second (the CPU passes, formatting and writing)
+  // finishes batch n. One second stage runs at a time, in input order, so
+  // the output does not depend on the overlap. Without a GPU both stages use
+  // the CPU's threads, and overlapping them keeps the cores busy through
+  // each stage's serial parts; --serial-stages runs them one after the other.
   struct Slot {
     std::vector<FastqRecord> recs;
     ReadBatch batch;
@@ -1178,10 +1300,6 @@ int cmd_map(const Args& a) {
     t = Clock::now();
     const int nt = std::max(1, std::min<int>(threads, static_cast<int>(recs.size() / 1024) + 1));
     std::vector<std::string> sam_out(nt), fq_out(nt), fq2_out(nt), fqs_out(nt);
-    // Paired fallback: pair-aligned cut points, so the two mate files can be
-    // written in alternating small chunks (a consumer reading both pipes in
-    // lockstep, record by record, never waits on one while we block on the other).
-    std::vector<std::vector<std::pair<size_t, size_t>>> cuts(nt);
     std::vector<Stats> st(nt);
     std::vector<std::thread> pool;
     for (int w = 0; w < nt; ++w) {
@@ -1245,7 +1363,6 @@ int cmd_map(const Args& a) {
                 ++s.pairs_cert;
                 s.pairs_proper += is_proper(res[i], res[i + 1], ref, pp.max_dist);
               }
-              if (s.pairs % 64 == 0) cuts[w].push_back({fq_out[w].size(), fq2_out[w].size()});
             }
             reason = pair_reason[i % 2];
           }
@@ -1271,23 +1388,10 @@ int cmd_map(const Args& a) {
     }
     for (auto& th : pool) th.join();
     for (int w = 0; w < nt; ++w) {
-      std::fwrite(sam_out[w].data(), 1, sam_out[w].size(), sam);
-      if (fq && fq2) {
-        size_t a1 = 0, a2 = 0;
-        cuts[w].push_back({fq_out[w].size(), fq2_out[w].size()});
-        for (const auto& c : cuts[w]) {
-          if (c.first == a1 && c.second == a2) continue;
-          std::fwrite(fq_out[w].data() + a1, 1, c.first - a1, fq);
-          std::fflush(fq);
-          std::fwrite(fq2_out[w].data() + a2, 1, c.second - a2, fq2);
-          std::fflush(fq2);
-          a1 = c.first;
-          a2 = c.second;
-        }
-      } else if (fq) {
-        std::fwrite(fq_out[w].data(), 1, fq_out[w].size(), fq);
-      }
-      if (fqs) std::fwrite(fqs_out[w].data(), 1, fqs_out[w].size(), fqs);
+      w_sam->put(std::move(sam_out[w]));
+      if (w_fq) w_fq->put(std::move(fq_out[w]));
+      if (w_fq2) w_fq2->put(std::move(fq2_out[w]));
+      if (w_fqs) w_fqs->put(std::move(fqs_out[w]));
       total.add(st[w]);
     }
     t_out += secs(t);
@@ -1309,7 +1413,7 @@ int cmd_map(const Args& a) {
   };
   load(0);
   wait_for_gpu();
-  const bool overlap = gm != nullptr;  // set by the upload thread
+  const bool overlap = gm != nullptr || !a.has("--serial-stages");  // gm: set by the upload thread
   for (int cur = 0; !slots[cur].recs.empty(); cur = (cur + 1) % kSlots) {
     // The slot read into is neither the one the GPU stage maps nor the
     // one the CPU stage may still be writing (three slots).
@@ -1336,6 +1440,10 @@ int cmd_map(const Args& a) {
   // Mapping time summed over both stages (with a GPU they overlap).
   const double t_map = t_map_gpu + t_map_cpu;
   if (read_error) std::rethrow_exception(read_error);
+  bool wrote = true;
+  for (auto* wr : {w_sam.get(), w_fq.get(), w_fq2.get(), w_fqs.get()})
+    if (wr) wrote = wr->finish() && wrote;
+  if (!wrote) throw std::runtime_error("writing an output failed");
   if (sam != stdout) std::fclose(sam);
   if (fq) std::fclose(fq);
   if (fq2) std::fclose(fq2);
