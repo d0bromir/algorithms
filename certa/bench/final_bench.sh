@@ -2,7 +2,10 @@
 # Final timing protocol, one session per host: every competitor, CERTA on the
 # CPU and (with a GPU) CERTA on the GPU, on 20,001,073 HG002 reads (single-end,
 # R1) and the same reads' pairs. Every pipeline gets 64 cores: on galaxy
-# (128 cores) everything runs under taskset -c 0-63; a2 has 64 cores. CERTA
+# (128 cores) everything runs under taskset -c 0-63; a2 has 64 cores in four
+# NUMA nodes, and everything there runs under numactl --interleave=all (with
+# the kernel's NUMA balancing, about half of the fallback + minibwa runs took
+# 1.5x longer, with more page migrations and kernel time). CERTA
 # and its fallback (minibwa) run concurrently; "64+64" starts 64 threads in
 # each on those 64 cores. SAM goes to /dev/null. Three rounds, the tools in
 # turn (paired BWA-MEM2, at over four minutes a run, and the paired fallback
@@ -16,7 +19,7 @@ BIN=$HOME/micromamba/envs/certa-bench/bin
 AWK=$(dirname "$C")/../bench/drop_certified_mates.awk
 IDX=idx/grch38.s1v3.cidx
 R1=reads/hg002_20M.fq
-if [ "$host" = a2 ]; then R2=/data/certa-bench/reads/hg002_20M_2.fq; PIN=""; GPU=0
+if [ "$host" = a2 ]; then R2=/data/certa-bench/reads/hg002_20M_2.fq; PIN="numactl --interleave=all"; GPU=0
 else R2=reads/hg002_20M_2.fq; PIN="taskset -c 0-63"; GPU=1; fi
 TSV=$O/timings.tsv
 [ -f "$TSV" ] || printf "host\tmode\tpipeline\tconfig\trep\twall_s\tuser_s\tsys_s\tmax_rss_kb\n" > "$TSV"
