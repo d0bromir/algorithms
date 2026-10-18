@@ -1508,7 +1508,6 @@ inline int band_score_vec(const IndexView& ix, const uint8_t* rd, int L, int64_t
   static_assert(kGapExt == 1, "band_score_vec assumes kGapExt = 1");
   typedef int16_t v8 __attribute__((vector_size(16)));
   typedef int16_t v8u __attribute__((vector_size(16), aligned(2), may_alias));
-  typedef uint8_t u8x8u __attribute__((vector_size(8), aligned(1), may_alias));
   constexpr int W = 8;
   const int16_t NEG = -16000;
   auto vmax = [](v8 a, v8 b) { return a > b ? a : b; };
@@ -1521,7 +1520,8 @@ inline int band_score_vec(const IndexView& ix, const uint8_t* rd, int L, int64_t
   int16_t buf[4][BMAX + 2 * W];
   int16_t *hp = buf[0], *hn = buf[1], *ep = buf[2], *en = buf[3];
   for (int b = 0; b < Bp + W; ++b) hp[b] = hn[b] = ep[b] = en[b] = NEG;
-  uint8_t refw[LMAX + BMAX + 2 * W];
+  // The window's bases as 16-bit lanes, so no row widens them.
+  int16_t refw[LMAX + BMAX + 2 * W];
   for (int j = 0; j < L - 1 + B; ++j) refw[j] = ref_at(ix, lo + j);
   for (int j = L - 1 + B; j < L - 1 + Bp + W; ++j) refw[j] = 4;
   int best = NEG;
@@ -1532,17 +1532,20 @@ inline int band_score_vec(const IndexView& ix, const uint8_t* rd, int L, int64_t
     const int64_t blo64 = smin == INT64_MIN ? 0 : smin - base, bhi64 = smax == INT64_MAX ? B : smax - base;
     const int blo = blo64 < 0 ? 0 : (blo64 > B ? B : (int)blo64);
     const int bhi = bhi64 < -1 ? -1 : (bhi64 >= B ? B - 1 : (int)bhi64);
-    const uint8_t* rw = refw + (i - 1);
+    const int16_t* rw = refw + (i - 1);
     const v8 eopen = splat(i > 1 ? kGapOpen + kGapExt : 8000);  // no alignment starts with a gap
     const v8 cv = splat(c < 4 ? c : -1);                         // N never matches
     const v8 st0 = splat(start), vlo = splat(blo), vhi = splat(bhi), vB = splat(B);
+    // A row that excludes no start gives every lane st0, lanes past the band
+    // included: their values reach no cell inside it (see above).
+    const bool open = blo == 0 && bhi >= B - 1;
     v8 carry = vneg, rbv = vneg, hbv = vneg;
-    for (int b = 0; b < Bp; b += W) {
-      const v8 bv = lane + splat(b);
+    v8 bv = lane;
+    for (int b = 0; b < Bp; b += W, bv += splat(W)) {
       const v8 p = *(const v8u*)(hp + b), pn = *(const v8u*)(hp + b + 1), epn = *(const v8u*)(ep + b + 1);
-      const v8 r = __builtin_convertvector(*(const u8x8u*)(rw + b), v8);
+      const v8 r = *(const v8u*)(rw + b);
       const v8 sub = r == cv ? splat(kMatch) : splat(-kMismatch);
-      const v8 st = (bv >= vlo) & (bv <= vhi) ? st0 : vneg;
+      const v8 st = open ? st0 : ((bv >= vlo) & (bv <= vhi) ? st0 : vneg);
       const v8 m = vmax(p, st) + sub;
       const v8 e = vmax(pn - eopen, epn - splat(kGapExt));
       const v8 h0 = vmax(m, e);
@@ -1555,9 +1558,14 @@ inline int band_score_vec(const IndexView& ix, const uint8_t* rd, int L, int64_t
       const v8 h = vmax(h0, x - bv - splat(kGapOpen));
       *(v8u*)(hn + b) = h;
       *(v8u*)(en + b) = e;
-      const v8 in = bv < vB;
-      rbv = vmax(rbv, in ? m : vneg);
-      hbv = vmax(hbv, in ? h : vneg);
+      if (b + W <= B) {  // every lane inside the band
+        rbv = vmax(rbv, m);
+        hbv = vmax(hbv, h);
+      } else {
+        const v8 in = bv < vB;
+        rbv = vmax(rbv, in ? m : vneg);
+        hbv = vmax(hbv, in ? h : vneg);
+      }
     }
     int16_t rb = NEG, hb = NEG;
     for (int l = 0; l < W; ++l) {

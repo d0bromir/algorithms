@@ -128,3 +128,4 @@ S2	src/seqio.cpp	s/             (base_\[x - 1\] == '\\r' \&\& (x - 1 == from || 
 S3	src/seqio.cpp	s/            cr_start = x + 1 < size_ \&\& base_\[x + 1\] == '\\r';/            cr_start = false;/	killed	FASTQ parallel scan: a record starting with a stray '\r' (which the serial scan skips) kept
 S4	src/seqio.cpp	s/          if (++k % 4 == 0) {/          if (++k % 4 == 1) {/	killed	FASTQ parallel scan: records end one line early
 S5	src/seqio.cpp	s/bytes_per_record_ \* 1.02/bytes_per_record_ * 0.5/	equivalent	FASTQ parallel scan: half the bytes scanned in parallel; the serial scan finds the rest (THEORY.md)
+E26	include/certa/core.h	s/    const bool open = blo == 0 \&\& bhi >= B - 1;/    const bool open = true;/	killed	band_score_vec: every row taken as excluding no start (start ranges ignored)

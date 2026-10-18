@@ -12,7 +12,7 @@ names:
 
 **Review status.** Written, then cross-checked by:
 - whole-reference oracles (4 seeds, ARM and x86);
-- 128 mutants;
+- 129 mutants;
 - exhaustive verification of the finite lemmas.
 
 It has **not yet been reviewed by a second person**. §11 lists what a
@@ -413,7 +413,16 @@ on 20,000 windows, mutant E24. `lookup_bucket` scans a bucket of at most 64
 entries linearly for the first key ≥ k and the first > k (the keys are sorted
 within a bucket), mutant E25. Tier R's lookups go through `lookup_batch`
 (the same ranges, prefetched), and so do `find_copies`'s (the same rarest
-q-mer, the first of equal counts). `map_cpu` prefetches the next reads'
+q-mer, the first of equal counts); `find_copies` first takes the range of
+any key the read's own lookups already gave (a range depends on the key
+alone), so it looks up only the q-mers of A*'s reference string that the
+read does not share. In `band_score_vec`, a row whose start range
+excludes no cell of the band gives every lane the start value, the lanes
+past the band included: no cell inside the band reads them (the deletion
+maximum runs left to right, and the insertion term of the last cell takes
+cell B, reset to minus infinity every row); mutant E26. It also keeps the
+band's reference window as 16-bit lanes, once per call, instead of widening
+it in every row. `map_cpu` prefetches the next reads'
 directory entries and buckets, and tier R and `find_copies` the reference
 bytes of the hit 16 ahead of the one being compared; a prefetch reads
 nothing the computation sees.
@@ -1053,7 +1062,7 @@ guarantees is the interval [XL, XU] at whatever stage it stops.
 ## 9a. Mutants that survive by design
 
 A mutant that changes no claim on any input cannot be killed by a test, so
-it must be argued instead. Eight of the 128 survive.
+it must be argued instead. Eight of the 129 survive.
 - **L6** (span start candidates shifted): Lemma S, §4.
 - **A2** (Lemma O's term lowered): §4.
 - **P2, P8, P13** (band pad − 2, narrowed band − 3, `relevant` term dropped)

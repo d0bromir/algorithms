@@ -105,7 +105,51 @@ struct RepeatScratch {
   std::vector<Eval> evals;                   // bands evaluated (lower bounds)
   std::vector<int> cval;                     // per chain: best score, or kUnset
   std::vector<uint8_t> tmp;                  // find_copies: the string in one orientation
+  // The read's q-mer ranges (both strands), for find_copies to reuse: open
+  // addressing by key; an entry is valid while its gen is kgen (one per read).
+  struct Known { uint64_t key = 0, lo = 0; uint32_t cnt = 0, gen = 0; };
+  std::vector<Known> known;
+  uint32_t kgen = 0;
+  std::vector<int> miss;                     // find_copies: positions not in `known`
+  std::vector<uint64_t> mkeys, mlo;          // ... their keys and ranges
+  std::vector<uint8_t> mok;
+  std::vector<uint32_t> mcnt;
 };
+
+namespace repeat_detail {
+
+constexpr int kKnownBits = 10;  // 1024 entries for at most 2 (LMAX - q + 1) keys
+
+inline size_t known_slot(uint64_t key) { return (size_t)((key * 0x9E3779B97F4A7C15ull) >> (64 - kKnownBits)); }
+
+// Starts a read's table of known ranges.
+inline void known_begin(RepeatScratch& sc) {
+  if (sc.known.size() != (size_t(1) << kKnownBits)) sc.known.assign(size_t(1) << kKnownBits, RepeatScratch::Known());
+  if (++sc.kgen == 0) {  // wrapped: invalidate every entry
+    for (auto& k : sc.known) k.gen = 0;
+    sc.kgen = 1;
+  }
+}
+
+inline void known_put(RepeatScratch& sc, uint64_t key, uint64_t lo, uint32_t cnt) {
+  const size_t mask = sc.known.size() - 1;
+  for (size_t h = known_slot(key);; h = (h + 1) & mask) {
+    RepeatScratch::Known& k = sc.known[h];
+    if (k.gen != sc.kgen) { k = {key, lo, cnt, sc.kgen}; return; }
+    if (k.key == key) return;  // the same key gives the same range
+  }
+}
+
+inline const RepeatScratch::Known* known_get(const RepeatScratch& sc, uint64_t key) {
+  const size_t mask = sc.known.size() - 1;
+  for (size_t h = known_slot(key);; h = (h + 1) & mask) {
+    const RepeatScratch::Known& k = sc.known[h];
+    if (k.gen != sc.kgen) return nullptr;
+    if (k.key == key) return &k;
+  }
+}
+
+}  // namespace repeat_detail
 
 constexpr int kUnset = -BIG;
 
@@ -152,7 +196,9 @@ constexpr uint64_t kPrefetchAhead = 16;  // hits
 // Exact non-overlapping copies of w (length n) in the reference, beside
 // [p, p + n) on its own strand; stops once `need` are found. Copies on the
 // other strand are searched with the reverse complement. Returns the number
-// found and their positions/strands. Uses sc.tmp, keys, kok, clo and kcnt.
+// found and their positions/strands. Uses sc.tmp, keys, kok, clo, kcnt and
+// the read's known ranges (known_begin/known_put), which the string's q-mers
+// mostly repeat where it matches the read.
 inline int find_copies(const IndexView& ix, const std::vector<uint8_t>& w, int64_t p, int strand_of_w,
                        int need, int cmax, int64_t* pos, int* strand, RepeatScratch& sc) {
   const int n = (int)w.size(), q = ix.q;
@@ -164,14 +210,37 @@ inline int find_copies(const IndexView& ix, const std::vector<uint8_t>& w, int64
   for (int orient = 0; orient < 2 && found < need; ++orient) {
     tmp.resize(n);
     for (int i = 0; i < n; ++i) tmp[i] = orient == 0 ? w[i] : (uint8_t)(3 - w[n - 1 - i]);
-    // Rarest q-mer of the string (the first of the rarest), the lookups
-    // pipelined (lookup_batch gives lookup's ranges).
+    // Rarest q-mer of the string (the first of the rarest). A key's range is
+    // the same wherever it was looked up: the read's are reused, the rest
+    // looked up together (lookup_batch gives lookup's ranges).
     sc.keys.resize(nq);
     sc.kok.resize(nq);
     sc.clo.resize(nq);
     sc.kcnt.resize(nq);
     qmer_keys(tmp.data(), n, q, sc.keys.data(), sc.kok.data());
-    lookup_batch(ix, sc.keys.data(), sc.kok.data(), nq, sc.clo.data(), sc.kcnt.data());
+    sc.miss.clear();
+    for (int i = 0; i < nq; ++i) {
+      const RepeatScratch::Known* k = known_get(sc, sc.keys[i]);
+      if (k) {
+        sc.clo[i] = k->lo;
+        sc.kcnt[i] = k->cnt;
+      } else {
+        sc.miss.push_back(i);
+      }
+    }
+    if (!sc.miss.empty()) {
+      const int nm = (int)sc.miss.size();
+      sc.mkeys.resize(nm);
+      sc.mok.assign(nm, 1);  // no N in the string
+      sc.mlo.resize(nm);
+      sc.mcnt.resize(nm);
+      for (int k = 0; k < nm; ++k) sc.mkeys[k] = sc.keys[sc.miss[k]];
+      lookup_batch(ix, sc.mkeys.data(), sc.mok.data(), nm, sc.mlo.data(), sc.mcnt.data());
+      for (int k = 0; k < nm; ++k) {
+        sc.clo[sc.miss[k]] = sc.mlo[k];
+        sc.kcnt[sc.miss[k]] = sc.mcnt[k];
+      }
+    }
     int best = 0;
     for (int i = 1; i < nq; ++i)
       if (sc.kcnt[i] < sc.kcnt[best]) best = i;
@@ -205,6 +274,7 @@ inline RepeatOut repeat_tier(const IndexView& ix, const RepeatParams& rp, const 
   const int q = ix.q;
   if (ix.s != 1 || L > LMAX || L < q) return out;
   out.claim = true;
+  known_begin(sc);
   for (int i = 0; i < L; ++i) {
     ws.seq[0][i] = codes[i];
     const uint8_t c = codes[L - 1 - i];
@@ -227,7 +297,10 @@ inline RepeatOut repeat_tier(const IndexView& ix, const RepeatParams& rp, const 
     sc.kcnt.resize(nq);
     qmer_keys(rd, L, q, sc.keys.data(), sc.kok.data());
     lookup_batch(ix, sc.keys.data(), sc.kok.data(), nq, sc.clo.data(), sc.kcnt.data());
-    for (int i = 0; i < nq; ++i) sc.chi[i] = sc.clo[i] + sc.kcnt[i];
+    for (int i = 0; i < nq; ++i) {
+      sc.chi[i] = sc.clo[i] + sc.kcnt[i];
+      if (sc.kok[i]) known_put(sc, sc.keys[i], sc.clo[i], sc.kcnt[i]);
+    }
     auto cnt = [&](int i) { return sc.chi[i] - sc.clo[i]; };
     for (int i = 0; i < nq; ++i)
       if (cnt(i) > 0 && (fb_i[st] < 0 || cnt(i) < fb_n[st])) { fb_i[st] = i; fb_n[st] = cnt(i); fb_lo[st] = sc.clo[i]; }
