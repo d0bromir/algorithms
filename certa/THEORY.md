@@ -431,10 +431,11 @@ intervals, CPU and GPU, default and 7,777-read batches).
   differs at empty lines between records, which it skips, and at a stray
   '\r' before a record). Otherwise, and for whatever the piece does not hold
   whole, the serial scan runs. Hence the piece's size only decides how much
-  the serial scan has left (mutant S5, half the piece, is equivalent).
+  the serial scan has left (mutant S5, half the piece, is equivalent; so is
+  S2, see §9a).
   *Test:* six random files (LF and CRLF, rare empty lines and stray '\r'
   between records, empty reads, no final newline) in batches of 1 to 9,000
-  records on 1, 3 and 8 threads give the written records. *Mutants:* S1–S4.
+  records on 1, 3 and 8 threads give the written records. *Mutants:* S1, S3, S4.
 - *Fused stages.* Without a GPU, each batch runs every pass on one chunk of
   64 reads (32 pairs) after another, the threads taking chunks in turn,
   instead of each pass over the whole batch. A read's passes see only that
@@ -1052,7 +1053,7 @@ guarantees is the interval [XL, XU] at whatever stage it stops.
 ## 9a. Mutants that survive by design
 
 A mutant that changes no claim on any input cannot be killed by a test, so
-it must be argued instead. Seven of the 128 survive.
+it must be argued instead. Eight of the 128 survive.
 - **L6** (span start candidates shifted): Lemma S, §4.
 - **A2** (Lemma O's term lowered): §4.
 - **P2, P8, P13** (band pad − 2, narrowed band − 3, `relevant` term dropped)
@@ -1060,6 +1061,12 @@ it must be argued instead. Seven of the 128 survive.
   points, as follows.
 - **S5** (half the bytes scanned in parallel): the serial scan finds the
   rest of the batch, §4 ("Reading and scheduling").
+- **S2** (an empty "\r" line not seen by the parallel scan): such a line
+  between records makes the next record start with '\r', which the
+  record-start check (S3) catches; inside a record (an empty read in a CRLF
+  file) it is one of the record's four lines, as for the serial scan. So
+  the clause is redundant: only empty lines between records need catching,
+  and those start a record with '\n' (S1) or '\r' (S3).
 
 **Proposition P3 (the band edge is covered twice).** Let P = (A_x, A_y)
 score above the floor. Suppose A_x has gap total G_x > pad − 3, the last two
