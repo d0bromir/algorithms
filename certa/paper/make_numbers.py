@@ -153,57 +153,89 @@ put('WkMiniOverBwa', f"{wk['minibwa']['miss'] / wk['bwa-mem2']['miss']:.1f}", sr
 per_genome = wk['bwa-mem2']['miss'] / w_reads * se_full_cert
 put('WkBwaPerGenome', grp(round(per_genome, -3)), src + ' x full_444M_v06_run4 certified')
 
-# ---------------------------------------------------------------- speed, single-end
-src = 'hg002_2026-09/galaxy_timing_v06.tsv'
-bw_w, bw_c = median_run(src, 'bwa-mem2')
-mb_w, mb_c = median_run(src, 'minibwa')
-ce_w, ce_c = median_run(src, 'certa-gpu-pipe')
-ct_w, ct_c = median_run(src, 'certa-gpu')
-put('SeWallBwa', fx(bw_w), src)
-put('SeCpuBwa', grp(round(bw_c)), src)
-put('SeWallMini', fx(mb_w), src)
-put('SeCpuMini', grp(round(mb_c)), src)
-put('SeWallCerta', fx(ce_w), src)
-put('SeCpuCerta', grp(round(ce_c)), src)
-put('SeWallTier', fx(ct_w), src)
-put('SeCpuTier', grp(round(ct_c)), src)
-put('SeSpeedBwa', fx(bw_w / ce_w), src)
-put('SeSpeedMini', fx(mb_w / ce_w), src)
-put('SeCpuRatioBwa', fx(bw_c / ce_c, 1), src)
-put('SeTierSpeedBwa', f'{bw_w / ct_w:.0f}', src)
+# ---------------------------------------------------------------- speed, the final protocol
+# One session per host, every pipeline on 64 cores (galaxy: taskset -c 0-63;
+# a2 has 64): hg002_2026-10/final_{galaxy,a2}.tsv. Single-end: medians of 3
+# runs; paired: one run. Where a pipeline was timed in several thread
+# configurations, the fastest is reported. Macros: F + host (G galaxy, A a2)
+# + mode (S, P) + pipeline + field (Wall, Cpu, XMini = minibwa's wall time
+# over this one's, XBwa = the same for BWA-MEM2, Cfg = the configuration).
+FINAL = {'G': 'hg002_2026-10/final_galaxy.tsv', 'A': 'hg002_2026-10/final_a2.tsv'}
+# The paired fallback configuration the text calls CERTA's: minibwa with
+# -K 10m, which on HG005 changes no F1 in the fourth decimal (checked below).
+PAIRED_FALLBACK = ('CpuKt', 'GpuKt')
+kb = {(r['config'], r['caller'], r['type']): r['f1'] for r in rows('hg002_2026-10/hg005_fallback_batch_f1.tsv')}
+assert len(kb) == 8 and all(kb[('kdef', c, t)] == kb[('k10m', c, t)]
+                            for c in ('gatk', 'bcftools') for t in ('snps', 'indels')), kb
+put('KbatchDiffRecords', grp(grab(r'Records differing between kdef and k10m \(chr20, fields 1-9\): (\d+)',
+                                   text('hg002_2026-10/hg005_fallback_batch_f1.tsv'), int)),
+    'hg002_2026-10/hg005_fallback_batch_f1.tsv')
+assert 'identical' in text('hg002_2026-10/hg005_interval_identity.txt').splitlines()[-1]
+FPIPES = [('bwa-mem2', None, 'Bwa'), ('minibwa', None, 'Mini'), ('strobealign', None, 'Strobe'),
+          ('minimap2', None, 'Mm'), ('bowtie2', None, 'Bt'),
+          ('certa-cpu', None, 'Cpu'), ('certa-cpu-iv', None, 'CpuIv'),
+          ('certa-gpu', None, 'Gpu'), ('certa-gpu-iv', None, 'GpuIv'),
+          ('certa-cpu-tier', None, 'CpuTier'), ('certa-gpu-tier', None, 'GpuTier')]
+final = {}
+for hk, path in FINAL.items():
+    by = {}
+    for r in rows(path):
+        by.setdefault((r['mode'], r['pipeline'], r['config']), []).append(r)
+    for mode, mk in (('single-end', 'S'), ('paired', 'P')):
+        for pipe, cfg_pick, key in FPIPES:
+            cands = [k for k in by if k[0] == mode and k[1] == pipe]
+            if pipe in ('certa-cpu', 'certa-gpu') and mode == 'paired':
+                # paired fallback: minibwa's default batch (the configuration
+                # whose accuracy is measured) and -K 10m, separately
+                for kk, ksuf in (('Kdefault', 'Kd'), ('K10m', 'Kt')):
+                    sub = [k for k in cands if k[2].endswith(kk)]
+                    if sub:
+                        final[(hk, mk, key + ksuf)] = min(
+                            ((float(sorted(by[k], key=lambda r: float(r['wall_s']))[len(by[k]) // 2]['wall_s']), k)
+                             for k in sub))
+                continue
+            if not cands:
+                continue
+            final[(hk, mk, key)] = min(
+                (float(sorted(by[k], key=lambda r: float(r['wall_s']))[len(by[k]) // 2]['wall_s']), k) for k in cands)
+    for (h, mk, key), val in list(final.items()):
+        if h != hk:
+            continue
+        w, k = val
+        rr = sorted(by[k], key=lambda r: float(r['wall_s']))
+        r = rr[len(rr) // 2]
+        final[(h, mk, key)] = (w, float(r['user_s']) + float(r['sys_s']), k[2], len(rr), float(r['sys_s']))
+for (hk, mk, key), (w, c, cfg, n, sy) in final.items():
+    src = FINAL[hk]
+    put(f'F{hk}{mk}{key}Wall', fx(w), src)
+    put(f'F{hk}{mk}{key}Cpu', grp(round(c)), src)
+    put(f'F{hk}{mk}{key}Sys', grp(round(sy)), src)
+    put(f'F{hk}{mk}{key}Cfg', cfg.replace('+', ':').split(' ')[0], src)
+    mini = final.get((hk, mk, 'Mini'))
+    bwa = final.get((hk, mk, 'Bwa'))
+    if mini and key != 'Mini':
+        put(f'F{hk}{mk}{key}XMini', fx(mini[0] / w), src)
+    if bwa and key != 'Bwa':
+        put(f'F{hk}{mk}{key}XBwa', fx(bwa[0] / w, 1), src)
+put('FReps', '3', FINAL['G'])
+# What the text says about them: every complete CERTA pipeline is faster than
+# every competitor on both hosts; CPU-only interval mode is the fastest CPU
+# pipeline for pairs.
+for hk in FINAL:
+    for mk in ('S', 'P'):
+        comp = [final[(hk, mk, k)][0] for k in ('Bwa', 'Mini', 'Strobe', 'Mm', 'Bt') if (hk, mk, k) in final]
+        ours = [final[(hk, mk, k)][0] for k in ('Cpu', 'CpuIv', 'Gpu', 'GpuIv') + PAIRED_FALLBACK
+                if (hk, mk, k) in final]
+        assert max(ours) < min(comp), (hk, mk, ours, comp)
 
-src = 'hg002_2026-09/galaxy_timing.tsv'
-for tool, key in (('strobealign', 'Strobe'), ('minimap2', 'Mm'), ('bowtie2', 'Bt')):
-    w, c = median_run(src, tool)
-    put(f'SeWall{key}', fx(w), src)
-    put(f'SeCpu{key}', grp(round(c)), src)
-
-src = 'hg002_2026-09/galaxy_timing_v07_pass3.tsv'
-mx_w, mx_c = median_run(src, 'maxcert', key='mode')
-put('SeWallMaxCert', fx(mx_w), src)
-
-# ---------------------------------------------------------------- speed, paired-end
-src = 'hg002_2026-10/galaxy_timing_pe.tsv'
-pbw_w, pbw_c = median_run(src, 'bwa-mem2')
-put('PeWallBwa', fx(pbw_w), src)
-put('PeCpuBwa', grp(round(pbw_c)), src)
-src = 'hg002_2026-10/galaxy_timing_pe_v2.tsv'
-pe_rows = rows(src)
-best = min((r for r in pe_rows if r['tool'] == 'certa-gpu-pe-pipe'), key=lambda r: float(r['wall_s']))
-pce_w = float(best['wall_s'])
-pce_c = float(best['user_s']) + float(best['sys_s'])
-pmb_w, pmb_c = median_run(src, 'minibwa')
-put('PeWallCerta', fx(pce_w), src)
-put('PeCpuCerta', grp(round(pce_c)), src)
-put('PeCertaThreads', best['certa_threads'], src)
-put('PeMiniThreads', str(64 - int(best['certa_threads'])), src)
-put('PeWallMini', fx(pmb_w), src)
-put('PeCpuMini', grp(round(pmb_c)), src)
-put('PeSpeedBwa', fx(pbw_w / pce_w, 1), src)
-put('PeSpeedMini', fx(pmb_w / pce_w), src)
-put('PeCpuRatioBwa', fx(pbw_c / pce_c, 1), src)
-side = re.search(r"CERTA's own side at 16 / 24 / 32 threads: ([\d.]+) / ([\d.]+) / ([\d.]+) s", text(src))
-put('PeCertaSide', side.group(3), src)
+# ---------------------------------------------------------------- CPU and GPU certify the same reads
+# The certified share does not depend on the host: the same count on galaxy (CPU and A100) and a2.
+cert = {}
+for host, f in (('galaxy', 'hg002_2026-10/galaxy_cpu_tier.stats.json'), ('a2', 'hg002_2026-10/a2_cpu_tier.stats.json')):
+    d = json.loads(text(f))
+    cert[host] = (d['certified'], d['reads'])
+assert cert['galaxy'] == cert['a2'], cert
+put('CpuTierCert', pct(*cert['a2']), 'hg002_2026-10/{galaxy,a2}_cpu_tier.stats.json')
 
 # ---------------------------------------------------------------- variant calling
 def vcfeval(path, keyfn):

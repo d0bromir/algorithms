@@ -186,18 +186,23 @@ Parameters:
 
 ## Results on real data: GIAB HG002, NovaSeq X
 
-Full details, raw timings and caveats are in [bench/RESULTS.md](bench/RESULTS.md).
+The current numbers are in the paper ([paper/main.tex](paper/main.tex),
+Table 2 for speed), every one generated from `bench/results/` by
+[paper/make_numbers.py](paper/make_numbers.py). Earlier runs and their
+caveats are in [bench/RESULTS.md](bench/RESULTS.md).
 
-- **Certified fraction:** 83.4 % of all 444.5 M reads are certified at
-  k = 2 (68.7 % exact).
-- **Certificate check:** no unexplained violation among 1.67 M certified
-  reads checked against BWA-MEM2. The 3 flagged cases are reference `N`s
-  that BWA indexes as random bases.
-- **Complete mapping, galaxy:** CERTA on the A100, streaming uncertified
-  reads into minibwa, takes 24.4 s vs 26.5 s for minibwa (1.08×) with 23 %
-  less CPU time. It beats strobealign, minimap2, BWA-MEM2 and bowtie2.
-- **Complete mapping, CPU only:** CERTA + fallback is slower than minibwa.
-  The 17 % of reads that cannot be certified cost ~70 % of minibwa's time.
+- **Certified fraction:** 95.4 % of all reads in paired mode (HG002), 92.9 %
+  for HG001 and HG005 (NovaSeq 6000); 94.4 % single-end.
+- **Speed (20 M reads or pairs, every pipeline on the same 64 cores, one
+  session per host, build 84dfa83):** on CPU alone CERTA is faster than
+  every other aligner timed, single-end and paired, on galaxy (ARM64) and
+  a2 (x86-64). Against minibwa, the fastest of them, on galaxy / a2:
+  single-end 1.76× / 1.92× in interval mode and 1.60× / 1.81× with the
+  minibwa fallback; paired 1.60× / 2.00× in interval mode and 1.20× /
+  1.36× with the fallback. With one A100 (galaxy): 2.10× single-end, 2.11×
+  paired. BWA-MEM2 is 5.8–8.4× slower than CERTA's interval mode on CPU.
+- **Independent checker:** `certa check` accepts all 8 M honest records
+  (HG002 and HG005) and rejects all 24,306 injected faults.
 
 ## Results so far (synthetic data)
 

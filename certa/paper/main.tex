@@ -63,9 +63,13 @@ certify. On the \PeReads{} reads of a 44$\times$ HG002 NovaSeq~X sample,
 \PeCert\% are certified in paired mode. The certificates expose provable
 misplacements in all five heuristic aligners tested, at rates that grow
 with their speed. Variant-calling F1 on three GIAB samples is above
-BWA-MEM2's in \PeVWins{} of \PeVComparisons{} comparisons, and the
-single-end pipeline is \SeSpeedBwa$\times$ faster than BWA-MEM2 on an A100
-GPU with 64 CPU threads. An independent checker, sharing no alignment
+BWA-MEM2's in \PeVWins{} of \PeVComparisons{} comparisons. On two 64-core
+servers (ARM64 and x86-64), CERTA maps single-end reads and pairs faster
+than every other aligner timed, on CPU alone and with a GPU; its interval
+mode, which gives every read a proven optimum or interval and needs no
+other aligner, maps pairs \FGPCpuIvXMini$\times$ and \FAPCpuIvXMini$\times$
+faster than minibwa, the fastest of them, on CPU alone and
+\FGPGpuIvXMini$\times$ with one GPU. An independent checker, sharing no alignment
 code with the mapper, accepts all \CkRecords{} honest records and rejects
 all \CkFaults{} injected faults. On HG002 HiFi reads the optimum is proven
 for \LrExactAll\% of reads at \LrCpuRatio$\times$ the CPU time of minimap2.
@@ -141,9 +145,10 @@ a small witness. The contributions are:
   (Sections~\ref{sec:loss}--\ref{sec:long}).
 \item \textbf{Measured provable errors} of five heuristic aligners on real
   reads, without simulation (Section~\ref{sec:errors}).
-\item \textbf{A complete GPU/CPU pipeline} that is faster than BWA-MEM2,
-  with variant-calling F1 above BWA-MEM2's in \PeVWins{} of
-  \PeVComparisons{} comparisons, and an independent checker for its output
+\item \textbf{A complete mapper, on CPU alone or with a GPU,} faster than
+  every other aligner timed on two servers, single-end and paired, with
+  variant-calling F1 above BWA-MEM2's in \PeVWins{} of \PeVComparisons{}
+  comparisons, and an independent checker for its output
   (Sections~\ref{sec:speed}--\ref{sec:check}).
 \item \textbf{Layered evidence for the proofs:} brute-force oracles,
   exhaustive checks of the finite lemmas, mutation testing of every bound,
@@ -387,11 +392,19 @@ code as the CPU path: counting, part choice, enumeration within a budget
 of 16 hits per strand, clustering and banded verification. This first pass
 is uniform and fast. The reads it cannot certify are compacted into a
 second pass with a budget of 256 hits, so the expensive work stays among
-the hard reads. Uncertified reads stream through a
-pipe into a conventional aligner (minibwa in all experiments), which runs
-concurrently on the CPU, so the pipeline's output is complete. The reported
-CIGAR is the affine-optimal alignment at the certified locus. Output is
-byte-identical across CPU and GPU, x86-64 and ARM64, and any thread count.
+the hard reads. Without a GPU the same passes run on the CPU. A complete
+mapping comes in two configurations: uncertified reads either stream
+through a pipe into a conventional aligner (minibwa in all experiments),
+which runs concurrently, or, in interval mode, get CERTA's own placement
+with a proven interval (Section~\ref{sec:intervals}). The next batch is
+read and parsed on several threads while the current one maps. With a GPU,
+the GPU passes of one batch overlap the CPU passes and formatting of the
+previous one; without a GPU, every pass of a batch runs on one small chunk
+of reads after another, the threads taking chunks in turn, so that the
+slow reads of a pass never leave the other cores waiting at its end. Each
+output is written by its own thread. The reported CIGAR is the affine-optimal
+alignment at the certified locus. Output is byte-identical across CPU and
+GPU, x86-64 and ARM64, and any thread count.
 
 \textbf{Vectorized banded DP.} One row of the Gotoh recurrence is computed
 $W$ cells at a time ($W=4$ with NEON or SSE, $8$ with AVX2; 8 lanes of 16
@@ -406,8 +419,16 @@ inclusive prefix maximum: $\log_2 W$ in-register shifts per vector and a
 carry between vectors. For long reads the DP is also pruned: a cell whose
 value plus the number of read bases after it cannot exceed $lb$ is dead,
 and once no new piece can start, each row is restricted to the previous
-row's live range. Index lookups for a read's parts are batched and
-prefetched.
+row's live range. The other band DPs use the same devices on the CPU: the
+edit-distance band of the end-to-end certificate takes the minimum form
+of the identity, on 16-bit lanes or, with every value capped at the limit
+plus one (which leaves the result unchanged, since the recurrence is
+monotone), on 8-bit lanes; the score-only band of the pair window may stop
+once no cell can still beat the threshold its caller needs; and the
+traceback fill runs on 16-bit lanes, its sentinels shifted but every
+comparison unchanged. Index lookups are batched and prefetched, across a
+read's parts and across consecutive reads, and so are the reference bytes
+of the repeat copies that tier R compares with the read.
 
 \subsection{Verification of the implementation}\label{sec:verify}
 
@@ -454,11 +475,17 @@ seeded random sample of \BenchReads{} reads or pairs, and the provable-error
 analysis its first 2~M reads. Long reads are \LrReads{} HG002 PacBio HiFi
 reads \citep{wenger2019hifi} (median length \LrMedLen~bp, about 1$\times$).
 The reference is the Ensembl GRCh38 primary assembly
-\citep{schneider2017grch38}. All runs used one machine with a 128-core
-Ampere Altra (ARM64) CPU, of which every tool got 64 threads, and one
-NVIDIA A100 80GB. Single-end wall times are medians of three runs after a
-warm-up, with SAM written to \texttt{/dev/null}. All tools ran with
-default settings.
+\citep{schneider2017grch38}. Unless stated otherwise, runs used galaxy, a
+machine with a 128-core Ampere Altra (ARM64) CPU and an NVIDIA A100 80GB.
+CPU-only timings were also taken on a2, with four Intel Xeon Gold 5218
+CPUs (x86-64, 64 cores in four NUMA nodes) and no GPU. Every pipeline got
+64 cores (on galaxy, cores 0--63 under \texttt{taskset}; on a2, with memory
+interleaved over the four nodes by \texttt{numactl}, without which the
+kernel's page migrations made about half of the runs of one pipeline 1.5
+times slower), and all of a host's timings come from one session. Wall times are medians of three
+runs after a warm-up (paired BWA-MEM2: one run), with SAM written to
+\texttt{/dev/null}. All tools ran with default settings, except the batch
+size of minibwa when it is CERTA's fallback (Section~\ref{sec:speed}).
 
 \subsection{Certification}\label{sec:cert}
 
@@ -539,53 +566,96 @@ CERTA, certified reads & 0 & 0 & 0 & 0\\
 \centering
 \includegraphics{figures/errors_vs_speed.pdf}
 \caption{Provable misplacements against wall time, single-end, 20~M
-HG002 reads, 64 CPU threads (CERTA: A100 plus 64 threads; certified reads
-make no provable error by construction). Error counts as in
-Table~\ref{tab:errors}. BWA-MEM2, minibwa and CERTA were timed in one
-session (Table~\ref{tab:speed}); strobealign, minimap2 and Bowtie~2 in an
-earlier session on the same machine and data, in which BWA-MEM2 took
-99.69~s.}
+HG002 reads on galaxy's 64 cores (Table~\ref{tab:speed}; one session).
+CERTA: its fastest complete configuration on CPU alone and with the A100;
+certified reads make no provable error by construction. Error counts as in
+Table~\ref{tab:errors}.}
 \label{fig:errors}
 \end{figure}
 
 \subsection{Speed}\label{sec:speed}
 
-CERTA maps the certified reads on the GPU and streams the others into
-minibwa, which runs concurrently. On 20~M single-end reads the complete
-pipeline takes \SeWallCerta~s, against \SeWallBwa~s for BWA-MEM2 and
-\SeWallMini~s for minibwa (Table~\ref{tab:speed}): \SeSpeedBwa$\times$
-faster than BWA-MEM2 with \SeCpuRatioBwa$\times$ less CPU time, and
-\SeSpeedMini$\times$ faster than minibwa. The certified tier alone handles
-\SeCert\% of the reads in \SeWallTier~s, \SeTierSpeedBwa$\times$ faster
-than BWA-MEM2. The rest of the time goes to the uncertified reads, which
-are also the reads that cost minibwa the most. In paired mode the pipeline
-takes \PeWallCerta~s for 20~M pairs, \PeSpeedBwa$\times$ faster than
-BWA-MEM2 with \PeCpuRatioBwa$\times$ less CPU time, but slower than
-minibwa (\PeWallMini~s). A pair with an uncertified mate sends both mates
-to the fallback so that it can pair them, and these are the costliest
-reads.
+Every pipeline was timed in one session per host, on the same 64 cores (on
+galaxy, which has 128, every pipeline ran under \texttt{taskset} on cores
+0--63), mapping \BenchReads{} reads or pairs with SAM written to
+\texttt{/dev/null} (Table~\ref{tab:speed}). CERTA runs in two complete
+configurations. \emph{With a fallback}, it streams the reads it cannot
+certify into minibwa, which maps them concurrently; each starts 64
+threads on the 64 cores. \emph{In interval mode} it maps every read
+itself: a certified read gets its optimum, any other read a proven interval
+around its optimum (Section~\ref{sec:check}), and nothing goes to another
+aligner. With or without the GPU, CERTA certifies the same reads
+(\CpuTierCert\% of the 20~M single-end reads, on both hosts) and writes the
+same bytes.
+
+Single-end, every CERTA configuration is faster than every other aligner on
+both hosts. On CPU alone, interval mode takes \FGSCpuIvWall~s on galaxy and
+\FASCpuIvWall~s on a2: \FGSCpuIvXMini$\times$ and \FASCpuIvXMini$\times$
+faster than minibwa, the fastest of the other aligners, and
+\FGSCpuIvXBwa$\times$ and \FASCpuIvXBwa$\times$ faster than BWA-MEM2. With
+the A100 it takes \FGSGpuIvWall~s (\FGSGpuIvXMini$\times$ minibwa,
+\FGSGpuIvXBwa$\times$ BWA-MEM2).
+
+Paired, interval mode is again the fastest: \FGPCpuIvWall~s on galaxy's
+CPU and \FAPCpuIvWall~s on a2's (\FGPCpuIvXMini$\times$ and
+\FAPCpuIvXMini$\times$ minibwa; \FGPCpuIvXBwa$\times$ and
+\FAPCpuIvXBwa$\times$ BWA-MEM2), and \FGPGpuIvWall~s with the A100
+(\FGPGpuIvXMini$\times$ minibwa, \FGPGpuIvXBwa$\times$ BWA-MEM2). With the
+fallback, a pair with an uncertified mate goes to minibwa whole, so that it
+can be paired; these pairs cost minibwa several times its average pair,
+and the pipeline takes \FGPCpuKtWall~s on galaxy's CPU and
+\FAPCpuKtWall~s on a2's (\FGPCpuKtXMini$\times$ and \FAPCpuKtXMini$\times$
+minibwa), and \FGPGpuKtWall~s with the A100 (\FGPGpuKtXMini$\times$).
+
+Five changes, none of which changes any output, made the CPU pipelines
+fast. Every pass of a batch runs on one chunk of 64 reads after another,
+the threads taking chunks in turn, so the slow reads of one pass (tier R's
+repeats above all) no longer hold the other cores at its end. The next
+batch is parsed on several threads while the current one maps, and each
+output is written by its own thread. The edit-distance band, the
+score-only band and the traceback fill run on 8- to 16-bit vector lanes
+(exact for every input; supplement). Index lookups, and tier R's reads of
+the reference at each repeat copy, are prefetched. And the fallback
+minibwa takes 10-Mbp batches (\texttt{-K 10m}): with its default
+(100~Mbp--1~Gbp), its threads waited on a few slow reads per batch of
+CERTA's hard reads, and the paired pipeline on a2 spent \FAPCpuKdSys~s in
+the kernel instead of \FAPCpuKtSys~s and took \FAPCpuKdWall~s.
+Single-end, \texttt{-K} changes nothing in minibwa's output. On pairs it
+changes the per-batch insert-size estimate, and with it \KbatchDiffRecords{}
+of HG005's chromosome-20 records, but no F1 of
+Table~\ref{tab:f1}'s callers in the fourth decimal (SNVs and indels, GATK
+and bcftools).
 
 \begin{table}[t]
 \centering
-\caption{Complete mapping of \BenchReads{} HG002 reads (single-end) or pairs
-(paired), one machine, 64 CPU threads for every tool; CERTA also uses one
-A100. CPU is user plus system time. Single-end: median of three runs;
-paired: one run, CERTA with \PeCertaThreads{} threads and minibwa with
-\PeMiniThreads.}
+\caption{Wall time (s) to map \BenchReads{} HG002 reads (single-end) or
+pairs (paired) completely, every pipeline on 64 cores, and in parentheses
+the speed relative to minibwa (minibwa's time over the pipeline's). One
+session per host; medians of \FReps{} runs (paired BWA-MEM2: one run).
+\emph{galaxy}: a 128-core Ampere Altra (ARM64), pipelines pinned to cores
+0--63; the A100 rows also use one NVIDIA A100. \emph{a2}: four Intel Xeon
+Gold 5218 (x86-64, 64 cores, four NUMA nodes), no GPU, every pipeline's
+memory interleaved over the nodes. CERTA + minibwa:
+CERTA streams its uncertified reads into minibwa; interval mode: no
+fallback (every read certified or given a proven interval).}
 \label{tab:speed}
 \small
-\begin{tabular}{@{}llrrr@{}}
+\begin{tabular}{@{}lllll@{}}
 \toprule
-Mode & Pipeline & Wall (s) & CPU (s) & Speed vs BWA-MEM2\\
+& \multicolumn{2}{c}{galaxy (ARM64)} & \multicolumn{2}{c}{a2 (x86-64)}\\
+\cmidrule(lr){2-3}\cmidrule(l){4-5}
+Pipeline & single-end & paired & single-end & paired\\
 \midrule
-\multirow{4}{*}{Single-end} & BWA-MEM2 & \SeWallBwa & \SeCpuBwa & 1.00$\times$\\
- & minibwa & \SeWallMini & \SeCpuMini & --\\
- & CERTA (A100) + minibwa & \SeWallCerta & \SeCpuCerta & \SeSpeedBwa$\times$\\
- & \quad certified tier only (\SeCert\% of reads) & \SeWallTier & \SeCpuTier & --\\
+BWA-MEM2 & \FGSBwaWall{} (\FGSBwaXMini) & \FGPBwaWall{} (\FGPBwaXMini) & \FASBwaWall{} (\FASBwaXMini) & \FAPBwaWall{} (\FAPBwaXMini)\\
+minibwa & \FGSMiniWall{} (1.00) & \FGPMiniWall{} (1.00) & \FASMiniWall{} (1.00) & \FAPMiniWall{} (1.00)\\
+strobealign & \FGSStrobeWall{} (\FGSStrobeXMini) & -- & \FASStrobeWall{} (\FASStrobeXMini) & --\\
+minimap2 \texttt{-x sr} & \FGSMmWall{} (\FGSMmXMini) & -- & \FASMmWall{} (\FASMmXMini) & --\\
+Bowtie~2 & \FGSBtWall{} (\FGSBtXMini) & -- & \FASBtWall{} (\FASBtXMini) & --\\
 \midrule
-\multirow{3}{*}{Paired} & BWA-MEM2 & \PeWallBwa & \PeCpuBwa & 1.00$\times$\\
- & minibwa & \PeWallMini & \PeCpuMini & --\\
- & CERTA (A100) + minibwa & \PeWallCerta & \PeCpuCerta & \PeSpeedBwa$\times$\\
+CERTA + minibwa, CPU only & \FGSCpuWall{} (\FGSCpuXMini) & \FGPCpuKtWall{} (\FGPCpuKtXMini) & \FASCpuWall{} (\FASCpuXMini) & \FAPCpuKtWall{} (\FAPCpuKtXMini)\\
+CERTA interval mode, CPU only & \FGSCpuIvWall{} (\FGSCpuIvXMini) & \FGPCpuIvWall{} (\FGPCpuIvXMini) & \FASCpuIvWall{} (\FASCpuIvXMini) & \FAPCpuIvWall{} (\FAPCpuIvXMini)\\
+CERTA + minibwa, A100 & \FGSGpuWall{} (\FGSGpuXMini) & \FGPGpuKtWall{} (\FGPGpuKtXMini) & -- & --\\
+CERTA interval mode, A100 & \FGSGpuIvWall{} (\FGSGpuIvXMini) & \FGPGpuIvWall{} (\FGPGpuIvXMini) & -- & --\\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -694,9 +764,10 @@ things possible. First, aligners can be evaluated on real data, not only
 on simulations: every heuristic aligner we tested misplaces reads that
 have a provably better locus, at rates that grow with speed. Second, the
 output can be verified by a program that trusts neither the mapper's code
-nor its authors. Third, exactness need not cost speed: the complete
-pipeline is faster than BWA-MEM2 in both modes, and its variant calls have
-the higher F1 in \PeVWins{} of \PeVComparisons{} comparisons.
+nor its authors. Third, exactness need not cost speed: on CPU alone, and
+more so with a GPU, CERTA maps reads and pairs faster than every other
+aligner we timed, and its variant calls have the higher F1 than BWA-MEM2's
+in \PeVWins{} of \PeVComparisons{} comparisons.
 
 The certificate is about the optimization problem, not about the read's
 true origin. A read from a diverged copy of a repeat can align better to
@@ -710,18 +781,20 @@ interval in interval mode. The S0/S1 tiers certify edit distance, while
 callers use the affine alignment at that locus; the certified local tier
 (Theorem~\ref{thm:L}) closes this gap but certifies fewer reads. MAPQ
 reuses BWA-MEM's formula rather than a calibration from the certified
-second best. Paired mode is still slower than minibwa, because the reads
-sent to the fallback are the hardest ones. The comparison pairs one A100
-and 64 threads against 64 threads, so cost per genome should be weighed
-alongside wall time. Accuracy was measured on chromosome 20 of three GIAB
-samples, and long reads on one HiFi sample at 1$\times$, with a standalone
-tool rather than the mapper. The written proofs have not yet been reviewed
+second best. The fastest configurations add one A100 to the 64 cores, so
+cost per genome should be weighed alongside wall time; on CPU alone CERTA
+is still the fastest. Accuracy was measured on chromosome 20 of three GIAB
+samples for CERTA with its fallback, and of one (HG005) for interval mode,
+the fastest paired configuration, and for the paired fallback's 10-Mbp
+batches; long reads on one HiFi sample at
+1$\times$, with a standalone tool rather than the mapper. The written proofs have not yet been reviewed
 by a second person; the mechanized lemmas reduce, but do not remove, that
 debt.
 
 \textbf{Outlook.} The limits are measurable. Shorter or error-tolerant
 parts, a GPU pair pass and a certificate for the uncertified mate's
-fallback would raise both certification and paired speed. The interval
+fallback would raise both certification and the fallback configuration's
+paired speed. The interval
 contract (every read gets either an exact optimum or a proven interval,
 and a checker for both) extends naturally to long reads, where a known
 alignment already makes the certificate cheaper than mapping.

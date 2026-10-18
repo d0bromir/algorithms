@@ -1,0 +1,11 @@
+{
+  "mode": "cpu",
+  "device": "",
+  "threads": 64,
+  "k": 5, "k1": 2, "budget": 16, "budget2": 256, "second_pass": 2062702, "q": 22, "s": 1,
+  "reads": 20001073, "bases": 2996189391, "certified": 18877900, "s0": 14487971, "s1": 4086535, "sr": 303394, "sl": 0, "s2": 0, "s2_limit": 0, "ties": 958824,
+  "uncertified": {"bad_length": 0, "radius_negative": 95153, "not_found": 1018233, "cluster_too_wide": 9779, "cross_contig": 8},
+  "certified_by_d1": [14791365, 2868061, 736882, 274102, 141147, 66343],
+  "certified_by_radius": [627539, 893569, 16470904, 71521, 112790, 398183],
+  "seconds": {"load": 0.613, "upload": 0.000, "read_encode": 6.209, "read_wait": 0.002, "map": 12.618, "output": 1.404, "total": 14.746}
+}

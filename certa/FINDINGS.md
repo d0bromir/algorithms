@@ -570,11 +570,13 @@ The pilot did not reach 10× over BWA-MEM2:
   but not by proof.
 - **MAPQ is not calibrated from first principles.** It reuses BWA-MEM's
   formula. Calibrating it on certified second-best distances is future work.
-- **Speed vs the fastest tool is modest.** The certified tier is fast, but
-  the uncertified ~5.6 % dominate the remaining cost (`bench/RESULTS.md`
-  §5b). The speedup is 4.35× against BWA-MEM2 and only 1.16× against
-  minibwa. Answer: fewer uncertified reads (paired-end, a certified
-  local-alignment mode) or a faster engine for them.
+- **Speed vs the fastest tool depends on the configuration** (2026-10-18,
+  64 cores, paper Table 2). Interval mode, which needs no other aligner, is
+  1.60–2.00× minibwa on pairs on CPU alone and 2.11× with an A100; with
+  minibwa as the fallback, pairs gain only 1.20–1.36×, because minibwa's
+  work on the ~6 % of pairs with an uncertified mate exceeds CERTA's on
+  all of them. Answer: fewer uncertified reads, or interval mode where its
+  proven intervals suffice.
 - **The GPU is part of the claim.** The comparison is A100 + 64 threads vs
   64 threads. Cost per genome (GPU hour vs CPU hours) should be reported
   alongside wall time.
@@ -775,9 +777,19 @@ verifies the XQ of PR mates too.
     interval mode 51.7 → 41.0 s (minibwa 79.5 s: 1.55× → 1.94×), CERTA
     alone with fallback 34.7 → 26.2 s, fallback + minibwa (`-K 10m`)
     65.2 → 59.4 s, single-end interval mode 22.8 → 19.3 s.
-  - *Variance on a2:* about one in three fallback + minibwa runs took
-    ~93 s instead of ~60 s, with more kernel time (NUMA balancing is on);
-    the final protocol therefore takes medians of three paired runs.
+  - *Variance on a2:* with the kernel's NUMA balancing, two of four
+    fallback + minibwa runs took 90–92 s instead of 58–60 s, with ~40 %
+    more page migrations, more kernel time and fewer CPU-seconds (cores
+    idle). Under `numactl --interleave=all` four runs took 57.6–58.0 s
+    (`bench/results/hg002_2026-10/a2_fallback_numa.txt`), so the final
+    protocol runs every a2 pipeline that way and takes medians of three
+    runs, paired too.
+  - *Final protocol, build 84dfa83* (`final_{galaxy,a2}.tsv`; the
+    80646c3 runs are kept as `final_*_80646c3.tsv`): paired interval mode
+    39.45 s on galaxy and 39.49 s on a2 (1.60× and 2.00× minibwa; it was
+    1.38× and 1.55×), 29.85 s with the A100 (2.11×, was 1.77×); the
+    fallback with `-K 10m` 1.20× and 1.36×. Single-end interval mode 1.76×
+    and 1.92× (was 1.63× and 1.57×), 2.10× with the A100.
 - **HG001 GATK indels** are the one comparison where CERTA's F1 is lower
   (0.9909 vs 0.9922). Look at the 13 extra FP and 14 extra FN.
 - **Long reads:** the mapper's limits (320 bp, 8 parts, radius 5) exclude

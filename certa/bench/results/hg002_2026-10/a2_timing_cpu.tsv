@@ -1,0 +1,26 @@
+# CPU-only timing on a2 (2026-10-16): 4 x Intel Xeon Gold 5218 (x86-64, Cascade Lake, AVX-512), 64 cores in 4 NUMA nodes, no GPU, no thread pinning; 64 threads per pipeline.
+# Build ~/certa-cpu = commit 12076c3 (CPU code as 474ad90), g++ 13.3 -O3 -DNDEBUG -march=native, without zlib (uncompressed input is memory-mapped either way); index q=22 s=1 built on a2. 20,001,073 reads (single-end, R1) or pairs, SAM discarded. Script: a2:~/certa-bench/cpu/run_a2.sh.
+# Rows up to the first bwa-mem2 row: warm-up, then the thread-split scan (one run each; the certified tier ran twice). Then, in one session: BWA-MEM2, minibwa and CERTA CPU + minibwa at the best split (32:32), three times each; then one paired run of each (CERTA 40:24).
+# certa-cpu-pipe / certa-cpu-pe-pipe: CERTA without a GPU (certa_threads) streaming its uncertified reads or pairs into minibwa (64 - certa_threads).
+mode	pipeline	certa_threads	rep	wall_s	user_s	sys_s	max_rss_kb
+single-end	certa-cpu-tier	64	1	22.48	932.68	4.99	30736240
+single-end	certa-cpu-pipe	24	1	62.96	1599.02	466.15	30115360
+single-end	certa-cpu-pipe	32	1	59.12	1555.97	370.62	30416560
+single-end	certa-cpu-pipe	40	1	68.70	1588.34	402.49	30587404
+paired	certa-cpu-pe-pipe	24	1	159.58	4655.88	804.01	37911876
+paired	certa-cpu-pe-pipe	32	1	136.64	4762.29	645.19	37824580
+paired	certa-cpu-pe-pipe	40	1	127.40	4782.78	475.22	38016376
+single-end	certa-cpu-tier	64	1	22.39	945.67	4.25	30752416
+paired	certa-cpu-pe-pipe	48	1	153.90	4690.35	322.31	38178072
+single-end	bwa-mem2	-	1	114.62	5415.97	165.72	33253884
+single-end	minibwa	-	1	35.69	1555.04	24.15	9700928
+single-end	certa-cpu-pipe	32	2	62.63	1530.18	508.41	30189280
+single-end	bwa-mem2	-	2	118.06	5692.89	143.30	33609872
+single-end	minibwa	-	2	36.70	1556.76	21.75	9682464
+single-end	certa-cpu-pipe	32	3	66.33	1591.63	532.93	30383240
+single-end	bwa-mem2	-	3	116.38	5419.30	153.98	33281984
+single-end	minibwa	-	3	36.06	1553.60	22.63	9709580
+single-end	certa-cpu-pipe	32	4	62.10	1520.88	481.54	30264824
+paired	bwa-mem2	-	1	264.05	14085.27	304.43	33583688
+paired	minibwa	-	1	79.02	3961.61	41.95	10069700
+paired	certa-cpu-pe-pipe	40	2	125.72	4818.27	421.23	38052232

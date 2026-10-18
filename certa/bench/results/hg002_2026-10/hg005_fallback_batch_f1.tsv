@@ -1,0 +1,12 @@
+# HG005 chr20, rtg vcfeval vs GIAB v4.2.1: CERTA + minibwa (paired), the fallback minibwa with its default batch (kdef) or -K 10m (k10m).
+# CERTA ran once (build 80646c3, galaxy, A100); its fallback pairs were mapped by minibwa twice and each result merged with the same certified records.
+# Same callers and settings as bench/sample_accuracy.sh. Records differing between kdef and k10m (chr20, fields 1-9): 16761. Script: bench/acc_fallback_batch.sh (2026-10-18).
+sample	config	caller	type	threshold	tp_base	tp_call	fp	fn	precision	sensitivity	f1
+HG005	kdef	gatk	snps	7.000	68105	68105	532	487	0.9922	0.9929	0.9926
+HG005	kdef	gatk	indels	1.000	8388	8388	48	61	0.9943	0.9928	0.9935
+HG005	kdef	bcftools	snps	None	68166	68166	564	426	0.9918	0.9938	0.9928
+HG005	kdef	bcftools	indels	None	7952	7952	387	497	0.9536	0.9412	0.9473
+HG005	k10m	gatk	snps	4.000	68130	68130	560	462	0.9918	0.9933	0.9926
+HG005	k10m	gatk	indels	1.000	8388	8388	48	61	0.9943	0.9928	0.9935
+HG005	k10m	bcftools	snps	None	68165	68165	564	427	0.9918	0.9938	0.9928
+HG005	k10m	bcftools	indels	None	7952	7952	387	497	0.9536	0.9412	0.9473

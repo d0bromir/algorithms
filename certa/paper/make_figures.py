@@ -75,14 +75,22 @@ def fig_errors_vs_speed():
     s = (RES / 'hg002_2026-09/weaknesses_2M.txt').read_text(encoding='utf-8')
     cert = int(re.search(r'^reads (\d+);', s, re.M).group(1))
     miss = {m.group(1): int(m.group(2)) for m in re.finditer(r'^(\S+)\s+(\d+) \(', s, re.M)}
-    wall = {
-        'bwa-mem2': median_wall('hg002_2026-09/galaxy_timing_v06.tsv', 'bwa-mem2'),
-        'minibwa': median_wall('hg002_2026-09/galaxy_timing_v06.tsv', 'minibwa'),
-        'strobealign': median_wall('hg002_2026-09/galaxy_timing.tsv', 'strobealign'),
-        'minimap2': median_wall('hg002_2026-09/galaxy_timing.tsv', 'minimap2'),
-        'bowtie2': median_wall('hg002_2026-09/galaxy_timing.tsv', 'bowtie2'),
-    }
-    certa = median_wall('hg002_2026-09/galaxy_timing_v06.tsv', 'certa-gpu-pipe')
+    # The final protocol: one session, every pipeline on the same 64 cores.
+    fin = [r for r in rows('hg002_2026-10/final_galaxy.tsv') if r['mode'] == 'single-end']
+
+    def fmed(pipe, cfg=None):
+        best = None
+        for c in sorted({r['config'] for r in fin if r['pipeline'] == pipe}):
+            if cfg is not None and c != cfg:
+                continue
+            rs = sorted((r for r in fin if r['pipeline'] == pipe and r['config'] == c), key=lambda r: float(r['wall_s']))
+            w = float(rs[len(rs) // 2]['wall_s'])
+            best = w if best is None or w < best else best
+        return best
+
+    wall = {t: fmed(t) for t in ('bwa-mem2', 'minibwa', 'strobealign', 'minimap2', 'bowtie2')}
+    certa_cpu = min(fmed('certa-cpu'), fmed('certa-cpu-iv'))
+    certa_gpu = min(fmed('certa-gpu'), fmed('certa-gpu-iv'))
     names = {'bwa-mem2': 'BWA-MEM2', 'minibwa': 'minibwa', 'strobealign': 'strobealign',
              'minimap2': 'minimap2 -x sr', 'bowtie2': 'Bowtie 2'}
     fig, ax = plt.subplots(figsize=(COL, 54 * MM))
@@ -95,16 +103,17 @@ def fig_errors_vs_speed():
         ha = 'right' if off[t][0] < 0 else 'left'
         ax.annotate(names[t], (w, y), xytext=off[t], textcoords='offset points',
                     ha=ha, va='center', fontsize=6.5, color=INK)
-    ax.scatter(certa, 0, s=30, color=BLUE, edgecolor='white', linewidth=1.0, zorder=4, clip_on=False)
-    ax.annotate('CERTA: 0 by construction', (certa, 0), xytext=(7, 0),
-                textcoords='offset points', ha='left', va='center', fontsize=6.5, color=INK)
+    for w, lab, xy, ha in ((certa_gpu, 'CERTA, GPU', (-2, -11), 'right'), (certa_cpu, 'CERTA, CPU only', (3, -11), 'left')):
+        ax.scatter(w, 0, s=30, color=BLUE, edgecolor='white', linewidth=1.0, zorder=4, clip_on=False)
+        ax.annotate(lab, (w, 0), xytext=xy, textcoords='offset points', ha=ha, va='center',
+                    fontsize=6.5, color=INK)
     ax.set_xscale('log')
-    ax.set_xticks([20, 30, 50, 100, 200])
-    ax.set_xticklabels(['20', '30', '50', '100', '200'])
+    ax.set_xticks([10, 20, 50, 100, 200])
+    ax.set_xticklabels(['10', '20', '50', '100', '200'])
     ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
-    ax.set_xlim(18, 260)
-    ax.set_ylim(-150, 2900)
-    ax.set_xlabel('Wall time, 20 M reads, 64 threads (s, log scale)')
+    ax.set_xlim(8, 260)
+    ax.set_ylim(-420, 2900)
+    ax.set_xlabel('Wall time, 20 M reads, 64 cores (s, log scale)')
     ax.set_ylabel('Provably misplaced reads\nper million certified reads')
     fig.tight_layout(pad=0.3)
     fig.savefig(OUT / 'errors_vs_speed.pdf', metadata={'CreationDate': None})
