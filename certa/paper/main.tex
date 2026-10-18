@@ -114,7 +114,7 @@ Four consequences follow.
 \end{enumerate}
 
 Exact methods exist, but none covers a whole sequencing run. Lossless
-$k$-error filters \citep{weese2012razers3,marcosola2012gem,kucherov2016search,kianfar2018optimum}
+$k$-error filters \citep{weese2012razers3,marcosola2012gem,kucherov2016search,kianfar2017optimum}
 find every locus within a fixed edit distance, so a read beyond that
 distance, or one whose fixed seeds are repetitive, gets no answer. BWT-SW
 \citep{lam2008bwtsw} computes exact local alignments against a genome, but
@@ -663,7 +663,7 @@ CERTA interval mode, A100 & \FGSGpuIvWall{} (\FGSGpuIvXMini) & \FGPGpuIvWall{} (
 \subsection{Variant-calling accuracy}
 
 We mapped every read of each sample, kept chromosome 20, called variants
-with GATK HaplotypeCaller \citep{poplin2018gatk} and with bcftools
+with GATK HaplotypeCaller \citep{poplin2017gatk} and with bcftools
 \citep{danecek2021bcftools}, and compared SNVs and indels separately with
 rtg vcfeval \citep{cleary2015vcfeval} against the GIAB v4.2.1 benchmark
 \citep{wagner2022giab}. The same caller settings were used for both

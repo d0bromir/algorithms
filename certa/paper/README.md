@@ -34,14 +34,13 @@ python make_numbers.py && python make_figures.py && latexmk -pdf main.tex
 | File | What it is |
 |---|---|
 | `main.tex` | the paper |
-| `refs.bib` | references. Entries with `x-verify = {yes}` were added from memory; check them before submission |
+| `refs.bib` | references, each checked against its Crossref, DataCite or arXiv record |
 | `make_numbers.py` | results → `numbers.tex` |
 | `make_figures.py` | results → `figures/` (palette: categorical slots validated for colour-vision deficiency) |
 
 ## Before submission
 
 - Add the affiliation, the contact address and funding.
-- Check the references marked `x-verify`.
 - Decide what goes into the supplement. `../THEORY.md` holds the written
   proofs and `../FINDINGS.md` the full measurements; both are cited as
   online material.
