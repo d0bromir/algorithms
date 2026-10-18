@@ -790,6 +790,18 @@ verifies the XQ of PR mates too.
     1.38× and 1.55×), 29.85 s with the A100 (2.11×, was 1.77×); the
     fallback with `-K 10m` 1.20× and 1.36×. Single-end interval mode 1.76×
     and 1.92× (was 1.63× and 1.57×), 2.10× with the A100.
+  - *Tried after that, no gain (not kept):* reading the DP kernels'
+    previous row as stored vectors and shifting it in registers, instead of
+    the `+ b + 1` loads that straddle two stores, gave identical output but
+    was 1.5–2 % slower on both hosts (paired interval mode 40.1 vs 39.5 s
+    on a2, 40.2 vs 39.5 s on galaxy). GPU batch size: 0.5 M and 1 M reads
+    are equal (29.7 s), 2 M and 4 M slower (30.5, 32.6 s).
+  - *Where paired interval mode's CPU goes now* (galaxy, perf): tier R 26 %
+    (its index lookups 9.5 %, of which `find_copies` 3.2 %), the DP fills
+    for CIGARs and the pair certificate ~22 % (`certify_pair`'s tracebacks
+    6.3 %, mate rescue's 10 %), passes 1–2 22 %, the pair certificate's
+    window scans 7 %. Each remaining fix is worth 2–5 %; larger gains need a
+    GPU pair pass or GPU tier R.
 - **HG001 GATK indels** are the one comparison where CERTA's F1 is lower
   (0.9909 vs 0.9922). Look at the 13 extra FP and 14 extra FN.
 - **Long reads:** the mapper's limits (320 bp, 8 parts, radius 5) exclude
