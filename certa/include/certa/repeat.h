@@ -104,6 +104,7 @@ struct RepeatScratch {
   struct Eval { int score, strand; int64_t lo; int B; };
   std::vector<Eval> evals;                   // bands evaluated (lower bounds)
   std::vector<int> cval;                     // per chain: best score, or kUnset
+  std::vector<uint8_t> tmp;                  // find_copies: the string in one orientation
 };
 
 constexpr int kUnset = -BIG;
@@ -138,30 +139,47 @@ inline int match_run(const IndexView& ix, const uint8_t* rd, int64_t j, int n) {
   return i;
 }
 
+// Prefetches the reference bytes [a, a + n), at most 256 of them: a copy whose
+// comparison with the read is a few hits away (hits are scattered over the
+// reference, so each comparison would otherwise wait on memory).
+inline void prefetch_ref(const IndexView& ix, int64_t a, int n) {
+  if (a < 0) return;
+  const int64_t e = a + std::min(n, 256);
+  for (int64_t x = a & ~int64_t(63); x < e && (uint64_t)x < ix.ref_len; x += 64) __builtin_prefetch(ix.ref + x);
+}
+constexpr uint64_t kPrefetchAhead = 16;  // hits
+
 // Exact non-overlapping copies of w (length n) in the reference, beside
 // [p, p + n) on its own strand; stops once `need` are found. Copies on the
 // other strand are searched with the reverse complement. Returns the number
-// found and their positions/strands.
+// found and their positions/strands. Uses sc.tmp, keys, kok, clo and kcnt.
 inline int find_copies(const IndexView& ix, const std::vector<uint8_t>& w, int64_t p, int strand_of_w,
-                       int need, int cmax, int64_t* pos, int* strand, std::vector<uint8_t>& tmp) {
+                       int need, int cmax, int64_t* pos, int* strand, RepeatScratch& sc) {
   const int n = (int)w.size(), q = ix.q;
   if (n < q) return 0;
   for (uint8_t c : w) if (c > 3) return 0;  // N never matches: no exact copy
+  const int nq = n - q + 1;
+  std::vector<uint8_t>& tmp = sc.tmp;
   int found = 0;
   for (int orient = 0; orient < 2 && found < need; ++orient) {
     tmp.resize(n);
     for (int i = 0; i < n; ++i) tmp[i] = orient == 0 ? w[i] : (uint8_t)(3 - w[n - 1 - i]);
-    // Rarest q-mer of the string.
-    int best = -1;
-    uint64_t blo = 0, bhi = 0;
-    for (int i = 0; i + q <= n; ++i) {
-      uint64_t key, lo, hi;
-      kmer_key(tmp.data() + i, q, &key);
-      lookup(ix, key, &lo, &hi);
-      if (best < 0 || hi - lo < bhi - blo) { best = i; blo = lo; bhi = hi; }
-    }
+    // Rarest q-mer of the string (the first of the rarest), the lookups
+    // pipelined (lookup_batch gives lookup's ranges).
+    sc.keys.resize(nq);
+    sc.kok.resize(nq);
+    sc.clo.resize(nq);
+    sc.kcnt.resize(nq);
+    qmer_keys(tmp.data(), n, q, sc.keys.data(), sc.kok.data());
+    lookup_batch(ix, sc.keys.data(), sc.kok.data(), nq, sc.clo.data(), sc.kcnt.data());
+    int best = 0;
+    for (int i = 1; i < nq; ++i)
+      if (sc.kcnt[i] < sc.kcnt[best]) best = i;
+    const uint64_t blo = sc.clo[best], bhi = blo + sc.kcnt[best];
     if (bhi - blo > (uint64_t)cmax) continue;
+    for (uint64_t e = blo; e < std::min(bhi, blo + kPrefetchAhead); ++e) prefetch_ref(ix, (int64_t)ix.pos[e] - best, n);
     for (uint64_t e = blo; e < bhi && found < need; ++e) {
+      if (e + kPrefetchAhead < bhi) prefetch_ref(ix, (int64_t)ix.pos[e + kPrefetchAhead] - best, n);
       const int64_t start = (int64_t)ix.pos[e] - best;
       if (orient == 0 && start + n > p && p + n > start) continue;  // overlaps A*'s own interval
       if (start < 0 || match_run(ix, tmp.data(), start, n) < n) continue;
@@ -224,7 +242,13 @@ inline RepeatOut repeat_tier(const IndexView& ix, const RepeatParams& rp, const 
       int banc = BIG;
       sc.elig.clear();
       if (c >= 0) {
-        for (uint64_t e = sc.clo[c]; e < sc.chi[c]; ++e) {
+        // Each hit's copy is compared with rd from s on: its reference bytes
+        // are prefetched kPrefetchAhead hits ahead.
+        const uint64_t e0 = sc.clo[c], e1 = sc.chi[c];
+        for (uint64_t e = e0; e < std::min(e1, e0 + kPrefetchAhead); ++e)
+          prefetch_ref(ix, (int64_t)ix.pos[e] - (c - s), L - s);
+        for (uint64_t e = e0; e < e1; ++e) {
+          if (e + kPrefetchAhead < e1) prefetch_ref(ix, (int64_t)ix.pos[e + kPrefetchAhead] - (c - s), L - s);
           const int64_t h = ix.pos[e];
           // The copy must match rd[s, c) exactly to its left; then extend right.
           if (c > s && match_run(ix, rd + s, h - (c - s), c - s) < c - s) continue;
@@ -364,8 +388,7 @@ inline RepeatOut repeat_tier(const IndexView& ix, const RepeatParams& rp, const 
   for (int64_t i = 0; i < span; ++i) sc.win[(size_t)i] = ref_at(ix, a.ref_pos + i);
   out.copy_pos[0] = a.ref_pos;
   out.copy_strand[0] = lo_st;
-  std::vector<uint8_t> tmp;
-  out.copies = 1 + find_copies(ix, sc.win, a.ref_pos, lo_st, 1, rp.cmax, &out.copy_pos[1], &out.copy_strand[1], tmp);
+  out.copies = 1 + find_copies(ix, sc.win, a.ref_pos, lo_st, 1, rp.cmax, &out.copy_pos[1], &out.copy_strand[1], sc);
 
   // SUB interval. A band [blo, blo + B) holds alignments starting at or
   // after blo and ending at or before blo + B + L - 2.

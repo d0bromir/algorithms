@@ -25,6 +25,11 @@ void encode_batch(const std::vector<FastqRecord>& recs, ReadBatch& out, int thre
 void map_cpu(const IndexView& ix, const Params& p, const ReadBatch& batch,
              std::vector<Result>& out, int threads);
 
+// Maps reads idx[0..n) of the batch on the calling thread into out[0..n),
+// with map_cpu's prefetching; each result is the one map_cpu gives.
+void map_reads(const IndexView& ix, const Params& p, const ReadBatch& batch, const size_t* idx, size_t n,
+               Result* out, Workspace& ws);
+
 // Keeps the reference and index resident on one CUDA device.
 class GpuMapper {
  public:

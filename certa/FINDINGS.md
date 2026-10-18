@@ -756,6 +756,28 @@ verifies the XQ of PR mates too.
   (`--fallback-mates single`) barely helps. Candidates: certify more of
   those reads; a smaller minibwa batch, once an accuracy run shows its
   changed pairing statistics do no harm.
+  - *Update 2026-10-18.* The smaller batch is safe: on HG005, minibwa
+    `-K 10m` changes 16,761 chr20 records of CERTA + minibwa but no F1 in
+    the fourth decimal (GATK and bcftools, SNVs and indels;
+    `bench/results/hg002_2026-10/hg005_fallback_batch_f1.tsv`).
+  - *Where paired time went (a2, 64 cores, 20M pairs, build 80646c3).*
+    CERTA alone took 35 s, 34 s of it in the input stage: a serial
+    boundary scan, a serial interleave of the mates and the freeing of
+    temporary records. minibwa on the fallback pairs alone took 1,939 CPU-s,
+    more than CERTA's 1,553 for every pair, so the fallback pipeline is
+    bound by minibwa's work and can gain at most ~1.3× over minibwa.
+    Interval mode needs no fallback.
+  - *Three changes, output byte-identical* (both hosts, CPU and A100, every
+    mode): FASTQ boundaries found on several threads and records parsed in
+    place; every pass of a batch run chunk by chunk (64 reads), so tier R's
+    slow repeats no longer idle the other cores at each pass's end; tier R
+    and `find_copies` prefetch the reference at the hit 16 ahead. a2: paired
+    interval mode 51.7 → 41.0 s (minibwa 79.5 s: 1.55× → 1.94×), CERTA
+    alone with fallback 34.7 → 26.2 s, fallback + minibwa (`-K 10m`)
+    65.2 → 59.4 s, single-end interval mode 22.8 → 19.3 s.
+  - *Variance on a2:* about one in three fallback + minibwa runs took
+    ~93 s instead of ~60 s, with more kernel time (NUMA balancing is on);
+    the final protocol therefore takes medians of three paired runs.
 - **HG001 GATK indels** are the one comparison where CERTA's F1 is lower
   (0.9909 vs 0.9922). Look at the 13 extra FP and 14 extra FN.
 - **Long reads:** the mapper's limits (320 bp, 8 parts, radius 5) exclude

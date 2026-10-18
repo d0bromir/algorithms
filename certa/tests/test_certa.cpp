@@ -512,12 +512,78 @@ int rescore(const IndexView& ix, const Result& r, const std::vector<uint8_t>& fw
   return i == L ? d : -1000;
 }
 
+// MappedFastq's parallel boundary scan must give the serial scan's batches.
+// Random FASTQ files with LF or CRLF line ends, rare blank lines and stray
+// '\r' between records, rare empty reads, varying lengths and sometimes no
+// final newline are read in batches of several sizes on 1 thread (serial
+// scan) and on several; batches and records must match the written records.
+void test_fastq_scan(std::mt19937_64& g) {
+  const std::string path = "test_certa." + std::to_string(getpid()) + ".tmp.fq";
+  int files = 0, batches = 0;
+  for (int shape = 0; shape < 6; ++shape) {
+    std::vector<FastqRecord> truth;
+    std::string text;
+    const bool crlf = shape == 1 || shape == 4;
+    const char* eol = crlf ? "\r\n" : "\n";
+    const int nrec = 20000 + static_cast<int>(g() % 5000);
+    for (int i = 0; i < nrec; ++i) {
+      if (shape >= 2 && g() % 700 == 0) text += g() % 2 ? "\n" : "\r\n";  // blank line
+      if (shape >= 3 && g() % 900 == 0) text += "\r";                    // stray '\r' before '@'
+      FastqRecord r;
+      r.name = "r" + std::to_string(i) + (g() % 3 == 0 ? "/1" : "");
+      int len = shape == 0 ? 150 : 50 + static_cast<int>(g() % 260);
+      if (shape >= 3 && g() % 1000 == 0) len = 0;  // an empty read: empty lines inside a record
+      for (int j = 0; j < len; ++j) r.seq += "ACGTN"[g() % 5];
+      for (int j = 0; j < len; ++j) r.qual += static_cast<char>('!' + g() % 40);
+      text += "@" + r.name + (g() % 2 ? " comment x" : "") + eol + r.seq + eol + "+" + eol + r.qual;
+      if (i + 1 < nrec || shape != 5) text += eol;  // shape 5: no final newline
+      truth.push_back(r);
+    }
+    std::FILE* f = std::fopen(path.c_str(), "wb");
+    std::fwrite(text.data(), 1, text.size(), f);
+    std::fclose(f);
+    ++files;
+    for (size_t max_records : {size_t(1), size_t(7), size_t(1000), size_t(3333), size_t(9000)}) {
+      if (max_records == 1 && shape > 1) continue;  // slow and covered by the others
+      for (int threads : {1, 3, 8}) {
+        MappedFastq mf(path);
+        std::vector<FastqRecord> out;
+        size_t got = 0;
+        bool ok = true;
+        std::string err;
+        try {
+          for (size_t n; ok && (n = mf.next_batch(out, max_records, threads)) > 0;) {
+            ++batches;
+            ok = n == out.size() && (n == max_records || got + n == truth.size());
+            for (size_t i = 0; ok && i < n; ++i) {
+              const FastqRecord& t = truth[got + i];
+              ok = out[i].name == t.name && out[i].seq == t.seq && out[i].qual == t.qual;
+            }
+            got += n;
+          }
+        } catch (const std::exception& e) {
+          ok = false;
+          err = e.what();
+        }
+        CHECK(ok && got == truth.size(), "FASTQ scan shape %d, batch %zu, %d threads: records differ (%zu of %zu read) %s",
+              shape, max_records, threads, got, truth.size(), err.c_str());
+      }
+    }
+  }
+  std::remove(path.c_str());
+  std::fprintf(stderr, "FASTQ batches: %d files, %d batches identical on 1, 3 and 8 threads\n", files, batches);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   const uint64_t seed = argc > 1 ? std::strtoull(argv[1], nullptr, 10) : 20260927;
   std::fprintf(stderr, "seed %llu\n", static_cast<unsigned long long>(seed));
   std::mt19937_64 g(seed);
+  {
+    std::mt19937_64 gq(seed ^ 0x5eedf00dULL);  // its own stream: the other tests' data stay as they were
+    test_fastq_scan(gq);
+  }
   Reference ref = make_reference(g);
   // Adversarial reads for tier SL, planted before the index is built:
   //  (a) the read has a mismatch in most parts at its true locus (so few or

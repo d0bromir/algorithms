@@ -12,7 +12,7 @@ names:
 
 **Review status.** Written, then cross-checked by:
 - whole-reference oracles (4 seeds, ARM and x86);
-- 111 mutants;
+- 128 mutants;
 - exhaustive verification of the finite lemmas.
 
 It has **not yet been reviewed by a second person**. §11 lists what a
@@ -412,8 +412,35 @@ cannot carry between bytes (bases are 0–4); tested against the scalar count
 on 20,000 windows, mutant E24. `lookup_bucket` scans a bucket of at most 64
 entries linearly for the first key ≥ k and the first > k (the keys are sorted
 within a bucket), mutant E25. Tier R's lookups go through `lookup_batch`
-(the same ranges, prefetched), and `map_cpu` prefetches the next reads'
-directory entries and buckets.
+(the same ranges, prefetched), and so do `find_copies`'s (the same rarest
+q-mer, the first of equal counts). `map_cpu` prefetches the next reads'
+directory entries and buckets, and tier R and `find_copies` the reference
+bytes of the hit 16 ahead of the one being compared; a prefetch reads
+nothing the computation sees.
+
+**Reading and scheduling, same output.** None of the following changes a
+byte of the output; each is checked by comparing whole SAM/FASTQ outputs
+with those of the previous build (single-end and paired, with and without
+intervals, CPU and GPU, default and 7,777-read batches).
+- *FASTQ batches.* `MappedFastq::next_spans` finds the next batch's record
+  boundaries on several threads where that is exact: each thread lists the
+  newlines in its piece of the bytes expected to hold the batch, and if no
+  line among them is empty ("" or "\r") and no record would start with
+  '\r', records are exactly four lines from the batch start, so every
+  fourth newline ends one, which is what the serial scan finds (it only
+  differs at empty lines between records, which it skips, and at a stray
+  '\r' before a record). Otherwise, and for whatever the piece does not hold
+  whole, the serial scan runs. Hence the piece's size only decides how much
+  the serial scan has left (mutant S5, half the piece, is equivalent).
+  *Test:* six random files (LF and CRLF, rare empty lines and stray '\r'
+  between records, empty reads, no final newline) in batches of 1 to 9,000
+  records on 1, 3 and 8 threads give the written records. *Mutants:* S1–S4.
+- *Fused stages.* Without a GPU, each batch runs every pass on one chunk of
+  64 reads (32 pairs) after another, the threads taking chunks in turn,
+  instead of each pass over the whole batch. A read's passes see only that
+  read (its mate, in the pair pass), and a re-run read gets exactly its
+  single-pass result (§3), so every read's result, and the formatted
+  output written in input order, are the same.
 
 **Pruning the band (`band_best` with a floor; Corollary L-long).** The DP
 needs only alignments above the best score so far, the floor. A cell (or
@@ -1025,12 +1052,14 @@ guarantees is the interval [XL, XU] at whatever stage it stops.
 ## 9a. Mutants that survive by design
 
 A mutant that changes no claim on any input cannot be killed by a test, so
-it must be argued instead. Six of the 111 survive.
+it must be argued instead. Seven of the 128 survive.
 - **L6** (span start candidates shifted): Lemma S, §4.
 - **A2** (Lemma O's term lowered): §4.
 - **P2, P8, P13** (band pad − 2, narrowed band − 3, `relevant` term dropped)
   and **P4** (window scan without pad): Theorem P is redundant at those
   points, as follows.
+- **S5** (half the bytes scanned in parallel): the serial scan finds the
+  rest of the batch, §4 ("Reading and scheduling").
 
 **Proposition P3 (the band edge is covered twice).** Let P = (A_x, A_y)
 score above the floor. Suppose A_x has gap total G_x > pad − 3, the last two

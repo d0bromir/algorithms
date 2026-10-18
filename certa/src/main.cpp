@@ -11,6 +11,7 @@
 // alignment found, the interval [XL, XU] that contains its optimum, and XQ,
 // a certified lower bound of its MAPQ.
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -81,15 +82,17 @@ class AsyncWriter {
   void run() {
     for (;;) {
       std::string s;
+      bool drained;  // nothing else queued: flush, so a reader gets everything so far
       {
         std::unique_lock<std::mutex> lk(m_);
         ready_.wait(lk, [&] { return !q_.empty() || done_; });
         if (q_.empty()) return;
         s = std::move(q_.front());
         q_.pop_front();
+        drained = q_.empty();
       }
       if (std::fwrite(s.data(), 1, s.size(), f_) != s.size()) failed_ = true;
-      std::fflush(f_);
+      if (drained) std::fflush(f_);
       {
         std::lock_guard<std::mutex> lk(m_);
         queued_ -= s.size();
@@ -1108,13 +1111,12 @@ int cmd_map(const Args& a) {
                  gm->device_name().c_str(), t_upload);
   };
 
-  // Batches in flight: a reader thread parses and encodes batch n+2 while
-  // the first stage (passes 1 and 2, on the GPU when there is one) maps
-  // batch n+1 and the second (the CPU passes, formatting and writing)
-  // finishes batch n. One second stage runs at a time, in input order, so
-  // the output does not depend on the overlap. Without a GPU both stages use
-  // the CPU's threads, and overlapping them keeps the cores busy through
-  // each stage's serial parts; --serial-stages runs them one after the other.
+  // Batches in flight: a reader thread parses and encodes the next batch
+  // while the current one maps. With a GPU, the first stage (passes 1 and 2,
+  // on the GPU) maps batch n+1 while the second (the CPU passes, formatting
+  // and writing) finishes batch n; one second stage runs at a time, in input
+  // order, so the output does not depend on the overlap. Without a GPU every
+  // stage of a batch runs in one pass over chunks of reads (fused_stage).
   struct Slot {
     std::vector<FastqRecord> recs;
     ReadBatch batch;
@@ -1122,6 +1124,7 @@ int cmd_map(const Args& a) {
     std::vector<Result> se_res;  // single-end results (paired mode, for MAPQ)
     std::vector<RepeatOut> iv_store;
     std::vector<int> iv_slot;    // per read: index into iv_store, or -1
+    std::vector<const RepeatOut*> iv_ptr;  // per read: its tier R output, or null
   };
   constexpr int kSlots = 3;
   Slot slots[kSlots];
@@ -1139,22 +1142,21 @@ int cmd_map(const Args& a) {
         if (mapped) mapped->next_batch(slots[slot].recs, batch_size, io_threads);
         else read_fastq_batch(*stream, slots[slot].recs, batch_size, io_threads);
       } else {
-        // Mates interleaved: read 2i is mate 1, read 2i + 1 its mate 2.
-        std::vector<FastqRecord> m1, m2;
+        // Mates interleaved: read 2i is mate 1, read 2i + 1 its mate 2, each
+        // parsed straight into its place (strings reused from the slot's
+        // previous batch).
+        FastqSpans s1, s2;
         const size_t half = std::max<size_t>(1, batch_size / 2);
-        if (mapped) mapped->next_batch(m1, half, io_threads);
-        else read_fastq_batch(*stream, m1, half, io_threads);
-        if (mapped2) mapped2->next_batch(m2, half, io_threads);
-        else read_fastq_batch(*stream2, m2, half, io_threads);
-        if (m1.size() != m2.size()) throw std::runtime_error("mate files have different numbers of reads");
+        const size_t n1 = mapped ? mapped->next_spans(s1, half, io_threads) : read_fastq_spans(*stream, s1, half);
+        const size_t n2 = mapped2 ? mapped2->next_spans(s2, half, io_threads) : read_fastq_spans(*stream2, s2, half);
+        if (n1 != n2) throw std::runtime_error("mate files have different numbers of reads");
         std::vector<FastqRecord>& out = slots[slot].recs;
-        out.resize(2 * m1.size());
-        for (size_t i = 0; i < m1.size(); ++i) {
-          if (m1[i].name != m2[i].name)
-            throw std::runtime_error("mate names differ: " + m1[i].name + " / " + m2[i].name);
-          out[2 * i] = std::move(m1[i]);
-          out[2 * i + 1] = std::move(m2[i]);
-        }
+        out.resize(2 * n1);
+        parse_spans(s1, out.data(), 2, io_threads);
+        parse_spans(s2, out.data() + 1, 2, io_threads);
+        for (size_t i = 0; i < n1; ++i)
+          if (out[2 * i].name != out[2 * i + 1].name)
+            throw std::runtime_error("mate names differ: " + out[2 * i].name + " / " + out[2 * i + 1].name);
       }
       encode_batch(slots[slot].recs, slots[slot].batch, io_threads);
       t_io += secs(t);
@@ -1184,6 +1186,91 @@ int cmd_map(const Args& a) {
     if (on_gpu) gm->map(pp, sub, res2);
     else map_cpu(view, pp, sub, res2, threads);
     for (size_t x = 0; x < redo.size(); ++x) S.res[redo[x]] = res2[x];
+  };
+  // Formats reads [a0, b0) of a batch (a0 even in paired mode) into the given
+  // outputs, in input order, and counts them into s; psc is scratch for
+  // interval mode's mate rescue.
+  auto format_range = [&](const Slot& S, size_t a0, size_t b0, std::string& sam, std::string& fqo, std::string& fq2o,
+                          std::string& fqso, Stats& s, PairScratch& psc) {
+    const std::vector<FastqRecord>& recs = S.recs;
+    const ReadBatch& batch = S.batch;
+    const std::vector<Result>& res = S.res;
+    const std::vector<Result>& se_res = S.se_res;
+    auto iv_of = [&](size_t i) -> const RepeatOut* { return intervals ? S.iv_ptr[i] : nullptr; };
+    int pair_reason[2] = {0, 0};
+    for (size_t i = a0; i < b0; ++i) {
+      int reason;
+      if (intervals) {
+        if (!paired) {
+          Placement pl;
+          emit_interval(res[i], iv_of(i), recs[i], ref, sam, &pl);
+          Result r = res[i];
+          check_contig(r, ref);
+          reason = r.certified == 1 ? int(kOk) : (r.reason == kOk ? int(kNotFound) : int(r.reason));
+          s.count_iv(pl);
+        } else {
+          if (i % 2 == 0) {
+            Result rr[2] = {res[i], res[i + 1]};
+            for (Result& r : rr) {
+              if (r.certified == 2) { r.certified = 0; r.reason = kNotFound; }
+              check_contig(r, ref);
+            }
+            Placement pl[2];
+            ++s.pairs;
+            if (rr[0].certified == 1 && rr[1].certified == 1) {
+              emit_pair(&res[i], &se_res[i], &recs[i], ref, pp.max_dist, sam, fqo, fq2o,
+                        nullptr, pair_reason, true, pl);
+              ++s.pairs_cert;
+              const bool pr = is_proper(rr[0], rr[1], ref, pp.max_dist);
+              s.pairs_proper += pr;
+              s.iv_proper += pr;
+            } else {
+              const RepeatOut* ivp[2] = {iv_of(i), iv_of(i + 1)};
+              const uint8_t* cp[2] = {batch.codes.data() + batch.offs[i], batch.codes.data() + batch.offs[i + 1]};
+              bool proper;
+              emit_pair_interval(&res[i], ivp, cp, &recs[i], ref, view, pp.max_dist, psc, sam, pl,
+                                 &proper);
+              s.iv_proper += proper;
+              for (int x = 0; x < 2; ++x)
+                pair_reason[x] = rr[x].certified == 1 ? int(kOk) : (rr[x].reason == kOk ? int(kNotFound) : int(rr[x].reason));
+            }
+            s.count_iv(pl[0]);
+            s.count_iv(pl[1]);
+          }
+          reason = pair_reason[i % 2];
+        }
+      } else if (!paired) {
+        reason = emit(res[i], recs[i], ref, sam, fqo);
+      } else {
+        if (i % 2 == 0) {
+          emit_pair(&res[i], &se_res[i], &recs[i], ref, pp.max_dist, sam, fqo, fq2o,
+                    fqs ? &fqso : nullptr,
+                    pair_reason);
+          ++s.pairs;
+          if (pair_reason[0] == kOk && pair_reason[1] == kOk) {
+            ++s.pairs_cert;
+            s.pairs_proper += is_proper(res[i], res[i + 1], ref, pp.max_dist);
+          }
+        }
+        reason = pair_reason[i % 2];
+      }
+      ++s.reads;
+      s.cands += res[i].ncand;
+      s.bases += recs[i].seq.size();
+      ++s.reason[reason];
+      if (reason != kOk) ++s.unc_by_used[res[i].used];
+      if (reason == kOk && res[i].certified == 2) {
+        ++s.s2;  // placed without certificate
+      } else if (reason == kOk) {
+        ++s.certified;
+        const uint8_t tier = res[i].tier;
+        ++(tier == kTierS0 ? s.s0 : tier == kTierS1 ? s.s1 : tier == kTierSR ? s.sr :
+           tier == kTierSL ? s.sl : s.pr);
+        s.ties += res[i].n_best > 1;
+        if (res[i].radius >= 0 && res[i].radius <= KMAX + 1) ++s.by_radius[res[i].radius];
+        if (res[i].d1 >= 0) ++s.by_d1[res[i].d1];
+      }
+    }
   };
   // Passes 1 and 2 (on the GPU when there is one).
   auto gpu_stage = [&](Slot& S) {
@@ -1293,106 +1380,171 @@ int cmd_map(const Args& a) {
       worker();
       for (auto& th : pw) th.join();
     }
-    auto iv_of = [&](size_t i) -> const RepeatOut* { return intervals && iv_slot[i] >= 0 ? &iv_store[iv_slot[i]] : nullptr; };
+    if (intervals) {
+      S.iv_ptr.assign(res.size(), nullptr);
+      for (size_t i = 0; i < res.size(); ++i)
+        if (iv_slot[i] >= 0) S.iv_ptr[i] = &iv_store[iv_slot[i]];
+    }
     t_map_cpu += secs(t);
 
-    // Format in parallel over contiguous slices, then write in input order.
+    // Format in parallel over contiguous chunks, which the threads take in
+    // turn (hard reads cluster, so one fixed slice per thread leaves threads
+    // idle), then write the chunks in input order.
     t = Clock::now();
     const int nt = std::max(1, std::min<int>(threads, static_cast<int>(recs.size() / 1024) + 1));
-    std::vector<std::string> sam_out(nt), fq_out(nt), fq2_out(nt), fqs_out(nt);
+    const int nc = nt == 1 ? 1 : 8 * nt;
+    std::vector<std::string> sam_out(nc), fq_out(nc), fq2_out(nc), fqs_out(nc);
     std::vector<Stats> st(nt);
+    std::atomic<int> next_chunk{0};
     std::vector<std::thread> pool;
     for (int w = 0; w < nt; ++w) {
       pool.emplace_back([&, w] {
-        size_t a0 = recs.size() * w / nt, b0 = recs.size() * (w + 1) / nt;
-        if (paired) { a0 &= ~size_t(1); b0 = w == nt - 1 ? recs.size() : (b0 & ~size_t(1)); }
-        int pair_reason[2] = {0, 0};
         PairScratch psc;  // interval mode: mate rescue
-        for (size_t i = a0; i < b0; ++i) {
-          int reason;
-          if (intervals) {
-            Stats& s = st[w];
-            if (!paired) {
-              Placement pl;
-              emit_interval(res[i], iv_of(i), recs[i], ref, sam_out[w], &pl);
-              Result r = res[i];
-              check_contig(r, ref);
-              reason = r.certified == 1 ? int(kOk) : (r.reason == kOk ? int(kNotFound) : int(r.reason));
-              s.count_iv(pl);
-            } else {
-              if (i % 2 == 0) {
-                Result rr[2] = {res[i], res[i + 1]};
-                for (Result& r : rr) {
-                  if (r.certified == 2) { r.certified = 0; r.reason = kNotFound; }
-                  check_contig(r, ref);
-                }
-                Placement pl[2];
-                ++s.pairs;
-                if (rr[0].certified == 1 && rr[1].certified == 1) {
-                  emit_pair(&res[i], &se_res[i], &recs[i], ref, pp.max_dist, sam_out[w], fq_out[w], fq2_out[w],
-                            nullptr, pair_reason, true, pl);
-                  ++s.pairs_cert;
-                  const bool pr = is_proper(rr[0], rr[1], ref, pp.max_dist);
-                  s.pairs_proper += pr;
-                  s.iv_proper += pr;
-                } else {
-                  const RepeatOut* ivp[2] = {iv_of(i), iv_of(i + 1)};
-                  const uint8_t* cp[2] = {batch.codes.data() + batch.offs[i], batch.codes.data() + batch.offs[i + 1]};
-                  bool proper;
-                  emit_pair_interval(&res[i], ivp, cp, &recs[i], ref, view, pp.max_dist, psc, sam_out[w], pl,
-                                     &proper);
-                  s.iv_proper += proper;
-                  for (int x = 0; x < 2; ++x)
-                    pair_reason[x] = rr[x].certified == 1 ? int(kOk) : (rr[x].reason == kOk ? int(kNotFound) : int(rr[x].reason));
-                }
-                s.count_iv(pl[0]);
-                s.count_iv(pl[1]);
-              }
-              reason = pair_reason[i % 2];
-            }
-          } else if (!paired) {
-            reason = emit(res[i], recs[i], ref, sam_out[w], fq_out[w]);
-          } else {
-            if (i % 2 == 0) {
-              emit_pair(&res[i], &se_res[i], &recs[i], ref, pp.max_dist, sam_out[w], fq_out[w], fq2_out[w],
-                        fqs ? &fqs_out[w] : nullptr,
-                        pair_reason);
-              Stats& s = st[w];
-              ++s.pairs;
-              if (pair_reason[0] == kOk && pair_reason[1] == kOk) {
-                ++s.pairs_cert;
-                s.pairs_proper += is_proper(res[i], res[i + 1], ref, pp.max_dist);
-              }
-            }
-            reason = pair_reason[i % 2];
-          }
-          Stats& s = st[w];
-          ++s.reads;
-          s.cands += res[i].ncand;
-          s.bases += recs[i].seq.size();
-          ++s.reason[reason];
-          if (reason != kOk) ++s.unc_by_used[res[i].used];
-          if (reason == kOk && res[i].certified == 2) {
-            ++s.s2;  // placed without certificate
-          } else if (reason == kOk) {
-            ++s.certified;
-            const uint8_t tier = res[i].tier;
-            ++(tier == kTierS0 ? s.s0 : tier == kTierS1 ? s.s1 : tier == kTierSR ? s.sr :
-               tier == kTierSL ? s.sl : s.pr);
-            s.ties += res[i].n_best > 1;
-            if (res[i].radius >= 0 && res[i].radius <= KMAX + 1) ++s.by_radius[res[i].radius];
-            if (res[i].d1 >= 0) ++s.by_d1[res[i].d1];
-          }
+        for (int c; (c = next_chunk.fetch_add(1)) < nc;) {
+          size_t a0 = recs.size() * c / nc, b0 = recs.size() * (c + 1) / nc;
+          if (paired) { a0 &= ~size_t(1); b0 = c == nc - 1 ? recs.size() : (b0 & ~size_t(1)); }
+          format_range(S, a0, b0, sam_out[c], fq_out[c], fq2_out[c], fqs_out[c], st[w], psc);
         }
       });
     }
     for (auto& th : pool) th.join();
+    for (int c = 0; c < nc; ++c) {
+      w_sam->put(std::move(sam_out[c]));
+      if (w_fq) w_fq->put(std::move(fq_out[c]));
+      if (w_fq2) w_fq2->put(std::move(fq2_out[c]));
+      if (w_fqs) w_fqs->put(std::move(fqs_out[c]));
+    }
+    for (int w = 0; w < nt; ++w) total.add(st[w]);
+    t_out += secs(t);
+  };
+  // Every stage of a batch in one pass over chunks of reads (whole pairs),
+  // which the threads take in turn. Each chunk gets passes 1 and 2 (with
+  // `map`; with a GPU they ran in gpu_stage), passes 3 and L, the pair pass,
+  // tier R and formatting, each read exactly what the staged passes give it
+  // (no result depends on which reads share a pass, a thread or a
+  // workspace). The threads then wait for each other once per batch instead
+  // of once per stage, so the slow reads of a stage no longer leave the
+  // other cores idle at its end.
+  auto fused_stage = [&](Slot& S, bool map) {
+    auto t = Clock::now();
+    const ReadBatch& batch = S.batch;
+    const size_t n = S.recs.size();
+    std::vector<Result>& res = S.res;
+    std::vector<Result>& se_res = S.se_res;
+    res.resize(n);
+    if (paired) se_res.resize(n);
+    if (intervals) S.iv_ptr.assign(n, nullptr);
+    constexpr size_t kChunk = 64;  // reads; even, so a pair never straddles two chunks
+    const size_t nc = (n + kChunk - 1) / kChunk;
+    std::vector<std::string> sam_out(nc), fq_out(nc), fq2_out(nc), fqs_out(nc);
+    const int nt = std::max(1, std::min<int>(threads, static_cast<int>(nc)));
+    std::vector<Stats> st(nt);
+    std::vector<std::array<uint64_t, 5>> counts(nt, std::array<uint64_t, 5>{});
+    std::vector<std::exception_ptr> errors(nt);
+    std::atomic<size_t> next{0};
+    auto worker = [&](int w) {
+      try {
+        std::unique_ptr<Workspace> ws(new Workspace), w1(new Workspace), w2(new Workspace), wr(new Workspace);
+        PairScratch sc, psc;  // the pair pass; interval mode's mate rescue
+        RepeatScratch rsc;
+        std::vector<RepeatOut> civ;  // the chunk's tier R outputs
+        civ.reserve(kChunk);
+        size_t idx[kChunk];
+        std::unique_ptr<Result[]> rr(new Result[kChunk]);
+        std::array<uint64_t, 5>& cnt = counts[w];  // escalated, third, local, pair_tried, iv_reads
+        auto rerun_chunk = [&](size_t m, const Params& pq) {
+          map_reads(view, pq, batch, idx, m, rr.get(), *ws);
+          for (size_t k = 0; k < m; ++k) res[idx[k]] = rr[k];
+        };
+        for (size_t c; (c = next.fetch_add(1)) < nc;) {
+          const size_t a0 = c * kChunk, b0 = std::min(n, a0 + kChunk);
+          size_t m = 0;
+          if (map) {
+            for (size_t i = a0; i < b0; ++i) idx[m++] = i;
+            map_reads(view, p, batch, idx, m, res.data() + a0, *ws);
+          }
+          if (map && second_pass) {
+            m = 0;
+            for (size_t i = a0; i < b0; ++i)
+              if (res[i].certified == 0 && res[i].reason != kBadLength) idx[m++] = i;
+            rerun_chunk(m, p2);
+            cnt[0] += m;
+          }
+          if (p3.budget > p2.budget) {
+            m = 0;
+            for (size_t i = a0; i < b0; ++i) {
+              const Result& r = res[i];
+              const int want = r.parts < p3.k + p3.min_support ? r.parts : p3.k + p3.min_support;
+              if (r.certified == 0 && (r.reason == kRadiusNegative || r.reason == kNotFound) && r.used < want)
+                idx[m++] = i;
+            }
+            rerun_chunk(m, p3);
+            cnt[1] += m;
+          }
+          if (pl.local > 0) {
+            m = 0;
+            for (size_t i = a0; i < b0; ++i)
+              if (res[i].certified == 0 && (res[i].reason == kNotFound || res[i].reason == kClusterTooWide)) idx[m++] = i;
+            rerun_chunk(m, pl);
+            cnt[2] += m;
+          }
+          if (paired) {
+            for (size_t i = a0; i < b0; ++i) se_res[i] = res[i];
+            for (size_t i = a0 / 2; 2 * i + 1 < b0; ++i) {
+              const Result& x = res[2 * i];
+              const Result& y = res[2 * i + 1];
+              const bool one = x.certified == 1 || y.certified == 1;
+              if (!(one && (x.certified != 1 || y.certified != 1 || x.n_best > 1 || y.n_best > 1))) continue;
+              ++cnt[3];
+              Result r1 = x, r2 = y;
+              const PairOut po = certify_pair(view, pp, batch.codes.data() + batch.offs[2 * i], batch.lens[2 * i],
+                                              batch.codes.data() + batch.offs[2 * i + 1], batch.lens[2 * i + 1],
+                                              *w1, *w2, sc, r1, r2);
+              if (po.certified) { res[2 * i] = r1; res[2 * i + 1] = r2; }
+            }
+          }
+          if (intervals) {
+            civ.clear();
+            m = 0;
+            for (size_t i = a0; i < b0; ++i) {
+              Result r = res[i];
+              check_contig(r, ref);
+              if (r.certified != 1 && r.reason != kBadLength) {
+                idx[m++] = i;
+                civ.push_back(repeat_tier(view, rp, batch.codes.data() + batch.offs[i], batch.lens[i], *wr, rsc));
+              }
+            }
+            for (size_t k = 0; k < m; ++k) S.iv_ptr[idx[k]] = &civ[k];
+            cnt[4] += m;
+          }
+          format_range(S, a0, b0, sam_out[c], fq_out[c], fq2_out[c], fqs_out[c], st[w], psc);
+        }
+      } catch (...) {
+        errors[w] = std::current_exception();
+        next = nc;  // the others stop after their chunk
+      }
+    };
+    std::vector<std::thread> pool;
+    for (int w = 1; w < nt; ++w) pool.emplace_back(worker, w);
+    worker(0);
+    for (auto& th : pool) th.join();
+    for (auto& e : errors)
+      if (e) std::rethrow_exception(e);
+    t_map_cpu += secs(t);
+    t = Clock::now();
+    for (size_t c = 0; c < nc; ++c) {
+      w_sam->put(std::move(sam_out[c]));
+      if (w_fq) w_fq->put(std::move(fq_out[c]));
+      if (w_fq2) w_fq2->put(std::move(fq2_out[c]));
+      if (w_fqs) w_fqs->put(std::move(fqs_out[c]));
+    }
     for (int w = 0; w < nt; ++w) {
-      w_sam->put(std::move(sam_out[w]));
-      if (w_fq) w_fq->put(std::move(fq_out[w]));
-      if (w_fq2) w_fq2->put(std::move(fq2_out[w]));
-      if (w_fqs) w_fqs->put(std::move(fqs_out[w]));
       total.add(st[w]);
+      escalated += counts[w][0];
+      third += counts[w][1];
+      local += counts[w][2];
+      pair_tried += counts[w][3];
+      iv_reads += counts[w][4];
     }
     t_out += secs(t);
   };
@@ -1413,31 +1565,42 @@ int cmd_map(const Args& a) {
   };
   load(0);
   wait_for_gpu();
-  const bool overlap = gm != nullptr || !a.has("--serial-stages");  // gm: set by the upload thread
+  // gm is set by the upload thread. Without a GPU each batch runs fused;
+  // with one, the CPU passes and formatting do (overlapping the next batch's
+  // GPU passes). --serial-stages runs the passes over the whole batch, one
+  // after the other, instead.
+  const bool serial = a.has("--serial-stages");
+  const bool fused = gm == nullptr && !serial;
   for (int cur = 0; !slots[cur].recs.empty(); cur = (cur + 1) % kSlots) {
     // The slot read into is neither the one the GPU stage maps nor the
     // one the CPU stage may still be writing (three slots).
     std::thread prefetch(load, (cur + 1) % kSlots);
     Joiner joiner{prefetch};
-    gpu_stage(slots[cur]);
-    finish_cpu();  // the previous batch's CPU stage: batches are written in order
-    if (overlap) {
-      cpu_thread = std::thread([&, cur] {
-        try {
-          cpu_stage(slots[cur]);
-        } catch (...) {
-          cpu_error = std::current_exception();
-        }
-      });
+    if (fused) {
+      fused_stage(slots[cur], true);
     } else {
-      cpu_stage(slots[cur]);
+      gpu_stage(slots[cur]);
+      finish_cpu();  // the previous batch's CPU stage: batches are written in order
+      if (gm) {
+        cpu_thread = std::thread([&, cur] {
+          try {
+            if (serial) cpu_stage(slots[cur]);
+            else fused_stage(slots[cur], false);
+          } catch (...) {
+            cpu_error = std::current_exception();
+          }
+        });
+      } else {
+        cpu_stage(slots[cur]);
+      }
     }
     auto t = Clock::now();
     prefetch.join();
     t_wait += secs(t);
   }
   finish_cpu();
-  // Mapping time summed over both stages (with a GPU they overlap).
+  // Mapping time summed over both stages (with a GPU they overlap; fused, it
+  // includes formatting).
   const double t_map = t_map_gpu + t_map_cpu;
   if (read_error) std::rethrow_exception(read_error);
   bool wrote = true;

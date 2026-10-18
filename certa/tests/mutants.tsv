@@ -123,3 +123,8 @@ E22	include/certa/core.h	s/      inc = vmax(inc, __builtin_shufflevector(inc, ni
 E23	include/certa/core.h	s/  return best < NEG \/ 2 ? best - NEG - (1 << 20) : best;/  return best;/	killed	affine_fill_vec16: 'no allowed start' returned in 16-bit form
 E24	include/certa/repeat.h	s/      const uint64_t bad = (((a ^ b) + 0x7f7f7f7f7f7f7f7full) | (a + 0x7c7c7c7c7c7c7c7cull)) \& high;/      const uint64_t bad = ((a ^ b) + 0x7f7f7f7f7f7f7f7full) \& high;/	killed	match_run: an N in the read matches an N in the reference
 E25	include/certa/core.h	s/      while (a < r \&\& ix.keys16\[a\] == k) ++a;/      while (a + 1 < r \&\& ix.keys16[a] == k) ++a;/	killed	lookup_bucket: the linear scan misses the bucket's last entry
+S1	src/seqio.cpp	s/        e |= x == from || base_\[x - 1\] == '\\n' ||/        e |= x == from ||/	killed	FASTQ parallel scan: an empty line after a newline ('\n\n') not seen, so records are counted across it
+S2	src/seqio.cpp	s/             (base_\[x - 1\] == '\\r' \&\& (x - 1 == from || base_\[x - 2\] == '\\n'));/             false;/	killed	FASTQ parallel scan: an empty CRLF line ('\r\n') not seen
+S3	src/seqio.cpp	s/            cr_start = x + 1 < size_ \&\& base_\[x + 1\] == '\\r';/            cr_start = false;/	killed	FASTQ parallel scan: a record starting with a stray '\r' (which the serial scan skips) kept
+S4	src/seqio.cpp	s/          if (++k % 4 == 0) {/          if (++k % 4 == 1) {/	killed	FASTQ parallel scan: records end one line early
+S5	src/seqio.cpp	s/bytes_per_record_ \* 1.02/bytes_per_record_ * 0.5/	equivalent	FASTQ parallel scan: half the bytes scanned in parallel; the serial scan finds the rest (THEORY.md)

@@ -67,46 +67,56 @@ int part_keys(const IndexView& ix, const uint8_t* codes, int L, uint64_t* keys) 
 
 }  // namespace
 
+void map_reads(const IndexView& ix, const Params& p, const ReadBatch& batch, const size_t* idx, size_t n,
+               Result* out, Workspace& ws) {
+  // Every lookup costs two dependent random reads of the index (the bucket
+  // directory, then the bucket), and enumeration a third (the hits'
+  // positions). They are pipelined across reads: while read k is mapped, the
+  // buckets and positions of read k + 1 and the directory entries of read
+  // k + 2 are prefetched. Results do not change.
+  const int shift = 2 * ix.q - ix.dir_bits;
+  uint64_t keys[3][kMaxKeys];
+  int nk[3] = {0, 0, 0};
+  auto read_keys = [&](size_t k) {
+    const size_t i = idx[k];
+    const int slot = static_cast<int>(k % 3);
+    nk[slot] = part_keys(ix, batch.codes.data() + batch.offs[i], batch.lens[i], keys[slot]);
+    for (int j = 0; j < nk[slot]; ++j) __builtin_prefetch(ix.dir + (keys[slot][j] >> shift));
+  };
+  auto prefetch_buckets = [&](size_t k) {
+    const int slot = static_cast<int>(k % 3);
+    for (int j = 0; j < nk[slot]; ++j) {
+      const uint64_t l = ix.dir[keys[slot][j] >> shift];
+      if (ix.keys16) __builtin_prefetch(ix.keys16 + l);
+      else __builtin_prefetch(ix.keys + l);
+      __builtin_prefetch(ix.pos + l);
+    }
+  };
+  if (n > 0) read_keys(0);
+  if (n > 1) read_keys(1);
+  if (n > 0) prefetch_buckets(0);
+  for (size_t k = 0; k < n; ++k) {
+    if (k + 2 < n) read_keys(k + 2);
+    if (k + 1 < n) prefetch_buckets(k + 1);
+    const size_t i = idx[k];
+    process_read(ix, p, batch.codes.data() + batch.offs[i], batch.lens[i], batch.hashes[i], ws, out[k]);
+  }
+}
+
 void map_cpu(const IndexView& ix, const Params& p, const ReadBatch& batch,
              std::vector<Result>& out, int threads) {
   out.resize(batch.size());
   std::atomic<size_t> next{0};
-  const size_t chunk = 256;
-  const int shift = 2 * ix.q - ix.dir_bits;
-  // Every lookup costs two dependent random reads of the index (the bucket
-  // directory, then the bucket), and enumeration a third (the hits'
-  // positions). They are pipelined across reads: while read i is mapped, the
-  // buckets and positions of read i + 1 and the directory entries of read
-  // i + 2 are prefetched. Results do not change.
+  constexpr size_t chunk = 256;
   auto worker = [&] {
     std::unique_ptr<Workspace> ws(new Workspace);
-    uint64_t keys[3][kMaxKeys];
-    int nk[3] = {0, 0, 0};
-    auto read_keys = [&](size_t i, int slot) {
-      nk[slot] = part_keys(ix, batch.codes.data() + batch.offs[i], batch.lens[i], keys[slot]);
-      for (int k = 0; k < nk[slot]; ++k) __builtin_prefetch(ix.dir + (keys[slot][k] >> shift));
-    };
-    auto prefetch_buckets = [&](int slot) {
-      for (int k = 0; k < nk[slot]; ++k) {
-        const uint64_t l = ix.dir[keys[slot][k] >> shift];
-        if (ix.keys16) __builtin_prefetch(ix.keys16 + l);
-        else __builtin_prefetch(ix.keys + l);
-        __builtin_prefetch(ix.pos + l);
-      }
-    };
+    size_t idx[chunk];
     for (;;) {
-      size_t a = next.fetch_add(chunk);
+      const size_t a = next.fetch_add(chunk);
       if (a >= batch.size()) break;
-      size_t b = std::min(batch.size(), a + chunk);
-      if (a < b) read_keys(a, a % 3);
-      if (a + 1 < b) read_keys(a + 1, (a + 1) % 3);
-      if (a < b) prefetch_buckets(a % 3);
-      for (size_t i = a; i < b; ++i) {
-        if (i + 2 < b) read_keys(i + 2, (i + 2) % 3);
-        if (i + 1 < b) prefetch_buckets((i + 1) % 3);
-        process_read(ix, p, batch.codes.data() + batch.offs[i], batch.lens[i],
-                     batch.hashes[i], *ws, out[i]);
-      }
+      const size_t b = std::min(batch.size(), a + chunk);
+      for (size_t i = a; i < b; ++i) idx[i - a] = i;
+      map_reads(ix, p, batch, idx, b - a, out.data() + a, *ws);
     }
   };
   std::vector<std::thread> pool;
