@@ -802,6 +802,15 @@ verifies the XQ of PR mates too.
     6.3 %, mate rescue's 10 %), passes 1–2 22 %, the pair certificate's
     window scans 7 %. Each remaining fix is worth 2–5 %; larger gains need a
     GPU pair pass or GPU tier R.
+  - *Two of them, kept* (77b1df2, output identical): `find_copies` reuses
+    the read's own index ranges, and `band_score_vec` keeps its window as
+    16-bit lanes and skips the start mask in rows that exclude no start.
+    Final protocol (`final_{galaxy,a2}.tsv`; 84dfa83's kept as
+    `final_*_84dfa83.tsv`): paired interval mode 37.82 s on galaxy and
+    37.97 s on a2 (1.66× and 2.09× minibwa), 28.31 s with the A100 (2.22×);
+    single-end interval mode 1.88× and 2.02×, 2.32× with the A100. The same
+    changes in `affine_fill_vec16` and `band_distance_vec16` were neutral
+    (0.5 % faster on a2, 1 % slower single-end on galaxy) and not kept.
 - **HG001 GATK indels** are the one comparison where CERTA's F1 is lower
   (0.9909 vs 0.9922). Look at the 13 extra FP and 14 extra FN.
 - **Long reads:** the mapper's limits (320 bp, 8 parts, radius 5) exclude

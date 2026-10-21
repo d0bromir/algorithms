@@ -1,57 +1,57 @@
 # Final timing protocol, galaxy (2026-10-18): Ampere Altra 128 cores, every pipeline pinned to cores 0-63 (taskset), one NVIDIA A100 (device 1) for the certa-gpu rows.
-# 20,001,073 HG002 reads (single-end, R1) or pairs; SAM to /dev/null; one session; three rounds, tools in turn (paired bwa-mem2 and certa-cpu Kdefault: one run). Build: commit 84dfa83.
+# 20,001,073 HG002 reads (single-end, R1) or pairs; SAM to /dev/null; one session; three rounds, tools in turn (paired bwa-mem2 and certa-cpu Kdefault: one run). Build: commit 77b1df2.
 # certa-cpu / certa-gpu: CERTA streams its uncertified reads into minibwa, both concurrent (config = CERTA:minibwa threads; single-end minibwa -K 10m; paired: minibwa -K 10m, or its default batch (Kdefault)).
-# certa-*-iv: interval mode (--intervals), no fallback. certa-*-tier: certified reads only, not a complete mapping. Script: bench/final_bench.sh (galaxy:~/certa-final, 84dfa83).
+# certa-*-iv: interval mode (--intervals), no fallback. certa-*-tier: certified reads only, not a complete mapping. Script: bench/final_bench.sh (galaxy:~/certa-final, 77b1df2).
 host	mode	pipeline	config	rep	wall_s	user_s	sys_s	max_rss_kb
-galaxy	single-end	bwa-mem2	-	1	100.71	5167.03	28.45	32625508
-galaxy	single-end	minibwa	-	1	40.95	1392.05	15.35	9657980
-galaxy	single-end	strobealign	-	1	39.46	1049.96	25.19	14048524
-galaxy	single-end	minimap2	-	1	71.07	3093.45	11.88	13189448
-galaxy	single-end	bowtie2	-	1	188.48	11868.06	5.75	4096100
-galaxy	single-end	certa-cpu	64+64	1	18.09	1070.28	6.18	30494488
-galaxy	single-end	certa-cpu-iv	64	1	16.33	912.79	4.13	30447096
-galaxy	single-end	certa-gpu	16+48	1	17.56	683.06	7.12	33285168
-galaxy	single-end	certa-gpu	64+64	1	14.78	689.17	9.92	33673120
-galaxy	single-end	certa-gpu-iv	64	1	13.74	576.04	8.25	33460108
-galaxy	single-end	bwa-mem2	-	2	100.09	5165.70	28.07	32624676
-galaxy	single-end	minibwa	-	2	28.89	1352.01	3.86	9746068
-galaxy	single-end	strobealign	-	2	39.44	1051.00	25.35	14022872
-galaxy	single-end	minimap2	-	2	71.16	3092.27	11.90	13103188
-galaxy	single-end	bowtie2	-	2	188.11	11846.91	5.56	4089920
-galaxy	single-end	certa-cpu	64+64	2	18.11	1071.39	6.03	30484372
-galaxy	single-end	certa-cpu-iv	64	2	16.37	916.79	4.01	30450420
-galaxy	single-end	certa-gpu	16+48	2	17.48	682.90	6.98	33281564
-galaxy	single-end	certa-gpu	64+64	2	14.93	691.12	9.87	33570356
-galaxy	single-end	certa-gpu-iv	64	2	13.69	577.93	8.22	33475724
-galaxy	single-end	bwa-mem2	-	3	100.06	5169.95	27.62	32684436
-galaxy	single-end	minibwa	-	3	28.70	1352.24	3.88	9696084
-galaxy	single-end	strobealign	-	3	38.82	1053.13	24.93	14064068
-galaxy	single-end	minimap2	-	3	71.16	3092.78	11.89	13312696
-galaxy	single-end	bowtie2	-	3	188.07	11840.74	6.20	4092988
-galaxy	single-end	certa-cpu	64+64	3	18.10	1070.56	6.39	30495304
-galaxy	single-end	certa-cpu-iv	64	3	16.43	917.43	4.04	30459284
-galaxy	single-end	certa-gpu	16+48	3	17.51	682.74	7.15	33266464
-galaxy	single-end	certa-gpu	64+64	3	14.83	689.86	10.27	33577012
-galaxy	single-end	certa-gpu-iv	64	3	13.83	576.13	7.98	33488572
-galaxy	single-end	certa-cpu-tier	64	1	8.23	402.73	4.15	30362384
-galaxy	single-end	certa-gpu-tier	16	1	10.73	33.22	3.86	32869368
-galaxy	paired	bwa-mem2	-	1	333.17	16827.87	43.34	33307060
-galaxy	paired	certa-cpu	64+64 Kdefault	1	55.71	3139.86	12.01	37234968
-galaxy	paired	minibwa	-	1	62.87	3566.42	7.38	10062952
-galaxy	paired	certa-cpu	64+64 K10m	1	52.38	3171.98	10.69	37968908
-galaxy	paired	certa-cpu-iv	64	1	39.44	2305.14	7.28	37835332
-galaxy	paired	certa-gpu-iv	64	1	29.84	1596.90	9.11	41331948
-galaxy	paired	certa-gpu	20+44 K10m	1	47.78	2406.72	10.29	40959148
-galaxy	paired	certa-gpu	64+64 K10m	1	43.42	2427.35	12.93	41605232
-galaxy	paired	minibwa	-	2	62.97	3566.55	7.45	10037180
-galaxy	paired	certa-cpu	64+64 K10m	2	52.33	3174.77	10.75	37986712
-galaxy	paired	certa-cpu-iv	64	2	39.48	2306.68	7.52	37844940
-galaxy	paired	certa-gpu-iv	64	2	29.85	1595.06	8.86	41316540
-galaxy	paired	certa-gpu	20+44 K10m	2	48.05	2407.55	10.21	40977192
-galaxy	paired	certa-gpu	64+64 K10m	2	43.46	2427.55	13.06	41621816
-galaxy	paired	minibwa	-	3	63.09	3566.54	7.17	10017216
-galaxy	paired	certa-cpu	64+64 K10m	3	52.31	3170.65	10.66	37978844
-galaxy	paired	certa-cpu-iv	64	3	39.45	2305.17	7.35	37849140
-galaxy	paired	certa-gpu-iv	64	3	29.89	1597.31	8.74	41307396
-galaxy	paired	certa-gpu	20+44 K10m	3	47.87	2407.14	10.20	40974196
-galaxy	paired	certa-gpu	64+64 K10m	3	43.37	2426.94	13.27	41598148
+galaxy	single-end	bwa-mem2	-	1	100.50	5174.07	28.04	32625780
+galaxy	single-end	minibwa	-	1	28.79	1352.03	4.19	9751244
+galaxy	single-end	strobealign	-	1	38.68	1053.37	24.77	14025356
+galaxy	single-end	minimap2	-	1	71.27	3094.85	11.89	13138956
+galaxy	single-end	bowtie2	-	1	188.27	11858.28	6.09	4095032
+galaxy	single-end	certa-cpu	64+64	1	18.13	1073.03	6.32	30484932
+galaxy	single-end	certa-cpu-iv	64	1	15.44	855.70	4.02	30472396
+galaxy	single-end	certa-gpu	16+48	1	17.55	683.29	6.94	33278144
+galaxy	single-end	certa-gpu	64+64	1	14.86	690.28	9.86	33645576
+galaxy	single-end	certa-gpu-iv	64	1	12.41	501.75	7.76	33494944
+galaxy	single-end	bwa-mem2	-	2	100.04	5169.03	27.71	32667520
+galaxy	single-end	minibwa	-	2	28.51	1351.93	3.95	9704852
+galaxy	single-end	strobealign	-	2	39.04	1050.03	24.58	14011444
+galaxy	single-end	minimap2	-	2	70.66	3093.36	11.73	13108964
+galaxy	single-end	bowtie2	-	2	187.88	11831.59	6.12	4089920
+galaxy	single-end	certa-cpu	64+64	2	18.11	1071.99	6.12	30473816
+galaxy	single-end	certa-cpu-iv	64	2	15.34	851.70	4.04	30470552
+galaxy	single-end	certa-gpu	16+48	2	17.57	683.15	7.11	33292396
+galaxy	single-end	certa-gpu	64+64	2	14.75	689.92	9.76	33586248
+galaxy	single-end	certa-gpu-iv	64	2	12.43	500.01	7.63	33467828
+galaxy	single-end	bwa-mem2	-	3	99.98	5166.33	27.89	32625804
+galaxy	single-end	minibwa	-	3	28.85	1351.15	3.98	9738076
+galaxy	single-end	strobealign	-	3	38.43	1051.61	24.60	14071028
+galaxy	single-end	minimap2	-	3	70.50	3092.86	11.77	13157924
+galaxy	single-end	bowtie2	-	3	187.96	11838.41	5.76	4097076
+galaxy	single-end	certa-cpu	64+64	3	18.13	1072.15	6.22	30484672
+galaxy	single-end	certa-cpu-iv	64	3	15.33	850.75	4.06	30469924
+galaxy	single-end	certa-gpu	16+48	3	17.44	683.01	7.10	33304128
+galaxy	single-end	certa-gpu	64+64	3	14.73	689.75	9.94	33616752
+galaxy	single-end	certa-gpu-iv	64	3	12.49	497.51	7.59	33495944
+galaxy	single-end	certa-cpu-tier	64	1	8.23	402.90	4.34	30348156
+galaxy	single-end	certa-gpu-tier	16	1	10.69	33.50	3.99	32898412
+galaxy	paired	bwa-mem2	-	1	334.38	16815.56	42.00	33381688
+galaxy	paired	certa-cpu	64+64 Kdefault	1	54.52	3122.86	12.33	37779036
+galaxy	paired	minibwa	-	1	62.97	3565.69	7.00	10104972
+galaxy	paired	certa-cpu	64+64 K10m	1	52.00	3154.34	10.42	37981932
+galaxy	paired	certa-cpu-iv	64	1	37.82	2209.03	7.06	37837732
+galaxy	paired	certa-gpu-iv	64	1	28.33	1495.65	8.54	41344220
+galaxy	paired	certa-gpu	20+44 K10m	1	47.80	2390.63	10.10	40988584
+galaxy	paired	certa-gpu	64+64 K10m	1	43.17	2409.91	13.05	41605636
+galaxy	paired	minibwa	-	2	63.06	3565.36	7.23	9984092
+galaxy	paired	certa-cpu	64+64 K10m	2	52.01	3154.16	10.41	37996676
+galaxy	paired	certa-cpu-iv	64	2	37.82	2209.56	7.28	37842812
+galaxy	paired	certa-gpu-iv	64	2	28.27	1499.42	8.73	41320112
+galaxy	paired	certa-gpu	20+44 K10m	2	47.77	2390.19	10.28	40965264
+galaxy	paired	certa-gpu	64+64 K10m	2	43.23	2409.90	13.58	41622168
+galaxy	paired	minibwa	-	3	62.73	3564.88	7.38	9912536
+galaxy	paired	certa-cpu	64+64 K10m	3	51.91	3153.43	10.65	37991188
+galaxy	paired	certa-cpu-iv	64	3	37.87	2211.12	7.35	37838936
+galaxy	paired	certa-gpu-iv	64	3	28.31	1498.64	8.88	41292048
+galaxy	paired	certa-gpu	20+44 K10m	3	47.80	2390.67	10.07	41004456
+galaxy	paired	certa-gpu	64+64 K10m	3	43.26	2410.34	13.17	41620448

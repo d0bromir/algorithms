@@ -615,7 +615,8 @@ batch is parsed on several threads while the current one maps, and each
 output is written by its own thread. The edit-distance band, the
 score-only band and the traceback fill run on 8- to 16-bit vector lanes
 (exact for every input; supplement). Index lookups, and tier R's reads of
-the reference at each repeat copy, are prefetched. And the fallback
+the reference at each repeat copy, are prefetched, and the search for
+copies of tier R's alignment reuses the read's own lookups. And the fallback
 minibwa takes 10-Mbp batches (\texttt{-K 10m}): with its default
 (100~Mbp--1~Gbp), its threads waited on a few slow reads per batch of
 CERTA's hard reads, and the paired pipeline on a2 spent \FAPCpuKdSys~s in

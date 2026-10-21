@@ -194,13 +194,13 @@ caveats are in [bench/RESULTS.md](bench/RESULTS.md).
 - **Certified fraction:** 95.4 % of all reads in paired mode (HG002), 92.9 %
   for HG001 and HG005 (NovaSeq 6000); 94.4 % single-end.
 - **Speed (20 M reads or pairs, every pipeline on the same 64 cores, one
-  session per host, build 84dfa83):** on CPU alone CERTA is faster than
+  session per host, build 77b1df2):** on CPU alone CERTA is faster than
   every other aligner timed, single-end and paired, on galaxy (ARM64) and
   a2 (x86-64). Against minibwa, the fastest of them, on galaxy / a2:
-  single-end 1.76× / 1.92× in interval mode and 1.60× / 1.81× with the
-  minibwa fallback; paired 1.60× / 2.00× in interval mode and 1.20× /
-  1.36× with the fallback. With one A100 (galaxy): 2.10× single-end, 2.11×
-  paired. BWA-MEM2 is 5.8–8.4× slower than CERTA's interval mode on CPU.
+  single-end 1.88× / 2.02× in interval mode and 1.59× / 1.85× with the
+  minibwa fallback; paired 1.66× / 2.09× in interval mode and 1.21× /
+  1.38× with the fallback. With one A100 (galaxy): 2.32× single-end, 2.22×
+  paired. BWA-MEM2 is 6.0–8.8× slower than CERTA's interval mode on CPU.
 - **Independent checker:** `certa check` accepts all 8 M honest records
   (HG002 and HG005) and rejects all 24,306 injected faults.
 

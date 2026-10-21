@@ -1,0 +1,57 @@
+# Final timing protocol, galaxy (2026-10-18): Ampere Altra 128 cores, every pipeline pinned to cores 0-63 (taskset), one NVIDIA A100 (device 1) for the certa-gpu rows.
+# 20,001,073 HG002 reads (single-end, R1) or pairs; SAM to /dev/null; one session; three rounds, tools in turn (paired bwa-mem2 and certa-cpu Kdefault: one run). Build: commit 84dfa83.
+# certa-cpu / certa-gpu: CERTA streams its uncertified reads into minibwa, both concurrent (config = CERTA:minibwa threads; single-end minibwa -K 10m; paired: minibwa -K 10m, or its default batch (Kdefault)).
+# certa-*-iv: interval mode (--intervals), no fallback. certa-*-tier: certified reads only, not a complete mapping. Script: bench/final_bench.sh (galaxy:~/certa-final, 84dfa83).
+host	mode	pipeline	config	rep	wall_s	user_s	sys_s	max_rss_kb
+galaxy	single-end	bwa-mem2	-	1	100.71	5167.03	28.45	32625508
+galaxy	single-end	minibwa	-	1	40.95	1392.05	15.35	9657980
+galaxy	single-end	strobealign	-	1	39.46	1049.96	25.19	14048524
+galaxy	single-end	minimap2	-	1	71.07	3093.45	11.88	13189448
+galaxy	single-end	bowtie2	-	1	188.48	11868.06	5.75	4096100
+galaxy	single-end	certa-cpu	64+64	1	18.09	1070.28	6.18	30494488
+galaxy	single-end	certa-cpu-iv	64	1	16.33	912.79	4.13	30447096
+galaxy	single-end	certa-gpu	16+48	1	17.56	683.06	7.12	33285168
+galaxy	single-end	certa-gpu	64+64	1	14.78	689.17	9.92	33673120
+galaxy	single-end	certa-gpu-iv	64	1	13.74	576.04	8.25	33460108
+galaxy	single-end	bwa-mem2	-	2	100.09	5165.70	28.07	32624676
+galaxy	single-end	minibwa	-	2	28.89	1352.01	3.86	9746068
+galaxy	single-end	strobealign	-	2	39.44	1051.00	25.35	14022872
+galaxy	single-end	minimap2	-	2	71.16	3092.27	11.90	13103188
+galaxy	single-end	bowtie2	-	2	188.11	11846.91	5.56	4089920
+galaxy	single-end	certa-cpu	64+64	2	18.11	1071.39	6.03	30484372
+galaxy	single-end	certa-cpu-iv	64	2	16.37	916.79	4.01	30450420
+galaxy	single-end	certa-gpu	16+48	2	17.48	682.90	6.98	33281564
+galaxy	single-end	certa-gpu	64+64	2	14.93	691.12	9.87	33570356
+galaxy	single-end	certa-gpu-iv	64	2	13.69	577.93	8.22	33475724
+galaxy	single-end	bwa-mem2	-	3	100.06	5169.95	27.62	32684436
+galaxy	single-end	minibwa	-	3	28.70	1352.24	3.88	9696084
+galaxy	single-end	strobealign	-	3	38.82	1053.13	24.93	14064068
+galaxy	single-end	minimap2	-	3	71.16	3092.78	11.89	13312696
+galaxy	single-end	bowtie2	-	3	188.07	11840.74	6.20	4092988
+galaxy	single-end	certa-cpu	64+64	3	18.10	1070.56	6.39	30495304
+galaxy	single-end	certa-cpu-iv	64	3	16.43	917.43	4.04	30459284
+galaxy	single-end	certa-gpu	16+48	3	17.51	682.74	7.15	33266464
+galaxy	single-end	certa-gpu	64+64	3	14.83	689.86	10.27	33577012
+galaxy	single-end	certa-gpu-iv	64	3	13.83	576.13	7.98	33488572
+galaxy	single-end	certa-cpu-tier	64	1	8.23	402.73	4.15	30362384
+galaxy	single-end	certa-gpu-tier	16	1	10.73	33.22	3.86	32869368
+galaxy	paired	bwa-mem2	-	1	333.17	16827.87	43.34	33307060
+galaxy	paired	certa-cpu	64+64 Kdefault	1	55.71	3139.86	12.01	37234968
+galaxy	paired	minibwa	-	1	62.87	3566.42	7.38	10062952
+galaxy	paired	certa-cpu	64+64 K10m	1	52.38	3171.98	10.69	37968908
+galaxy	paired	certa-cpu-iv	64	1	39.44	2305.14	7.28	37835332
+galaxy	paired	certa-gpu-iv	64	1	29.84	1596.90	9.11	41331948
+galaxy	paired	certa-gpu	20+44 K10m	1	47.78	2406.72	10.29	40959148
+galaxy	paired	certa-gpu	64+64 K10m	1	43.42	2427.35	12.93	41605232
+galaxy	paired	minibwa	-	2	62.97	3566.55	7.45	10037180
+galaxy	paired	certa-cpu	64+64 K10m	2	52.33	3174.77	10.75	37986712
+galaxy	paired	certa-cpu-iv	64	2	39.48	2306.68	7.52	37844940
+galaxy	paired	certa-gpu-iv	64	2	29.85	1595.06	8.86	41316540
+galaxy	paired	certa-gpu	20+44 K10m	2	48.05	2407.55	10.21	40977192
+galaxy	paired	certa-gpu	64+64 K10m	2	43.46	2427.55	13.06	41621816
+galaxy	paired	minibwa	-	3	63.09	3566.54	7.17	10017216
+galaxy	paired	certa-cpu	64+64 K10m	3	52.31	3170.65	10.66	37978844
+galaxy	paired	certa-cpu-iv	64	3	39.45	2305.17	7.35	37849140
+galaxy	paired	certa-gpu-iv	64	3	29.89	1597.31	8.74	41307396
+galaxy	paired	certa-gpu	20+44 K10m	3	47.87	2407.14	10.20	40974196
+galaxy	paired	certa-gpu	64+64 K10m	3	43.37	2426.94	13.27	41598148
