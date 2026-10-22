@@ -1,0 +1,5 @@
+data,tool,end_to_end_certified,e2e_missed_better,e2e_more_edits,e2e_unmapped,local_certified,local_missed_better,local_unmapped,proven_ties,overconfident_ties
+single-end,Yara 1.0.5,1914808,89,0,14,21824,200,12214,72408,2
+paired,Yara 1.0.5,3570362,2489,2442,27,300357,1412,26279,17408,64
+single-end-200000,RazerS 3 (best record),191549,19,10,0,2130,20,1204,7123,0
+single-end-200000,RazerS 3 (flagged primary),191549,12572,12584,0,2130,81,1204,7123,0
