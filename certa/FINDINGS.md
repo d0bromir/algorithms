@@ -855,6 +855,29 @@ verifies the XQ of PR mates too.
     93.31 %, above Winnowmap's own alignment for 70,653 reads (minimap2:
     40,265), under CERTA's +1/−4 scores; Winnowmap's preset scores +2/−4,
     so this is not an error count.
+  - *What is left for their patterns* (`bench/headroom.py`,
+    `slow_headroom.txt`, 2 M reads single-end): Yara maps 96.83 % within 6
+    edits, as many as CERTA certifies with `--full-cert --index2`
+    (96.83 %), but not the same reads (CERTA's 1.09 % SL is out of Yara's
+    reach). Of the 3.17 % CERTA leaves uncertified, Yara at 12 edits
+    (`-e 8`, 2,405 s for these 63,368 reads) finds the best end-to-end
+    alignment within 6 edits for 0.62 % of all reads (mostly with parts
+    over the hit budget: 0.53 %), within 7–11 edits for 0.60 %, and none
+    within 12 edits for 1.82 %. Default settings leave 1.98 %
+    repeat-limited reads within 5 edits; `--full-cert --index2` already
+    took three quarters of them.
+  - *Patterns worth taking, by that headroom:* parts chosen by their
+    rarity (Winnowmap's weighted minimizers, the optimal seed solver; the
+    parts are fixed today and only their first 22-mer is looked up; Lemma
+    L allows any disjoint parts, as in `lr_ceiling`) and repeats handled as
+    index intervals or merged adjacent parts (Yara's bidirectional FM
+    index) for the 0.62 %; parts that may match with one error (Yara's
+    search schemes; radius 2|S| − 1, up to 11) for the 0.60 %; bit-parallel
+    banded verification (Myers/Hyyrö, RazerS 3 and Yara) for the cost of
+    `--full-cert`. Not worth taking: exhaustive search at a larger radius
+    (Yara at 12 edits costs 1.3 CPU-s per read), RazerS 3's scan of the
+    genome, and end-to-end-only alignment: the remaining 1.82 % need
+    clipped (local) certificates or are not from this reference.
 - **HG001 GATK indels** are the one comparison where CERTA's F1 is lower
   (0.9909 vs 0.9922). Look at the 13 extra FP and 14 extra FN.
 - **Long reads:** the mapper's limits (320 bp, 8 parts, radius 5) exclude
