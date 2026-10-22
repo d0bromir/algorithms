@@ -502,7 +502,10 @@ Lemma~\ref{lem:L} charges 5 points per part, so no exact-part certificate
 can prove an alignment that loses 30 points or more. A second, $q=15$ index
 with up to ten parts per read moves this limit: it raises single-end
 certification on HG002 from \AqBase\% to \AqAfter\% at \AqMs~ms per
-residual read, or to \AqAfterMax\% with large budgets.
+residual read, or to \AqAfterMax\% with large budgets. Both steps are
+options of the mapper: \texttt{-{}-full-cert} (pass~3 with a budget of 4096
+hits per strand, and the certified local tier) certifies \AqBase\%, and
+\texttt{-{}-index2} adds the $q=15$ cascade (Section~\ref{sec:slow}).
 
 \begin{figure}[t]
 \centering
@@ -661,6 +664,55 @@ CERTA interval mode, A100 & \FGSGpuIvWall{} (\FGSGpuIvXMini) & \FGPGpuIvWall{} (
 \end{tabular}
 \end{table}
 
+\subsection{Against fully sensitive mappers}\label{sec:slow}
+
+Lossless $k$-error mappers find every alignment within a fixed error
+limit. We ran Yara 1.0.5 (from SeqAn, \url{https://github.com/seqan/seqan})
+with \texttt{-e 4 -y full}, every alignment with at most 4\% errors (6 edits
+at 150~bp), and RazerS~3 \citep{weese2012razers3} with \texttt{-i 96 -rr
+100}, 100\% recognition of matches with at least 96\% identity. Each ran on
+the same 64 cores of galaxy as CERTA's interval mode on the CPU
+(Table~\ref{tab:slow}). Full certification with both indexes takes
+\SlSeIxWall~s for 2~M single-end reads; Yara takes \SlSeYaraWall~s
+(\SlSeYaraX$\times$), and \SlPeYaraX$\times$ CERTA's time on pairs. RazerS~3
+needs \SlRazWall~s for the first 200,000 reads, against \SlRazCertaWall~s
+(\SlRazX$\times$), and its paired mode aborted for lack of memory. The two
+guarantees differ in scope. Yara and RazerS~3 cover every read up to their
+error limit, but only end-to-end alignments. CERTA's radius adapts per read
+(at most 5 edits end to end) and its local tier also covers clipped
+alignments, but some reads stay uncertified. Of the \SlYaraEtoE{} reads that
+CERTA certifies end to end, Yara places \SlYaraElse{} at a locus with more
+edits than the proven minimum and leaves \SlYaraUnm{} unmapped; of the
+\SlRazEtoE{} such reads among the first 200,000, RazerS~3 leaves
+\SlRazEtoEUnm{} unmapped. Both leave about \SlYaraLocalUnmPct\% of the reads
+with a local certificate unmapped, because they do not clip.
+
+\begin{table}[t]
+\centering
+\caption{CERTA against fully sensitive mappers: wall and CPU time (s),
+2,000,000 HG002 reads or pairs, galaxy, 64 cores, CPU only. CERTA in
+interval mode (every read gets a record), median of three runs; Yara one
+run. RazerS~3 ran on the first 200,000 reads only (its paired mode
+aborted).}
+\label{tab:slow}
+\small
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+& \multicolumn{2}{c}{Single-end} & \multicolumn{2}{c}{Paired}\\
+Mapper and settings & Wall & CPU & Wall & CPU\\
+\midrule
+CERTA, default & \SlSeDefWall & \SlSeDefCpu & \SlPeDefWall & \SlPeDefCpu\\
+CERTA \texttt{-{}-full-cert} & \SlSeFcWall & \SlSeFcCpu & \SlPeFcWall & \SlPeFcCpu\\
+CERTA \texttt{-{}-full-cert -{}-index2} & \SlSeIxWall & \SlSeIxCpu & \SlPeIxWall & \SlPeIxCpu\\
+Yara \texttt{-e 4 -y full} & \SlSeYaraWall & \SlSeYaraCpu & \SlPeYaraWall & \SlPeYaraCpu\\
+\midrule
+\multicolumn{5}{@{}l}{\emph{First 200,000 reads}}\\
+CERTA \texttt{-{}-full-cert -{}-index2} & \SlRazCertaWall & \SlRazCertaCpu & -- & --\\
+RazerS~3 \texttt{-i 96 -rr 100} & \SlRazWall & \SlRazCpu & aborted & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 \subsection{Variant-calling accuracy}
 
 We mapped every read of each sample, kept chromosome 20, called variants
@@ -739,7 +791,10 @@ The certificate costs \LrCpu~s of CPU for the whole sample, against
 Fig.~\ref{fig:hifi}). The vectorized DP row, batched index lookups and
 pruning to live cells (only \LrCellsPct\% of the band can still beat $lb$)
 took the median DP per read from \LrDpMedScalar~ms to \LrDpMed~ms. None of
-these changes altered a certificate. The split certificate is costlier:
+these changes altered a certificate. Winnowmap2 \citep{jain2022winnowmap2},
+built for repetitive references, takes \SlHifiWmWall~s on the same reads
+(64 cores, \SlHifiWmIdx~s of it indexing the reference),
+\SlHifiWmX$\times$ the \SlHifiCertaWall~s of minimap2 plus the certificate. The split certificate is costlier:
 median \LrJumpMedSec~s per attempted read. Of the \LrJumpAttempted{}
 attempted reads, \LrJumpInterval{} keep an interval and \LrJumpCapped{}
 reach the cell cap, which also leaves an interval.
