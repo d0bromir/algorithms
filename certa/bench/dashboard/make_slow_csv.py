@@ -68,22 +68,58 @@ write('slow_speed.csv', speed)
 # weaknesses.py output: a "==" title per comparison, then its two tables.
 rel, title = [], None
 NAMES = {'Yara': 'Yara 1.0.5', 'RazerS3:all': 'RazerS 3 (best record)', 'RazerS3-primary': 'RazerS 3 (flagged primary)'}
+ints = lambda s: [int(x) for x in re.findall(r'(?<![.(\d])(\d+)(?![.\d%])', s)]  # counts, not percentages
 text = (RES / 'slow_reliability.txt').read_text(encoding='utf-8')
-for block in text.split('\n== ')[1:]:
+blocks = text.split('\n== ')[1:]
+# Unmapped reads within / beyond each tool's own error rate (within_rate.py), by data set and tool.
+rate = {}
+for block in blocks:
+    if not block.startswith('unmapped reads against'):
+        continue
+    label = None
+    for ln in block.splitlines()[1:]:
+        if ln.endswith(':'):
+            label = ln[:-1]
+        elif label and 'within its error rate' in ln:
+            w, b = re.search(r'unmapped by the tool: (\d+) within its error rate, (\d+) beyond it', ln).groups()
+            key = ('single-end-200000', 'RazerS 3 (best record)') if label.startswith('RazerS') else \
+                  ('paired' if 'paired' in label else 'single-end', 'Yara 1.0.5')
+            rate[key] = (int(w), int(b))
+for block in blocks:
     title = block.splitlines()[0]
-    data = 'single-end' if title.startswith('single-end, 2,000,000') else 'paired' if title.startswith('paired') else 'single-end-200000'
+    if title.startswith('single-end, 2,000,000'):
+        data = 'single-end'
+    elif title.startswith('paired, 2,000,000'):
+        data = 'paired'
+    elif title.startswith('single-end, the first 200,000'):
+        data = 'single-end-200000'
+    else:
+        continue
     ties = int(re.search(r'proven exact multi-copy ties (\d+)', block).group(1))
-    m = re.search(r'end-to-end \(S0 S1 SR\) (\d+), local \(SL PR\) (\d+)', block)
+    m = re.search(r'end-to-end \(S0 S1 SR\) (\d+)(?: \(proven edits <= 5: \d+, 6: \d+, >= 7: \d+\))?, local \(SL PR\) (\d+)',
+                  block)
     n_e2e, n_local = int(m.group(1)), int(m.group(2))
-    main = {ln.split()[0]: ln for ln in block.splitlines() if ln.split() and ln.split()[0] in NAMES and 'of ties' in ln}
-    tier = {ln.split()[0]: ln for ln in block.splitlines() if ln.split() and ln.split()[0] in NAMES and 'of ties' not in ln}
+    lines = block.splitlines()
+    main, tier, by_xe = {}, {}, {}
+    section = 'main'
+    for ln in lines:
+        if ln.startswith('tool') and 'e2e: missed better' in ln:
+            section = 'tier'
+        elif ln.startswith('end-to-end unmapped by the proven edit count'):
+            section = 'xe'
+        elif ln.split() and ln.split()[0] in NAMES:
+            {'main': main, 'tier': tier, 'xe': by_xe}[section][ln.split()[0]] = ln
     for key, name in NAMES.items():
         if key not in main:
             continue
-        n = [int(x) for x in re.findall(r'(?<![.(\d])(\d+)(?![.\d%])', tier[key].split(None, 1)[1])]
+        n = ints(tier[key].split(None, 1)[1])
+        x = ints(by_xe[key].split(None, 1)[1]) if key in by_xe else ['', '', '']
+        w, b = rate.get((data, name), ('', ''))
         over = int(re.findall(r'(\d+) \([0-9.]+% of ties\)', main[key])[0])
         rel.append(dict(data=data, tool=name, end_to_end_certified=n_e2e, e2e_missed_better=n[0],
-                        e2e_more_edits=n[1], e2e_unmapped=n[2], local_certified=n_local, local_missed_better=n[3],
+                        e2e_more_edits=n[1], e2e_unmapped=n[2], e2e_unmapped_proven_le5=x[0],
+                        e2e_unmapped_proven_6=x[1], e2e_unmapped_proven_7plus=x[2], unmapped_within_error_rate=w,
+                        unmapped_beyond_error_rate=b, local_certified=n_local, local_missed_better=n[3],
                         local_unmapped=n[4], proven_ties=ties, overconfident_ties=over))
 write('slow_reliability.csv', rel)
 

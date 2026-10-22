@@ -56,7 +56,8 @@
       paired comparisons with BWA-MEM2. With every certification pass on, it is still
       <span class="cx-v dash-skeleton" data-source="slow_vs" data-field="se_lo" data-row="0">—</span> to
       <span class="cx-v dash-skeleton" data-source="slow_vs" data-field="se_hi" data-row="0">—</span>
-      faster than Yara, which searches every alignment within the same error radius but proves nothing.
+      faster than Yara, which finds every alignment within 4 % errors but proves nothing; CERTA certifies the reads beyond
+      that rate too.
     </p>
   </header>
 
@@ -201,10 +202,11 @@
     <h2>Against the slow, reliable mappers</h2>
     <p>Yara and RazerS 3 search exhaustively: each reports every alignment within an error rate, set here to cover CERTA's
       certificate radius (Settings, in the table below). They prove nothing about a read; CERTA proves each certified read
-      optimal over the whole genome. CERTA runs in interval mode, so every read gets a record, at its default certification,
-      with <code>--full-cert</code> (every certification pass) and with <code>--full-cert --index2</code> (every pass again on a
-      second index of 15-base parts for the reads still uncertified). Winnowmap2 maps long reads only, so it is compared on
-      HiFi reads. All on galaxy's 64 cores, index loading included.</p>
+      optimal over the whole genome. CERTA runs in interval mode, so every read gets a record: at its default certification;
+      with <code>--full-cert --adaptive-parts 0</code> (the larger budget and local certificates); with <code>--full-cert</code>,
+      which adds pass V, parts chosen per read: the rarest q-mers, then q-mers searched with one edit, certifying up to 12 edits;
+      and with <code>--full-cert --index2</code> (every pass again on a second index of 15-base parts). Winnowmap2 maps long
+      reads only, so it is compared on HiFi reads. All on galaxy's 64 cores, index loading included.</p>
     <div class="cx-kpis" id="slow-kpis">
       <div class="cx-kpi">
         <span class="cx-lbl">Vs Yara, single-end</span>
@@ -219,7 +221,7 @@
       <div class="cx-kpi">
         <span class="cx-lbl">Vs RazerS 3, single-end</span>
         <span class="cx-num dash-skeleton" data-source="slow_vs" data-field="razers" data-row="0">—</span>
-        <span class="cx-sub">On its <span data-source="slow_speed" data-field="reads" data-row="14">—</span> reads, CERTA with the second index. Its paired mode aborted.</span>
+        <span class="cx-sub">On its <span data-source="slow_speed" data-field="reads" data-row="16">—</span> reads, CERTA with <code>--full-cert</code>. Its paired mode aborted.</span>
       </div>
       <div class="cx-kpi">
         <span class="cx-lbl">HiFi vs Winnowmap2</span>
@@ -241,19 +243,19 @@
       </div>
       <div class="cx-card">
         <h3 id="h-slow-pe">Paired, wall time</h3>
-        <p class="cx-note"><span data-source="slow_speed" data-field="reads" data-row="3">—</span> HG002 pairs. Log scale.</p>
+        <p class="cx-note"><span data-source="slow_speed" data-field="reads" data-row="4">—</span> HG002 pairs. Log scale.</p>
         <div class="cx-chart dash-skeleton" id="chart-slow-pe" data-source="slow_speed" style="min-height: 250px"></div>
       </div>
       <div class="cx-card">
         <h3 id="h-slow-rz">RazerS 3, on fewer reads</h3>
-        <p class="cx-note">The first <span data-source="slow_speed" data-field="reads" data-row="14">—</span> reads or pairs:
+        <p class="cx-note">The first <span data-source="slow_speed" data-field="reads" data-row="16">—</span> reads or pairs:
           RazerS 3 on all of them would take most of an hour. Its paired run aborted with an out-of-memory exception at the end
           (time to the abort). Log scale.</p>
         <div class="cx-chart dash-skeleton" id="chart-slow-rz" data-source="slow_speed" style="min-height: 150px"></div>
       </div>
       <div class="cx-card">
         <h3 id="h-slow-hifi">HiFi long reads, wall time</h3>
-        <p class="cx-note"><span data-source="slow_speed" data-field="reads" data-row="16">—</span> HG002 HiFi reads. CERTA's
+        <p class="cx-note"><span data-source="slow_speed" data-field="reads" data-row="22">—</span> HG002 HiFi reads. CERTA's
           pipeline maps with minimap2, then proves each read's optimum with lr_ceiling. Winnowmap2's saved index crashes on load,
           so it builds its index in every run.</p>
         <div class="cx-legend" id="legend-slow-hifi" data-source="slow_speed"></div>
@@ -263,10 +265,12 @@
     <div class="cx-grid">
       <div class="cx-card">
         <h3 id="h-slow-rel">Agreement with CERTA's certificates</h3>
-        <p class="cx-note">On the reads CERTA certifies. End-to-end certificates prove the fewest edits (at most five); "more edits"
-          counts reads placed elsewhere with more edits than that, wrong under any scoring, while "worse locus" uses BWA-MEM's
-          scores, under which equal edits can differ. Local certificates prove the best clipped alignment, which these
-          end-to-end mappers cannot report. RazerS 3 marks its first match primary, not its best, so both are shown.</p>
+        <p class="cx-note">On the reads CERTA certifies with <code>--full-cert</code>. End-to-end certificates prove the fewest
+          edits (up to 12); "more edits" counts reads placed elsewhere with more edits than that, wrong under any scoring, while
+          "worse locus" uses BWA-MEM's scores, under which equal edits can differ. "Unmapped" splits by the mapper's own error
+          rate (4 % of the read length): within it they miss nothing; beyond it CERTA still proves the optimum. Local
+          certificates prove the best clipped alignment, which these end-to-end mappers cannot report. RazerS 3 marks its first
+          match primary, not its best, so both are shown.</p>
         <div class="cx-tbl-wrap dash-skeleton" id="wrap-slow-rel">
           <table class="cx-tbl" id="tbl-slow-rel" data-source="slow_reliability" data-row-key="data,tool">
             <thead><tr>
@@ -275,7 +279,8 @@
               <th data-field="end_to_end_certified">End-to-end certified</th>
               <th data-field="e2e_more_edits">More edits</th>
               <th data-field="e2e_missed_better">Worse locus</th>
-              <th data-field="e2e_unmapped">Unmapped</th>
+              <th data-field="unmapped_within_error_rate">Unmapped, within its error rate</th>
+              <th data-field="unmapped_beyond_error_rate">… beyond it</th>
               <th data-field="local_certified">Local certified</th>
               <th data-field="local_unmapped">… unmapped</th>
               <th data-field="overconfident_ties">Ties, MAPQ ≥ 20</th>
@@ -481,7 +486,7 @@ dash.calc('hifi_summary', {
 dash.calc('slow_vs', {
   inputs: ['slow_speed'],
   title: 'Speed vs the slow mappers',
-  description: "Yara's, RazerS 3's and Winnowmap2's wall time over CERTA's (CPU) on the same reads: CERTA with --full-cert (hi) and with --full-cert --index2 (lo); HiFi: CERTA's pipeline is minimap2 + lr_ceiling.",
+  description: "Yara's, RazerS 3's and Winnowmap2's wall time over CERTA's (CPU) on the same reads: CERTA with --full-cert (hi; RazerS 3) and with --full-cert --index2 (lo); HiFi: CERTA's pipeline is minimap2 + lr_ceiling.",
   fn: (slow_speed) => {
     const w = (data, tool, config) => +slow_speed.find((r) => r.data === data && r.tool === tool
       && (config === undefined || r.config === config)).wall_s;
@@ -491,7 +496,7 @@ dash.calc('slow_vs', {
       se_hi: w('single-end', 'Yara 1.0.5') / w('single-end', 'CERTA', fc),
       pe_lo: w('paired', 'Yara 1.0.5') / w('paired', 'CERTA', fx),
       pe_hi: w('paired', 'Yara 1.0.5') / w('paired', 'CERTA', fc),
-      razers: w('single-end-200000', 'RazerS 3 3.5.12') / w('single-end-200000', 'CERTA', fx),
+      razers: w('single-end-200000', 'RazerS 3 3.5.12') / w('single-end-200000', 'CERTA', fc),
       hifi: w('hifi', 'Winnowmap 2.03')
         / (w('hifi', 'minimap2 2.31') + w('hifi', 'lr_ceiling', '--certify (minimap2 alignments)')),
     }];
@@ -1002,8 +1007,9 @@ dash.calc('headline', {
       }, (r) => [r.host, r.mode, r.pipeline, r.config].map(enc).join(','));
     fillTable('tbl-slow-rel', 'wrap-slow-rel', ['slow_reliability'], () => st('slow_reliability').data,
       (r) => [[r.data, 'cx-txt'], [r.tool, 'cx-txt'], [fInt(+r.end_to_end_certified)], [fInt(+r.e2e_more_edits)],
-        [fInt(+r.e2e_missed_better)], [fInt(+r.e2e_unmapped)], [fInt(+r.local_certified)], [fInt(+r.local_unmapped)],
-        [fInt(+r.overconfident_ties)]],
+        [fInt(+r.e2e_missed_better)], [r.unmapped_within_error_rate === '' ? '—' : fInt(+r.unmapped_within_error_rate)],
+        [r.unmapped_beyond_error_rate === '' ? '—' : fInt(+r.unmapped_beyond_error_rate)], [fInt(+r.local_certified)],
+        [fInt(+r.local_unmapped)], [fInt(+r.overconfident_ties)]],
       (r) => [r.data, r.tool].map(enc).join(','));
     fillTable('tbl-slow-hifi', 'wrap-slow-hifi', ['slow_hifi'], () => st('slow_hifi').data,
       (r) => [[r.aligner, 'cx-txt'], [fInt(+r.reads_aligned)], [fInt(+r.proven)], [fInt(+r.proven_above_aligner)]]);

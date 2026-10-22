@@ -214,18 +214,20 @@ caveats are in [bench/RESULTS.md](bench/RESULTS.md).
 
   | | certified, single-end / paired | single-end | paired |
   |---|---|---|---|
-  | CERTA (default) | 94.5 % / 95.4 % | 2.7 s | 5.0 s |
-  | CERTA `--full-cert` | 95.7 % / 96.3 % | 3.0 s | 6.9 s |
-  | CERTA `--full-cert --index2` (q = 15) | 96.8 % / 96.9 % | 6.2 s | 12.3 s |
+  | CERTA (default) | 94.5 % / 95.4 % | 2.7 s | 5.1 s |
+  | CERTA `--full-cert --adaptive-parts 0` (no pass V) | 95.7 % / 96.3 % | 3.0 s | 6.9 s |
+  | CERTA `--full-cert` (with pass V) | 97.6 % / 97.5 % | 5.6 s | 12.5 s |
+  | CERTA `--full-cert --index2` (q = 15) | 97.7 % / 97.5 % | 8.5 s | 17.0 s |
   | Yara 1.0.5 `-e 4 -y full` | — | 138.2 s | 211.2 s |
-  | RazerS 3 `-i 96 -rr 100` | — | est. ~2,400 s (timed: 239.6 s for the first 200 k reads) | aborts (`std::bad_alloc`) |
+  | RazerS 3 `-i 96 -rr 100` | — | est. ~2,400 s (timed: 239.6 s for the first 200 k reads, CERTA 1.6 s) | aborts (`std::bad_alloc`) |
 
   Yara and RazerS 3 find every alignment within 4 % errors (6 edits at
-  150 bp; CERTA's certificate radius is ≤ 5); they give no proof. On the
-  reads CERTA certifies end-to-end they agree with the certificates almost
-  exactly (Yara single-end: no read placed elsewhere with more edits than
-  the proven minimum, 14 of 1.9 M unmapped;
-  [slow_reliability.txt](bench/results/hg002_2026-10/slow_reliability.txt)).
+  150 bp); they give no proof. CERTA's certificates (radius ≤ 5, with pass V
+  up to 12) agree with them: within their own error rate they miss no read
+  CERTA certifies and place none elsewhere with more edits than the proven
+  minimum; the reads they leave unmapped have their proven optimum beyond
+  that rate (0.89 % of single-end reads), and CERTA certifies those too
+  ([slow_reliability.txt](bench/results/hg002_2026-10/slow_reliability.txt)).
   Long reads: CERTA's HiFi pipeline (minimap2 + `tools/lr_ceiling --certify`,
   optimum proven for 93.3 % of 242,534 reads) takes 163 s, Winnowmap2 610 s.
 
