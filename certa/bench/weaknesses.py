@@ -17,8 +17,10 @@ maximum local (clipped) score is proven. Per tool it counts:
                        scheme (+1/-4, gap -6-1k, clip -5 per end), than the
                        alignment CERTA reports at the certified locus;
   unmapped             the tool reports nothing although an alignment with
-                       at most R <= 5 edits (SL: with the certified score)
-                       provably exists;
+                       at most R edits (R <= 5; pass V: R <= 12; SL: with the
+                       certified score) provably exists, split below by the
+                       proven edit count (a tool searching up to e edits
+                       cannot report a read whose optimum has more);
   overconfident ties   the read has >= 2 identical exact copies (a proven
                        tie under any scoring), yet the tool gives MAPQ >= 20
                        (MAPQ 255, "unavailable", never counts: RazerS 3).
@@ -85,7 +87,7 @@ def main():
     print(f"reads {n_reads}; CERTA-certified {len(cert)} ({100 * len(cert) / n_reads:.2f}%); "
           f"proven exact multi-copy ties {len(ties)}")
     print(f"{'tool':12s} {'missed better locus':>24s} {'of which MAPQ>=20':>18s} "
-          f"{'unmapped (<=5 edits exist)':>28s} {'overconfident ties (MAPQ>=20)':>32s}")
+          f"{'unmapped (<=R edits exist)':>28s} {'overconfident ties (MAPQ>=20)':>32s}")
     # The same counts split by certificate: end-to-end (S0, S1, SR) or local
     # (SL, PR); see the docstring.
     local_tiers = ("SL", "PR")
@@ -96,12 +98,15 @@ def main():
         tool = load(path, name.endswith(":all"))
         worse = worse_conf = unmapped = over = 0
         local_worse = local_unmapped = more_edits = 0
+        unm_by_xe = [0, 0, 0]  # end-to-end unmapped with a proven alignment of <= 5, 6, >= 7 edits
         for k, c in cert.items():
             t = tool.get(k)
             local = c["xt"] in local_tiers
             if t is None:
                 unmapped += 1
                 local_unmapped += local
+                if not local:
+                    unm_by_xe[0 if c["xe"] <= 5 else 1 if c["xe"] == 6 else 2] += 1
                 continue
             same = t["chrom"] == c["chrom"] and abs(t["pos"] - c["pos"]) <= 10
             if not same and t["score"] <= c["score"] - 5:
@@ -118,15 +123,21 @@ def main():
               f"{unmapped:>14d} ({100 * unmapped / n:.3f}%) "
               f"{over:>16d} ({100 * over / max(len(ties), 1):.2f}% of ties)")
         by_tier.append((name, worse - local_worse, more_edits, unmapped - local_unmapped, local_worse,
-                        local_unmapped))
+                        local_unmapped, unm_by_xe))
     n_e2e = len(cert) - n_local
-    print(f"by certificate: end-to-end (S0 S1 SR) {n_e2e}, local (SL PR) {n_local}")
+    xe_n = [sum(1 for v in cert.values() if v["xt"] not in local_tiers and f(v["xe"]))
+            for f in (lambda x: x <= 5, lambda x: x == 6, lambda x: x >= 7)]
+    print(f"by certificate: end-to-end (S0 S1 SR) {n_e2e} (proven edits <= 5: {xe_n[0]}, 6: {xe_n[1]}, "
+          f">= 7: {xe_n[2]}), local (SL PR) {n_local}")
     print(f"{'tool':12s} {'e2e: missed better':>22s} {'e2e: elsewhere, NM > XE':>24s} {'e2e: unmapped':>20s} "
           f"{'local: missed better':>22s} {'local: unmapped':>22s}")
     pc = lambda x, n, d: f"{x:>12d} ({100 * x / max(n, 1):.{d}f}%)"
-    for name, ew, em, eu, lw, lu in by_tier:
+    for name, ew, em, eu, lw, lu, ux in by_tier:
         print(f"{name:12s} {pc(ew, n_e2e, 3):>22s} {pc(em, n_e2e, 3):>24s} {pc(eu, n_e2e, 3):>20s} "
               f"{pc(lw, n_local, 2):>22s} {pc(lu, n_local, 2):>22s}")
+    print("end-to-end unmapped by the proven edit count: tool, <= 5, 6, >= 7")
+    for name, ew, em, eu, lw, lu, ux in by_tier:
+        print(f"{name:12s} {pc(ux[0], xe_n[0], 4):>22s} {pc(ux[1], xe_n[1], 2):>22s} {pc(ux[2], xe_n[2], 2):>22s}")
 
 
 if __name__ == "__main__":

@@ -85,6 +85,11 @@ constexpr int S2_MAX = 10;  // largest --s2 edit limit (band must fit BMAX)
 constexpr int S2_TOP = 8;   // S2 evaluates only this many best-supported clusters
 static_assert(MAX_CIGAR >= 2 * S2_MAX + 1, "CIGAR buffer too small for S2");
 static_assert(4 * S2_MAX + 1 <= BAND_E2E, "S2 band does not fit BAND_E2E");
+// Adaptive parts (pass V, host only; certify_vparts): largest certified
+// radius, and the most one-edit neighbours of a q-mer (q <= 32).
+constexpr int VMAX = 12;
+constexpr int NBMAX = 1 + 11 * 32;
+static_assert(MAX_CIGAR >= 2 * VMAX + 3, "CIGAR buffer too small for pass V");
 
 enum Reason : uint8_t {
   kOk = 0,
@@ -148,6 +153,9 @@ struct Params {
   // already failed it).
   int local = 0;
   int local_only = 0;
+  // Pass V (host only, certify_vparts): 1 = the rarest disjoint q-mers as
+  // parts; 2 = also those q-mers searched with up to one edit. Needs s = 1.
+  int vparts = 0;
 };
 
 struct Result {
@@ -225,6 +233,16 @@ struct Workspace {
   int16_t ubmemo[2][1 << PMAX];
   uint32_t ub_touched[MAX_CLUST];
   int ub_ntouched;
+  // Pass V: the index range of the q-mer at each read offset (lo > hi: it
+  // holds an 'N'), the DP over disjoint q-mers, the chosen parts, and the
+  // index ranges of their one-edit neighbourhoods.
+  uint64_t vlo[2][LMAX], vhi[2][LMAX];
+  uint64_t vf[2][PMAX + 1][LMAX + 1];
+  int16_t vfrom[2][PMAX + 1][LMAX + 1];
+  int16_t voff[2][PMAX];
+  uint64_t nblo[2][PMAX][NBMAX], nbhi[2][PMAX][NBMAX];
+  uint16_t nbn[2][PMAX];
+  uint64_t nbcost[2][PMAX];
 #endif
 };
 
@@ -649,8 +667,9 @@ CERTA_HD inline void band_traceback(const IndexView& ix, const uint8_t* rd,
 
 // Groups the sorted candidate diagonals of both strands into clusters whose
 // bands (+-pad) overlap. Returns the number of clusters, or -1 when a cluster
-// is wider than BAND_E2E and skip_wide is false (with skip_wide it is dropped).
-CERTA_HD inline int build_clusters(Workspace& ws, int pad, bool skip_wide) {
+// is wider than max_width and skip_wide is false (with skip_wide it is
+// dropped). Only host passes (pass V) widen max_width beyond BAND_E2E.
+CERTA_HD inline int build_clusters(Workspace& ws, int pad, bool skip_wide, int max_width = BAND_E2E) {
   int nclust = 0;
   for (int st = 0; st < 2; ++st) {
     const int64_t* c = ws.cand[st];
@@ -666,7 +685,7 @@ CERTA_HD inline int build_clusters(Workspace& ws, int pad, bool skip_wide) {
         ++j;
       }
       const int64_t width = dmax - dmin + 2 * pad + 1;
-      if (width > BAND_E2E) {
+      if (width > max_width) {
         if (!skip_wide) return -1;
         i = j;
         continue;
@@ -1729,6 +1748,255 @@ inline bool certify_local(const IndexView& ix, const Params& p, int L, int P, in
 }
 #endif
 
+// The certified end-to-end result once clusters were evaluated with b1 <= R:
+// the best locus (ties broken by name_hash), the second best within R, the
+// SUB bound and, for MAPQ, the second locus's score.
+CERTA_HD inline void finish_certified(const IndexView& ix, const Params& p, int L, int R, int nclust, int b1,
+                                      int b2, uint64_t name_hash, Workspace& ws, Result& r) {
+  int width;
+  const int n_best = align_best(ix, L, nclust, b1, name_hash, ws, r, &width);
+  r.certified = 1;
+  r.tier = b1 == 0 ? kTierS0 : kTierS1;
+  r.d1 = (int8_t)b1;
+  r.d2 = (int8_t)(n_best > 1 ? b1 : (b2 <= R ? b2 : -1));
+  r.n_best = (uint16_t)n_best;
+  // SUB bound. Every other locus has end-to-end distance >= d* (the
+  // exact second best, or R + 1 beyond the radius), so by Lemma E an
+  // alignment there that scores above edit_bound(L, R + 1) completes
+  // within R edits and lies in another cluster. Inside the reported band
+  // (w diagonals), an alignment scoring s shares >= s + score - L read
+  // bases with the reported one (each spans >= its score), and sharing
+  // >= 2w + 5 forces their reference intervals to overlap (the paths
+  // stay within w - 1 diagonals of each other); so a non-overlapping one
+  // there scores at most L - score + 2w + 6 (and at most score, the band
+  // optimum).
+  {
+    const int dstar = n_best > 1 ? b1 : (r.d2 >= 0 ? r.d2 : R + 1);
+    const int other = edit_bound(L, dstar);
+    int band = L * kMatch - r.score + 2 * width + 6;
+    if (band > r.score) band = r.score;
+    r.sub_hi = (int16_t)(other > band ? other : band);
+  }
+  if (n_best == 1 && r.d2 >= 0) {
+    // The certified second-best locus: its affine score, for MAPQ.
+    for (int x = 0; x < nclust; ++x)
+      if (ws.clusters[x].dist == r.d2) { r.sub_score = cluster_score(ix, L, ws.clusters[x], ws); break; }
+  } else if (n_best == 1 && p.mapq_limit > R) {
+    r.d2x = (int8_t)other_candidates(ix, L, p.mapq_limit, r, ws, &r.sub_score);
+  }
+}
+
+#ifndef __CUDA_ARCH__
+// ---------------------------------------------------------------------------
+// Pass V: adaptive parts (host only; THEORY.md §4b, Theorem A).
+//
+// The fixed partition looks each part up by one q-mer at a fixed offset, so
+// one repetitive q-mer removes a part from S. Here the parts are chosen per
+// read and strand, any disjoint q-mers of the read (s = 1: every reference
+// position is indexed, so any q-mer can be looked up):
+//  (A1) exact parts: the most disjoint q-mers whose hits fit the budget,
+//       fewest hits in all among those (a DP over read offsets). Every
+//       alignment with at most |S| - 1 edits leaves one of them untouched
+//       (an edit touches at most one part), so R = |S| - 1, as in the fixed
+//       certificate;
+//  (A2) one-edit parts: the most disjoint q-mers with the fewest hits (no
+//       budget), their one-edit neighbourhoods looked up, then the cheapest
+//       neighbourhoods while they fit the budget. An alignment with at most
+//       2|S| - 1 edits has a part with at most one edit; the reference q-mer
+//       at that part's aligned start is then in its neighbourhood (Lemma N),
+//       within one diagonal of the alignment there, so R = 2|S| - 1.
+// Hits are clustered with pad R + 1 (an alignment with <= R edits stays
+// within R diagonals of an untouched part's hit, R + 1 of a one-edit part's)
+// into bands of up to BMAX diagonals, and verified exactly as in
+// process_read. R is capped at min(p.k, VMAX).
+constexpr uint64_t kVInf = UINT64_MAX / 4;
+
+// One strand: the index range of the q-mer at every offset.
+inline void vparts_ranges(const IndexView& ix, int L, Workspace& ws, int st) {
+  const int n = L - ix.q + 1;
+  for (int a = 0; a < n; ++a) {
+    uint64_t key;
+    if (kmer_key(ws.seq[st] + a, ix.q, &key)) lookup(ix, key, &ws.vlo[st][a], &ws.vhi[st][a]);
+    else { ws.vlo[st][a] = 1; ws.vhi[st][a] = 0; }  // an 'N': never a part
+  }
+}
+
+// DP over disjoint q-mers of strand st with the given costs (kVInf: not a
+// part): vf[st][k][i] is the least total cost of k of them within [0, i).
+// Returns the most parts whose least total cost is <= budget.
+inline int vparts_dp(int L, int q, const uint64_t* cost, uint64_t budget, Workspace& ws, int st) {
+  const int K = L / q < PMAX ? L / q : PMAX;
+  for (int i = 0; i <= L; ++i) { ws.vf[st][0][i] = 0; ws.vfrom[st][0][i] = -1; }
+  for (int k = 1; k <= K; ++k)
+    for (int i = 0; i <= L; ++i) {
+      uint64_t best = i > 0 ? ws.vf[st][k][i - 1] : kVInf;
+      int16_t from = -1;
+      if (i >= q && ws.vf[st][k - 1][i - q] < kVInf && cost[i - q] < kVInf) {
+        const uint64_t v = ws.vf[st][k - 1][i - q] + cost[i - q];
+        if (v < best) { best = v; from = (int16_t)(i - q); }
+      }
+      ws.vf[st][k][i] = best;
+      ws.vfrom[st][k][i] = from;
+    }
+  int m = 0;
+  for (int k = K; k >= 1 && m == 0; --k)
+    if (ws.vf[st][k][L] <= budget) m = k;
+  return m;
+}
+
+// The m parts of least total cost found by vparts_dp, left to right, into voff.
+inline void vparts_pick(int L, int m, Workspace& ws, int st) {
+  for (int i = L, k = m; k > 0;) {
+    const int a = ws.vfrom[st][k][i];
+    if (a < 0) { --i; continue; }
+    ws.voff[st][--k] = (int16_t)a;
+    i = a;
+  }
+}
+
+// Lemma N: the q-mers within one edit of the read q-mer s, as they start a
+// reference stretch aligned to s: s itself; one substitution; one read base
+// missing from the reference (the other q - 1, then any base); one reference
+// base inserted at 0..q-1 (cut to q bases). Sorted, distinct.
+inline int vparts_neighbours(const uint8_t* s, int q, uint64_t* keys) {
+  uint8_t w[32];
+  int n = 0;
+  auto add = [&](const uint8_t* v) {
+    uint64_t key;
+    if (kmer_key(v, q, &key)) keys[n++] = key;
+  };
+  add(s);
+  for (int i = 0; i < q; ++i)
+    for (uint8_t x = 0; x < 4; ++x) {
+      if (x == s[i]) continue;
+      for (int j = 0; j < q; ++j) w[j] = s[j];
+      w[i] = x;
+      add(w);
+    }
+  for (int i = 0; i < q; ++i)
+    for (uint8_t x = 0; x < 4; ++x) {
+      int k = 0;
+      for (int j = 0; j < q; ++j) if (j != i) w[k++] = s[j];
+      w[k] = x;
+      add(w);
+    }
+  for (int i = 0; i < q; ++i)
+    for (uint8_t x = 0; x < 4; ++x) {
+      int k = 0;
+      for (int j = 0; j < i; ++j) w[k++] = s[j];
+      w[k++] = x;
+      for (int j = i; k < q; ++j) w[k++] = s[j];
+      add(w);
+    }
+  std::sort(keys, keys + n);
+  return (int)(std::unique(keys, keys + n) - keys);
+}
+
+// Clusters ws.cand (hits of the chosen parts, both strands) with pad R + 1
+// and verifies them; certifies r when the best distance is <= R.
+inline bool vparts_verify(const IndexView& ix, const Params& p, int L, int R, uint64_t name_hash, Workspace& ws,
+                          Result& r) {
+  sort_i64(ws.cand[0], ws.ncand[0]);
+  sort_i64(ws.cand[1], ws.ncand[1]);
+  r.ncand = (uint32_t)(ws.ncand[0] + ws.ncand[1]);
+  const int nclust = build_clusters(ws, R + 1, false, BMAX);
+  if (nclust < 0) { r.reason = kClusterTooWide; return false; }
+  r.n_clusters = (uint16_t)nclust;
+  int b1 = R + 1, b2 = R + 1;
+  evaluate_clusters(ix, L, nclust, R, p.reverse_order, nclust, 1, ws, &b1, &b2);
+  if (b1 > R) { r.reason = kNotFound; return false; }
+  r.reason = kOk;
+  finish_certified(ix, p, L, R, nclust, b1, b2, name_hash, ws, r);
+  return true;
+}
+
+// Pass V for one read (ws.seq holds both strands): (A1), then (A2) if
+// p.vparts >= 2. No witness: r.support = 0, r.probes = 0. r.used and
+// r.radius describe the last step tried.
+inline void certify_vparts(const IndexView& ix, const Params& p, int L, uint64_t name_hash, Workspace& ws,
+                           Result& r) {
+  const int q = ix.q;
+  r.reason = kRadiusNegative;
+  if (ix.s != 1 || L < q || q > 32) return;
+  const int cap = p.k < VMAX ? p.k : VMAX;
+  const uint64_t budget = (uint64_t)p.budget;
+  uint64_t cost[2][LMAX];
+  int mst[2];
+  // (A1) the rarest disjoint q-mers that fit the budget.
+  for (int st = 0; st < 2; ++st) {
+    vparts_ranges(ix, L, ws, st);
+    for (int a = 0; a + q <= L; ++a)
+      cost[st][a] = ws.vlo[st][a] <= ws.vhi[st][a] ? ws.vhi[st][a] - ws.vlo[st][a] : kVInf;
+    mst[st] = vparts_dp(L, q, cost[st], budget, ws, st);
+  }
+  int m = mst[0] < mst[1] ? mst[0] : mst[1];
+  int R = m - 1 < cap ? m - 1 : cap;
+  r.used = (uint8_t)m;
+  r.radius = (int8_t)R;
+  if (R >= 0) {
+    for (int st = 0; st < 2; ++st) {
+      vparts_pick(L, m, ws, st);  // the m of least total hits, within the budget
+      int n = 0;
+      for (int x = 0; x < m; ++x) {
+        const int a = ws.voff[st][x];
+        for (uint64_t e = ws.vlo[st][a]; e < ws.vhi[st][a]; ++e)
+          ws.cand[st][n++] = ((int64_t)ix.pos[e] - a) * 16 + x;
+      }
+      ws.ncand[st] = n;
+    }
+    if (vparts_verify(ix, p, L, R, name_hash, ws, r)) return;
+  }
+  if (p.vparts < 2) return;
+  // (A2) one-edit parts: the most disjoint q-mers with the fewest hits, then
+  // the cheapest one-edit neighbourhoods while they fit the budget (ties:
+  // left to right).
+  uint64_t keys[NBMAX];
+  int order[2][PMAX];
+  for (int st = 0; st < 2; ++st) {
+    const int K = vparts_dp(L, q, cost[st], kVInf - 1, ws, st);
+    vparts_pick(L, K, ws, st);
+    for (int x = 0; x < K; ++x) {
+      const int nk = vparts_neighbours(ws.seq[st] + ws.voff[st][x], q, keys);
+      uint64_t tot = 0;
+      int nb = 0;
+      for (int y = 0; y < nk; ++y) {
+        uint64_t lo, hi;
+        lookup(ix, keys[y], &lo, &hi);
+        if (hi > lo) { ws.nblo[st][x][nb] = lo; ws.nbhi[st][x][nb] = hi; ++nb; tot += hi - lo; }
+      }
+      ws.nbn[st][x] = (uint16_t)nb;
+      ws.nbcost[st][x] = tot;
+      order[st][x] = x;
+      for (int y = x; y > 0 && ws.nbcost[st][order[st][y]] < ws.nbcost[st][order[st][y - 1]]; --y) {
+        const int t = order[st][y];
+        order[st][y] = order[st][y - 1];
+        order[st][y - 1] = t;
+      }
+    }
+    uint64_t used = 0;
+    int mm = 0;
+    while (mm < K && used + ws.nbcost[st][order[st][mm]] <= budget) used += ws.nbcost[st][order[st][mm++]];
+    mst[st] = mm;
+  }
+  m = mst[0] < mst[1] ? mst[0] : mst[1];
+  R = 2 * m - 1 < cap ? 2 * m - 1 : cap;
+  r.used = (uint8_t)m;
+  r.radius = (int8_t)R;
+  if (R < 0) { r.reason = kRadiusNegative; return; }
+  for (int st = 0; st < 2; ++st) {
+    int n = 0;
+    for (int y = 0; y < m; ++y) {  // part y: the y-th cheapest neighbourhood
+      const int x = order[st][y], a = ws.voff[st][x];
+      for (int z = 0; z < ws.nbn[st][x]; ++z)
+        for (uint64_t e = ws.nblo[st][x][z]; e < ws.nbhi[st][x][z]; ++e)
+          ws.cand[st][n++] = ((int64_t)ix.pos[e] - a) * 16 + y;
+    }
+    ws.ncand[st] = n;
+  }
+  vparts_verify(ix, p, L, R, name_hash, ws, r);
+}
+#endif
+
 // Map one read. `codes` holds L bases coded 0..3 (4 = N). `name_hash`
 // breaks ties between equally good loci deterministically.
 CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
@@ -1751,6 +2019,13 @@ CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
     uint8_t c = codes[L - 1 - i];
     ws.seq[1][i] = c < 4 ? (uint8_t)(3 - c) : (uint8_t)4;
   }
+#ifndef __CUDA_ARCH__
+  if (p.vparts > 0) {  // pass V: parts chosen per read (host only)
+    r.parts = (uint8_t)P;
+    certify_vparts(ix, p, L, name_hash, ws, r);
+    return;
+  }
+#endif
   // Same number of rarest parts on both strands, within budget and k + 1.
   count_parts(ix, ws.seq[0], L, P, ws, 0);
   count_parts(ix, ws.seq[1], L, P, ws, 1);
@@ -1787,37 +2062,7 @@ CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
     r.n_clusters = (uint16_t)nclust;
     evaluate_clusters(ix, L, nclust, R, p.reverse_order, nclust, p.min_support, ws, &b1, &b2);  // all: certificate
     if (b1 <= R) {
-      int width;
-      const int n_best = align_best(ix, L, nclust, b1, name_hash, ws, r, &width);
-      r.certified = 1;
-      r.tier = b1 == 0 ? kTierS0 : kTierS1;
-      r.d1 = (int8_t)b1;
-      r.d2 = (int8_t)(n_best > 1 ? b1 : (b2 <= R ? b2 : -1));
-      r.n_best = (uint16_t)n_best;
-      // SUB bound. Every other locus has end-to-end distance >= d* (the
-      // exact second best, or R + 1 beyond the radius), so by Lemma E an
-      // alignment there that scores above edit_bound(L, R + 1) completes
-      // within R edits and lies in another cluster. Inside the reported band
-      // (w diagonals), an alignment scoring s shares >= s + score - L read
-      // bases with the reported one (each spans >= its score), and sharing
-      // >= 2w + 5 forces their reference intervals to overlap (the paths
-      // stay within w - 1 diagonals of each other); so a non-overlapping one
-      // there scores at most L - score + 2w + 6 (and at most score, the band
-      // optimum).
-      {
-        const int dstar = n_best > 1 ? b1 : (r.d2 >= 0 ? r.d2 : R + 1);
-        const int other = edit_bound(L, dstar);
-        int band = L * kMatch - r.score + 2 * width + 6;
-        if (band > r.score) band = r.score;
-        r.sub_hi = (int16_t)(other > band ? other : band);
-      }
-      if (n_best == 1 && r.d2 >= 0) {
-        // The certified second-best locus: its affine score, for MAPQ.
-        for (int x = 0; x < nclust; ++x)
-          if (ws.clusters[x].dist == r.d2) { r.sub_score = cluster_score(ix, L, ws.clusters[x], ws); break; }
-      } else if (n_best == 1 && p.mapq_limit > R) {
-        r.d2x = (int8_t)other_candidates(ix, L, p.mapq_limit, r, ws, &r.sub_score);
-      }
+      finish_certified(ix, p, L, R, nclust, b1, b2, name_hash, ws, r);
       return;
     }
   }

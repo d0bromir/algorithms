@@ -1918,6 +1918,197 @@ int main(int argc, char** argv) {
       std::fprintf(stderr, "checker: index validation (3 valid, 5 corruptions rejected) done\n");
     }
   }
+
+  // ---- Pass V (adaptive parts, certify_vparts; THEORY.md §4b) against the
+  // edit-distance oracle with radii up to VMAX: a certified d1 is the global
+  // minimum, nothing within the radius is missed, a unique best with no second
+  // locus within R has none, the result does not depend on threads or on the
+  // order clusters are verified in, and [XL, XU] holds OPT. Lemma N and the
+  // DP over disjoint q-mers are checked directly.
+  {
+    std::mt19937_64 gv(seed ^ 0xadab7ee5ULL);  // its own stream: the other tests' data stay as they were
+    const auto& R = ref.seq.owned;
+    {  // Lemma N: the reference q-mer at the aligned start of a stretch within one edit is a neighbour
+      uint64_t keys[NBMAX];
+      int checked = 0, missing = 0;
+      for (int it = 0; it < 20000; ++it) {
+        const int qq = 8 + static_cast<int>(gv() % 25);
+        const std::vector<uint8_t> s = random_seq(gv, qq);
+        std::vector<uint8_t> t = s;
+        const int kind = static_cast<int>(gv() % 4), at = static_cast<int>(gv() % qq);
+        if (kind == 1) t[at] = static_cast<uint8_t>((t[at] + 1 + gv() % 3) % 4);  // a substitution
+        if (kind == 2) t.erase(t.begin() + at);                                    // a read base missing from the reference
+        if (kind == 3) t.insert(t.begin() + at, rand_base(gv));                    // a reference base before read base `at`
+        while (static_cast<int>(t.size()) < qq) t.push_back(rand_base(gv));       // the reference continues
+        t.resize(qq);
+        const int n = vparts_neighbours(s.data(), qq, keys);
+        uint64_t key;
+        kmer_key(t.data(), qq, &key);
+        ++checked;
+        missing += !std::binary_search(keys, keys + n, key);
+      }
+      CHECK(missing == 0, "Lemma N: %d of %d one-edit reference q-mers not among the neighbours", missing, checked);
+      std::fprintf(stderr, "Lemma N: %d one-edit reference q-mers, all among the neighbours: %s\n", checked,
+                   missing ? "no" : "yes");
+    }
+    {  // vparts_dp / vparts_pick against brute force: the most disjoint q-mers within the budget, least cost
+      std::unique_ptr<Workspace> ws(new Workspace);
+      int checked = 0;
+      for (int it = 0; it < 600; ++it) {
+        const int L = 20 + static_cast<int>(gv() % 17), qq = 6 + static_cast<int>(gv() % 5), n = L - qq + 1;
+        uint64_t cost[LMAX];
+        for (int a = 0; a < n; ++a) cost[a] = gv() % 7 == 0 ? kVInf : gv() % 12;
+        const uint64_t budget = it % 10 == 0 ? kVInf - 1 : gv() % 40;
+        const int m = vparts_dp(L, qq, cost, budget, *ws, 0);
+        int bm = 0;
+        uint64_t bc = 0;
+        std::function<void(int, int, uint64_t)> rec = [&](int from, int k, uint64_t c) {
+          if (k > bm || (k == bm && c < bc)) { bm = k; bc = c; }
+          for (int a = from; a < n; ++a)
+            if (cost[a] < kVInf && c + cost[a] <= budget) rec(a + qq, k + 1, c + cost[a]);
+        };
+        rec(0, 0, 0);
+        ++checked;
+        CHECK(m == bm, "vparts_dp: %d parts, brute force %d (L %d q %d budget %llu)", m, bm, L, qq,
+              static_cast<unsigned long long>(budget));
+        if (m != bm || m == 0) continue;
+        vparts_pick(L, m, *ws, 0);
+        uint64_t c = 0;
+        bool ok = true;
+        for (int x = 0; x < m; ++x) {
+          const int a = ws->voff[0][x];
+          ok &= a >= 0 && a + qq <= L && (x == 0 || a >= ws->voff[0][x - 1] + qq) && cost[a] < kVInf;
+          if (ok) c += cost[a];
+        }
+        CHECK(ok && c == bc, "vparts_pick: parts %s, cost %llu, brute force %llu", ok ? "disjoint" : "NOT disjoint",
+              static_cast<unsigned long long>(c), static_cast<unsigned long long>(bc));
+      }
+      std::fprintf(stderr, "pass V DP checked against brute force %d times\n", checked);
+    }
+    const int q = 14;
+    Index ixv = Index::build(ref, q, 1, 4);  // pass V needs s = 1
+    const IndexView viewv = ixv.view(ref);
+    // Reads: every second read above, and reads of 60-150 bases with 0..13
+    // edits from unique sequence, the diverged copies, the 50-copy element and
+    // the tandem repeat, on both strands (a few with an N).
+    std::vector<std::vector<uint8_t>> vreads;
+    for (size_t i = 0; i < reads.size(); i += 2) vreads.push_back(reads[i].seq);
+    const int64_t vanchor[] = {-1, -1, -1, 10000, 30000, 50000, 60250, 66000, 75000};
+    for (int n = 0; n < 400; ++n) {
+      const int L = 60 + 20 * (n % 4) + (n % 4 == 3 ? 30 : 0);  // 60, 80, 100, 150
+      const int c = static_cast<int>(gv() % 2);
+      const int64_t an = vanchor[gv() % 9];
+      int64_t start = an >= 0 && c == 0 ? an + static_cast<int64_t>(gv() % 1500)
+                                        : static_cast<int64_t>(gv() % (ref.lengths[c] - L - 40));
+      start += static_cast<int64_t>(ref.offsets[c]);
+      std::vector<uint8_t> s(R.begin() + start, R.begin() + start + L + 20);
+      mutate(gv, s, static_cast<int>(gv() % 14));
+      s.resize(L);
+      if (n % 37 == 11) s[gv() % L] = 4;
+      if (gv() % 2) {
+        std::vector<uint8_t> rc(L);
+        for (int i = 0; i < L; ++i) rc[i] = s[L - 1 - i] < 4 ? 3 - s[L - 1 - i] : 4;
+        s.swap(rc);
+      }
+      vreads.push_back(s);
+    }
+    ReadBatch vbatch;
+    std::vector<int> vmin(vreads.size(), 99);
+    std::vector<std::vector<Hit>> vtruth(vreads.size());
+    for (size_t i = 0; i < vreads.size(); ++i) {
+      vbatch.offs.push_back(vbatch.codes.size());
+      vbatch.codes.insert(vbatch.codes.end(), vreads[i].begin(), vreads[i].end());
+      vbatch.lens.push_back(static_cast<uint16_t>(vreads[i].size()));
+      vbatch.hashes.push_back(i * 0x9E3779B97F4A7C15ULL + 7);
+      vtruth[i] = oracle(R, vreads[i].data(), static_cast<int>(vreads[i].size()), VMAX);
+      for (auto& h : vtruth[i]) vmin[i] = std::min(vmin[i], h.dist);
+    }
+    std::vector<int> vopt(vreads.size(), INT32_MIN);
+    auto vp = [](int vparts, int budget, int k) {
+      Params p{k, budget};
+      p.vparts = vparts;
+      p.mapq_limit = 8;
+      return p;
+    };
+    const Params vcfgs[] = {vp(1, 4096, VMAX), vp(2, 4096, VMAX), vp(2, 256, VMAX), vp(2, 64, VMAX), vp(2, 16, VMAX),
+                            vp(2, 4096, 7)};
+    int beyond_kmax = 0, bounds = 0, subs = 0;
+    for (const Params& p : vcfgs) {
+      std::vector<Result> res, res1, resrev;
+      map_cpu(viewv, p, vbatch, res, 4);
+      map_cpu(viewv, p, vbatch, res1, 1);
+      Params prev = p;
+      prev.reverse_order = 1;
+      map_cpu(viewv, prev, vbatch, resrev, 4);
+      int cert = 0, deep = 0, nf = 0;
+      for (size_t i = 0; i < vreads.size(); ++i) {
+        const Result& r = res[i];
+        const int L = static_cast<int>(vreads[i].size());
+        CHECK(std::memcmp(&r, &res1[i], sizeof r) == 0, "pass V read %zu differs between 1 and 4 threads", i);
+        const Result& rv = resrev[i];
+        CHECK(r.certified == rv.certified && r.d1 == rv.d1 && r.radius == rv.radius,
+              "pass V vparts=%d budget=%d read %zu: order-dependent result", p.vparts, p.budget, i);
+        if (r.certified == 1 && r.n_best == 1 && rv.n_best == 1)
+          CHECK(r.d2 == rv.d2, "pass V read %zu: order-dependent d2 (%d vs %d)", i, r.d2, rv.d2);
+        CHECK((r.n_best > 1) == (rv.n_best > 1), "pass V read %zu: order-dependent tie", i);
+        CHECK(r.radius <= std::min(p.k, VMAX), "pass V read %zu: radius %d above the cap", i, r.radius);
+        // The budget bounds the work (and ws.cand): at most `budget` hits per strand.
+        CHECK(r.ncand <= 2u * static_cast<uint32_t>(p.budget), "pass V budget=%d read %zu: %u hits enumerated",
+              p.budget, i, r.ncand);
+        if (r.certified != 1) {
+          // Lossless: an uncertified read has nothing within the radius.
+          if (r.reason == kNotFound) {
+            ++nf;
+            CHECK(vmin[i] > r.radius, "pass V vparts=%d budget=%d read %zu: oracle %d within R %d, not found",
+                  p.vparts, p.budget, i, vmin[i], r.radius);
+          }
+          continue;
+        }
+        ++cert;
+        deep += r.d1 > KMAX;
+        CHECK(r.tier == kTierS0 || r.tier == kTierS1, "pass V read %zu: tier %d", i, r.tier);
+        CHECK(r.d1 <= r.radius && r.support == 0 && r.probes[0] == 0 && r.probes[1] == 0,
+              "pass V read %zu: d1 %d R %d support %d", i, r.d1, r.radius, r.support);
+        CHECK(rescore(viewv, r, vreads[i]) == r.nm, "pass V read %zu: CIGAR rescores to %d, NM %d", i,
+              rescore(viewv, r, vreads[i]), r.nm);
+        bool clipped = false;
+        for (int c = 0; c < r.n_cigar; ++c) clipped |= (r.cigar[c] & 0xF) == kOpS;
+        CHECK(clipped || r.nm >= r.d1, "pass V read %zu: unclipped NM %d below d1 %d", i, r.nm, r.d1);
+        CHECK(r.d1 == vmin[i], "pass V vparts=%d budget=%d read %zu: d1 %d != oracle %d", p.vparts, p.budget, i,
+              r.d1, vmin[i]);
+        if (r.n_best == 1 && r.d2 < 0) {  // no second locus within R
+          int64_t span = 0;
+          for (int c = 0; c < r.n_cigar; ++c)
+            if ((r.cigar[c] & 0xF) == kOpM || (r.cigar[c] & 0xF) == kOpD) span += r.cigar[c] >> 4;
+          const int64_t end = r.ref_pos + span - 1;
+          for (auto& h : vtruth[i]) {
+            if (h.dist > r.radius) continue;
+            const bool near = h.strand == r.strand && h.end - end <= 2 * BMAX && end - h.end <= 2 * BMAX;
+            CHECK(near, "pass V read %zu: oracle locus (strand %d end %lld d %d) within R %d missed", i, h.strand,
+                  static_cast<long long>(h.end), h.dist, r.radius);
+          }
+        }
+        if (i % 4 == 0) {  // [XL, XU] and SUB_hi against the local oracles
+          if (vopt[i] == INT32_MIN) vopt[i] = oracle_local(R, vreads[i].data(), L);
+          int xl, xu, sh;
+          certified_bounds(r, L, &xl, &xu, &sh);
+          ++bounds;
+          CHECK(xl <= vopt[i] && vopt[i] <= xu, "pass V read %zu: OPT %d outside [%d, %d]", i, vopt[i], xl, xu);
+          if (i % 8 == 0 && sh < vopt[i]) {
+            const int sub = oracle_sub(R, vreads[i], r.strand, r.ref_pos, ref_span_of(r));
+            ++subs;
+            CHECK(sub <= sh, "pass V read %zu: SUB %d above SUB_hi %d (d1 %d d2 %d R %d)", i, sub, sh, r.d1, r.d2,
+                  r.radius);
+          }
+        }
+      }
+      beyond_kmax += deep;
+      std::fprintf(stderr, "pass V vparts=%d budget=%-4d k=%-2d certified %3d/%zu (%d beyond %d edits), not found %d\n",
+                   p.vparts, p.budget, p.k, cert, vreads.size(), deep, KMAX, nf);
+    }
+    CHECK(beyond_kmax > 0, "pass V certified no read beyond %d edits: the test does not exercise it", KMAX);
+    std::fprintf(stderr, "pass V: [XL, XU] checked %d times, SUB bounds %d times\n", bounds, subs);
+  }
   if (failures) {
     std::fprintf(stderr, "%d check(s) FAILED\n", failures);
     return 1;

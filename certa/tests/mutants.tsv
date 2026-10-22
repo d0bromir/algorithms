@@ -130,3 +130,12 @@ S4	src/seqio.cpp	s/          if (++k % 4 == 0) {/          if (++k % 4 == 1) {/	
 S5	src/seqio.cpp	s/bytes_per_record_ \* 1.02/bytes_per_record_ * 0.5/	equivalent	FASTQ parallel scan: half the bytes scanned in parallel; the serial scan finds the rest (THEORY.md)
 E26	include/certa/core.h	s/    const bool open = blo == 0 \&\& bhi >= B - 1;/    const bool open = true;/	killed	band_score_vec: every row taken as excluding no start (start ranges ignored)
 P17	include/certa/pair.h	s/const int yb = st == 1 ? 0 : Y.n0, ye = st == 1 ? Y.n0 : Y.nch;/const int yb = st == 0 ? 0 : Y.n0, ye = st == 0 ? Y.n0 : Y.nch;/	killed	Thm P: partner chains looked up on the wrong strand (the binary-search range)
+V1	include/certa/core.h	s/R = 2 \* m - 1 < cap ? 2 \* m - 1 : cap;/R = 2 * m < cap ? 2 * m : cap;/	killed	Thm A (A2): one-edit radius 2|S| instead of 2|S| - 1
+V2	include/certa/core.h	s/int R = m - 1 < cap ? m - 1 : cap;/int R = m < cap ? m : cap;/	killed	Thm A (A1): exact-part radius |S| instead of |S| - 1
+V3	include/certa/core.h	s/for (int j = 0; j < q; ++j) if (j != i) w\[k++\] = s\[j\];/for (int j = 0; j < q; ++j) if (j != i) w[k++] = s[j]; continue;/	killed	Lemma N: read bases missing from the reference not in the neighbourhood
+V4	include/certa/core.h	s/for (int j = i; k < q; ++j) w\[k++\] = s\[j\];/for (int j = i; k < q; ++j) w[k++] = s[j]; continue;/	killed	Lemma N: reference bases inserted in the part not in the neighbourhood
+V5	include/certa/core.h	s/for (int j = 0; j < i; ++j) w\[k++\] = s\[j\];/if (i == 0) continue; for (int j = 0; j < i; ++j) w[k++] = s[j];/	killed	Lemma N: a reference base before the part (attributed to it) not in the neighbourhood
+V6	include/certa/core.h	s/evaluate_clusters(ix, L, nclust, R, p.reverse_order, nclust, 1, ws, &b1, &b2);/evaluate_clusters(ix, L, nclust, R, p.reverse_order, nclust, 2, ws, \&b1, \&b2);/	killed	Thm A: clusters need two parts while R assumes one
+V7	include/certa/core.h	s/const int nclust = build_clusters(ws, R + 1, false, BMAX);/const int nclust = build_clusters(ws, R - 1, false, BMAX);/	killed	Thm A: band pad R - 1 (an alignment drifting R diagonals is cut)
+V8	include/certa/core.h	s/int m = mst\[0\] < mst\[1\] ? mst\[0\] : mst\[1\];/int m = mst[0] > mst[1] ? mst[0] : mst[1];/	killed	Thm A: the larger strand's |S| used on both strands (sound, but over the hit budget)
+V9	include/certa/core.h	s/if (ws.vf\[st\]\[k\]\[L\] <= budget) m = k;/if (ws.vf[st][k][L] < budget) m = k;/	killed	Thm A, DP: parts that fit the budget exactly left out

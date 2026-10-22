@@ -118,8 +118,8 @@ const char* const kReasonNames[kNumReasons] = {
 struct Stats {
   uint64_t reads = 0, bases = 0, certified = 0, s0 = 0, s1 = 0, sr = 0, sl = 0, s2 = 0, ties = 0;
   uint64_t reason[kNumReasons] = {};
-  uint64_t by_radius[KMAX + 2] = {};  // certified reads per radius R
-  uint64_t by_d1[KMAX + 1] = {};
+  uint64_t by_radius[VMAX + 2] = {};  // certified reads per radius R (pass V reaches VMAX)
+  uint64_t by_d1[VMAX + 1] = {};
   uint64_t unc_by_used[PMAX + 1] = {};  // uncertified reads per parts searched |S|
   uint64_t pr = 0;                      // reads certified by the pair certificate (PR)
   uint64_t pairs = 0, pairs_cert = 0, pairs_proper = 0;
@@ -149,8 +149,8 @@ struct Stats {
     reads += o.reads; bases += o.bases; certified += o.certified;
     s0 += o.s0; s1 += o.s1; sr += o.sr; sl += o.sl; s2 += o.s2; ties += o.ties;
     for (int i = 0; i < kNumReasons; ++i) reason[i] += o.reason[i];
-    for (int i = 0; i < KMAX + 2; ++i) by_radius[i] += o.by_radius[i];
-    for (int i = 0; i < KMAX + 1; ++i) by_d1[i] += o.by_d1[i];
+    for (int i = 0; i < VMAX + 2; ++i) by_radius[i] += o.by_radius[i];
+    for (int i = 0; i < VMAX + 1; ++i) by_d1[i] += o.by_d1[i];
     for (int i = 0; i <= PMAX; ++i) unc_by_used[i] += o.unc_by_used[i];
     cands += o.cands;
     pr += o.pr; pairs += o.pairs; pairs_cert += o.pairs_cert; pairs_proper += o.pairs_proper;
@@ -944,7 +944,7 @@ int cmd_map(const Args& a) {
   if (a.pos.size() != 2 && a.pos.size() != 3)
     throw std::runtime_error(
         "usage: certa map ref.cidx reads.fq[.gz] [mates.fq[.gz]] [-k 5] [--k1 2] [--budget 16] [--budget2 256] "
-        "[--budget3 0] [--support3 2] [--local 0] [--full-cert] [--index2 second.cidx] [--mapq-limit 8] [-t N] [--gpu] [--device 0] [-o out.sam] "
+        "[--budget3 0] [--support3 2] [--local 0] [--full-cert] [--adaptive-parts 0|1|2] [--vbudget 4096] [--index2 second.cidx] [--mapq-limit 8] [-t N] [--gpu] [--device 0] [-o out.sam] "
         "[-u uncertified.fq] [-U uncertified_mates.fq] [--fallback-mates pair|single -S single_mates.fq] [--max-dist 850] [--stats s.json] [--batch N] [--io-threads N] [--serial-stages]");
   Params p;
   p.k = a.geti("-k", 5);
@@ -975,9 +975,9 @@ int cmd_map(const Args& a) {
   if (p.k < 0) throw std::runtime_error("--k1 must be >= 0");
   const bool second_pass = p2.budget > p.budget || p2.s2_limit > 0 || p2.k > p.k;
   // --full-cert: the most certified reads the certificates allow, at a cost
-  // in speed: pass 3 with budget 4096 and pass L with t = 2 unless given, and
-  // with --index2 every pass again on a second index (shorter parts) for the
-  // reads still uncertified.
+  // in speed: pass 3 with budget 4096, pass V (adaptive parts) and pass L
+  // with t = 2 unless given, and with --index2 every pass again on a second
+  // index (shorter parts) for the reads still uncertified.
   const bool full_cert = a.has("--full-cert");
   // Pass 3 (CPU, opt-in): larger budgets for reads whose parts are all
   // repetitive. It certifies ~0.9% more reads but costs more CPU than the
@@ -1036,6 +1036,21 @@ int cmd_map(const Args& a) {
     throw std::runtime_error("--witness with --index2: the witnesses would refer to two indexes");
   if (!index2_path.empty() && a.has("--serial-stages"))
     throw std::runtime_error("--index2 needs the fused stages (no --serial-stages)");
+  // Pass V (CPU; --full-cert unless --witness): parts chosen per read on the
+  // main index, the rarest disjoint q-mers (1), then also q-mers searched with
+  // up to one edit (2), for the reads passes 1-3 leave uncertified; a
+  // certificate found there is taken (core.h, certify_vparts).
+  Params pv = p2;
+  pv.vparts = a.geti("--adaptive-parts", full_cert && !g_witness ? 2 : 0);
+  if (pv.vparts < 0 || pv.vparts > 2) throw std::runtime_error("--adaptive-parts must be 0, 1 or 2");
+  if (pv.vparts > 0 && g_witness)
+    throw std::runtime_error("--witness with --adaptive-parts: no witness describes adaptive parts");
+  pv.budget = a.geti("--vbudget", HOST_BUDGET_MAX);
+  if (pv.budget < 1 || pv.budget > HOST_BUDGET_MAX) throw std::runtime_error("--vbudget must be in [1, 4096]");
+  pv.k = VMAX;
+  pv.min_support = 1;
+  pv.s2_limit = 0;
+  pv.local = pv.local_only = 0;
   if (intervals && (a.has("-u") || a.has("-U") || a.has("-S")))
     throw std::runtime_error("--intervals writes every read to SAM: no -u/-U/-S");
   const bool gpu = a.has("--gpu");
@@ -1057,6 +1072,13 @@ int cmd_map(const Args& a) {
   if (p3.budget > p2.budget || pl.local > 0)
     std::fprintf(stderr, "[map] pass 3: budget=%d support=%d; pass L: support %d%s\n", p3.budget,
                  p3.min_support, pl.local, full_cert ? " (--full-cert)" : "");
+  if (pv.vparts > 0 && ix.s != 1) {
+    std::fprintf(stderr, "[map] pass V needs an index of every position (s = 1); off\n");
+    pv.vparts = 0;
+  }
+  if (pv.vparts > 0)
+    std::fprintf(stderr, "[map] pass V: adaptive parts %s, budget=%d, radius <= %d\n",
+                 pv.vparts == 1 ? "(rarest q-mers)" : "(rarest q-mers, then one-edit q-mers)", pv.budget, VMAX);
   const IndexView view = ix.view(ref);
   // The second index must hold the same reference: its view reads the first
   // index's copy of the sequence.
@@ -1111,6 +1133,7 @@ int cmd_map(const Args& a) {
   std::string extra;
   if (p3.budget > p2.budget) extra += " --budget3 " + std::to_string(p3.budget) + " --support3 " + std::to_string(p3.min_support);
   if (pl.local > 0) extra += " --local " + std::to_string(pl.local);
+  if (pv.vparts > 0) extra += " --adaptive-parts " + std::to_string(pv.vparts) + " --vbudget " + std::to_string(pv.budget);
   if (view2) extra += " --index2 " + index2_path;
   std::fprintf(sam, "@PG\tID:certa\tPN:certa\tVN:0.5\tCL:certa map -k %d --k1 %d --budget %d --budget2 %d --s2 %d%s%s\n",
                p2.k, p.k, p.budget, p2.budget, p2.s2_limit, gpu ? " --gpu" : "", extra.c_str());
@@ -1173,6 +1196,7 @@ int cmd_map(const Args& a) {
   uint64_t pair_tried = 0; // pairs given to the pair certificate
   uint64_t iv_reads = 0;   // reads given to tier R (interval mode)
   uint64_t index2_tried = 0, index2_certified = 0;  // reads given to the second index, certified there
+  uint64_t vtried = 0, vcertified = 0;              // reads given to pass V, certified there
   auto load = [&](int slot) {
     try {
       auto t = Clock::now();
@@ -1205,9 +1229,12 @@ int cmd_map(const Args& a) {
   };
   Stats total;
   // Re-runs the selected reads of a batch as a compacted batch with other parameters.
-  auto rerun = [&](Slot& S, const std::vector<size_t>& redo, const Params& pp, bool on_gpu) {
+  // Re-runs reads `redo` of a batch with pp; with only_certified, a result
+  // replaces the old one only when certified. Returns the results taken.
+  auto rerun = [&](Slot& S, const std::vector<size_t>& redo, const Params& pp, bool on_gpu,
+                   bool only_certified = false) -> size_t {
     const ReadBatch& batch = S.batch;
-    if (redo.empty()) return;
+    if (redo.empty()) return 0;
     ReadBatch sub;
     sub.offs.resize(redo.size());
     sub.lens.resize(redo.size());
@@ -1223,8 +1250,16 @@ int cmd_map(const Args& a) {
     std::vector<Result> res2;
     if (on_gpu) gm->map(pp, sub, res2);
     else map_cpu(view, pp, sub, res2, threads);
-    for (size_t x = 0; x < redo.size(); ++x) S.res[redo[x]] = res2[x];
+    size_t taken = 0;
+    for (size_t x = 0; x < redo.size(); ++x)
+      if (!only_certified || res2[x].certified == 1) {
+        S.res[redo[x]] = res2[x];
+        ++taken;
+      }
+    return taken;
   };
+  // Pass V's reads: every read still uncertified (not those too short or long).
+  auto wantV = [](const Result& r) { return r.certified == 0 && r.reason != kBadLength; };
   // Formats reads [a0, b0) of a batch (a0 even in paired mode) into the given
   // outputs, in input order, and counts them into s; psc is scratch for
   // interval mode's mate rescue.
@@ -1305,8 +1340,8 @@ int cmd_map(const Args& a) {
         ++(tier == kTierS0 ? s.s0 : tier == kTierS1 ? s.s1 : tier == kTierSR ? s.sr :
            tier == kTierSL ? s.sl : s.pr);
         s.ties += res[i].n_best > 1;
-        if (res[i].radius >= 0 && res[i].radius <= KMAX + 1) ++s.by_radius[res[i].radius];
-        if (res[i].d1 >= 0) ++s.by_d1[res[i].d1];
+        if (res[i].radius >= 0 && res[i].radius <= VMAX + 1) ++s.by_radius[res[i].radius];
+        if (res[i].d1 >= 0 && res[i].d1 <= VMAX) ++s.by_d1[res[i].d1];
       }
     }
   };
@@ -1348,6 +1383,14 @@ int cmd_map(const Args& a) {
       }
       rerun(S, redo, p3, false);
       third += redo.size();
+    }
+    if (pv.vparts > 0) {
+      // Pass V, on the CPU: only a certificate replaces the pass-3 result.
+      std::vector<size_t> redo;
+      for (size_t i = 0; i < res.size(); ++i)
+        if (wantV(res[i])) redo.push_back(i);
+      vcertified += rerun(S, redo, pv, false, true);
+      vtried += redo.size();
     }
     if (pl.local > 0) {
       // Pass L, on the CPU: certified local alignment (tier SL).
@@ -1477,7 +1520,7 @@ int cmd_map(const Args& a) {
     std::vector<std::string> sam_out(nc), fq_out(nc), fq2_out(nc), fqs_out(nc);
     const int nt = std::max(1, std::min<int>(threads, static_cast<int>(nc)));
     std::vector<Stats> st(nt);
-    std::vector<std::array<uint64_t, 7>> counts(nt, std::array<uint64_t, 7>{});
+    std::vector<std::array<uint64_t, 9>> counts(nt, std::array<uint64_t, 9>{});
     std::vector<std::exception_ptr> errors(nt);
     std::atomic<size_t> next{0};
     // Which reads each pass re-runs (the same on either index).
@@ -1499,8 +1542,9 @@ int cmd_map(const Args& a) {
         civ.reserve(kChunk);
         size_t idx[kChunk], id2[kChunk], sub[kChunk];
         std::unique_ptr<Result[]> rr(new Result[kChunk]), rx(new Result[kChunk]);
-        // escalated, third, local, pair_tried, iv_reads, index2 tried, index2 certified
-        std::array<uint64_t, 7>& cnt = counts[w];
+        // escalated, third, local, pair_tried, iv_reads, index2 tried, index2 certified,
+        // pass V tried, pass V certified
+        std::array<uint64_t, 9>& cnt = counts[w];
         auto rerun_chunk = [&](size_t m, const Params& pq) {
           map_reads(view, pq, batch, idx, m, rr.get(), *ws);
           for (size_t k = 0; k < m; ++k) res[idx[k]] = rr[k];
@@ -1534,6 +1578,20 @@ int cmd_map(const Args& a) {
               if (want3(res[i])) idx[m++] = i;
             rerun_chunk(m, p3);
             cnt[1] += m;
+          }
+          if (pv.vparts > 0) {
+            // Pass V: a certificate found with adaptive parts is taken; the
+            // other reads keep their pass-3 results (pass L reads those).
+            m = 0;
+            for (size_t i = a0; i < b0; ++i)
+              if (wantV(res[i])) idx[m++] = i;
+            map_reads(view, pv, batch, idx, m, rr.get(), *ws);
+            for (size_t k = 0; k < m; ++k)
+              if (rr[k].certified == 1) {
+                res[idx[k]] = rr[k];
+                ++cnt[8];
+              }
+            cnt[7] += m;
           }
           if (pl.local > 0) {
             m = 0;
@@ -1620,6 +1678,8 @@ int cmd_map(const Args& a) {
       iv_reads += counts[w][4];
       index2_tried += counts[w][5];
       index2_certified += counts[w][6];
+      vtried += counts[w][7];
+      vcertified += counts[w][8];
     }
     t_out += secs(t);
   };
@@ -1701,6 +1761,9 @@ int cmd_map(const Args& a) {
   std::fprintf(stderr, "[map] second pass (budget %d, S2 <= %d): %.2f%% of reads; third pass (CPU, budget %d): %.2f%%\n",
                p2.budget, p2.s2_limit, pct(escalated), p3.budget, pct(third));
   std::fprintf(stderr, "[map] local pass (CPU, support %d): %.2f%% of reads\n", pl.local, pct(local));
+  if (pv.vparts > 0)
+    std::fprintf(stderr, "[map] pass V (CPU, adaptive parts): %.2f%% of reads tried, %.2f%% certified there\n",
+                 pct(vtried), pct(vcertified));
   if (view2)
     std::fprintf(stderr, "[map] second index (CPU, every pass): %.2f%% of reads tried, %.2f%% certified there\n",
                  pct(index2_tried), pct(index2_certified));
@@ -1755,11 +1818,15 @@ int cmd_map(const Args& a) {
     for (int i = 1; i < kNumReasons; ++i)
       std::fprintf(js, "%s\"%s\": %llu", i > 1 ? ", " : "", kReasonNames[i],
                    static_cast<unsigned long long>(total.reason[i]));
+    // Up to KMAX, or further when pass V certified larger distances or radii.
+    int top = KMAX;
+    for (int i = KMAX + 1; i <= VMAX; ++i)
+      if (total.by_d1[i] || total.by_radius[i]) top = i;
     std::fprintf(js, "},\n  \"certified_by_d1\": [");
-    for (int i = 0; i <= KMAX; ++i)
+    for (int i = 0; i <= top; ++i)
       std::fprintf(js, "%s%llu", i ? ", " : "", static_cast<unsigned long long>(total.by_d1[i]));
     std::fprintf(js, "],\n  \"certified_by_radius\": [");
-    for (int i = 0; i <= KMAX; ++i)
+    for (int i = 0; i <= top; ++i)
       std::fprintf(js, "%s%llu", i ? ", " : "", static_cast<unsigned long long>(total.by_radius[i]));
     if (intervals) {
       std::fprintf(js, "],\n  \"intervals\": {\"tier_r_reads\": %llu, \"tier_r_exact\": %llu, \"interval\": %llu, "
@@ -1790,7 +1857,8 @@ int main(int argc, char** argv) {
                    "certa 0.7 - certified short-read fast path (prototype)\n"
                    "  certa index ref.fa -o ref.cidx [-q 22] [-s 8] [-t N]\n"
                    "  certa map ref.cidx reads.fq[.gz] [-k 5] [--k1 2] [--budget 16] [--budget2 256]\n"
-                   "            [--budget3 0|4096] [--support3 2] [--local 0|2] [-t N] [--gpu] [--device 0]\n"
+                   "            [--budget3 0|4096] [--support3 2] [--local 0|2] [--full-cert] [--adaptive-parts 0|1|2]\n"
+                   "            [--index2 second.cidx] [-t N] [--gpu] [--device 0]\n"
                    "            [-o out.sam] [-u uncertified.fq] [--stats s.json] [--batch N] [--io-threads N]\n"
                    "            [--intervals [--witness] [--iv-mapq point|cons]]\n"
                    "  certa repeat ref.cidx reads.fq [--tau 16] [--tsv out.tsv]\n"

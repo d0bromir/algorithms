@@ -12,7 +12,7 @@ names:
 
 **Review status.** Written, then cross-checked by:
 - whole-reference oracles (4 seeds, ARM and x86);
-- 130 mutants;
+- 139 mutants;
 - exhaustive verification of the finite lemmas.
 
 It has **not yet been reviewed by a second person**. §11 lists what a
@@ -152,6 +152,67 @@ two smallest distances b1 ≤ b2, each with limit b2 − 1.
 
 **Theorem 4 (SR).** Two distinct exact full-length matches prove d1 = 0 and
 n_opt ≥ 2, under any scoring. *Mutant:* E2.
+
+**Edit attribution.** A substitution or an inserted read base belongs to its
+read base; a deleted reference base, lying between read bases j − 1 and j,
+belongs to read base j (to position L after the last base). So every edit
+belongs to one read position, and touches at most one of any disjoint parts.
+
+**Lemma N (one-edit neighbourhood).** Let p be a read q-mer, aligned with at
+most one edit to the reference stretch that starts at position g (the first
+reference base the alignment of p consumes, or would consume next). The
+reference q-mer at g is then one of: p; p with one base substituted; p
+without its base i, followed by any base (read base i missing from the
+reference, 0 ≤ i < q); p with a base inserted before its base i, cut to q
+bases (a reference base before read base i, 0 ≤ i < q).
+*Proof:* by the edit. None: the q-mer is p. A substitution at i: p with
+base i changed. Read base i inserted: the stretch is p without base i
+(q − 1 bases), and the q-mer at g adds the next reference base. A
+reference base before read base i (by the attribution, i < q): the stretch
+is p with that base inserted, q + 1 bases, of which the q-mer is the first
+q. ∎
+- *Built:* `vparts_neighbours` (core.h), at most 1 + 11q keys.
+- *Test:* 20,000 random q-mers (q = 8 … 32), one edit of each kind at
+  every position, the reference continuing at random; the q-mer at g must
+  be a neighbour.
+- *Mutants:* V3, V4, V5.
+
+**Theorem A (adaptive parts, pass V).** Let s = 1 (every reference position
+indexed), and choose, per read and strand, disjoint read q-mers S, with all
+their hits enumerated.
+- *(A1) exact parts.* Every locus with d ≤ |S| − 1 edits has an untouched
+  part of S (Theorem 1 with t = 1, which holds for any disjoint parts, so
+  for parts chosen after the hit counts are known); its hit lies on the
+  alignment, and every diagonal of the alignment is within ±d of the
+  hit's (they differ by the indels between them). R = |S| − 1.
+- *(A2) one-edit parts.* For every part p at read offset a, enumerate every
+  position g whose q-mer is in Lemma N's set, as the diagonal g − a. Every
+  locus with d ≤ 2|S| − 1 has a part with at most one edit (if every part
+  had two, d ≥ 2|S|). By Lemma N its reference q-mer at g is enumerated;
+  the alignment's diagonal at p is within ±1 of g − a (the edit may be an
+  indel at p's first base), and every other diagonal of the alignment is
+  within ±d of that one. R = 2|S| − 1.
+- *Verification:* hits are clustered with pad R + 1, so the band of a
+  cluster holds every such alignment (Theorem 2), and verified as in
+  Theorem 3; R ≤ VMAX = 12, bands of up to BMAX = 96 diagonals (host only).
+  The same |S| is used on both strands. The certified d1, d2, ties and SUB
+  bound follow as for S1 (`finish_certified`).
+- *Choice of parts (any choice is sound):* (A1) the most disjoint q-mers
+  whose hits fit the budget, least hits among them (a DP over read offsets,
+  `vparts_dp`); (A2) the most disjoint q-mers with the fewest hits, then
+  those whose neighbourhoods are cheapest while they fit the budget.
+- *No witness:* the checker's probes are exact; pass V records carry none,
+  and `--witness` turns pass V off.
+- *Tests:* the oracle at radius 12 on 640 reads of 60–150 bases with up to
+  13 edits, from unique sequence and every repeat of the test genome, six
+  settings (budget 16 … 4096, radius cap 7 and 12): d1 equals the global
+  minimum; a not-found read has nothing within R; a unique best with no
+  second locus within R has none; threads and verification order change
+  nothing; [XL, XU] holds OPT and SUB ≤ SUB_hi; at most `budget` hits are
+  enumerated per strand. The DP is checked against brute force.
+- *Mutants:* V1, V2, V6, V7, V8, V9. V8 (the larger strand's |S| on both
+  strands) keeps the certificate sound, since every chosen part is still
+  enumerated in full, but breaks the hit budget, so the budget check kills it.
 
 ## 4. The affine local objective
 
@@ -1130,6 +1191,7 @@ positions, more than a mate covers.
 |---|---|---|---|---|
 | Lemma I, V0 | core.h `enumerate_parts`; check.cpp | all; index validation | E3, C4, C8, C9 | — |
 | Thm 1, 1′, 2, 3, 4 | core.h `process_read`, `evaluate_clusters` | edit-distance oracle | E1–E7 | — |
+| Lemma N, Thm A (pass V) | core.h `vparts_neighbours`, `vparts_dp`, `certify_vparts` | Lemma N directly; DP against brute force; edit-distance oracle at radius 12 | V1–V9 | — |
 | Lemma L, S, W, C | core.h `local_bound`; pair.h `span_bound`; check.cpp | local oracle | L1–L5, L7, C1, C3; L6 equivalent (Lemma S) | L, S |
 | Thm L, SL SUB | core.h `certify_local` | local + SUB oracles, planted reads e–i | L1–L5, L7, L8, A4, A10 | — |
 | Lemma E, O, Prop. E′ | core.h `edit_bound`, `process_read`; interval.h | [XL, XU] and SUB oracles, planted reads | A1, A2 (equivalent), A3, A5 | E |

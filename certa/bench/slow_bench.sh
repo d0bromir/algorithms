@@ -8,8 +8,9 @@
 #      Yara 1.0.5      -e 4 -y full: every alignment with <= 4 % errors;
 #      RazerS 3 3.5.12 -i 96 -rr 100: 100 % recognition of every match with
 #                      >= 96 % identity (pairs: -ll 450 -le 400, i.e. 50-850).
-#    CERTA in interval mode (every read gets a record), CPU and GPU, with and
-#    without the q = 15 second index.
+#    CERTA in interval mode (every read gets a record), CPU and GPU: default,
+#    --full-cert without and with pass V (adaptive parts), and with the q = 15
+#    second index too.
 #    RazerS 3's paired mode aborts (std::bad_alloc) at the end of every run
 #    in this build (aarch64 Bioconda), with -le 150 too: its single-end time
 #    is the comparison, the paired run is kept to record that.
@@ -66,12 +67,12 @@ if has certa; then
   for rep in $(seq 1 $REPS); do
     for g in cpu gpu; do
       G=""; [ $g = gpu ] && G=$GPU
-      run single-end certa-$g "default --intervals" $rep "'$C' map $IDX $R1 -t 64 $G --intervals -o /dev/null 2>/dev/null"
-      run single-end certa-$g "--full-cert --intervals" $rep "'$C' map $IDX $R1 -t 64 $G --full-cert --intervals -o /dev/null 2>/dev/null"
-      run single-end certa-$g "--full-cert --index2 q15 --intervals" $rep "'$C' map $IDX $R1 -t 64 $G --full-cert --index2 $IDX2 --intervals -o /dev/null 2>/dev/null"
-      run paired certa-$g "default --intervals" $rep "'$C' map $IDX $R1 $R2 -t 64 $G --intervals -o /dev/null 2>/dev/null"
-      run paired certa-$g "--full-cert --intervals" $rep "'$C' map $IDX $R1 $R2 -t 64 $G --full-cert --intervals -o /dev/null 2>/dev/null"
-      run paired certa-$g "--full-cert --index2 q15 --intervals" $rep "'$C' map $IDX $R1 $R2 -t 64 $G --full-cert --index2 $IDX2 --intervals -o /dev/null 2>/dev/null"
+      for m in "single-end:$R1" "paired:$R1 $R2"; do
+        run ${m%%:*} certa-$g "default --intervals" $rep "'$C' map $IDX ${m#*:} -t 64 $G --intervals -o /dev/null 2>/dev/null"
+        run ${m%%:*} certa-$g "--full-cert --adaptive-parts 0 --intervals" $rep "'$C' map $IDX ${m#*:} -t 64 $G --full-cert --adaptive-parts 0 --intervals -o /dev/null 2>/dev/null"
+        run ${m%%:*} certa-$g "--full-cert --intervals" $rep "'$C' map $IDX ${m#*:} -t 64 $G --full-cert --intervals -o /dev/null 2>/dev/null"
+        run ${m%%:*} certa-$g "--full-cert --index2 q15 --intervals" $rep "'$C' map $IDX ${m#*:} -t 64 $G --full-cert --index2 $IDX2 --intervals -o /dev/null 2>/dev/null"
+      done
     done
   done
 fi
@@ -98,8 +99,10 @@ if has razers; then
     rm -f "$O/razers_pe.sam"
   if [ "$NRZ" -lt 2000000 ]; then
     for rep in $(seq 1 $REPS); do
-      run single-end-$NRZ certa-cpu "--full-cert --index2 q15 --intervals" $rep "'$C' map $IDX $Z1 -t 64 --full-cert --index2 $IDX2 --intervals -o /dev/null 2>/dev/null"
-      run paired-$NRZ certa-cpu "--full-cert --index2 q15 --intervals" $rep "'$C' map $IDX $Z1 $Z2 -t 64 --full-cert --index2 $IDX2 --intervals -o /dev/null 2>/dev/null"
+      for x in "--full-cert" "--full-cert --index2 $IDX2"; do
+        run single-end-$NRZ certa-cpu "${x/$IDX2/q15} --intervals" $rep "'$C' map $IDX $Z1 -t 64 $x --intervals -o /dev/null 2>/dev/null"
+        run paired-$NRZ certa-cpu "${x/$IDX2/q15} --intervals" $rep "'$C' map $IDX $Z1 $Z2 -t 64 $x --intervals -o /dev/null 2>/dev/null"
+      done
     done
   fi
 fi
@@ -132,19 +135,19 @@ if has check; then
   }
   # RazerS 3 flags its first match primary, not its best: RazerS3:all takes
   # each read's best record (weaknesses.py).
-  echo "-- CERTA single-end --full-cert --index2 --intervals, 2 M reads"
-  log $R1 --full-cert --index2 $IDX2 --intervals
+  echo "-- CERTA single-end --full-cert --intervals, 2 M reads"
+  log $R1 --full-cert --intervals
   rz=""; [ "$NRZ" -ge 2000000 ] && rz=RazerS3:all=$O/razers_se.sam
   python3 "$WEAK" "$O/certa.sam" $(tools Yara=$O/yara_se.sam $rz)
-  echo "-- CERTA paired --full-cert --index2 --intervals, 2 M pairs"
-  log $R1 $R2 --full-cert --index2 $IDX2 --intervals
+  echo "-- CERTA paired --full-cert --intervals, 2 M pairs"
+  log $R1 $R2 --full-cert --intervals
   rz=""; [ "$NRZ" -ge 2000000 ] && rz=RazerS3:all=$O/razers_pe.sam
   python3 "$WEAK" "$O/certa.sam" $(tools Yara=$O/yara_pe.sam $rz)
   if [ "$NRZ" -lt 2000000 ]; then
     for m in se:"$Z1" pe:"$Z1 $Z2"; do
       [ -s "$O/razers_${m%%:*}.sam" ] || continue
       echo "-- CERTA on RazerS 3's $NRZ reads (${m%%:*})"
-      log ${m#*:} --full-cert --index2 $IDX2 --intervals
+      log ${m#*:} --full-cert --intervals
       python3 "$WEAK" "$O/certa.sam" RazerS3:all="$O/razers_${m%%:*}.sam" RazerS3-primary="$O/razers_${m%%:*}.sam"
     done
   fi

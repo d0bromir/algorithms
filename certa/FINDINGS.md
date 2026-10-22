@@ -897,6 +897,27 @@ verifies the XQ of PR mates too.
     support 1 at budget 4096 and every hit verified on its own band
     (pass 3 uses support 2 and drops wide clusters) give +0.57 points
     alone. Next: rare parts and one-edit parts in the mapper itself.
+- **Pass V: adaptive parts in the mapper** (2026-10-22; THEORY.md Lemma N,
+  Theorem A; `bench/results/hg002_2026-10/pass_v_check.txt`). For reads
+  still uncertified after pass 3: the rarest disjoint q-mers as parts
+  (radius |S| − 1), then q-mers searched with one edit (radius 2|S| − 1, at
+  most 12). On with `--full-cert` (unless `--witness`), or
+  `--adaptive-parts 1|2`; opt-in, so the default output is byte-identical
+  to 77b1df2 (14 files, CPU and A100), and pass V off reproduces 77b1df2's
+  `--budget3 4096 --local 2`; with it on, CPU = A100 and fused = serial.
+  - *2 M HG002, interval mode, 64 cores:* single-end `--full-cert` 95.65 →
+    97.63 % certified, 3.0 → 5.6 s, 24 GB (the old maximum, `--index2`:
+    96.83 %, 6.3 s, 46 GB; both: 97.73 %, 8.4 s). Paired 96.33 → 97.45 % of
+    reads (both mates 94.90 → 96.18 % of pairs), 6.9 → 12.5 s. The
+    prototype predicted 97.65 %.
+  - *Tests:* the oracle at radius 12 (873 reads, 6 settings, 3 seeds, ARM
+    and x86), Lemma N directly, the DP against brute force, the hit budget;
+    9 mutants V1–V9 killed (139 in all: 131 killed, 8 equivalent).
+  - *Against the slow mappers* (`slow_reliability.txt`): within their own
+    error rate (4 % of the read length) Yara and RazerS 3 miss none of the
+    reads CERTA certifies; every read they leave unmapped has its proven
+    optimum beyond that rate (17,836 single-end reads, 0.89 %; distances
+    rechecked against the reference). CERTA now certifies those too.
 - **HG001 GATK indels** are the one comparison where CERTA's F1 is lower
   (0.9909 vs 0.9922). Look at the 13 extra FP and 14 extra FN.
 - **Long reads:** the mapper's limits (320 bp, 8 parts, radius 5) exclude
