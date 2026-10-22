@@ -876,8 +876,27 @@ verifies the XQ of PR mates too.
     banded verification (Myers/Hyyrö, RazerS 3 and Yara) for the cost of
     `--full-cert`. Not worth taking: exhaustive search at a larger radius
     (Yara at 12 edits costs 1.3 CPU-s per read), RazerS 3's scan of the
-    genome, and end-to-end-only alignment: the remaining 1.82 % need
-    clipped (local) certificates or are not from this reference.
+    genome, and end-to-end-only alignment: the remaining 1.82 % have no
+    end-to-end alignment within 12 edits, so only clipped (local)
+    certificates or larger radii can reach them.
+  - *Their payoff, measured* (`tools/payoff`, `bench/payoff_union.py`,
+    `slow_payoff.txt`): a standalone certifier of the minimum end-to-end
+    edit distance, one part choice per technique, on the reads CERTA leaves
+    uncertified. Every certified distance agrees with Yara's (31
+    comparisons, none with fewer edits; no two techniques disagree on a
+    read). On top of `--full-cert` (95.65 %), on the q = 22 index alone:
+    rarest disjoint 22-mers +0.85 points, one-edit parts (the six rarest
+    22-mers' neighbourhoods; radius up to 11) +1.55, both in a cascade
+    +2.00 (97.65 %) for 344 more CPU-s in this prototype (CERTA's whole
+    run: 105 s; 4.0 ms per residual read). That beats
+    `--index2` (96.83 %, two 23 GB indexes); with it too, 97.75 %; every
+    technique on both indexes, 97.99 % for 20× the CPU, against a ceiling
+    of 98.18 % (the 1.82 % without an end-to-end alignment within 12 edits).
+    Long exact parts add little once these run, and cost most here (24–41
+    ms per read through hash-index extension). CERTA's own parts with
+    support 1 at budget 4096 and every hit verified on its own band
+    (pass 3 uses support 2 and drops wide clusters) give +0.57 points
+    alone. Next: rare parts and one-edit parts in the mapper itself.
 - **HG001 GATK indels** are the one comparison where CERTA's F1 is lower
   (0.9909 vs 0.9922). Look at the 13 extra FP and 14 extra FN.
 - **Long reads:** the mapper's limits (320 bp, 8 parts, radius 5) exclude

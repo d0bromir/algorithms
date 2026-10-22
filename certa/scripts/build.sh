@@ -52,6 +52,7 @@ else
     "${libs[@]}" &
   "$cxx" "${flags[@]}" -o "$build/test_longread" "$here/tests/test_longread.cpp" "$build/index.o" "$build/seqio.o" \
     "${libs[@]}" &
+  "$cxx" "${flags[@]}" -o "$build/payoff" "$here/tools/payoff.cpp" "$build/index.o" "$build/seqio.o" "${libs[@]}" &
   if [[ "$cuda" != OFF ]] && command -v nvcc >/dev/null; then
     gencode=()
     for a in ${archs//;/ }; do gencode+=(-gencode "arch=compute_$a,code=sm_$a"); done

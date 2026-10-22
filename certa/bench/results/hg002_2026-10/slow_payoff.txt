@@ -1,0 +1,165 @@
+# Payoff of the techniques taken from the slow mappers (tools/payoff, bench/payoff_union.py), galaxy, 64 threads, 2026-10-22, build ea812d8 + tools/payoff.
+# Each technique certifies the minimum end-to-end edit distance of a read (both strands) by pigeonhole over its parts, on the 2 M HG002 reads (single-end) CERTA leaves uncertified:
+#   fixed  CERTA's parts (support 1 at budget 4096, every hit verified on its own band); rare  the most disjoint 22-mers (15-mers) with the fewest hits (DP);
+#   long   exact parts of any length (counted through a q-mer inside them, extension <= 40 each side, q-mers with > 20,000 hits skipped);
+#   err1   disjoint q-mers each searched with up to one edit (all one-edit neighbours looked up; radius 2|S| - 1); err1r  the same for the rarest disjoint q-mers only.
+# Budget 4096 hits per strand (pass 3's), radius cap 15. "vs truth": Yara 1.0.5 -e 4 -y full (6 edits) or -e 8 (12 edits) on the same reads; "truth fewer edits" would mean a wrong certificate.
+# "CPU vs CERTA": the cascade's CPU against CERTA's for all 2 M reads in interval mode (197.2 s with --full-cert --index2, 104.6 s with --full-cert; slow_galaxy.tsv). Prototype costs (scalar band DP per hit, per-read lookups).
+
+######## run 1: validation on the first 20,000 reads; every mode on both indexes; budget 256
+== 11:43:12 uncertified reads and their truth
+[map] 2000000 reads: certified 96.83% (S0 exact 73.81%, S1 <=R edits 20.38%, SR repeat 1.55%, SL local 1.09%), ties 5.53%
+uncertified: 63368 reads
+yara -e 8 on the 2,000-read sample: 357.72 s
+== 11:49:47 validation: the first 20,000 reads, every certified distance against Yara -e 4
+payoff: 20000 reads, q = 22, budget 4096, k 6, cap 20000, ext 40, 64 threads
+fixed  certified 19224 of 20000 (96.12 % of 20000 reads); CPU 8.7 s (0.43 ms per read), 333.7 band checks per read
+       distance: 0: 15115 1: 2823 2: 759 3: 283 4: 164 5: 80
+       vs truth: equal 19224, truth fewer edits 0, truth more 0, truth unmapped 0
+rare   certified 19280 of 20000 (96.40 % of 20000 reads); CPU 8.3 s (0.41 ms per read), 227.2 band checks per read
+       distance: 0: 15116 1: 2830 2: 766 3: 290 4: 181 5: 97
+       vs truth: equal 19280, truth fewer edits 0, truth more 0, truth unmapped 0
+long   certified 19291 of 20000 (96.45 % of 20000 reads); CPU 188.8 s (9.44 ms per read), 169.0 band checks per read
+       distance: 0: 15118 1: 2831 2: 769 3: 292 4: 181 5: 100
+       vs truth: equal 19291, truth fewer edits 0, truth more 0, truth unmapped 0
+err1   certified 19182 of 20000 (95.91 % of 20000 reads); CPU 195.9 s (9.80 ms per read), 376.6 band checks per read
+       distance: 0: 14990 1: 2815 2: 746 3: 291 4: 176 5: 103 6: 61
+       vs truth: equal 19179, truth fewer edits 0, truth more 0, truth unmapped 3
+== 11:49:55 payoff, q = 22 index, budget 4096, no radius cap below 15
+payoff: 63368 reads, q = 22, budget 4096, k 15, cap 20000, ext 40, 64 threads
+fixed  certified 5325 of 63368 (0.27 % of 2000000 reads); CPU 69.2 s (1.09 ms per read), 1040.0 band checks per read
+       distance: 0: 959 1: 2049 2: 1280 3: 591 4: 311 5: 135
+       vs truth: equal 5325, truth fewer edits 0, truth more 0, truth unmapped 0
+rare   certified 8913 of 63368 (0.45 % of 2000000 reads); CPU 73.3 s (1.16 ms per read), 787.4 band checks per read
+       distance: 0: 1077 1: 2609 2: 2054 3: 1396 4: 1111 5: 666
+       vs truth: equal 8913, truth fewer edits 0, truth more 0, truth unmapped 0
+long   certified 9877 of 63368 (0.49 % of 2000000 reads); CPU 1527.0 s (24.10 ms per read), 680.2 band checks per read
+       distance: 0: 1124 1: 2717 2: 2238 3: 1623 4: 1326 5: 849
+       vs truth: equal 9877, truth fewer edits 0, truth more 0, truth unmapped 0
+err1   certified 15492 of 63368 (0.77 % of 2000000 reads); CPU 793.2 s (12.52 ms per read), 1232.5 band checks per read
+       distance: 0: 143 1: 1725 2: 795 3: 1144 4: 777 5: 1116 6: 904 7: 1125 8: 1174 9: 2692 10: 2037 11: 1860
+       vs truth: equal 6530, truth fewer edits 0, truth more 0, truth unmapped 8962
+== 11:50:35 payoff, q = 15 index (exact parts: up to 10, radius up to 9)
+payoff: 63368 reads, q = 15, budget 4096, k 15, cap 20000, ext 40, 64 threads
+fixed  certified 8950 of 63368 (0.45 % of 2000000 reads); CPU 255.3 s (4.03 ms per read), 2888.4 band checks per read
+       distance: 0: 899 1: 2076 2: 1413 3: 809 4: 587 5: 480 6: 379 7: 389 8: 426 9: 1492
+       vs truth: equal 6620, truth fewer edits 0, truth more 0, truth unmapped 2330
+rare   certified 12263 of 63368 (0.61 % of 2000000 reads); CPU 258.9 s (4.09 ms per read), 2620.5 band checks per read
+       distance: 0: 1007 1: 2472 2: 1923 3: 1294 4: 1071 5: 942 6: 761 7: 679 8: 622 9: 1492
+       vs truth: equal 9423, truth fewer edits 0, truth more 0, truth unmapped 2840
+long   certified 14723 of 63368 (0.74 % of 2000000 reads); CPU 2599.6 s (41.02 ms per read), 2087.1 band checks per read
+       distance: 0: 1123 1: 2723 2: 2252 3: 1657 4: 1450 5: 1277 6: 1029 7: 906 8: 814 9: 1492
+       vs truth: equal 11455, truth fewer edits 0, truth more 0, truth unmapped 3268
+== 11:51:25 radii above 6 against Yara -e 8 (12 edits), the 2,000-read sample
+payoff: 2000 reads, q = 22, budget 4096, k 15, cap 20000, ext 40, 64 threads
+err1   certified 466 of 2000 (23.30 % of 2000 reads); CPU 24.2 s (12.11 ms per read), 1166.7 band checks per read
+       distance: 0: 3 1: 51 2: 22 3: 31 4: 21 5: 37 6: 19 7: 48 8: 32 9: 84 10: 69 11: 49
+       vs truth: equal 466, truth fewer edits 0, truth more 0, truth unmapped 0
+payoff: 2000 reads, q = 15, budget 4096, k 15, cap 20000, ext 40, 64 threads
+fixed  certified 277 of 2000 (13.85 % of 2000 reads); CPU 8.3 s (4.15 ms per read), 2878.3 band checks per read
+       distance: 0: 21 1: 51 2: 48 3: 21 4: 17 5: 19 6: 11 7: 23 8: 15 9: 51
+       vs truth: equal 277, truth fewer edits 0, truth more 0, truth unmapped 0
+rare   certified 351 of 2000 (17.55 % of 2000 reads); CPU 8.2 s (4.11 ms per read), 2606.2 band checks per read
+       distance: 0: 23 1: 61 2: 60 3: 34 4: 24 5: 31 6: 17 7: 30 8: 20 9: 51
+       vs truth: equal 351, truth fewer edits 0, truth more 0, truth unmapped 0
+== 11:51:28 budget 256 (no pass 3)
+payoff: 63368 reads, q = 22, budget 256, k 15, cap 20000, ext 40, 64 threads
+fixed  certified 1 of 63368 (0.00 % of 2000000 reads); CPU 5.7 s (0.09 ms per read), 99.2 band checks per read
+       distance: 1: 1
+rare   certified 1746 of 63368 (0.09 % of 2000000 reads); CPU 6.9 s (0.11 ms per read), 73.0 band checks per read
+       distance: 0: 222 1: 472 2: 456 3: 301 4: 199 5: 96
+err1   certified 8078 of 63368 (0.40 % of 2000000 reads); CPU 604.3 s (9.54 ms per read), 97.4 band checks per read
+       distance: 0: 7 1: 374 2: 86 3: 305 4: 166 5: 476 6: 395 7: 656 8: 670 9: 2165 10: 1456 11: 1322
+ALL_DONE
+
+######## run 2: one-edit variant validated; per-read output; cascades over the residual of --full-cert --index2
+== 11:54:08 validation of err1r: the first 20,000 reads, the 2,000-read sample (12 edits)
+payoff: 20000 reads, q = 22, budget 4096, k 6, cap 20000, ext 40, 64 threads
+err1r  certified 18987 of 20000 (94.94 % of 20000 reads); CPU 21.7 s (1.08 ms per read), 408.5 band checks per read
+       distance: 0: 14884 1: 2782 2: 714 3: 283 4: 165 5: 100 6: 59
+       vs truth: equal 18984, truth fewer edits 0, truth more 0, truth unmapped 3
+payoff: 2000 reads, q = 22, budget 4096, k 15, cap 20000, ext 40, 64 threads
+err1r  certified 364 of 2000 (18.20 % of 2000 reads); CPU 7.1 s (3.54 ms per read), 1298.9 band checks per read
+       distance: 0: 1 1: 23 2: 8 3: 18 4: 11 5: 27 6: 13 7: 39 8: 28 9: 79 10: 68 11: 49
+       vs truth: equal 364, truth fewer edits 0, truth more 0, truth unmapped 0
+payoff: 2000 reads, q = 15, budget 4096, k 15, cap 20000, ext 40, 64 threads
+err1r  certified 222 of 2000 (11.10 % of 2000 reads); CPU 16.4 s (8.22 ms per read), 4876.6 band checks per read
+       distance: 1: 23 3: 6 4: 1 5: 8 6: 3 7: 22 8: 12 9: 43 10: 41 11: 25 12: 17 13: 7 14: 6 15: 8
+       vs truth: equal 200, truth fewer edits 0, truth more 0, truth unmapped 22
+== 11:54:12 q = 22, every mode, per read
+payoff: 63368 reads, q = 22, budget 4096, k 15, cap 20000, ext 40, 64 threads
+fixed  certified 5325 of 63368 (0.27 % of 2000000 reads); CPU 68.8 s (1.09 ms per read), 1040.0 band checks per read
+       distance: 0: 959 1: 2049 2: 1280 3: 591 4: 311 5: 135
+       vs truth: equal 5325, truth fewer edits 0, truth more 0, truth unmapped 0
+rare   certified 8913 of 63368 (0.45 % of 2000000 reads); CPU 72.8 s (1.15 ms per read), 787.4 band checks per read
+       distance: 0: 1077 1: 2609 2: 2054 3: 1396 4: 1111 5: 666
+       vs truth: equal 8913, truth fewer edits 0, truth more 0, truth unmapped 0
+long   certified 9877 of 63368 (0.49 % of 2000000 reads); CPU 1515.2 s (23.91 ms per read), 680.2 band checks per read
+       distance: 0: 1124 1: 2717 2: 2238 3: 1623 4: 1326 5: 849
+       vs truth: equal 9877, truth fewer edits 0, truth more 0, truth unmapped 0
+err1   certified 15492 of 63368 (0.77 % of 2000000 reads); CPU 803.4 s (12.68 ms per read), 1232.5 band checks per read
+       distance: 0: 143 1: 1725 2: 795 3: 1144 4: 777 5: 1116 6: 904 7: 1125 8: 1174 9: 2692 10: 2037 11: 1860
+       vs truth: equal 6530, truth fewer edits 0, truth more 0, truth unmapped 8962
+err1r  certified 11782 of 63368 (0.59 % of 2000000 reads); CPU 224.6 s (3.54 ms per read), 1339.4 band checks per read
+       distance: 0: 23 1: 875 2: 263 3: 543 4: 336 5: 753 6: 661 7: 953 8: 1040 9: 2550 10: 1983 11: 1802
+       vs truth: equal 3397, truth fewer edits 0, truth more 0, truth unmapped 8385
+== 11:54:55 q = 15, every mode, per read
+payoff: 63368 reads, q = 15, budget 4096, k 15, cap 20000, ext 40, 64 threads
+fixed  certified 8950 of 63368 (0.45 % of 2000000 reads); CPU 254.4 s (4.01 ms per read), 2888.4 band checks per read
+       distance: 0: 899 1: 2076 2: 1413 3: 809 4: 587 5: 480 6: 379 7: 389 8: 426 9: 1492
+       vs truth: equal 6620, truth fewer edits 0, truth more 0, truth unmapped 2330
+rare   certified 12263 of 63368 (0.61 % of 2000000 reads); CPU 257.6 s (4.06 ms per read), 2620.5 band checks per read
+       distance: 0: 1007 1: 2472 2: 1923 3: 1294 4: 1071 5: 942 6: 761 7: 679 8: 622 9: 1492
+       vs truth: equal 9423, truth fewer edits 0, truth more 0, truth unmapped 2840
+long   certified 14723 of 63368 (0.74 % of 2000000 reads); CPU 2623.4 s (41.40 ms per read), 2087.1 band checks per read
+       distance: 0: 1123 1: 2723 2: 2252 3: 1657 4: 1450 5: 1277 6: 1029 7: 906 8: 814 9: 1492
+       vs truth: equal 11455, truth fewer edits 0, truth more 0, truth unmapped 3268
+err1   certified 12242 of 63368 (0.61 % of 2000000 reads); CPU 1149.9 s (18.15 ms per read), 4827.8 band checks per read
+       distance: 0: 17 1: 1048 2: 251 3: 542 4: 266 5: 598 6: 466 7: 776 8: 814 9: 2232 10: 1533 11: 1329 12: 807 13: 697 14: 446 15: 420
+       vs truth: equal 3123, truth fewer edits 0, truth more 0, truth unmapped 9119
+err1r  certified 6966 of 63368 (0.35 % of 2000000 reads); CPU 499.9 s (7.89 ms per read), 4738.9 band checks per read
+       distance: 0: 1 1: 617 2: 91 3: 207 4: 102 5: 296 6: 258 7: 429 8: 441 9: 1424 10: 908 11: 779 12: 497 13: 395 14: 256 15: 265
+       vs truth: equal 1525, truth fewer edits 0, truth more 0, truth unmapped 5441
+== 11:56:12 cascades
+63368 uncertified reads (3.17 % of 2000000); CERTA's CPU for all reads 197 s
+reads whose certified distances disagree between techniques: 0
+cascade                                                     certified  % of all  <= 6 edits  7+ edits   CPU (s)  vs CERTA
+q22:fixed                                                        5325     0.27%        5325         0      68.8       35%
+q22:rare                                                         8913     0.45%        8913         0      72.8       37%
+q22:err1r                                                       11782     0.59%        3454      8328     224.6      114%
+q22:err1                                                        15492     0.77%        6604      8888     803.4      407%
+q22:long                                                         9877     0.49%        9877         0    1515.2      768%
+q15:rare                                                        12263     0.61%        9470      2793     257.6      131%
+q22:rare -> q22:err1r                                           18352     0.92%       10024      8328     276.2      140%
+q22:rare -> q22:err1r -> q22:err1                               19441     0.97%       10553      8888     827.5      420%
+q22:rare -> q15:rare -> q22:err1r                               18935     0.95%       10553      8382     476.2      241%
+q22:rare -> q15:rare -> q22:err1r -> q22:err1                   19691     0.98%       10795      8896    1017.9      516%
+q22:rare -> q15:rare -> q22:err1r -> q22:err1 -> q22:long -> q15:long -> q15:err1r -> q15:err1      23276     1.16%       11693     11583    3942.6     1999%
+ALL_DONE
+
+######## run 3: the residual of --full-cert without the second index (rare and one-edit parts on the q = 22 index only)
+[map] 2000000 reads: certified 95.65% (S0 exact 73.78%, S1 <=R edits 20.02%, SR repeat 1.53%, SL local 0.32%), ties 5.28%
+certa --full-cert wall/user/sys (fallback mode): 2.58 70.86 2.23
+payoff: 86924 reads, q = 22, budget 4096, k 15, cap 20000, ext 40, 64 threads
+fixed  certified 11320 of 86924 (0.57 % of 2000000 reads); CPU 94.2 s (1.08 ms per read), 1016.2 band checks per read
+       distance: 0: 1888 1: 3374 2: 2324 3: 1381 4: 1022 5: 1331
+       vs truth: equal 11320, truth fewer edits 0, truth more 0, truth unmapped 0
+rare   certified 17079 of 86924 (0.85 % of 2000000 reads); CPU 105.1 s (1.21 ms per read), 777.7 band checks per read
+       distance: 0: 2060 1: 4063 2: 3288 3: 2525 4: 2367 5: 2776
+       vs truth: equal 17079, truth fewer edits 0, truth more 0, truth unmapped 0
+err1   certified 36473 of 86924 (1.82 % of 2000000 reads); CPU 1072.2 s (12.33 ms per read), 1183.3 band checks per read
+       distance: 0: 698 1: 3068 2: 1790 3: 2268 4: 2043 5: 3486 6: 5970 7: 4911 8: 3993 9: 3538 10: 2553 11: 2155
+       vs truth: equal 19110, truth fewer edits 0, truth more 0, truth unmapped 17363
+err1r  certified 30945 of 86924 (1.55 % of 2000000 reads); CPU 294.5 s (3.39 ms per read), 1276.4 band checks per read
+       distance: 0: 183 1: 1777 2: 775 3: 1456 4: 1448 5: 3079 6: 5696 7: 4722 8: 3845 9: 3378 10: 2492 11: 2094
+       vs truth: equal 14220, truth fewer edits 0, truth more 0, truth unmapped 16725
+86924 uncertified reads (4.35 % of 2000000); CERTA's CPU for all reads 105 s
+reads whose certified distances disagree between techniques: 0
+cascade                                                     certified  % of all  <= 6 edits  7+ edits   CPU (s)  vs CERTA
+q22:fixed                                                       11320     0.57%       11320         0      94.2       90%
+q22:rare                                                        17079     0.85%       17079         0     105.1      100%
+q22:err1r                                                       30945     1.55%       14414     16531     294.5      282%
+q22:err1                                                        36473     1.82%       19323     17150    1072.2     1025%
+q22:long                                                            0     0.00%           0         0       0.0        0%
+q22:rare -> q22:err1r                                           40091     2.00%       23560     16531     343.8      329%
+q22:rare -> q22:err1r -> q22:err1                               41289     2.06%       24139     17150     902.9      863%

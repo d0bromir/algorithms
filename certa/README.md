@@ -286,6 +286,7 @@ tests/test_longread.cpp    long-read certificates against a brute-force DP (plan
 tests/mutants.tsv          one mutant per bound; tests/run_mutants.sh runs them
 tools/simulate.py          synthetic genome/reads and placement evaluation
 tools/lr_ceiling.cpp       long reads: Lemma L ceiling vs best known alignment; --certify proves OPT (Aim 6)
+tools/payoff.cpp           part choices taken from the slow mappers, certified on CERTA's uncertified reads
 scripts/                   build.sh, demo.sh
 THEORY.md                  the proofs, with code, tests and mutants per statement
 lean/                      machine-checked proofs (Lean 4; lake build): Lemmas L, E, H, S, W, C; Theorem G; band pruning, DP row
