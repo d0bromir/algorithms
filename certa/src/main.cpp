@@ -668,7 +668,7 @@ struct Args {
 };
 
 Args parse(int argc, char** argv, int start) {
-  static const char* flags[] = {"--gpu", "--unc-tags", "--intervals", "--witness", "--serial-stages"};
+  static const char* flags[] = {"--gpu", "--unc-tags", "--intervals", "--witness", "--serial-stages", "--full-cert"};
   Args a;
   for (int i = start; i < argc; ++i) {
     std::string s = argv[i];
@@ -944,7 +944,7 @@ int cmd_map(const Args& a) {
   if (a.pos.size() != 2 && a.pos.size() != 3)
     throw std::runtime_error(
         "usage: certa map ref.cidx reads.fq[.gz] [mates.fq[.gz]] [-k 5] [--k1 2] [--budget 16] [--budget2 256] "
-        "[--budget3 0] [--support3 2] [--local 0] [--mapq-limit 8] [-t N] [--gpu] [--device 0] [-o out.sam] "
+        "[--budget3 0] [--support3 2] [--local 0] [--full-cert] [--index2 second.cidx] [--mapq-limit 8] [-t N] [--gpu] [--device 0] [-o out.sam] "
         "[-u uncertified.fq] [-U uncertified_mates.fq] [--fallback-mates pair|single -S single_mates.fq] [--max-dist 850] [--stats s.json] [--batch N] [--io-threads N] [--serial-stages]");
   Params p;
   p.k = a.geti("-k", 5);
@@ -974,12 +974,17 @@ int cmd_map(const Args& a) {
   p.k = std::min(p2.k, a.geti("--k1", 2));
   if (p.k < 0) throw std::runtime_error("--k1 must be >= 0");
   const bool second_pass = p2.budget > p.budget || p2.s2_limit > 0 || p2.k > p.k;
+  // --full-cert: the most certified reads the certificates allow, at a cost
+  // in speed: pass 3 with budget 4096 and pass L with t = 2 unless given, and
+  // with --index2 every pass again on a second index (shorter parts) for the
+  // reads still uncertified.
+  const bool full_cert = a.has("--full-cert");
   // Pass 3 (CPU, opt-in): larger budgets for reads whose parts are all
   // repetitive. It certifies ~0.9% more reads but costs more CPU than the
   // fallback mapper spends on them, so it is off by default; use
-  // --budget3 4096 for maximum certification.
+  // --budget3 4096 (or --full-cert) for maximum certification.
   Params p3 = p2;
-  p3.budget = a.geti("--budget3", 0);
+  p3.budget = a.geti("--budget3", full_cert ? HOST_BUDGET_MAX : 0);
   if (p3.budget != 0 && (p3.budget < p2.budget || p3.budget > HOST_BUDGET_MAX))
     throw std::runtime_error("--budget3 must be 0 or in [budget2, 4096]");
   if (p3.budget == 0) p3.budget = p2.budget;
@@ -992,7 +997,7 @@ int cmd_map(const Args& a) {
   // cheap setting (t = 1 costs ~10x more on HG002 for +0.16 points).
   Params pl = p2;
   pl.budget = std::max(p2.budget, p3.budget);
-  pl.local = a.geti("--local", 0);
+  pl.local = a.geti("--local", full_cert ? 2 : 0);
   pl.local_only = 1;
   if (pl.local < 0 || pl.local > PMAX) throw std::runtime_error("--local must be in [0, 16]");
   // Paired-end: a second FASTQ with the mates, in the same order.
@@ -1023,6 +1028,14 @@ int cmd_map(const Args& a) {
   g_mapq_cons = mapq_mode == "cons";
   g_witness = a.has("--witness");
   if (g_witness && !intervals) throw std::runtime_error("--witness needs --intervals");
+  // --index2: a second index of the same reference (e.g. q = 15: more, shorter
+  // parts) on which the reads still uncertified after every pass get every
+  // pass again (CPU); a certificate found there is a certificate.
+  const std::string index2_path = a.get("--index2", "");
+  if (!index2_path.empty() && g_witness)
+    throw std::runtime_error("--witness with --index2: the witnesses would refer to two indexes");
+  if (!index2_path.empty() && a.has("--serial-stages"))
+    throw std::runtime_error("--index2 needs the fused stages (no --serial-stages)");
   if (intervals && (a.has("-u") || a.has("-U") || a.has("-S")))
     throw std::runtime_error("--intervals writes every read to SAM: no -u/-U/-S");
   const bool gpu = a.has("--gpu");
@@ -1041,7 +1054,25 @@ int cmd_map(const Args& a) {
   std::fprintf(stderr,
                "[map] pass 1: k=%d budget=%d; pass 2: k=%d budget=%d S2<=%d; parts are >= %d bases\n",
                p.k, p.budget, p2.k, p2.budget, p2.s2_limit, min_read_length(ix.q, ix.s));
+  if (p3.budget > p2.budget || pl.local > 0)
+    std::fprintf(stderr, "[map] pass 3: budget=%d support=%d; pass L: support %d%s\n", p3.budget,
+                 p3.min_support, pl.local, full_cert ? " (--full-cert)" : "");
   const IndexView view = ix.view(ref);
+  // The second index must hold the same reference: its view reads the first
+  // index's copy of the sequence.
+  Index ix2;
+  std::unique_ptr<IndexView> view2;
+  if (!index2_path.empty()) {
+    auto t = Clock::now();
+    Reference ref2;
+    load_index(index2_path, ref2, ix2);
+    if (ref2.names != ref.names || ref2.lengths != ref.lengths || ref2.seq.size() != ref.seq.size() ||
+        std::memcmp(ref2.seq.data(), ref.seq.data(), ref.seq.size()) != 0)
+      throw std::runtime_error("--index2 " + index2_path + " was built from another reference");
+    view2.reset(new IndexView(ix2.view(ref)));
+    std::fprintf(stderr, "[map] second index %s: q=%d s=%d, %llu entries, loaded and checked in %.1f s\n",
+                 index2_path.c_str(), ix2.q, ix2.s, static_cast<unsigned long long>(ix2.pos.size()), secs(t));
+  }
 
   // Open input and outputs first, so a failure cannot leave the upload
   // thread running. Uncompressed regular files are memory-mapped; gzip and
@@ -1075,8 +1106,14 @@ int cmd_map(const Args& a) {
   for (size_t c = 0; c < ref.names.size(); ++c)
     std::fprintf(sam, "@SQ\tSN:%s\tLN:%llu\n", ref.names[c].c_str(),
                  static_cast<unsigned long long>(ref.lengths[c]));
-  std::fprintf(sam, "@PG\tID:certa\tPN:certa\tVN:0.5\tCL:certa map -k %d --k1 %d --budget %d --budget2 %d --s2 %d%s\n",
-               p2.k, p.k, p.budget, p2.budget, p2.s2_limit, gpu ? " --gpu" : "");
+  // The certification passes beyond the defaults, when on (the default header
+  // is unchanged).
+  std::string extra;
+  if (p3.budget > p2.budget) extra += " --budget3 " + std::to_string(p3.budget) + " --support3 " + std::to_string(p3.min_support);
+  if (pl.local > 0) extra += " --local " + std::to_string(pl.local);
+  if (view2) extra += " --index2 " + index2_path;
+  std::fprintf(sam, "@PG\tID:certa\tPN:certa\tVN:0.5\tCL:certa map -k %d --k1 %d --budget %d --budget2 %d --s2 %d%s%s\n",
+               p2.k, p.k, p.budget, p2.budget, p2.s2_limit, gpu ? " --gpu" : "", extra.c_str());
   // From here on each output is written by its own thread. Two mate files
   // read in lockstep by one consumer cannot deadlock: each writer moves on as
   // soon as its own pipe has room.
@@ -1135,6 +1172,7 @@ int cmd_map(const Args& a) {
   uint64_t local = 0;      // reads re-run on the CPU for tier SL
   uint64_t pair_tried = 0; // pairs given to the pair certificate
   uint64_t iv_reads = 0;   // reads given to tier R (interval mode)
+  uint64_t index2_tried = 0, index2_certified = 0;  // reads given to the second index, certified there
   auto load = [&](int slot) {
     try {
       auto t = Clock::now();
@@ -1439,22 +1477,42 @@ int cmd_map(const Args& a) {
     std::vector<std::string> sam_out(nc), fq_out(nc), fq2_out(nc), fqs_out(nc);
     const int nt = std::max(1, std::min<int>(threads, static_cast<int>(nc)));
     std::vector<Stats> st(nt);
-    std::vector<std::array<uint64_t, 5>> counts(nt, std::array<uint64_t, 5>{});
+    std::vector<std::array<uint64_t, 7>> counts(nt, std::array<uint64_t, 7>{});
     std::vector<std::exception_ptr> errors(nt);
     std::atomic<size_t> next{0};
+    // Which reads each pass re-runs (the same on either index).
+    auto want2 = [](const Result& r) { return r.certified == 0 && r.reason != kBadLength; };
+    auto want3 = [&](const Result& r) {
+      const int want = r.parts < p3.k + p3.min_support ? r.parts : p3.k + p3.min_support;
+      return r.certified == 0 && (r.reason == kRadiusNegative || r.reason == kNotFound) && r.used < want;
+    };
+    auto wantL = [](const Result& r) {
+      return r.certified == 0 && (r.reason == kNotFound || r.reason == kClusterTooWide);
+    };
     auto worker = [&](int w) {
       try {
         std::unique_ptr<Workspace> ws(new Workspace), w1(new Workspace), w2(new Workspace), wr(new Workspace);
+        std::unique_ptr<Workspace> wx(view2 ? new Workspace : nullptr);  // the second index's passes
         PairScratch sc, psc;  // the pair pass; interval mode's mate rescue
         RepeatScratch rsc;
         std::vector<RepeatOut> civ;  // the chunk's tier R outputs
         civ.reserve(kChunk);
-        size_t idx[kChunk];
-        std::unique_ptr<Result[]> rr(new Result[kChunk]);
-        std::array<uint64_t, 5>& cnt = counts[w];  // escalated, third, local, pair_tried, iv_reads
+        size_t idx[kChunk], id2[kChunk], sub[kChunk];
+        std::unique_ptr<Result[]> rr(new Result[kChunk]), rx(new Result[kChunk]);
+        // escalated, third, local, pair_tried, iv_reads, index2 tried, index2 certified
+        std::array<uint64_t, 7>& cnt = counts[w];
         auto rerun_chunk = [&](size_t m, const Params& pq) {
           map_reads(view, pq, batch, idx, m, rr.get(), *ws);
           for (size_t k = 0; k < m; ++k) res[idx[k]] = rr[k];
+        };
+        // Second index: reads id2[0..m2) get every pass on it, into rx; one
+        // pass re-runs those of rx[0..m2) that `want` selects.
+        auto rerun_index2 = [&](size_t m2, const Params& pq, auto want) {
+          size_t m = 0;
+          for (size_t k = 0; k < m2; ++k)
+            if (want(rx[k])) { sub[m] = k; idx[m++] = id2[k]; }
+          map_reads(*view2, pq, batch, idx, m, rr.get(), *wx);
+          for (size_t j = 0; j < m; ++j) rx[sub[j]] = rr[j];
         };
         for (size_t c; (c = next.fetch_add(1)) < nc;) {
           const size_t a0 = c * kChunk, b0 = std::min(n, a0 + kChunk);
@@ -1466,27 +1524,42 @@ int cmd_map(const Args& a) {
           if (map && second_pass) {
             m = 0;
             for (size_t i = a0; i < b0; ++i)
-              if (res[i].certified == 0 && res[i].reason != kBadLength) idx[m++] = i;
+              if (want2(res[i])) idx[m++] = i;
             rerun_chunk(m, p2);
             cnt[0] += m;
           }
           if (p3.budget > p2.budget) {
             m = 0;
-            for (size_t i = a0; i < b0; ++i) {
-              const Result& r = res[i];
-              const int want = r.parts < p3.k + p3.min_support ? r.parts : p3.k + p3.min_support;
-              if (r.certified == 0 && (r.reason == kRadiusNegative || r.reason == kNotFound) && r.used < want)
-                idx[m++] = i;
-            }
+            for (size_t i = a0; i < b0; ++i)
+              if (want3(res[i])) idx[m++] = i;
             rerun_chunk(m, p3);
             cnt[1] += m;
           }
           if (pl.local > 0) {
             m = 0;
             for (size_t i = a0; i < b0; ++i)
-              if (res[i].certified == 0 && (res[i].reason == kNotFound || res[i].reason == kClusterTooWide)) idx[m++] = i;
+              if (wantL(res[i])) idx[m++] = i;
             rerun_chunk(m, pl);
             cnt[2] += m;
+          }
+          if (view2) {
+            // Every pass again on the second index for the reads still
+            // uncertified; a certificate found there is taken.
+            size_t m2 = 0;
+            for (size_t i = a0; i < b0; ++i)
+              if (want2(res[i])) id2[m2++] = i;
+            if (m2 > 0) {
+              map_reads(*view2, p, batch, id2, m2, rx.get(), *wx);
+              if (second_pass) rerun_index2(m2, p2, want2);
+              if (p3.budget > p2.budget) rerun_index2(m2, p3, want3);
+              if (pl.local > 0) rerun_index2(m2, pl, wantL);
+              for (size_t k = 0; k < m2; ++k)
+                if (rx[k].certified == 1) {
+                  res[id2[k]] = rx[k];
+                  ++cnt[6];
+                }
+              cnt[5] += m2;
+            }
           }
           if (paired) {
             for (size_t i = a0; i < b0; ++i) se_res[i] = res[i];
@@ -1545,6 +1618,8 @@ int cmd_map(const Args& a) {
       local += counts[w][2];
       pair_tried += counts[w][3];
       iv_reads += counts[w][4];
+      index2_tried += counts[w][5];
+      index2_certified += counts[w][6];
     }
     t_out += secs(t);
   };
@@ -1626,6 +1701,9 @@ int cmd_map(const Args& a) {
   std::fprintf(stderr, "[map] second pass (budget %d, S2 <= %d): %.2f%% of reads; third pass (CPU, budget %d): %.2f%%\n",
                p2.budget, p2.s2_limit, pct(escalated), p3.budget, pct(third));
   std::fprintf(stderr, "[map] local pass (CPU, support %d): %.2f%% of reads\n", pl.local, pct(local));
+  if (view2)
+    std::fprintf(stderr, "[map] second index (CPU, every pass): %.2f%% of reads tried, %.2f%% certified there\n",
+                 pct(index2_tried), pct(index2_certified));
   if (paired) {
     const double np = total.pairs ? 100.0 / total.pairs : 0.0;
     std::fprintf(stderr,

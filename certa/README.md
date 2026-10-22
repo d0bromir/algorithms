@@ -183,6 +183,10 @@ Parameters:
 | `--cap` | 32 | max hits enumerated per part (≤ 32) |
 | `--batch` | 200 000 CPU / 1 000 000 GPU | reads per batch |
 | `--serial-stages` | off | without a GPU, run a batch in two stages, one after the other (passes 1 and 2 over the whole batch, then the CPU passes and formatting), instead of all stages in one pass over chunks of reads (same output either way) |
+| `--budget3` / `--support3` | 0 / 2 | pass 3 (CPU): reads whose parts did not all fit pass 2's budget are re-run with up to this many hits per part (≤ 4096), verifying clusters hit by ≥ `--support3` parts |
+| `--local` | 0 | pass L (CPU): certified local alignment (tier SL) for reads still uncertified, verifying chains hit by ≥ t parts (2 is the cheap setting) |
+| `--full-cert` | off | maximum certification: `--budget3 4096` and `--local 2` unless given; slower |
+| `--index2` | none | a second index of the same reference (e.g. built with `-q 15 -s 1`, about 23 GB for GRCh38): reads still uncertified after every pass get every pass again on it (CPU). Not with `--witness` or `--serial-stages` |
 
 ## Results on real data: GIAB HG002, NovaSeq X
 

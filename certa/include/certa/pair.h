@@ -241,6 +241,7 @@ inline int window_search(const IndexView& ix, const uint8_t* rd, int L, int64_t 
 struct Mate {
   const uint8_t* codes = nullptr;
   int L = 0, P = 0, m = 0, U = 0, B = 0, nch = 0;
+  int n0 = 0;  // chains [0, n0) are on the forward strand, [n0, nch) on the reverse
   Workspace* ws = nullptr;
   std::vector<int> ub;
   std::vector<int64_t> slo, shi;  // start range of each chain
@@ -277,8 +278,10 @@ inline void chain_mate(Mate& M, int pad) {
   M.shi.assign(M.nch, 0);
   ubmemo_begin(ws);
   M.B = M.U;
+  M.n0 = 0;
   for (int x = 0; x < M.nch; ++x) {
     const Cluster& cl = ws.clusters[x];
+    M.n0 += cl.strand == 0;
     const int u = ub_of_mask(ws, cl.strand, M.L, M.P, M.m, cl.pmask);
     M.ub[x] = u;
     M.B = std::max(M.B, (int)u);
@@ -316,6 +319,11 @@ inline PairOut certify_pair(const IndexView& ix, const PairParams& pp, const uin
   struct Anchor { int bound, mate, chain, nbeg, nend; };
   std::vector<Anchor> anchors;
   std::vector<int> near;  // per anchor: chains of the other mate within reach
+  // build_chains emits each strand's chains in diagonal order, each starting
+  // more than pad diagonals after the previous one ends, so within a strand
+  // both slo and shi increase: the chains of mate y within reach of an
+  // anchor (shi >= plo and slo <= phi) are one index range, found by binary
+  // search instead of a scan of every chain (quadratic with --budget3 4096).
   for (int x = 0; x < 2; ++x) {
     const Mate& X = M[x];
     const Mate& Y = M[1 - x];
@@ -325,11 +333,13 @@ inline PairOut certify_pair(const IndexView& ix, const PairParams& pp, const uin
       partner_range(st, X.slo[c], X.shi[c], &plo, &phi);
       int ny = Y.U;  // mate y near this chain: no exact part, or one of its chains
       const size_t nb = near.size();
-      for (int c2 = 0; c2 < Y.nch; ++c2)
-        if (Y.ws->clusters[c2].strand == 1 - st && Y.shi[c2] >= plo && Y.slo[c2] <= phi) {
-          ny = std::max(ny, Y.ub[c2]);
-          near.push_back(c2);
-        }
+      const int yb = st == 1 ? 0 : Y.n0, ye = st == 1 ? Y.n0 : Y.nch;  // chains on strand 1 - st
+      const int c2b = (int)(std::lower_bound(Y.shi.begin() + yb, Y.shi.begin() + ye, plo) - Y.shi.begin());
+      const int c2e = (int)(std::upper_bound(Y.slo.begin() + yb, Y.slo.begin() + ye, phi) - Y.slo.begin());
+      for (int c2 = c2b; c2 < c2e; ++c2) {
+        ny = std::max(ny, Y.ub[c2]);
+        near.push_back(c2);
+      }
       const int b = X.ub[c] + ny;
       if (b > floor) anchors.push_back({b, x, c, (int)nb, (int)near.size()});
       else near.resize(nb);

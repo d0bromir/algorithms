@@ -19,7 +19,7 @@ P1	include/certa/pair.h	s/  int floor = M\[0\].U + M\[1\].U;/  int floor = M[0].
 P2	include/certa/pair.h	s/  const int pad = std::max(0, Ltot - floor - 7);/  const int pad = std::max(0, Ltot - floor - 9);/	equivalent	Thm P: band pad 2 too narrow (a pair at the band edge has an exact partner whose anchor covers it; THEORY.md)
 P3	include/certa/pair.h	s/  \*thr = t;/  *thr = t - 3;/	killed	Thm P: window threshold 3 too low (family D)
 P4	include/certa/pair.h	s/std::min<int64_t>((int64_t)ix.ref_len, smax + L + pad)/std::min<int64_t>((int64_t)ix.ref_len, smax + L)/	equivalent	Thm P: window scan without pad (the union window covers it; THEORY.md)
-P5	include/certa/pair.h	s/          ny = std::max(ny, Y.ub\[c2\]);/          ny = ny;/	killed	Thm P: nearby-partner bound missing
+P5	include/certa/pair.h	s/        ny = std::max(ny, Y.ub\[c2\]);/        ny = ny;/	killed	Thm P: nearby-partner bound missing
 P6	include/certa/pair.h	s/    const int up = sx + std::max(fu, thr);/    const int up = sx + std::max(fu, thr) - 3;/	killed	Thm P: anchor bound 3 too low
 P7	include/certa/pair.h	s/      if (!done\[1 - an.mate\]\[near\[k\]\]) ny/      if (false) ny/	killed	Thm P: unfinished chains treated as finished
 P8	include/certa/pair.h	s/std::min(pad, Ltot - relevant - 7))/std::min(pad, Ltot - relevant - 10))/	equivalent	Thm P: narrowed band 3 too narrow (the partner's anchor covers it; THEORY.md)
@@ -129,3 +129,4 @@ S3	src/seqio.cpp	s/            cr_start = x + 1 < size_ \&\& base_\[x + 1\] == '
 S4	src/seqio.cpp	s/          if (++k % 4 == 0) {/          if (++k % 4 == 1) {/	killed	FASTQ parallel scan: records end one line early
 S5	src/seqio.cpp	s/bytes_per_record_ \* 1.02/bytes_per_record_ * 0.5/	equivalent	FASTQ parallel scan: half the bytes scanned in parallel; the serial scan finds the rest (THEORY.md)
 E26	include/certa/core.h	s/    const bool open = blo == 0 \&\& bhi >= B - 1;/    const bool open = true;/	killed	band_score_vec: every row taken as excluding no start (start ranges ignored)
+P17	include/certa/pair.h	s/const int yb = st == 1 ? 0 : Y.n0, ye = st == 1 ? Y.n0 : Y.nch;/const int yb = st == 0 ? 0 : Y.n0, ye = st == 0 ? Y.n0 : Y.nch;/	killed	Thm P: partner chains looked up on the wrong strand (the binary-search range)

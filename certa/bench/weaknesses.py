@@ -16,7 +16,8 @@ maximum local (clipped) score is proven. Per tool it counts:
                        at most R <= 5 edits (SL: with the certified score)
                        provably exists;
   overconfident ties   the read has >= 2 identical exact copies (a proven
-                       tie under any scoring), yet the tool gives MAPQ >= 20.
+                       tie under any scoring), yet the tool gives MAPQ >= 20
+                       (MAPQ 255, "unavailable", never counts: RazerS 3).
 
 Scores for every tool are recomputed from CIGAR and NM with the same scheme,
 so tools with different native scores are compared on one scale.
@@ -52,8 +53,9 @@ def load(path):
                 continue
             tags = {x[:2]: x[5:] for x in t[11:]}
             nm = int(tags.get("NM", 0))
+            mapq = int(t[4])
             d[key] = {
-                "chrom": t[2], "pos": int(t[3]), "mapq": int(t[4]),
+                "chrom": t[2], "pos": int(t[3]), "mapq": -1 if mapq == 255 else mapq,  # 255: unavailable
                 "score": bwa_score(t[5], nm), "xt": tags.get("XT"),
                 "xb": int(tags.get("XB", 1)), "xe": int(tags.get("XE", nm)),
             }

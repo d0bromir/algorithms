@@ -12,7 +12,7 @@ names:
 
 **Review status.** Written, then cross-checked by:
 - whole-reference oracles (4 seeds, ARM and x86);
-- 129 mutants;
+- 130 mutants;
 - exhaustive verification of the finite lemmas.
 
 It has **not yet been reviewed by a second person**. §11 lists what a
@@ -772,9 +772,17 @@ The proof uses only Lemmas P0, C and WS:
   pairs;
 - certification requires every bound other than R1's own to be ≤ R1.
 
-*Mutants:* P1–P3, P5–P7, P9, P10, P14. Families A, B, D and E put pairs at
-the floor, the band pad, the window threshold and the window chain skip.
+*Mutants:* P1–P3, P5–P7, P9, P10, P14, P17. Families A, B, D and E put pairs
+at the floor, the band pad, the window threshold and the window chain skip.
 The direct Lemma WS test catches P14.
+
+*Partner lookup.* The chains of mate y within reach of an anchor (their
+start ranges [slo, shi] meet its partner range) are found by binary search,
+not by a scan of every chain. `build_chains` emits a strand's chains in
+diagonal order, each starting more than pad diagonals after the previous
+one's last, so on a strand both slo and shi increase strictly and the chains
+meeting a range form one index interval: the same chains, in the same order,
+as the scan. P17 (the other strand's interval) is killed.
 
 **Proposition P2 (S2).** S2 bounds every proper pair P′ that differs from R1's
 pair P* = (A₁*, A₂*) in some mate, i.e. that mate does not overlap.
@@ -1125,7 +1133,7 @@ positions, more than a mate covers.
 | Lemma L, S, W, C | core.h `local_bound`; pair.h `span_bound`; check.cpp | local oracle | L1–L5, L7, C1, C3; L6 equivalent (Lemma S) | L, S |
 | Thm L, SL SUB | core.h `certify_local` | local + SUB oracles, planted reads e–i | L1–L5, L7, L8, A4, A10 | — |
 | Lemma E, O, Prop. E′ | core.h `edit_bound`, `process_read`; interval.h | [XL, XU] and SUB oracles, planted reads | A1, A2 (equivalent), A3, A5 | E |
-| Thm P, Lemma WS, Prop. P3 | pair.h | pair oracle, threshold families A–F, Lemma WS against a start oracle | P1, P3, P5–P7, P9, P10, P14; P2, P4, P8 equivalent (§9a) | — |
+| Thm P, Lemma WS, Prop. P3 | pair.h | pair oracle, threshold families A–F, Lemma WS against a start oracle | P1, P3, P5–P7, P9, P10, P14, P17; P2, P4, P8 equivalent (§9a) | — |
 | Prop. P2 (S2) | pair.h | other-pair oracle, family F | P11, P12; P13 equivalent (§9a) | — |
 | Thm G, Lemma R, R-int, Thm R | repeat.h | local + SUB oracles, planted reads d and j | R1–R6, A6–A9, A11, A12 | G |
 | Prop. Q (XQ) | interval.h `mapq_se` | — | C7 | XQ |
