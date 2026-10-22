@@ -1,0 +1,13 @@
+# HiFi certificates (tools/lr_ceiling --certify, q = 22 index, tau 16) on minimap2 2.31 and Winnowmap 2.03 alignments of 242,534 HG002 HiFi reads; "above the best known alignment": reads whose proven optimum scores above the tool's own alignment under CERTA's scores (+1/-4, gaps -6-1k; minimap2 -x map-hifi scores +1/-4, gaps 6+2k/26+1k; Winnowmap -x map-pb +2/-4, gaps 4+2k/24+1k). Also: the reason RazerS 3's paired run aborted. galaxy, 2026-10-22, bench/slow_bench.sh.
+== lr_mm2.log
+reads 242534, fit 226253 (93.29 %), with the trimmed path 226330; CIGARs failing the base check 0; tau 16, cmax 4096
+certify: OPT proven for 226330 reads (93.32 %), above the best known alignment for 40265; over the cell cap 0
+== lr_wm.log
+reads 242534, fit 226291 (93.30 %), with the trimmed path 226311; CIGARs failing the base check 0; tau 16, cmax 4096
+certify: OPT proven for 226311 reads (93.31 %), above the best known alignment for 70653; over the cell cap 0
+== hifi_counts.txt
+minimap2: 251380 primary alignments, 241246 reads with one
+winnowmap: 88.497 s of its run to index the FASTA
+winnowmap: 248111 primary alignments, 242233 reads with one
+== razers_pe.log
+/opt/conda/conda-bld/razers3_1772199499752/work/include/seqan/basic/basic_exception.h:363 FAILED!  (Uncaught exception of type std::bad_alloc: std::bad_alloc)

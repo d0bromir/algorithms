@@ -1,0 +1,24 @@
+# Reliability against CERTA certificates (bench/weaknesses.py), galaxy, 2026-10-22, build ea812d8: CERTA --full-cert --index2 (q = 15) --intervals vs Yara 1.0.5 -e 4 -y full (2 M reads, 2 M pairs) and RazerS 3 3.5.12 -i 96 -rr 100 (the first 200,000 reads; RazerS3:all = each read's best record by score, RazerS3-primary = the record it flags primary, its first match). End-to-end certificates (S0 S1 SR) prove the minimum edit distance XE <= 5; "elsewhere, NM > XE" counts unclipped alignments at another locus with more edits than XE, wrong under any scoring. Local certificates (SL, PR) prove the best clipped score, which an end-to-end mapper may not reach.
+== single-end, 2,000,000 HG002 reads: CERTA --full-cert --index2 idx/grch38.s1q15.cidx --intervals vs Yara -e 4 -y full
+reads 2000000; CERTA-certified 1936632 (96.83%); proven exact multi-copy ties 72408
+tool              missed better locus  of which MAPQ>=20   unmapped (<=5 edits exist)    overconfident ties (MAPQ>=20)
+Yara                  289 (0.015%)                161          12228 (0.631%)                2 (0.00% of ties)
+by certificate: end-to-end (S0 S1 SR) 1914808, local (SL PR) 21824
+tool             e2e: missed better  e2e: elsewhere, NM > XE        e2e: unmapped   local: missed better        local: unmapped
+Yara                    89 (0.005%)               0 (0.000%)           14 (0.001%)            200 (0.92%)         12214 (55.97%)
+== paired, 2,000,000 HG002 pairs: CERTA --full-cert --index2 idx/grch38.s1q15.cidx --intervals vs Yara -e 4 -y full
+reads 4000000; CERTA-certified 3870719 (96.77%); proven exact multi-copy ties 17408
+tool              missed better locus  of which MAPQ>=20   unmapped (<=5 edits exist)    overconfident ties (MAPQ>=20)
+Yara                 3901 (0.101%)                757          26306 (0.680%)               64 (0.37% of ties)
+by certificate: end-to-end (S0 S1 SR) 3570362, local (SL PR) 300357
+tool             e2e: missed better  e2e: elsewhere, NM > XE        e2e: unmapped   local: missed better        local: unmapped
+Yara                  2489 (0.070%)            2442 (0.068%)           27 (0.001%)           1412 (0.47%)          26279 (8.75%)
+== single-end, the first 200,000 reads: CERTA --full-cert --index2 idx/grch38.s1q15.cidx --intervals vs RazerS 3 -i 96 -rr 100 (each read: best record; flagged primary)
+reads 200000; CERTA-certified 193679 (96.84%); proven exact multi-copy ties 7123
+tool              missed better locus  of which MAPQ>=20   unmapped (<=5 edits exist)    overconfident ties (MAPQ>=20)
+RazerS3:all            39 (0.020%)                  0           1204 (0.622%)                0 (0.00% of ties)
+RazerS3-primary        12653 (6.533%)                  0           1204 (0.622%)                0 (0.00% of ties)
+by certificate: end-to-end (S0 S1 SR) 191549, local (SL PR) 2130
+tool             e2e: missed better  e2e: elsewhere, NM > XE        e2e: unmapped   local: missed better        local: unmapped
+RazerS3:all             19 (0.010%)              10 (0.005%)            0 (0.000%)             20 (0.94%)          1204 (56.53%)
+RazerS3-primary         12572 (6.563%)           12584 (6.570%)            0 (0.000%)             81 (3.80%)          1204 (56.53%)

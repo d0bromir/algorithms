@@ -207,6 +207,26 @@ caveats are in [bench/RESULTS.md](bench/RESULTS.md).
   paired. BWA-MEM2 is 6.0–8.8× slower than CERTA's interval mode on CPU.
 - **Independent checker:** `certa check` accepts all 8 M honest records
   (HG002 and HG005) and rejects all 24,306 injected faults.
+- **Maximum certification against the slow, reliable mappers** (2 M HG002
+  reads or pairs, galaxy, 64 cores, CPU, interval mode;
+  [bench/results/hg002_2026-10/slow_galaxy.tsv](bench/results/hg002_2026-10/slow_galaxy.tsv)):
+
+  | | certified, single-end / paired | single-end | paired |
+  |---|---|---|---|
+  | CERTA (default) | 94.5 % / 95.4 % | 2.7 s | 5.0 s |
+  | CERTA `--full-cert` | 95.7 % / 96.3 % | 3.0 s | 6.9 s |
+  | CERTA `--full-cert --index2` (q = 15) | 96.8 % / 96.9 % | 6.2 s | 12.3 s |
+  | Yara 1.0.5 `-e 4 -y full` | — | 138.2 s | 211.2 s |
+  | RazerS 3 `-i 96 -rr 100` | — | est. ~2,400 s (timed: 239.6 s for the first 200 k reads) | aborts (`std::bad_alloc`) |
+
+  Yara and RazerS 3 find every alignment within 4 % errors (6 edits at
+  150 bp; CERTA's certificate radius is ≤ 5); they give no proof. On the
+  reads CERTA certifies end-to-end they agree with the certificates almost
+  exactly (Yara single-end: no read placed elsewhere with more edits than
+  the proven minimum, 14 of 1.9 M unmapped;
+  [slow_reliability.txt](bench/results/hg002_2026-10/slow_reliability.txt)).
+  Long reads: CERTA's HiFi pipeline (minimap2 + `tools/lr_ceiling --certify`,
+  optimum proven for 93.3 % of 242,534 reads) takes 163 s, Winnowmap2 610 s.
 
 ## Results so far (synthetic data)
 

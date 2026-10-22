@@ -811,6 +811,50 @@ verifies the XQ of PR mates too.
     single-end interval mode 1.88× and 2.02×, 2.32× with the A100. The same
     changes in `affine_fill_vec16` and `band_distance_vec16` were neutral
     (0.5 % faster on a2, 1 % slower single-end on galaxy) and not kept.
+- **Maximum certification and the slow, reliable mappers** (2026-10-22,
+  ea812d8; `bench/results/hg002_2026-10/slow_*`).
+  - *Options:* `certa map --full-cert` turns on pass 3 (budget 4096) and
+    pass L (t = 2); `--index2 q15.cidx` runs every pass again on a second
+    index for the reads still uncertified (the Aim 1 cascade). The default
+    output is unchanged (byte-identical to 77b1df2 in every mode).
+  - *Certified, 2 M HG002 reads:* single-end 94.46 → 95.65 % with
+    `--full-cert`, 96.83 % with `--index2` too; paired 95.42 → 96.33 →
+    96.87 % of reads (both mates: 93.59 → 94.90 → 95.43 % of pairs).
+  - *Paired `--full-cert` was 6.4× slower than the default:* the pair
+    certificate's partner-chain lookup scanned every chain of the other
+    mate, quadratic once 4096 hits per part are enumerated (80 % of the
+    time). Binary search over the sorted chains (THEORY.md, Theorem P):
+    22.1 → 5.9 s, output identical; mutant P17 killed.
+  - *Speed* (galaxy, 64 cores, interval mode, CPU, medians of three; Yara
+    and RazerS 3 one run): single-end 2.67 / 2.97 / 6.21 s (default /
+    `--full-cert` / `--index2`), paired 4.95 / 6.85 / 12.28 s. Yara 1.0.5
+    `-e 4 -y full` (every alignment with ≤ 4 % errors): 138.2 s and
+    211.2 s, 22–46× and 17–31× CERTA's wall time and 9–17× and 7–12× its
+    CPU (Yara keeps 13–19 of 64 cores busy). RazerS 3 `-i 96 -rr 100`
+    (100 % recognition at ≥ 96 % identity) on the first 200,000 reads:
+    239.6 s against CERTA's 3.2 s (75× wall, 510× CPU); its paired mode
+    aborts with `std::bad_alloc` at the end of every run (also with
+    `-le 150`). The A100 is slower than the CPU at 2 M reads (fixed
+    start-up costs). CERTA with `--index2` holds two 23 GB indexes
+    (~46 GB RSS; Yara 5.5 GB).
+  - *Reliability* (`bench/weaknesses.py`, split by certificate): on the
+    1.91 M reads certified end-to-end, Yara single-end places none
+    elsewhere with more edits than the proven minimum; 89 differ only
+    under BWA's affine scores (equal edits); 14 (0.001 %) are unmapped
+    although ≤ 5 edits exist. Paired, Yara places 2,442 mates (0.07 %)
+    elsewhere with more edits than proven, the price of its pairing.
+    RazerS 3 maps every end-to-end certified read, but flags its first
+    match primary, not its best: by primary it is "wrong" for 6.6 %, by its
+    best record for 0.01 % (affine-score differences). Both leave ~56 % of
+    local (SL) certificates unmapped: end-to-end mappers cannot clip.
+  - *Long reads:* Winnowmap 2.03 has no short-read mode; on 242,534 HiFi
+    reads it takes 610.4 s (88.5 s of it indexing the FASTA: its dumped
+    index crashes on load) against 163.4 s for minimap2 + `lr_ceiling
+    --certify` (3.7× wall, 4.1× CPU), which proves the optimum for
+    93.32 %. On Winnowmap's alignments `lr_ceiling` proves the optimum for
+    93.31 %, above Winnowmap's own alignment for 70,653 reads (minimap2:
+    40,265), under CERTA's +1/−4 scores; Winnowmap's preset scores +2/−4,
+    so this is not an error count.
 - **HG001 GATK indels** are the one comparison where CERTA's F1 is lower
   (0.9909 vs 0.9922). Look at the 13 extra FP and 14 extra FN.
 - **Long reads:** the mapper's limits (320 bp, 8 parts, radius 5) exclude
