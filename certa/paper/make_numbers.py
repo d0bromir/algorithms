@@ -418,7 +418,10 @@ def slow_run(data, tool, config):
     return float(r['wall_s']), float(r['user_s']) + float(r['sys_s']), r['exit']
 
 
-SLOW = {'Def': 'default --intervals', 'Fc': '--full-cert --intervals', 'Ix': '--full-cert --index2 q15 --intervals'}
+SLOW = {'Def': 'default --intervals', 'NoV': '--full-cert --adaptive-parts 0 --intervals',
+        'Fc': '--full-cert --intervals', 'Ix': '--full-cert --index2 q15 --intervals'}
+CERT = {'Def': 'default', 'NoV': '--full-cert --adaptive-parts 0', 'Fc': '--full-cert', 'Ix': '--full-cert --index2 q15'}
+cert = {(r['data'], r['config']): r['certified_pct'] for r in rows('hg002_2026-10/slow_certified.tsv')}
 sl = {}
 for mode, mk in (('single-end', 'Se'), ('paired', 'Pe')):
     for ck, cfg in SLOW.items():
@@ -426,17 +429,19 @@ for mode, mk in (('single-end', 'Se'), ('paired', 'Pe')):
         sl[(mk, ck)] = (w, c)
         put(f'Sl{mk}{ck}Wall', fx(w), src)
         put(f'Sl{mk}{ck}Cpu', grp(round(c)), src)
+        put(f'Sl{mk}{ck}Cert', cert[(mode, CERT[ck])], 'hg002_2026-10/slow_certified.tsv')
     w, c, _ = slow_run(mode, 'yara', '-e 4 -y full')
     sl[(mk, 'Yara')] = (w, c)
     put(f'Sl{mk}YaraWall', fx(w), src)
     put(f'Sl{mk}YaraCpu', grp(round(c)), src)
-    put(f'Sl{mk}YaraX', f"{w / sl[(mk, 'Ix')][0]:.0f}", src)
+    put(f'Sl{mk}YaraX', f"{w / sl[(mk, 'Fc')][0]:.0f}", src)
 rw, rc, rex = slow_run('single-end-200000', 'razers3', '-i 96 -rr 100')
-cw, cc, _ = slow_run('single-end-200000', 'certa-cpu', '--full-cert --index2 q15 --intervals')
+cw, cc, _ = slow_run('single-end-200000', 'certa-cpu', '--full-cert --intervals')
 put('SlRazWall', fx(rw), src)
 put('SlRazCpu', grp(round(rc)), src)
 put('SlRazCertaWall', fx(cw), src)
 put('SlRazCertaCpu', grp(round(cc)), src)
+put('SlRazCertaCert', cert[('single-end-200000', '--full-cert')], 'hg002_2026-10/slow_certified.tsv')
 put('SlRazX', f'{rw / cw:.0f}', src)
 _, _, pex = slow_run('paired-200000', 'razers3', '-i 96 -rr 100 -ll 450 -le 400')
 assert pex != '0'  # RazerS 3's paired run aborted
@@ -449,6 +454,7 @@ put('SlHifiWmX', fx(ww / (mw + lw), 1), src)
 put('SlHifiWmIdx', fx(grab(r'winnowmap: ([\d.]+) s of its run to index the FASTA',
                            text('hg002_2026-10/slow_hifi_and_logs.txt')), 1), 'hg002_2026-10/slow_hifi_and_logs.txt')
 
+# Reliability against pass V's certificates (bench/weaknesses.py, within_rate.py).
 src = 'hg002_2026-10/slow_reliability.txt'
 s = text(src)
 blk = s.split('== single-end, 2,000,000')[1].split('==')[0]
@@ -458,12 +464,20 @@ m = re.search(r'^Yara\s+(\d+) \([\d.]+%\)\s+(\d+) \([\d.]+%\)\s+(\d+) \([\d.]+%\
 put('SlYaraElse', grp(int(m.group(2))), src)
 put('SlYaraUnm', grp(int(m.group(3))), src)
 put('SlYaraLocalUnmPct', f'{float(m.group(6)):.0f}', src)
-blk = s.split('== single-end, the first 200,000')[1]
+blk = s.split('== single-end, the first 200,000')[1].split('==')[0]
 put('SlRazEtoE', grp(grab(r'end-to-end \(S0 S1 SR\) (\d+)', blk, int)), src)
-m = re.search(r'^RazerS3:all\s+\d+ \([\d.]+%\)\s+\d+ \([\d.]+%\)\s+(\d+) \(', blk, re.M)
+m = re.search(r'^RazerS3:all\s+\d+ \([\d.]+%\)\s+\d+ \([\d.]+%\)\s+(\d+) \([\d.]+%\)\s+\d+ \([\d.]+%\)\s+(\d+) \(([\d.]+)%\)',
+              blk, re.M)
 put('SlRazEtoEUnm', grp(int(m.group(1))), src)
+put('SlRazLocalUnmPct', f'{float(m.group(3)):.0f}', src)
+wr = s.split('== unmapped reads against each tool')[1]
+for tool, key in (('Yara single-end', 'Yara'), ('RazerS 3', 'Raz')):
+    b = wr.split(tool)[1]
+    within, beyond = re.search(r'unmapped by the tool: (\d+) within its error rate, (\d+) beyond it', b).groups()
+    put(f'Sl{key}UnmWithin', grp(int(within)), src)
+    put(f'Sl{key}UnmBeyond', grp(int(beyond)), src)
 
-# What an exhaustive search adds on the reads full certification leaves (bench/headroom.py).
+# What an exhaustive search adds on the reads full certification left before pass V (bench/headroom.py).
 src = 'hg002_2026-10/slow_headroom.txt'
 s = text(src)
 nreads = grab(r'^reads (\d+);', s, int, re.M)
@@ -481,33 +495,6 @@ put('HrCpuPerRead', fx(cpu / unc, 1), src)
 put('HrLeSixPct', grab(r'<= 6 edits ([\d.]+) %', tail, str), src)
 put('HrSevenElevenPct', grab(r'7-11 edits ([\d.]+) %', tail, str), src)
 put('HrNonePct', grab(r'none within 12 edits ([\d.]+) %', tail, str), src)
-
-# The payoff of the lossless mappers' techniques, prototype (tools/payoff), on the reads
-# --full-cert leaves uncertified, q = 22 index only (run 3 of slow_payoff.txt).
-src = 'hg002_2026-10/slow_payoff.txt'
-s = text(src)
-assert 'truth fewer edits' in s and not re.search(r'truth fewer edits [1-9]', s)  # never below Yara's distance
-assert all(int(x) == 0 for x in re.findall(r'disagree between techniques: (\d+)', s))
-run3 = s.split('######## run 3')[1]
-base = grab(r'certified ([\d.]+)% \(S0', run3)
-
-
-def cascade(name):
-    m = re.search(r'^' + re.escape(name) + r'\s+(\d+)\s+([\d.]+)%\s+\d+\s+\d+\s+([\d.]+)\s+(\d+)%', run3, re.M)
-    assert m, name
-    return float(m.group(2)), float(m.group(3)), m.group(4)
-
-
-rare, _, _ = cascade('q22:rare')
-err1r, _, _ = cascade('q22:err1r')
-casc, ccpu, cvs = cascade('q22:rare -> q22:err1r')
-put('PoBase', fx(base), src)
-put('PoRare', fx(rare), src)
-put('PoErr', fx(err1r), src)
-put('PoCasc', fx(casc), src)
-put('PoTotal', fx(base + casc), src)
-put('PoCpu', grp(round(ccpu)), src)
-put('PoCpuPct', cvs, src)
 
 # ---------------------------------------------------------------- write
 out = ['% Generated by make_numbers.py from bench/results/; do not edit.']

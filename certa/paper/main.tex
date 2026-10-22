@@ -256,6 +256,16 @@ the adaptive choice certifies \SeCert\%. With $t=2$, the $q$-gram threshold
 \citep{ukkonen1992qgram}, clusters supported by a single part are skipped
 without loss, which makes large budgets affordable.
 
+The same argument allows parts that are searched with one edit. Every
+reference $q$-mer within one edit of a read $q$-mer is one of at most
+$1+11q$ neighbours, which can be looked up directly. A locus within
+$2|S|-1$ edits leaves some part of $S$ with at most one edit, so the radius
+becomes $R=2|S|-1$ (Theorem~A in the supplement). The optional pass~V uses
+this. Per read it chooses the rarest disjoint $q$-mers by dynamic
+programming over read offsets, then, for reads still uncertified, $q$-mers
+searched with one edit, up to a radius of 12. Pass~V's records carry no
+witness for the independent checker yet.
+
 Clusters of candidate diagonals are verified by banded edit-distance DP
 over their diagonals $\pm 2R$, which finds $d(r,\ell)$ exactly for every
 locus within $R$ whose witness part lies in the cluster. They are evaluated
@@ -499,13 +509,15 @@ sequencing errors, reach \PeCertHGOne\% (HG001) and \PeCertHGFive\%
 fit the budget, so the floor is close to $L$) or lose too much: with
 $q=22$ a 150~bp read has at most six disjoint parts, and
 Lemma~\ref{lem:L} charges 5 points per part, so no exact-part certificate
-can prove an alignment that loses 30 points or more. A second, $q=15$ index
-with up to ten parts per read moves this limit: it raises single-end
-certification on HG002 from \AqBase\% to \AqAfter\% at \AqMs~ms per
-residual read, or to \AqAfterMax\% with large budgets. Both steps are
-options of the mapper: \texttt{-{}-full-cert} (pass~3 with a budget of 4096
-hits per strand, and the certified local tier) certifies \AqBase\%, and
-\texttt{-{}-index2} adds the $q=15$ cascade (Section~\ref{sec:slow}).
+can prove an alignment that loses 30 points or more. Full certification
+(\texttt{-{}-full-cert}) moves this limit on the main index alone. It
+raises the hit budget to 4096 per strand (pass~3), adds the certified local
+tier, and adds pass~V's adaptive and one-edit parts. On the first 2~M
+HG002 reads it certifies \SlSeFcCert\% single-end and \SlPeFcCert\% of
+paired reads, against \SlSeDefCert\% and \SlPeDefCert\% by default and
+\SlSeNoVCert\% single-end without pass~V. A second, $q=15$ index
+(\texttt{-{}-index2}) adds little on top of that (\SlSeIxCert\%) for a
+second 23~GB index (Section~\ref{sec:slow}).
 
 \begin{figure}[t]
 \centering
@@ -672,54 +684,60 @@ with \texttt{-e 4 -y full}, every alignment with at most 4\% errors (6 edits
 at 150~bp), and RazerS~3 \citep{weese2012razers3} with \texttt{-i 96 -rr
 100}, 100\% recognition of matches with at least 96\% identity. Each ran on
 the same 64 cores of galaxy as CERTA's interval mode on the CPU
-(Table~\ref{tab:slow}). Full certification with both indexes takes
-\SlSeIxWall~s for 2~M single-end reads; Yara takes \SlSeYaraWall~s
-(\SlSeYaraX$\times$), and \SlPeYaraX$\times$ CERTA's time on pairs. RazerS~3
-needs \SlRazWall~s for the first 200,000 reads, against \SlRazCertaWall~s
-(\SlRazX$\times$), and its paired mode aborted for lack of memory. The two
-guarantees differ in scope. Yara and RazerS~3 cover every read up to their
-error limit, but only end-to-end alignments. CERTA's radius adapts per read
-(at most 5 edits end to end) and its local tier also covers clipped
-alignments, but some reads stay uncertified. Of the \SlYaraEtoE{} reads that
-CERTA certifies end to end, Yara places \SlYaraElse{} at a locus with more
-edits than the proven minimum and leaves \SlYaraUnm{} unmapped; of the
-\SlRazEtoE{} such reads among the first 200,000, RazerS~3 leaves
-\SlRazEtoEUnm{} unmapped. Both leave about \SlYaraLocalUnmPct\% of the reads
-with a local certificate unmapped, because they do not clip.
+(Table~\ref{tab:slow}). Full certification takes \SlSeFcWall~s for 2~M
+single-end reads; Yara takes \SlSeYaraWall~s (\SlSeYaraX$\times$), and
+\SlPeYaraX$\times$ CERTA's time on pairs. RazerS~3 needs \SlRazWall~s for
+the first 200,000 reads, against \SlRazCertaWall~s (\SlRazX$\times$), and
+its paired mode aborted for lack of memory. The two guarantees differ in
+scope. Yara and RazerS~3 cover every read up to their error limit, but
+only end-to-end alignments. CERTA's radius adapts per read (up to 12 edits
+end to end with pass~V) and its local tier also covers clipped alignments,
+but some reads stay uncertified. Within their own error limit, neither tool
+misses a read that CERTA certifies. Of the \SlYaraEtoE{} reads that CERTA
+certifies end to end, Yara places \SlYaraElse{} of them at a locus with more
+edits than the proven minimum. It leaves \SlYaraUnm{} of them unmapped,
+\SlYaraUnmWithin{} with a proven distance within 4\% of the read length and
+\SlYaraUnmBeyond{} beyond it.
+Of the \SlRazEtoE{} such reads among the first 200,000, RazerS~3 leaves
+\SlRazEtoEUnm{} unmapped, again all beyond its limit. CERTA certifies these
+reads, and the reads that need clipping: of those, Yara leaves
+\SlYaraLocalUnmPct\% unmapped and RazerS~3 \SlRazLocalUnmPct\%.
 
-What would exhaustive search add? Full certification leaves \HrUncPct\% of
-the reads (\HrUnc) uncertified. On these, Yara with \texttt{-e 8} (every
-alignment within 12 edits) finds a best end-to-end alignment within 6 edits
-for only \HrLeSixPct\% of all reads, \HrRepPct{} points of them reads whose
-parts are too repetitive for the hit budget. Another \HrSevenElevenPct\%
-need 7 to 11 edits, and \HrNonePct\% have no end-to-end alignment within 12
-edits. That search took \HrYaraWall~s, \HrCpuPerRead~CPU-s per read, against
-\SlSeIxWall~s for CERTA on all 2~M reads. So an exhaustive mapper at
-CERTA's radius would add at most \HrLeSixPct{} points of certification; the
-rest needs clipped certificates or larger radii.
+Before pass~V we asked what exhaustive search could add. Full certification
+with both indexes then left \HrUncPct\% of the reads (\HrUnc) uncertified.
+On these, Yara with \texttt{-e 8} (every alignment within 12 edits) found a
+best end-to-end alignment within 6 edits for only \HrLeSixPct\% of all
+reads, \HrRepPct{} points of them reads whose parts are too repetitive for
+the hit budget. Another \HrSevenElevenPct\% needed 7 to 11 edits, and
+\HrNonePct\% had no end-to-end alignment within 12 edits. That search took
+\HrYaraWall~s, \HrCpuPerRead~CPU-s per read. Pass~V, with rarer parts and a
+radius of up to 12, now certifies most of the first two groups on the main
+index alone (\SlSeFcCert\% in all). What remains needs clipped
+certificates or larger radii.
 
 \begin{table}[t]
 \centering
-\caption{CERTA against fully sensitive mappers: wall and CPU time (s),
-2,000,000 HG002 reads or pairs, galaxy, 64 cores, CPU only. CERTA in
-interval mode (every read gets a record), median of three runs; Yara one
-run. RazerS~3 ran on the first 200,000 reads only (its paired mode
-aborted).}
+\caption{CERTA against fully sensitive mappers: share of reads certified
+(\%), wall and CPU time (s), 2,000,000 HG002 reads or pairs, galaxy, 64
+cores, CPU only. CERTA in interval mode (every read gets a record), median
+of three runs; Yara one run. RazerS~3 ran on the first 200,000 reads only
+(its paired mode aborted).}
 \label{tab:slow}
 \small
-\begin{tabular}{@{}lrrrr@{}}
+\begin{tabular}{@{}lrrrrrr@{}}
 \toprule
-& \multicolumn{2}{c}{Single-end} & \multicolumn{2}{c}{Paired}\\
-Mapper and settings & Wall & CPU & Wall & CPU\\
+& \multicolumn{3}{c}{Single-end} & \multicolumn{3}{c}{Paired}\\
+Mapper and settings & Cert. & Wall & CPU & Cert. & Wall & CPU\\
 \midrule
-CERTA, default & \SlSeDefWall & \SlSeDefCpu & \SlPeDefWall & \SlPeDefCpu\\
-CERTA \texttt{-{}-full-cert} & \SlSeFcWall & \SlSeFcCpu & \SlPeFcWall & \SlPeFcCpu\\
-CERTA \texttt{-{}-full-cert -{}-index2} & \SlSeIxWall & \SlSeIxCpu & \SlPeIxWall & \SlPeIxCpu\\
-Yara \texttt{-e 4 -y full} & \SlSeYaraWall & \SlSeYaraCpu & \SlPeYaraWall & \SlPeYaraCpu\\
+CERTA, default & \SlSeDefCert & \SlSeDefWall & \SlSeDefCpu & \SlPeDefCert & \SlPeDefWall & \SlPeDefCpu\\
+CERTA \texttt{-{}-full-cert}, no pass~V & \SlSeNoVCert & \SlSeNoVWall & \SlSeNoVCpu & \SlPeNoVCert & \SlPeNoVWall & \SlPeNoVCpu\\
+CERTA \texttt{-{}-full-cert} & \SlSeFcCert & \SlSeFcWall & \SlSeFcCpu & \SlPeFcCert & \SlPeFcWall & \SlPeFcCpu\\
+CERTA \texttt{-{}-full-cert -{}-index2} & \SlSeIxCert & \SlSeIxWall & \SlSeIxCpu & \SlPeIxCert & \SlPeIxWall & \SlPeIxCpu\\
+Yara \texttt{-e 4 -y full} & -- & \SlSeYaraWall & \SlSeYaraCpu & -- & \SlPeYaraWall & \SlPeYaraCpu\\
 \midrule
-\multicolumn{5}{@{}l}{\emph{First 200,000 reads}}\\
-CERTA \texttt{-{}-full-cert -{}-index2} & \SlRazCertaWall & \SlRazCertaCpu & -- & --\\
-RazerS~3 \texttt{-i 96 -rr 100} & \SlRazWall & \SlRazCpu & aborted & \\
+\multicolumn{7}{@{}l}{\emph{First 200,000 reads}}\\
+CERTA \texttt{-{}-full-cert} & \SlRazCertaCert & \SlRazCertaWall & \SlRazCertaCpu & -- & -- & --\\
+RazerS~3 \texttt{-i 96 -rr 100} & -- & \SlRazWall & \SlRazCpu & -- & aborted & \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -858,17 +876,11 @@ batches; long reads on one HiFi sample at
 by a second person; the mechanized lemmas reduce, but do not remove, that
 debt.
 
-\textbf{Outlook.} The limits are measurable. A prototype certifier, not
-yet part of the mapper, measures two techniques of the lossless mappers on
-the reads that \texttt{-{}-full-cert} leaves uncertified
-(\PoBase\% certified). Choosing the rarest disjoint 22-mers adds \PoRare{}
-points. Parts searched with up to one edit, which allow a radius of up to
-11, add \PoErr. Both in a cascade add \PoCasc, to \PoTotal\% on the $q=22$
-index alone, against \AqAfterMax\% with the second index. No certified
-distance was below Yara's, and no two techniques disagreed on a read. The
-prototype's cost, \PoCpu~CPU-s on 2~M reads (\PoCpuPct\% of CERTA's), comes
-from scalar code that checks each read on its own. A GPU pair pass and a
-certificate for the uncertified mate's fallback would also raise the
+\textbf{Outlook.} The limits are measurable. Pass~V runs on the CPU only
+and costs about \SlSeFcCpu~CPU-s per 2~M single-end reads against
+\SlSeNoVCpu~CPU-s without it; a GPU version, and witnesses for its records
+so that the independent checker covers them, are the next steps. A GPU pair
+pass and a certificate for the uncertified mate's fallback would raise the
 fallback configuration's paired speed. The interval
 contract (every read gets either an exact optimum or a proven interval,
 and a checker for both) extends naturally to long reads, where a known
