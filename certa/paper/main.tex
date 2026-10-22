@@ -687,6 +687,17 @@ edits than the proven minimum and leaves \SlYaraUnm{} unmapped; of the
 \SlRazEtoEUnm{} unmapped. Both leave about \SlYaraLocalUnmPct\% of the reads
 with a local certificate unmapped, because they do not clip.
 
+What would exhaustive search add? Full certification leaves \HrUncPct\% of
+the reads (\HrUnc) uncertified. On these, Yara with \texttt{-e 8} (every
+alignment within 12 edits) finds a best end-to-end alignment within 6 edits
+for only \HrLeSixPct\% of all reads, \HrRepPct{} points of them reads whose
+parts are too repetitive for the hit budget. Another \HrSevenElevenPct\%
+need 7 to 11 edits, and \HrNonePct\% have no end-to-end alignment within 12
+edits. That search took \HrYaraWall~s, \HrCpuPerRead~CPU-s per read, against
+\SlSeIxWall~s for CERTA on all 2~M reads. So an exhaustive mapper at
+CERTA's radius would add at most \HrLeSixPct{} points of certification; the
+rest needs clipped certificates or larger radii.
+
 \begin{table}[t]
 \centering
 \caption{CERTA against fully sensitive mappers: wall and CPU time (s),
