@@ -632,8 +632,13 @@ paired (Table~\ref{tab:speed}). That is slower than minibwa, but
 \FCGSFcCpuXBwa$\times$ and \FCGPFcCpuXBwa$\times$ faster than BWA-MEM2.
 Most of the difference from the default is pass~V: without it, full
 certification takes \FCGSNoVCpuWall~s and \FCGPNoVCpuWall~s and certifies
-\FCCertSNoV\% and \FCCertPNoV\%. Peak memory is \FCGSFcCpuRss~GB
-single-end and \FCGPFcCpuRss~GB paired.
+\FCCertSNoV\% and \FCCertPNoV\%. Peak memory is
+the same as by default: \MemSOld~GiB single-end and \MemPOld~GiB paired
+for the build timed in Table~\ref{tab:speed}. The current build releases
+input pages once they are parsed and holds the index directory in 32
+bits. That brings peak memory to \MemSNew~GiB and \MemPNew~GiB on the
+CPU (\MemSGpuNew~GiB and \MemPGpuNew~GiB with the A100), with identical
+output, and it is up to \MemFasterMax\% faster.
 
 Five changes, none of which changes any output, made the CPU pipelines
 fast. Every pass of a batch runs on one chunk of 64 reads after another,

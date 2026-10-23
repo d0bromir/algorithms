@@ -246,7 +246,7 @@ for hk, path in FCERT.items():
         name = f'FC{hk}{mk}{FCFG[cfg]}{pk}'
         put(name + 'Wall', fx(w), path)
         put(name + 'Cpu', grp(round(float(r['user_s']) + float(r['sys_s']))), path)
-        put(name + 'Rss', f"{float(r['max_rss_kb']) / 1e6:.0f}", path)
+        put(name + 'Rss', f"{float(r['max_rss_kb']) / 1024 ** 2:.1f}", path)  # KiB -> GiB
         put(name + 'XMini', fx(final[(hk, mk, 'Mini')][0] / w), path)
         put(name + 'XBwa', fx(final[(hk, mk, 'Bwa')][0] / w, 1), path)
         if cfg == 'default':  # the later session reproduces the final protocol's interval rows
@@ -258,6 +258,34 @@ for blk in s.split('== ')[1:]:
     head, body = blk.split('\n', 1)
     host, mode, pipe, cfg = head.split(' ', 3)
     shares.setdefault((mode, cfg.strip()), set()).add(grab(r'certified ([\d.]+)%', body, str))
+# Peak memory before and after the memory changes (old = 72ff02f, new = 82b18ec), identical output:
+# hg002_2026-10/memory_{galaxy,a2}.tsv, memory_identity.txt. GiB = max_rss_kb / 1024^2.
+src = 'hg002_2026-10/memory_identity.txt'
+s = text(src)
+assert re.search(r'galaxy: (\d+) of \1 outputs identical', s) and re.search(r'a2:\s+(\d+) of \1 outputs identical', s)
+mem = {}
+for hk, path in (('G', 'hg002_2026-10/memory_galaxy.tsv'), ('A', 'hg002_2026-10/memory_a2.tsv')):
+    by = {}
+    for r in rows(path):
+        by.setdefault((r['mode'], r['pipeline'], r['config'], r['build']), []).append(r)
+    for (mode, pipe, cfg, build), rs in by.items():
+        rs = sorted(rs, key=lambda r: float(r['wall_s']))
+        r = rs[len(rs) // 2]
+        mem[(hk, mode, pipe, cfg, build)] = (float(r['wall_s']), float(r['max_rss_kb']) / 1024 ** 2)
+for mode, mk in (('single-end', 'S'), ('paired', 'P')):
+    for build, bk in (('old', 'Old'), ('new', 'New')):
+        put(f'Mem{mk}{bk}', fx(mem[('G', mode, 'certa-cpu-iv', 'default', build)][1], 1), 'hg002_2026-10/memory_galaxy.tsv')
+        put(f'Mem{mk}Gpu{bk}', fx(mem[('G', mode, 'certa-gpu-iv', 'default', build)][1], 1), 'hg002_2026-10/memory_galaxy.tsv')
+    # --full-cert needs no more memory than the default (within 0.2 GiB), on both hosts
+    for hk in ('G', 'A'):
+        d = mem[(hk, mode, 'certa-cpu-iv', 'default', 'new')][1]
+        f = mem[(hk, mode, 'certa-cpu-iv', '--full-cert', 'new')][1]
+        assert abs(d - f) < 0.2, (hk, mode, d, f)
+gain = [mem[(hk, m, p, c, 'old')][0] / mem[(hk, m, p, c, 'new')][0] - 1
+        for (hk, m, p, c, b) in mem if b == 'new' and (hk, m, p, c, 'old') in mem]
+assert min(gain) > 0  # the new build is not slower at 20 M on either host
+put('MemFasterMax', f'{100 * max(gain):.1f}', 'hg002_2026-10/memory_{galaxy,a2}.tsv')
+
 for (mode, cfg), v in shares.items():
     assert len(v) == 1, (mode, cfg, v)  # the same on both hosts, CPU and A100
     put(f"FCCert{ {'single-end': 'S', 'paired': 'P'}[mode] }{FCFG[cfg]}".replace(' ', ''), v.pop(), src)
