@@ -943,7 +943,7 @@ verifies the XQ of PR mates too.
     galaxy CPU: 15.8 → 20.9 → 38.7 s single-end, 37.6 → 59.8 → 100.1 s
     paired (A100: 13.0 / 17.5 / 34.7 and 28.4 / 49.2 / 88.6 s); a2: 18.2 →
     19.5 → 40.9 s and 37.8 → 58.1 → 107.1 s. Peak RSS 29.1 GiB single-end,
-    36.2 GiB paired (39.5 GiB with the A100; 21.3 and 21.6 GiB since the
+    36.2 GiB paired (39.5 GiB with the A100; 21.3 and 21.5 GiB since the
     memory changes below). So `--full-cert` costs about 2.5×
     the default: slower than minibwa (on galaxy 28.8 s single-end and
     63.0 s paired; also with the A100 and on a2), 2.6× and 3.3× faster than
@@ -967,11 +967,13 @@ verifies the XQ of PR mates too.
     galaxy as before; 0.2 s on a2, where the old load took 0.04 s (its
     page cache maps the file in large folios).
   - *20 M reads / pairs, interval mode, medians of three interleaved with
-    the old build:* peak 29.1 → 21.3 GiB single-end and 36.2 → 21.6 GiB
-    paired on both hosts (A100: 31.9 → 24.3 and 39.5 → 25.0 GiB). galaxy is
-    2.7–6.5 % faster in every configuration (single-end default 15.79 →
-    14.77 s, paired `--full-cert` 99.93 → 96.36 s), a2 0.3–1.2 % faster;
-    at 2 M, a2 is 0.7–4 % slower (the 0.2 s load).
+    the old build (peak memory of the median run, as in the paper):* peak
+    29.1 → 21.3 GiB single-end and 36.2 → 21.5 GiB paired on galaxy (a2:
+    21.4 and 21.6 GiB; A100: 31.9 → 24.3 and 39.5 → 25.0 GiB). galaxy is
+    2.8–6.9 % faster in every configuration (old time / new time − 1;
+    single-end default 15.79 → 14.77 s, paired `--full-cert` 99.93 →
+    96.36 s), a2 0.3–1.2 % faster; at 2 M, a2 is 0.7–4 % slower (the 0.2 s
+    load).
   - *Tried and not kept: 8-bit keys* (the keys' high 8 bits held, the low 8
     read from the reference at the entry). Byte-identical and 2.7 GiB
     less, but 21–79 % slower at 2 M: in repeats every binary-search step

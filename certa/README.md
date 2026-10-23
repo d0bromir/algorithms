@@ -111,7 +111,7 @@ reads single-end and 97.4 % paired (default: 94.4 % and 95.4 %) in about
 2.5 times the default time (galaxy, 64 cores: 38.7 s and 100.1 s; still
 2.6× and 3.3× faster than BWA-MEM2); a second index (`--index2`) adds only
 0.1 points more. Peak memory is the index alone, whatever the input size:
-21.3 GiB single-end and 21.6 GiB paired for GRCh38 (24.3 / 25.0 GiB with an
+21.3 GiB single-end and 21.5 GiB paired for GRCh38 (24.3 / 25.0 GiB with an
 A100), as for the default (`bench/results/hg002_2026-10/memory_*.tsv`).
 
 ### Interval output, no fallback (`--intervals`)
