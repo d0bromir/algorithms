@@ -104,6 +104,14 @@ build-*/certa map grch38.cidx sample_R1.fastq.gz -k 2 --gpu \
 minibwa ... uncertified.fq > fallback.sam      # or bwa-mem2 mem ...
 ```
 
+For the most certified reads, use `--full-cert` on an index of every
+position (`certa index ... -s 1`, about 23 GB for GRCh38): pass 3, pass V
+(adaptive parts) and pass L. On 20 M HG002 reads it certifies 97.6 % of
+reads single-end and 97.4 % paired (default: 94.4 % and 95.4 %) in about
+2.5 times the default time (galaxy, 64 cores: 38.7 s and 100.1 s; still
+2.6× and 3.3× faster than BWA-MEM2); a second index (`--index2`) adds only
+0.1 points more.
+
 ### Interval output, no fallback (`--intervals`)
 
 ```bash
@@ -187,7 +195,7 @@ Parameters:
 | `--local` | 0 | pass L (CPU): certified local alignment (tier SL) for reads still uncertified, verifying chains hit by ≥ t parts (2 is the cheap setting) |
 | `--full-cert` | off | maximum certification: `--budget3 4096`, `--adaptive-parts 2` (unless `--witness`) and `--local 2` unless given; slower |
 | `--adaptive-parts` / `--vbudget` | 0 / 4096 | pass V (CPU, s = 1 index): for reads still uncertified after pass 3, parts chosen per read: 1 = the rarest disjoint q-mers (radius \|S\| − 1); 2 = then q-mers searched with up to one edit (radius 2\|S\| − 1, at most 12); hits per strand ≤ `--vbudget`. Not with `--witness` |
-| `--index2` | none | a second index of the same reference (e.g. built with `-q 15 -s 1`, about 23 GB for GRCh38): reads still uncertified after every pass get every pass again on it (CPU). Not with `--witness` or `--serial-stages` |
+| `--index2` | none | not recommended since pass V: a second index of the same reference (e.g. built with `-q 15 -s 1`, about 23 GB for GRCh38) on which reads still uncertified after every pass get every pass again (CPU). With `--full-cert` it adds 0.1 points for twice the memory and 50 % more time (HG002). Not with `--witness` or `--serial-stages` |
 
 ## Results on real data: GIAB HG002, NovaSeq X
 

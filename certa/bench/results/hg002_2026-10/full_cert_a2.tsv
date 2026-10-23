@@ -1,0 +1,21 @@
+# --full-cert at full scale, a2 (2026-10-23): 4 x Xeon Gold 5218, 64 cores, every run under numactl --interleave=all.
+# 20,001,073 HG002 reads (single-end, R1) or pairs; SAM to /dev/null; interval mode (every read a record); three rounds in one session. Build: exact-alignment-proposal after c9ee1c7 (pass V with batched lookups, prefetched cluster windows and the support bound; every output byte-identical to c9ee1c7, whose default output is byte-identical to 77b1df2, the build of final_a2.tsv). Configurations: default; --full-cert --adaptive-parts 0 (pass 3 budget 4096 and pass L); --full-cert (with pass V). Certified shares: full_cert_certified.txt. Script: bench/full_cert_bench.sh.
+host	mode	pipeline	config	rep	wall_s	user_s	sys_s	max_rss_kb
+a2	single-end	certa-cpu-iv	default	1	18.24	1062.89	4.74	30587664
+a2	paired	certa-cpu-iv	default	1	37.77	2218.95	7.88	38028288
+a2	single-end	certa-cpu-iv	--full-cert --adaptive-parts 0	1	19.53	1120.54	4.03	30536928
+a2	paired	certa-cpu-iv	--full-cert --adaptive-parts 0	1	58.12	3427.15	7.41	38062080
+a2	single-end	certa-cpu-iv	--full-cert	1	41.03	2443.99	4.20	30508676
+a2	paired	certa-cpu-iv	--full-cert	1	107.23	6460.02	8.36	38045236
+a2	single-end	certa-cpu-iv	default	2	18.23	1063.49	5.10	30592196
+a2	paired	certa-cpu-iv	default	2	37.82	2216.91	7.75	38027352
+a2	single-end	certa-cpu-iv	--full-cert --adaptive-parts 0	2	19.56	1122.38	4.03	30520140
+a2	paired	certa-cpu-iv	--full-cert --adaptive-parts 0	2	58.08	3425.56	7.52	38053248
+a2	single-end	certa-cpu-iv	--full-cert	2	40.89	2437.60	4.09	30494992
+a2	paired	certa-cpu-iv	--full-cert	2	107.11	6454.17	8.53	38041088
+a2	single-end	certa-cpu-iv	default	3	18.24	1065.90	4.90	30596900
+a2	paired	certa-cpu-iv	default	3	37.80	2219.07	7.66	38022056
+a2	single-end	certa-cpu-iv	--full-cert --adaptive-parts 0	3	19.54	1122.25	4.02	30540188
+a2	paired	certa-cpu-iv	--full-cert --adaptive-parts 0	3	58.08	3424.45	7.70	38043928
+a2	single-end	certa-cpu-iv	--full-cert	3	40.88	2437.68	4.07	30493512
+a2	paired	certa-cpu-iv	--full-cert	3	106.90	6447.88	8.12	38051864

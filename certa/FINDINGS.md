@@ -912,12 +912,41 @@ verifies the XQ of PR mates too.
     prototype predicted 97.65 %.
   - *Tests:* the oracle at radius 12 (873 reads, 6 settings, 3 seeds, ARM
     and x86), Lemma N directly, the DP against brute force, the hit budget;
-    9 mutants V1–V9 killed (139 in all: 131 killed, 8 equivalent).
+    11 mutants V1–V11 killed (141 in all: 133 killed, 8 equivalent).
   - *Against the slow mappers* (`slow_reliability.txt`): within their own
     error rate (4 % of the read length) Yara and RazerS 3 miss none of the
     reads CERTA certifies; every read they leave unmapped has its proven
     optimum beyond that rate (17,836 single-end reads, 0.89 %; distances
     rechecked against the reference). CERTA now certifies those too.
+  - *Where pass V's time goes* (galaxy, perf, paired `--full-cert`): about
+    56 % of the run, of which the exact verification of clusters is 40
+    points (the banded DP itself 44 % of a single-end run), its lookups and
+    part choice 17. A read in a repeat has up to 4,096 hits per strand, and a
+    unique read keeps b2 at R + 1, so every cluster that could hold a second
+    locus within R must be verified: that is the claim d2 makes.
+  - *Faster, output unchanged* (byte-identical to c9ee1c7 in 15 outputs:
+    default and `--full-cert`, single-end and paired, fallback and interval
+    mode, CPU and A100; ARM = x86): batched, prefetched index lookups in
+    pass V; the reference windows of clusters prefetched six ahead; and a
+    support bound (THEORY.md, Theorem A) that skips a cluster whose parts
+    imply more edits than the current limit. 2 M reads, `--full-cert`:
+    single-end 5.58 → 4.96 s (CPU 260 → 221 s), paired 12.45 → 11.10 s
+    (675 → 591 s). Two alternatives were measured and not kept: a two-phase
+    verification at a smaller radius (the same speed, but a changed radius
+    for some records), and a smaller pass V budget (1,024 hits: 24 % faster
+    single-end, but 0.34 points fewer certified).
+  - *At full scale* (`full_cert_{galaxy,a2}.tsv`, `full_cert_certified.txt`;
+    20,001,073 reads or pairs, interval mode, medians of three, final
+    protocol's pinning): certified single-end / paired 94.38 / 95.39 %
+    (default), 95.59 / 96.29 % (`--full-cert --adaptive-parts 0`), 97.61 /
+    97.44 % (`--full-cert`), the same on both hosts, CPU and A100. Wall,
+    galaxy CPU: 15.8 → 20.9 → 38.7 s single-end, 37.6 → 59.8 → 100.1 s
+    paired (A100: 13.0 / 17.5 / 34.7 and 28.4 / 49.2 / 88.6 s); a2: 18.2 →
+    19.5 → 40.9 s and 37.8 → 58.1 → 107.1 s. Peak RSS 30.5 GB single-end,
+    38 GB paired (41 GB with the A100). So `--full-cert` costs about 2.5×
+    the default: slower than minibwa single-end (28.8 s on galaxy), 2.6× and
+    3.3× faster than BWA-MEM2, and it certifies 3.2 and 2.1 points more
+    than the default (pass V alone: 2.0 and 1.2).
 - **HG001 GATK indels** are the one comparison where CERTA's F1 is lower
   (0.9909 vs 0.9922). Look at the 13 extra FP and 14 extra FN.
 - **Long reads:** the mapper's limits (320 bp, 8 parts, radius 5) exclude

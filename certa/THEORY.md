@@ -12,7 +12,7 @@ names:
 
 **Review status.** Written, then cross-checked by:
 - whole-reference oracles (4 seeds, ARM and x86);
-- 139 mutants;
+- 141 mutants;
 - exhaustive verification of the finite lemmas.
 
 It has **not yet been reviewed by a second person**. §11 lists what a
@@ -197,6 +197,15 @@ their hits enumerated.
   Theorem 3; R ≤ VMAX = 12, bands of up to BMAX = 96 diagonals (host only).
   The same |S| is used on both strands. The certified d1, d2, ties and SUB
   bound follow as for S1 (`finish_certified`).
+- *Support bound (a skip, not a filter):* an alignment with d edits leaves
+  ≥ m − d parts untouched (A1), or ≥ m − ⌊d/2⌋ parts with at most one edit
+  (A2), and each of them has a hit in the alignment's cluster. So a cluster
+  hit by s of the m parts holds only alignments with ≥ m − s (A1) or
+  ≥ 2(m − s) (A2) edits. A cluster whose bound exceeds the current limit
+  b2 − 1 is skipped: by Theorem 3 its verification could not have changed
+  (b1, b2) or its recorded distance, so the output is the same byte for
+  byte (checked on 2 M HG002 reads and pairs, every mode, CPU and A100). It
+  saves 11 % of `--full-cert`'s time.
 - *Choice of parts (any choice is sound):* (A1) the most disjoint q-mers
   whose hits fit the budget, least hits among them (a DP over read offsets,
   `vparts_dp`); (A2) the most disjoint q-mers with the fewest hits, then
@@ -210,7 +219,7 @@ their hits enumerated.
   second locus within R has none; threads and verification order change
   nothing; [XL, XU] holds OPT and SUB ≤ SUB_hi; at most `budget` hits are
   enumerated per strand. The DP is checked against brute force.
-- *Mutants:* V1, V2, V6, V7, V8, V9. V8 (the larger strand's |S| on both
+- *Mutants:* V1, V2, V6–V11. V8 (the larger strand's |S| on both
   strands) keeps the certificate sound, since every chosen part is still
   enumerated in full, but breaks the hit budget, so the budget check kills it.
 
@@ -1191,7 +1200,7 @@ positions, more than a mate covers.
 |---|---|---|---|---|
 | Lemma I, V0 | core.h `enumerate_parts`; check.cpp | all; index validation | E3, C4, C8, C9 | — |
 | Thm 1, 1′, 2, 3, 4 | core.h `process_read`, `evaluate_clusters` | edit-distance oracle | E1–E7 | — |
-| Lemma N, Thm A (pass V) | core.h `vparts_neighbours`, `vparts_dp`, `certify_vparts` | Lemma N directly; DP against brute force; edit-distance oracle at radius 12 | V1–V9 | — |
+| Lemma N, Thm A (pass V) | core.h `vparts_neighbours`, `vparts_dp`, `certify_vparts`, `evaluate_clusters` (support bound) | Lemma N directly; DP against brute force; edit-distance oracle at radius 12 | V1–V11 | — |
 | Lemma L, S, W, C | core.h `local_bound`; pair.h `span_bound`; check.cpp | local oracle | L1–L5, L7, C1, C3; L6 equivalent (Lemma S) | L, S |
 | Thm L, SL SUB | core.h `certify_local` | local + SUB oracles, planted reads e–i | L1–L5, L7, L8, A4, A10 | — |
 | Lemma E, O, Prop. E′ | core.h `edit_bound`, `process_read`; interval.h | [XL, XU] and SUB oracles, planted reads | A1, A2 (equivalent), A3, A5 | E |

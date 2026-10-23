@@ -1,0 +1,52 @@
+# Certified shares of the full_cert_{galaxy,a2}.tsv runs (CERTA's summary lines, the first round of each configuration). 20,001,073 HG002 reads or pairs; identical on both hosts, CPU and A100.
+== galaxy single-end certa-cpu-iv default
+[map] 20001073 reads: certified 94.38% (S0 exact 72.44%, S1 <=R edits 20.43%, SR repeat 1.52%, SL local 0.00%), ties 4.79%
+== galaxy paired certa-cpu-iv default
+[map] 40002146 reads: certified 95.39% (S0 exact 69.43%, S1 <=R edits 17.77%, SR repeat 1.03%, SL local 0.00%), ties 4.74%
+[map] pairs 20001073: both mates certified 93.56% (proper 92.21%); PR pair certificate 7.16% of reads; pair pass tried 11.90% of pairs
+== galaxy single-end certa-gpu-iv default
+[map] 20001073 reads: certified 94.38% (S0 exact 72.44%, S1 <=R edits 20.43%, SR repeat 1.52%, SL local 0.00%), ties 4.79%
+== galaxy paired certa-gpu-iv default
+[map] 40002146 reads: certified 95.39% (S0 exact 69.43%, S1 <=R edits 17.77%, SR repeat 1.03%, SL local 0.00%), ties 4.74%
+[map] pairs 20001073: both mates certified 93.56% (proper 92.21%); PR pair certificate 7.16% of reads; pair pass tried 11.90% of pairs
+== galaxy single-end certa-cpu-iv --full-cert --adaptive-parts 0
+[map] 20001073 reads: certified 95.59% (S0 exact 72.66%, S1 <=R edits 21.10%, SR repeat 1.52%, SL local 0.31%), ties 5.29%
+== galaxy paired certa-cpu-iv --full-cert --adaptive-parts 0
+[map] 40002146 reads: certified 96.29% (S0 exact 69.74%, S1 <=R edits 18.25%, SR repeat 0.36%, SL local 0.42%), ties 4.96%
+[map] pairs 20001073: both mates certified 94.85% (proper 93.62%); PR pair certificate 7.52% of reads; pair pass tried 11.07% of pairs
+== galaxy single-end certa-gpu-iv --full-cert --adaptive-parts 0
+[map] 20001073 reads: certified 95.59% (S0 exact 72.66%, S1 <=R edits 21.10%, SR repeat 1.52%, SL local 0.31%), ties 5.29%
+== galaxy paired certa-gpu-iv --full-cert --adaptive-parts 0
+[map] 40002146 reads: certified 96.29% (S0 exact 69.74%, S1 <=R edits 18.25%, SR repeat 0.36%, SL local 0.42%), ties 4.96%
+[map] pairs 20001073: both mates certified 94.85% (proper 93.62%); PR pair certificate 7.52% of reads; pair pass tried 11.07% of pairs
+== galaxy single-end certa-cpu-iv --full-cert
+[map] 20001073 reads: certified 97.61% (S0 exact 72.76%, S1 <=R edits 23.28%, SR repeat 1.52%, SL local 0.06%), ties 5.91%
+[map] pass V (CPU, adaptive parts): 4.72% of reads tried, 2.28% certified there
+== galaxy paired certa-cpu-iv --full-cert
+[map] 40002146 reads: certified 97.44% (S0 exact 70.31%, S1 <=R edits 20.63%, SR repeat 0.36%, SL local 0.18%), ties 5.30%
+[map] pass V (CPU, adaptive parts): 5.31% of reads tried, 2.33% certified there
+[map] pairs 20001073: both mates certified 96.16% (proper 93.98%); PR pair certificate 5.95% of reads; pair pass tried 9.94% of pairs
+== galaxy single-end certa-gpu-iv --full-cert
+[map] 20001073 reads: certified 97.61% (S0 exact 72.76%, S1 <=R edits 23.28%, SR repeat 1.52%, SL local 0.06%), ties 5.91%
+[map] pass V (CPU, adaptive parts): 4.72% of reads tried, 2.28% certified there
+== galaxy paired certa-gpu-iv --full-cert
+[map] 40002146 reads: certified 97.44% (S0 exact 70.31%, S1 <=R edits 20.63%, SR repeat 0.36%, SL local 0.18%), ties 5.30%
+[map] pass V (CPU, adaptive parts): 5.31% of reads tried, 2.33% certified there
+[map] pairs 20001073: both mates certified 96.16% (proper 93.98%); PR pair certificate 5.95% of reads; pair pass tried 9.94% of pairs
+== a2 single-end certa-cpu-iv default
+[map] 20001073 reads: certified 94.38% (S0 exact 72.44%, S1 <=R edits 20.43%, SR repeat 1.52%, SL local 0.00%), ties 4.79%
+== a2 paired certa-cpu-iv default
+[map] 40002146 reads: certified 95.39% (S0 exact 69.43%, S1 <=R edits 17.77%, SR repeat 1.03%, SL local 0.00%), ties 4.74%
+[map] pairs 20001073: both mates certified 93.56% (proper 92.21%); PR pair certificate 7.16% of reads; pair pass tried 11.90% of pairs
+== a2 single-end certa-cpu-iv --full-cert --adaptive-parts 0
+[map] 20001073 reads: certified 95.59% (S0 exact 72.66%, S1 <=R edits 21.10%, SR repeat 1.52%, SL local 0.31%), ties 5.29%
+== a2 paired certa-cpu-iv --full-cert --adaptive-parts 0
+[map] 40002146 reads: certified 96.29% (S0 exact 69.74%, S1 <=R edits 18.25%, SR repeat 0.36%, SL local 0.42%), ties 4.96%
+[map] pairs 20001073: both mates certified 94.85% (proper 93.62%); PR pair certificate 7.52% of reads; pair pass tried 11.07% of pairs
+== a2 single-end certa-cpu-iv --full-cert
+[map] 20001073 reads: certified 97.61% (S0 exact 72.76%, S1 <=R edits 23.28%, SR repeat 1.52%, SL local 0.06%), ties 5.91%
+[map] pass V (CPU, adaptive parts): 4.72% of reads tried, 2.28% certified there
+== a2 paired certa-cpu-iv --full-cert
+[map] 40002146 reads: certified 97.44% (S0 exact 70.31%, S1 <=R edits 20.63%, SR repeat 0.36%, SL local 0.18%), ties 5.30%
+[map] pass V (CPU, adaptive parts): 5.31% of reads tried, 2.33% certified there
+[map] pairs 20001073: both mates certified 96.16% (proper 93.98%); PR pair certificate 5.95% of reads; pair pass tried 9.94% of pairs

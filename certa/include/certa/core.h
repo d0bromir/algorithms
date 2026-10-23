@@ -746,7 +746,7 @@ CERTA_HD inline void order_by_support(Workspace& ws, int n) {
 // first, so exact matches never reach the DP. Cluster.dist is exact or cap + 1.
 CERTA_HD inline void evaluate_clusters(const IndexView& ix, int L, int nclust, int cap,
                                        int reverse, int max_eval, int min_support, Workspace& ws,
-                                       int* pb1, int* pb2) {
+                                       int* pb1, int* pb2, int lb_parts = 0, int lb_per = 0) {
   order_by_support(ws, nclust);
   if (reverse)  // results must not depend on the order (tested)
     for (int x = 0, y = nclust - 1; x < y; ++x, --y) {
@@ -755,12 +755,31 @@ CERTA_HD inline void evaluate_clusters(const IndexView& ix, int L, int nclust, i
       ws.corder[y] = t;
     }
   int b1 = cap + 1, b2 = cap + 1;
+#ifndef __CUDA_ARCH__
+  // Each cluster's first reference access is a random read of a 3 GB
+  // reference; start those of the clusters a few places ahead (results do
+  // not change).
+  // Only for the many clusters of host passes (pass 3, pass V).
+  constexpr int kAhead = 6;
+  const bool pf = nclust > 16;
+  auto prefetch_window = [&](int y) {
+    const int64_t lo = ws.clusters[ws.corder[y]].lo;
+    if (lo < 0 || (uint64_t)lo + L + BMAX > ix.ref_len) return;
+    for (int b = 0; b < L + 64; b += 64) __builtin_prefetch(ix.ref + lo + b);
+  };
+  if (pf)
+    for (int y = 0; y < kAhead && y < nclust; ++y) prefetch_window(y);
+#endif
   for (int x = 0; x < nclust; ++x) {
+#ifndef __CUDA_ARCH__
+    if (pf && x + kAhead < nclust) prefetch_window(x + kAhead);
+#endif
     Cluster& cl = ws.clusters[ws.corder[x]];
     cl.dist = (int8_t)(cap + 1);  // "cannot improve (b1, b2)", or not evaluated
     const int limit = b2 - 1;
     if (limit < 0 || x >= max_eval) continue;
     if (popcount16(cl.pmask) < min_support) continue;  // q-gram lemma: no locus within R here
+    if (lb_per * (lb_parts - popcount16(cl.pmask)) > limit) continue;  // pass V: none below b2 here
     const uint8_t* rd = ws.seq[cl.strand];
     int u = limit + 1;  // Hamming upper bound, only tracked below limit + 1
     for (int e = cl.beg; e < cl.end && u > 0; ++e) {
@@ -1812,13 +1831,30 @@ CERTA_HD inline void finish_certified(const IndexView& ix, const Params& p, int 
 constexpr uint64_t kVInf = UINT64_MAX / 4;
 
 // One strand: the index range of the q-mer at every offset.
+// lookup() of n keys, the same ranges: every key's bucket directory entry is
+// prefetched, then every bucket, then each is searched, so the random reads
+// of all n overlap instead of following one another.
+inline void lookup_many(const IndexView& ix, const uint64_t* keys, int n, uint64_t* lo, uint64_t* hi) {
+  const int shift = 2 * ix.q - ix.dir_bits;
+  for (int i = 0; i < n; ++i) __builtin_prefetch(ix.dir + (keys[i] >> shift));
+  for (int i = 0; i < n; ++i) {
+    const uint64_t l = ix.dir[keys[i] >> shift];
+    if (ix.keys16) __builtin_prefetch(ix.keys16 + l);
+    else __builtin_prefetch(ix.keys + l);
+  }
+  for (int i = 0; i < n; ++i) lookup(ix, keys[i], lo + i, hi + i);
+}
+
 inline void vparts_ranges(const IndexView& ix, int L, Workspace& ws, int st) {
   const int n = L - ix.q + 1;
+  uint64_t keys[LMAX], lo[LMAX], hi[LMAX];
+  int at[LMAX], nk = 0;
   for (int a = 0; a < n; ++a) {
-    uint64_t key;
-    if (kmer_key(ws.seq[st] + a, ix.q, &key)) lookup(ix, key, &ws.vlo[st][a], &ws.vhi[st][a]);
+    if (kmer_key(ws.seq[st] + a, ix.q, &keys[nk])) at[nk++] = a;
     else { ws.vlo[st][a] = 1; ws.vhi[st][a] = 0; }  // an 'N': never a part
   }
+  lookup_many(ix, keys, nk, lo, hi);
+  for (int k = 0; k < nk; ++k) { ws.vlo[st][at[k]] = lo[k]; ws.vhi[st][at[k]] = hi[k]; }
 }
 
 // DP over disjoint q-mers of strand st with the given costs (kVInf: not a
@@ -1894,8 +1930,12 @@ inline int vparts_neighbours(const uint8_t* s, int q, uint64_t* keys) {
 
 // Clusters ws.cand (hits of the chosen parts, both strands) with pad R + 1
 // and verifies them; certifies r when the best distance is <= R.
-inline bool vparts_verify(const IndexView& ix, const Params& p, int L, int R, uint64_t name_hash, Workspace& ws,
-                          Result& r) {
+// lb_per: an alignment in a cluster hit by s of the m parts has at least
+// lb_per * (m - s) edits (Theorem A), so a cluster whose bound already
+// exceeds the current limit is skipped; (b1, b2) and every Cluster.dist come
+// out as if it had been verified.
+inline bool vparts_verify(const IndexView& ix, const Params& p, int L, int R, int m, int lb_per,
+                          uint64_t name_hash, Workspace& ws, Result& r) {
   sort_i64(ws.cand[0], ws.ncand[0]);
   sort_i64(ws.cand[1], ws.ncand[1]);
   r.ncand = (uint32_t)(ws.ncand[0] + ws.ncand[1]);
@@ -1903,7 +1943,7 @@ inline bool vparts_verify(const IndexView& ix, const Params& p, int L, int R, ui
   if (nclust < 0) { r.reason = kClusterTooWide; return false; }
   r.n_clusters = (uint16_t)nclust;
   int b1 = R + 1, b2 = R + 1;
-  evaluate_clusters(ix, L, nclust, R, p.reverse_order, nclust, 1, ws, &b1, &b2);
+  evaluate_clusters(ix, L, nclust, R, p.reverse_order, nclust, 1, ws, &b1, &b2, m, lb_per);
   if (b1 > R) { r.reason = kNotFound; return false; }
   r.reason = kOk;
   finish_certified(ix, p, L, R, nclust, b1, b2, name_hash, ws, r);
@@ -1944,26 +1984,24 @@ inline void certify_vparts(const IndexView& ix, const Params& p, int L, uint64_t
       }
       ws.ncand[st] = n;
     }
-    if (vparts_verify(ix, p, L, R, name_hash, ws, r)) return;
+    if (vparts_verify(ix, p, L, R, m, 1, name_hash, ws, r)) return;
   }
   if (p.vparts < 2) return;
   // (A2) one-edit parts: the most disjoint q-mers with the fewest hits, then
   // the cheapest one-edit neighbourhoods while they fit the budget (ties:
   // left to right).
-  uint64_t keys[NBMAX];
+  uint64_t keys[NBMAX], klo[NBMAX], khi[NBMAX];
   int order[2][PMAX];
   for (int st = 0; st < 2; ++st) {
     const int K = vparts_dp(L, q, cost[st], kVInf - 1, ws, st);
     vparts_pick(L, K, ws, st);
     for (int x = 0; x < K; ++x) {
       const int nk = vparts_neighbours(ws.seq[st] + ws.voff[st][x], q, keys);
+      lookup_many(ix, keys, nk, klo, khi);
       uint64_t tot = 0;
       int nb = 0;
-      for (int y = 0; y < nk; ++y) {
-        uint64_t lo, hi;
-        lookup(ix, keys[y], &lo, &hi);
-        if (hi > lo) { ws.nblo[st][x][nb] = lo; ws.nbhi[st][x][nb] = hi; ++nb; tot += hi - lo; }
-      }
+      for (int y = 0; y < nk; ++y)
+        if (khi[y] > klo[y]) { ws.nblo[st][x][nb] = klo[y]; ws.nbhi[st][x][nb] = khi[y]; ++nb; tot += khi[y] - klo[y]; }
       ws.nbn[st][x] = (uint16_t)nb;
       ws.nbcost[st][x] = tot;
       order[st][x] = x;
@@ -1993,7 +2031,7 @@ inline void certify_vparts(const IndexView& ix, const Params& p, int L, uint64_t
     }
     ws.ncand[st] = n;
   }
-  vparts_verify(ix, p, L, R, name_hash, ws, r);
+  vparts_verify(ix, p, L, R, m, 2, name_hash, ws, r);
 }
 #endif
 
