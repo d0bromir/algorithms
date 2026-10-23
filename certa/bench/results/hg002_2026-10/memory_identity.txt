@@ -70,3 +70,24 @@ paired      CPU    default      |      4.94 s      7.20 s  +45.8% |      215 s  
 paired      CPU    --full-cert  |     10.89 s     14.19 s  +30.3% |      579 s      722 s |       21.4       18.6
 paired      A100   default      |      6.82 s      8.44 s  +23.6% |      156 s      209 s |       24.2       21.4
 paired      A100   --full-cert  |     12.53 s     15.11 s  +20.6% |      519 s      636 s |       24.4       21.6
+
+== Tried and not kept: a 2-bit reference (map --packed-ref; 4 bases per
+byte, N runs kept apart, a 4,096-base block flagged when it holds an N;
+windows unpacked by table, lazily in the DP and the exact checks; huge
+pages requested). Byte-identical (30 of 30 outputs on galaxy, CPU and
+A100; 22 of 22 on a2) and 2.2 GiB less (2 M single-end: 21.4 -> 19.2 GiB),
+but slower wherever many windows are compared: the byte reference is read
+by vector loads in place, the packed one must be unpacked first, and pass V
+and the pair passes check many bands that stop after a few rows.
+2 M reads / pairs, 82b18ec against the packed build, two rounds each:
+  galaxy  single-end default: wall  0 %, CPU  0 %
+          paired default:     wall  0 %, CPU +8 %
+          single-end --full-cert: wall +9 %, CPU +10 %
+          paired --full-cert:     wall +9 %, CPU +10 %
+  a2      single-end default: wall +3-5 %, CPU +3-5 %
+          paired default:     wall 0-5 %,  CPU +13 %
+          single-end --full-cert: wall +19 %, CPU +20 %
+          paired --full-cert:     wall +17 %, CPU +17 %
+With the option off, the same build cost 0.5-0.8 % more CPU (galaxy,
+paired), since every reference window then passes through the unpacking
+helpers. Not kept: 2.2 GiB (10 %) does not pay for up to 20 % more time.

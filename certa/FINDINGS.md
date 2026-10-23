@@ -978,8 +978,16 @@ verifies the XQ of PR mates too.
     then needs two dependent random reads (the position, then the
     reference), and the lookups of tier R and `find_copies` took 37 % of a
     single-end interval run.
+  - *Tried and not kept: a 2-bit reference* (`--packed-ref`; N runs kept
+    apart, windows unpacked by table and lazily). Byte-identical and
+    2.2 GiB less, but pass V and the pair passes compare many short-lived
+    bands, which the byte reference serves by vector loads in place: at
+    2 M, `--full-cert` 9 % slower on galaxy and 17–19 % on a2, paired
+    default 8 % / 13 % more CPU; even switched off it cost 0.5–0.8 % CPU.
   - What is left is the index itself: positions 11.0 GiB, keys 5.5 GiB,
-    reference 2.9 GiB (1 byte per base), directory 1 GiB.
+    reference 2.9 GiB (1 byte per base), directory 1 GiB. Below that would
+    take a compressed index (FM-index or sampled positions), which changes
+    what each lookup costs rather than how the arrays are stored.
 - **HG001 GATK indels** are the one comparison where CERTA's F1 is lower
   (0.9909 vs 0.9922). Look at the 13 extra FP and 14 extra FN.
 - **Long reads:** the mapper's limits (320 bp, 8 parts, radius 5) exclude

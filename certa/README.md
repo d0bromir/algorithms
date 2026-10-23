@@ -322,10 +322,9 @@ no claim, pass.
   it on simulated reads from HPRC assemblies (roadmap §2.4).
 - **Memory:** the index is memory-mapped and is nearly all of it: positions
   11.0 GiB, keys 5.5 GiB, the reference 2.9 GiB (1 byte per base) and the
-  directory 1 GiB for GRCh38 with `-s 1`. Packing the reference to 2 bits
-  would save 2.2 GiB if decoding it costs the hot loops nothing (to be
-  measured); holding 8 of the keys' 16 bits was measured and costs too
-  much time (FINDINGS.md).
+  directory 1 GiB for GRCh38 with `-s 1`. A 2-bit reference (2.2 GiB less)
+  and 8-bit keys (2.7 GiB less) were measured and cost too much time
+  (9–20 % and 21–79 %; FINDINGS.md).
 - **GPU:** one thread per read, with local-memory workspaces. Warp-cooperative
   lookups, overlapping transfers with compute, and a device-side output
   path are the obvious optimizations.
