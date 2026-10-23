@@ -832,6 +832,30 @@ int main(int argc, char** argv) {
   std::remove(tmp.c_str());  // the mapping stays valid until ix_m is gone
   const IndexView view_m = ix_m.view(ref_m);
   CHECK(view_m.keys16 != nullptr, "saved index should use 16-bit keys (q=14)");
+  // The file stores the directory as 64 bits, memory holds it as 32.
+  CHECK(ix_m.dir.size() == ix.dir.size() &&
+            std::equal(ix.dir.data(), ix.dir.data() + ix.dir.size(), ix_m.dir.data()),
+        "directory changed by the round trip");
+  {
+    // A directory offset that 32 bits cannot hold is rejected on load.
+    save_index(tmp, ref, ix);
+    {
+      std::fstream f(tmp, std::ios::in | std::ios::out | std::ios::binary);
+      f.seekp(-8, std::ios::end);  // the directory's last entry ends the file
+      const uint64_t big = (uint64_t(1) << 32) + ix.pos.size();
+      f.write(reinterpret_cast<const char*>(&big), sizeof big);
+    }
+    Reference r;
+    Index x;
+    bool thrown = false;
+    try {
+      load_index(tmp, r, x);
+    } catch (const std::runtime_error&) {
+      thrown = true;
+    }
+    std::remove(tmp.c_str());
+    CHECK(thrown, "a directory offset beyond 2^32 - 1 accepted");
+  }
 
   // Reads: from unique sequence, repeat copies, the exact duplicate, the
   // tandem repeat and near the N run; with 0..7 edits; plus random reads.

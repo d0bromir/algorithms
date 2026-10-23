@@ -55,7 +55,9 @@ size_t read_fastq_batch(LineReader& in, std::vector<FastqRecord>& out,
 
 // Uncompressed FASTQ read in place from a memory mapping. Record boundaries
 // are found on several threads where that is exact (see next_spans), and
-// records are built on several threads.
+// records are built on several threads. The spans of one next_spans call are
+// to be parsed before the next call, which drops the pages before them from
+// memory (so memory does not grow with the input).
 class MappedFastq {
  public:
   explicit MappedFastq(const std::string& path);
@@ -70,6 +72,7 @@ class MappedFastq {
  private:
   const char* base_ = nullptr;
   size_t size_ = 0, pos_ = 0;
+  size_t released_ = 0;          // the pages before this offset were dropped
   double bytes_per_record_ = 0;  // in the previous batch
 };
 

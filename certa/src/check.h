@@ -160,7 +160,7 @@ class Checker {
   const uint64_t* keys_;
   const uint16_t* keys16_;
   const uint32_t* pos_;
-  const uint64_t* dir_;
+  const uint32_t* dir_;
 };
 
 // Proves that the index lists exactly the N-free q-mers of its reference at

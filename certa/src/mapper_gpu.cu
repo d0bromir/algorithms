@@ -46,7 +46,7 @@ struct GpuMapper::Impl {
   uint64_t* d_keys = nullptr;
   uint16_t* d_keys16 = nullptr;
   uint32_t* d_pos = nullptr;
-  uint64_t* d_dir = nullptr;
+  uint32_t* d_dir = nullptr;
   // Batch buffers, grown on demand.
   uint8_t* d_codes = nullptr;
   uint64_t* d_offs = nullptr;

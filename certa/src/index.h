@@ -40,7 +40,7 @@ struct Index {
   Array<uint64_t> keys;    // full keys (built in memory, or v2 files)
   Array<uint16_t> keys16;  // low 16 bits (v3 files, when 2q - dir_bits <= 16)
   Array<uint32_t> pos;
-  Array<uint64_t> dir;
+  Array<uint32_t> dir;     // in memory as 32 bits (files store 64)
   std::shared_ptr<void> mapping;  // keeps a memory-mapped index file alive
 
   static Index build(const Reference& ref, int q, int s, int threads);

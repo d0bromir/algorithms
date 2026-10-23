@@ -139,6 +139,7 @@ Index Index::build(const Reference& ref, int q, int s, int threads) {
     bounds.swap(next);
   }
 
+  if (kp.size() > UINT32_MAX) throw std::runtime_error("more than 2^32 - 1 index entries");
   std::vector<uint64_t>& keys = ix.keys.owned;
   std::vector<uint32_t>& pos = ix.pos.owned;
   keys.resize(kp.size());
@@ -154,7 +155,7 @@ Index Index::build(const Reference& ref, int q, int s, int threads) {
   ix.dir_bits = std::min(bits, 2 * q);
   const int shift = 2 * q - ix.dir_bits;
   const uint64_t nb = uint64_t(1) << ix.dir_bits;
-  std::vector<uint64_t>& dir = ix.dir.owned;
+  std::vector<uint32_t>& dir = ix.dir.owned;
   dir.assign(nb + 1, 0);
   for (uint64_t k : keys) ++dir[(k >> shift) + 1];
   for (uint64_t b = 0; b < nb; ++b) dir[b + 1] += dir[b];
@@ -187,6 +188,7 @@ const char kMagicV2[8] = {'C', 'E', 'R', 'T', 'A', 'I', 'X', '2'};
 // whenever 2q - dir_bits <= 16 (the bucket directory holds the rest).
 const char kMagicV3[8] = {'C', 'E', 'R', 'T', 'A', 'I', 'X', '3'};
 constexpr uint64_t kAlign = 64;
+constexpr uint64_t kChunk = uint64_t(1) << 21;  // directory entries per step (16 MB at 64 bits)
 
 struct File {
   std::FILE* f;
@@ -205,10 +207,23 @@ struct File {
   // v2 layout: size, zero padding to a 64-byte boundary, then the data.
   template <class T> void put_array(const Array<T>& a) {
     put<uint64_t>(a.size());
+    pad();
+    write(a.data(), a.size() * sizeof(T));
+  }
+  // A 32-bit array stored as 64-bit values (the directory in v1 to v3 files).
+  void put_array64(const Array<uint32_t>& a) {
+    put<uint64_t>(a.size());
+    pad();
+    std::vector<uint64_t> buf;
+    for (uint64_t i = 0; i < a.size(); i += kChunk) {
+      buf.assign(a.data() + i, a.data() + std::min(a.size(), i + kChunk));
+      write(buf.data(), buf.size() * sizeof(uint64_t));
+    }
+  }
+  void pad() {
     static const char zeros[kAlign] = {};
     long at = std::ftell(f);
     write(zeros, (kAlign - static_cast<uint64_t>(at) % kAlign) % kAlign);
-    write(a.data(), a.size() * sizeof(T));
   }
   template <class T> void get_vec(std::vector<T>& v) {  // v1 layout
     v.resize(get<uint64_t>());
@@ -249,6 +264,39 @@ struct Cursor {
   }
 };
 
+// The file's 64-bit directory as 32-bit offsets (each is at most the number
+// of entries, < 2^32), converted on several threads. With `drop`, src lies in
+// a file mapping whose pages are released as they are read, so the 64-bit
+// copy is never resident as a whole.
+void narrow_dir(const uint64_t* src, uint64_t len, std::vector<uint32_t>& dst, bool drop,
+                const std::string& path) {
+  static const uint64_t page = static_cast<uint64_t>(sysconf(_SC_PAGESIZE));
+  auto release = [&](uint64_t a, uint64_t b) {  // whole pages of src[a, b)
+    const uint64_t lo = (reinterpret_cast<uint64_t>(src + a) + page - 1) / page * page;
+    const uint64_t hi = reinterpret_cast<uint64_t>(src + b) / page * page;
+    if (drop && hi > lo) madvise(reinterpret_cast<void*>(lo), hi - lo, MADV_DONTNEED);
+  };
+  dst.resize(len);
+  const uint64_t steps = (len + kChunk - 1) / kChunk;
+  const int threads = static_cast<int>(std::max<uint64_t>(1, std::min<uint64_t>({16, steps, std::thread::hardware_concurrency()})));
+  std::vector<char> wide(threads, 0);
+  parallel_for(threads, [&](int t) {
+    uint64_t high = 0;  // the high halves, or-ed
+    for (uint64_t k = steps * t / threads; k < steps * (t + 1) / threads; ++k) {
+      const uint64_t a = k * kChunk, b = std::min(len, a + kChunk);
+      for (uint64_t i = a; i < b; ++i) {
+        high |= src[i] >> 32;
+        dst[i] = static_cast<uint32_t>(src[i]);
+      }
+      release(a, b);
+    }
+    wide[t] = high != 0;
+  });
+  release(0, len);  // the pages split between steps
+  for (char w : wide)
+    if (w) throw std::runtime_error(path + ": directory offset beyond 2^32 - 1");
+}
+
 }  // namespace
 
 void save_index(const std::string& path, const Reference& ref, const Index& ix) {
@@ -285,7 +333,7 @@ void save_index(const std::string& path, const Reference& ref, const Index& ix) 
     f.put_array(ix.keys);
   }
   f.put_array(ix.pos);
-  f.put_array(ix.dir);
+  f.put_array64(ix.dir);
 }
 
 void load_index(const std::string& path, Reference& ref, Index& ix) {
@@ -310,24 +358,26 @@ void load_index(const std::string& path, Reference& ref, Index& ix) {
       f.get_vec(ref.seq.owned);
       f.get_vec(ix.keys.owned);
       f.get_vec(ix.pos.owned);
-      f.get_vec(ix.dir.owned);
+      std::vector<uint64_t> dir64;
+      f.get_vec(dir64);
+      ix.dir = Array<uint32_t>();
+      narrow_dir(dir64.data(), dir64.size(), ix.dir.owned, false, path);
       return;
     }
     if (std::memcmp(magic, kMagicV2, sizeof magic) != 0 &&
         std::memcmp(magic, kMagicV3, sizeof magic) != 0)
       throw std::runtime_error(path + " is not a CERTA index");
   }
-  int fd = ::open(path.c_str(), O_RDONLY);
-  if (fd < 0) throw std::runtime_error("cannot open " + path);
+  struct Fd {
+    int fd;
+    ~Fd() { ::close(fd); }
+  } fd{::open(path.c_str(), O_RDONLY)};
+  if (fd.fd < 0) throw std::runtime_error("cannot open " + path);
   struct stat st;
-  if (fstat(fd, &st) != 0) {
-    ::close(fd);
-    throw std::runtime_error("cannot stat " + path);
-  }
+  if (fstat(fd.fd, &st) != 0) throw std::runtime_error("cannot stat " + path);
   auto m = std::make_shared<Mapping>();
   m->size = static_cast<size_t>(st.st_size);
-  m->base = mmap(nullptr, m->size, PROT_READ, MAP_SHARED | MAP_POPULATE, fd, 0);
-  ::close(fd);
+  m->base = mmap(nullptr, m->size, PROT_READ, MAP_SHARED, fd.fd, 0);
   if (m->base == MAP_FAILED) throw std::runtime_error("cannot mmap " + path);
   Cursor c{static_cast<const char*>(m->base), sizeof magic, m->size};
   ix.q = c.get<int32_t>();
@@ -352,7 +402,26 @@ void load_index(const std::string& path, Reference& ref, Index& ix) {
   if (key_bits == 16) c.array(ix.keys16);
   else c.array(ix.keys);
   c.array(ix.pos);
-  c.array(ix.dir);
+  Array<uint64_t> dir64;
+  c.array(dir64);
+  // The arrays before the directory are used in place: one thread faults them
+  // in (MAP_POPULATE on the same pages again) while the others read the
+  // directory, once, into 32 bits, dropping its pages as they go.
+  const size_t keep = static_cast<size_t>(reinterpret_cast<const char*>(dir64.data()) - c.base);
+  bool populated = true;
+  std::thread populate([&] {
+    populated = keep == 0 ||
+                mmap(m->base, keep, PROT_READ, MAP_SHARED | MAP_FIXED | MAP_POPULATE, fd.fd, 0) != MAP_FAILED;
+  });
+  ix.dir = Array<uint32_t>();
+  try {
+    narrow_dir(dir64.data(), dir64.size(), ix.dir.owned, true, path);
+  } catch (...) {
+    populate.join();
+    throw;
+  }
+  populate.join();
+  if (!populated) throw std::runtime_error("cannot mmap " + path);
   ix.mapping = m;
 }
 

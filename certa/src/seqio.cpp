@@ -197,6 +197,15 @@ bool MappedFastq::usable(const std::string& path) {
 }
 
 size_t MappedFastq::next_spans(FastqSpans& sp, size_t max_records, int threads) {
+  // The records before pos_ were parsed after the previous call: drop their
+  // whole pages from the resident set. The mapping is private and never
+  // written, so a dropped page read again would come back from the file.
+  static const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+  const size_t upto = pos_ / page * page;
+  if (upto > released_) {
+    madvise(const_cast<char*>(base_) + released_, upto - released_, MADV_DONTNEED);
+    released_ = upto;
+  }
   sp.base = base_;
   sp.block.clear();
   std::vector<size_t>& starts = sp.starts;

@@ -129,7 +129,7 @@ struct IndexView {
   const uint16_t* keys16; // low 16 bits only, when 2q - dir_bits <= 16 (the
                           // bucket directory already fixes the high bits)
   const uint32_t* pos;    // positions (multiples of s), parallel to keys
-  const uint64_t* dir;    // bucket directory, size 2^dir_bits + 1
+  const uint32_t* dir;    // bucket directory, size 2^dir_bits + 1 (n < 2^32)
   uint64_t n;
   int q, s, dir_bits;
 };
