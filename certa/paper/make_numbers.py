@@ -228,6 +228,40 @@ for hk in FINAL:
                 if (hk, mk, k) in final]
         assert max(ours) < min(comp), (hk, mk, ours, comp)
 
+# --full-cert at full scale (a later session, same protocol): hg002_2026-10/full_cert_{galaxy,a2}.tsv.
+# Macros: FC + host (G, A) + mode (S, P) + configuration (Def, NoV = without pass V, Fc) + pipeline
+# (Cpu, Gpu; interval mode) + field. XMini / XBwa against the final protocol's minibwa / BWA-MEM2.
+FCERT = {'G': 'hg002_2026-10/full_cert_galaxy.tsv', 'A': 'hg002_2026-10/full_cert_a2.tsv'}
+FCFG = {'default': 'Def', '--full-cert --adaptive-parts 0': 'NoV', '--full-cert': 'Fc'}
+for hk, path in FCERT.items():
+    by = {}
+    for r in rows(path):
+        by.setdefault((r['mode'], r['pipeline'], r['config']), []).append(r)
+    for (mode, pipe, cfg), rs in by.items():
+        mk = {'single-end': 'S', 'paired': 'P'}[mode]
+        pk = {'certa-cpu-iv': 'Cpu', 'certa-gpu-iv': 'Gpu'}[pipe]
+        rs = sorted(rs, key=lambda r: float(r['wall_s']))
+        r = rs[len(rs) // 2]
+        w = float(r['wall_s'])
+        name = f'FC{hk}{mk}{FCFG[cfg]}{pk}'
+        put(name + 'Wall', fx(w), path)
+        put(name + 'Cpu', grp(round(float(r['user_s']) + float(r['sys_s']))), path)
+        put(name + 'Rss', f"{float(r['max_rss_kb']) / 1e6:.0f}", path)
+        put(name + 'XMini', fx(final[(hk, mk, 'Mini')][0] / w), path)
+        put(name + 'XBwa', fx(final[(hk, mk, 'Bwa')][0] / w, 1), path)
+        if cfg == 'default':  # the later session reproduces the final protocol's interval rows
+            assert abs(w - final[(hk, mk, pk + 'Iv')][0]) < 1.0, (hk, mode, pipe, w)
+src = 'hg002_2026-10/full_cert_certified.txt'
+s = text(src)
+shares = {}
+for blk in s.split('== ')[1:]:
+    head, body = blk.split('\n', 1)
+    host, mode, pipe, cfg = head.split(' ', 3)
+    shares.setdefault((mode, cfg.strip()), set()).add(grab(r'certified ([\d.]+)%', body, str))
+for (mode, cfg), v in shares.items():
+    assert len(v) == 1, (mode, cfg, v)  # the same on both hosts, CPU and A100
+    put(f"FCCert{ {'single-end': 'S', 'paired': 'P'}[mode] }{FCFG[cfg]}".replace(' ', ''), v.pop(), src)
+
 # ---------------------------------------------------------------- CPU and GPU certify the same reads
 # The certified share does not depend on the host: the same count on galaxy (CPU and A100) and a2.
 cert = {}

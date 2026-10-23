@@ -64,8 +64,10 @@ certify. On the \PeReads{} reads of a 44$\times$ HG002 NovaSeq~X sample,
 misplacements in all five heuristic aligners tested, at rates that grow
 with their speed. Variant-calling F1 on three GIAB samples is above
 BWA-MEM2's in \PeVWins{} of \PeVComparisons{} comparisons. On two 64-core
-servers (ARM64 and x86-64), CERTA maps single-end reads and pairs faster
-than every other aligner timed, on CPU alone and with a GPU; its interval
+servers (ARM64 and x86-64), CERTA's default configuration maps single-end
+reads and pairs faster than every other aligner timed, on CPU alone and
+with a GPU, and a full-certification mode certifies \FCCertSFc\% of
+single-end reads, still \FCGSFcCpuXBwa$\times$ faster than BWA-MEM2; its interval
 mode, which gives every read a proven optimum or interval and needs no
 other aligner, maps pairs \FGPCpuIvXMini$\times$ and \FAPCpuIvXMini$\times$
 faster than minibwa, the fastest of them, on CPU alone and
@@ -603,8 +605,8 @@ aligner. With or without the GPU, CERTA certifies the same reads
 (\CpuTierCert\% of the 20~M single-end reads, on both hosts) and writes the
 same bytes.
 
-Single-end, every CERTA configuration is faster than every other aligner on
-both hosts. On CPU alone, interval mode takes \FGSCpuIvWall~s on galaxy and
+Single-end, every default CERTA configuration is faster than every other
+aligner on both hosts. On CPU alone, interval mode takes \FGSCpuIvWall~s on galaxy and
 \FASCpuIvWall~s on a2: \FGSCpuIvXMini$\times$ and \FASCpuIvXMini$\times$
 faster than minibwa, the fastest of the other aligners, and
 \FGSCpuIvXBwa$\times$ and \FASCpuIvXBwa$\times$ faster than BWA-MEM2. With
@@ -621,6 +623,17 @@ can be paired; these pairs cost minibwa several times its average pair,
 and the pipeline takes \FGPCpuKtWall~s on galaxy's CPU and
 \FAPCpuKtWall~s on a2's (\FGPCpuKtXMini$\times$ and \FAPCpuKtXMini$\times$
 minibwa), and \FGPGpuKtWall~s with the A100 (\FGPGpuKtXMini$\times$).
+
+Full certification costs time. At full scale it certifies \FCCertSFc\% of
+single-end reads and \FCCertPFc\% of paired reads, against \FCCertSDef\%
+and \FCCertPDef\% by default, the same on both hosts and with the A100. On
+galaxy's CPU it takes \FCGSFcCpuWall~s single-end and \FCGPFcCpuWall~s
+paired (Table~\ref{tab:speed}). That is slower than minibwa, but
+\FCGSFcCpuXBwa$\times$ and \FCGPFcCpuXBwa$\times$ faster than BWA-MEM2.
+Most of the difference from the default is pass~V: without it, full
+certification takes \FCGSNoVCpuWall~s and \FCGPNoVCpuWall~s and certifies
+\FCCertSNoV\% and \FCCertPNoV\%. Peak memory is \FCGSFcCpuRss~GB
+single-end and \FCGPFcCpuRss~GB paired.
 
 Five changes, none of which changes any output, made the CPU pipelines
 fast. Every pass of a batch runs on one chunk of 64 reads after another,
@@ -653,7 +666,9 @@ session per host; medians of \FReps{} runs (paired BWA-MEM2: one run).
 Gold 5218 (x86-64, 64 cores, four NUMA nodes), no GPU, every pipeline's
 memory interleaved over the nodes. CERTA + minibwa:
 CERTA streams its uncertified reads into minibwa; interval mode: no
-fallback (every read certified or given a proven interval).}
+fallback (every read certified or given a proven interval). The full
+certification rows come from a later session with the same protocol, whose
+default rows reproduce this table's interval rows within 1~s.}
 \label{tab:speed}
 \small
 \begin{tabular}{@{}lllll@{}}
@@ -672,6 +687,10 @@ CERTA + minibwa, CPU only & \FGSCpuWall{} (\FGSCpuXMini) & \FGPCpuKtWall{} (\FGP
 CERTA interval mode, CPU only & \FGSCpuIvWall{} (\FGSCpuIvXMini) & \FGPCpuIvWall{} (\FGPCpuIvXMini) & \FASCpuIvWall{} (\FASCpuIvXMini) & \FAPCpuIvWall{} (\FAPCpuIvXMini)\\
 CERTA + minibwa, A100 & \FGSGpuWall{} (\FGSGpuXMini) & \FGPGpuKtWall{} (\FGPGpuKtXMini) & -- & --\\
 CERTA interval mode, A100 & \FGSGpuIvWall{} (\FGSGpuIvXMini) & \FGPGpuIvWall{} (\FGPGpuIvXMini) & -- & --\\
+\midrule
+\multicolumn{5}{@{}l}{\emph{Full certification (\texttt{-{}-full-cert}), interval mode}}\\
+CPU only & \FCGSFcCpuWall{} (\FCGSFcCpuXMini) & \FCGPFcCpuWall{} (\FCGPFcCpuXMini) & \FCASFcCpuWall{} (\FCASFcCpuXMini) & \FCAPFcCpuWall{} (\FCAPFcCpuXMini)\\
+A100 & \FCGSFcGpuWall{} (\FCGSFcGpuXMini) & \FCGPFcGpuWall{} (\FCGPFcGpuXMini) & -- & --\\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -850,9 +869,12 @@ on simulations: every heuristic aligner we tested misplaces reads that
 have a provably better locus, at rates that grow with speed. Second, the
 output can be verified by a program that trusts neither the mapper's code
 nor its authors. Third, exactness need not cost speed: on CPU alone, and
-more so with a GPU, CERTA maps reads and pairs faster than every other
-aligner we timed, and its variant calls have the higher F1 than BWA-MEM2's
-in \PeVWins{} of \PeVComparisons{} comparisons.
+more so with a GPU, CERTA's default configuration maps reads and pairs
+faster than every other aligner we timed, and its variant calls have the
+higher F1 than BWA-MEM2's in \PeVWins{} of \PeVComparisons{} comparisons.
+Certifying more reads does cost time: full certification (\FCCertSFc\% of
+single-end reads) is slower than minibwa, though still
+\FCGSFcCpuXBwa$\times$ faster than BWA-MEM2.
 
 The certificate is about the optimization problem, not about the read's
 true origin. A read from a diverged copy of a repeat can align better to
