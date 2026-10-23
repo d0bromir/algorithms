@@ -265,18 +265,28 @@ struct Cursor {
 };
 
 // The file's 64-bit directory as 32-bit offsets (each is at most the number
-// of entries, < 2^32), converted on several threads. With `drop`, src lies in
-// a file mapping whose pages are released as they are read, so the 64-bit
-// copy is never resident as a whole.
-void narrow_dir(const uint64_t* src, uint64_t len, std::vector<uint32_t>& dst, bool drop,
-                const std::string& path) {
+// of entries, < 2^32), converted on several threads into `dir`'s own storage:
+// an anonymous mapping, not zero-filled first, so each thread is the first to
+// touch its part. With `drop`, src lies in a file mapping whose pages are
+// released as they are read, so the 64-bit copy is never resident as a whole.
+void narrow_dir(const uint64_t* src, uint64_t len, Array<uint32_t>& dir, bool drop, const std::string& path) {
   static const uint64_t page = static_cast<uint64_t>(sysconf(_SC_PAGESIZE));
   auto release = [&](uint64_t a, uint64_t b) {  // whole pages of src[a, b)
     const uint64_t lo = (reinterpret_cast<uint64_t>(src + a) + page - 1) / page * page;
     const uint64_t hi = reinterpret_cast<uint64_t>(src + b) / page * page;
     if (drop && hi > lo) madvise(reinterpret_cast<void*>(lo), hi - lo, MADV_DONTNEED);
   };
-  dst.resize(len);
+  dir = Array<uint32_t>();
+  const size_t bytes = std::max<size_t>(1, len * sizeof(uint32_t));
+  void* mem = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mem == MAP_FAILED) throw std::runtime_error("out of memory for the directory of " + path);
+#ifdef MADV_HUGEPAGE
+  madvise(mem, bytes, MADV_HUGEPAGE);  // lookups read it at random: fewer TLB misses, where allowed
+#endif
+  dir.held.reset(static_cast<uint32_t*>(mem), [bytes](uint32_t* p) { munmap(p, bytes); });
+  dir.ptr = dir.held.get();
+  dir.len = len;
+  uint32_t* dst = dir.held.get();
   const uint64_t steps = (len + kChunk - 1) / kChunk;
   const int threads = static_cast<int>(std::max<uint64_t>(1, std::min<uint64_t>({16, steps, std::thread::hardware_concurrency()})));
   std::vector<char> wide(threads, 0);
@@ -360,8 +370,7 @@ void load_index(const std::string& path, Reference& ref, Index& ix) {
       f.get_vec(ix.pos.owned);
       std::vector<uint64_t> dir64;
       f.get_vec(dir64);
-      ix.dir = Array<uint32_t>();
-      narrow_dir(dir64.data(), dir64.size(), ix.dir.owned, false, path);
+      narrow_dir(dir64.data(), dir64.size(), ix.dir, false, path);
       return;
     }
     if (std::memcmp(magic, kMagicV2, sizeof magic) != 0 &&
@@ -413,9 +422,8 @@ void load_index(const std::string& path, Reference& ref, Index& ix) {
     populated = keep == 0 ||
                 mmap(m->base, keep, PROT_READ, MAP_SHARED | MAP_FIXED | MAP_POPULATE, fd.fd, 0) != MAP_FAILED;
   });
-  ix.dir = Array<uint32_t>();
   try {
-    narrow_dir(dir64.data(), dir64.size(), ix.dir.owned, true, path);
+    narrow_dir(dir64.data(), dir64.size(), ix.dir, true, path);
   } catch (...) {
     populate.join();
     throw;

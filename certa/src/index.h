@@ -13,12 +13,14 @@ namespace certa {
 // certified radius can span two contigs.
 constexpr uint64_t kContigPad = 512;
 
-// Read-only array that either owns its storage or points into a mapping.
+// Read-only array that either owns its storage or points into a mapping (or
+// into `held`, storage of its own that is not zero-filled first).
 template <class T>
 struct Array {
   std::vector<T> owned;
   const T* ptr = nullptr;
   uint64_t len = 0;
+  std::shared_ptr<T> held;
   const T* data() const { return ptr ? ptr : owned.data(); }
   uint64_t size() const { return ptr ? len : owned.size(); }
   const T& operator[](uint64_t i) const { return data()[i]; }
