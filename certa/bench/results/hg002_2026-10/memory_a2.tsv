@@ -1,0 +1,28 @@
+# Peak memory and time at full scale, a2 (2026-10-23): 4 x Xeon Gold 5218, 64 cores, every run under numactl --interleave=all.
+# build old = 72ff02f (as in full_cert_a2.tsv), new = 82b18ec (input FASTQ pages released once parsed; the bucket directory held as 32 bits, in its own huge-page mapping), interleaved run by run; every output byte is the same (memory_identity.txt).
+# 20,001,073 HG002 reads (single-end, R1) or pairs; SAM to /dev/null; interval mode; three rounds. max_rss_kb is in KiB (GiB = max_rss_kb / 1024^2). The index file is unchanged: grch38.s1v3.cidx, format v3, 22,938,956,424 bytes. Script: bench/memory_bench.sh.
+host	mode	pipeline	config	build	rep	wall_s	user_s	sys_s	max_rss_kb
+a2	single-end	certa-cpu-iv	default	old	1	18.30	1060.04	5.26	30590628
+a2	paired	certa-cpu-iv	default	old	1	37.71	2213.20	7.96	38030900
+a2	single-end	certa-cpu-iv	default	new	1	18.20	1051.93	6.02	22422196
+a2	paired	certa-cpu-iv	default	new	1	37.26	2193.04	8.75	22668892
+a2	single-end	certa-cpu-iv	--full-cert	old	1	40.86	2432.86	4.18	30502452
+a2	paired	certa-cpu-iv	--full-cert	old	1	106.92	6444.26	8.31	38043000
+a2	single-end	certa-cpu-iv	--full-cert	new	1	40.73	2413.25	4.92	22330932
+a2	paired	certa-cpu-iv	--full-cert	new	1	106.24	6408.51	8.76	22672556
+a2	single-end	certa-cpu-iv	default	old	2	18.20	1059.80	4.82	30595636
+a2	paired	certa-cpu-iv	default	old	2	37.81	2216.62	8.05	38033948
+a2	single-end	certa-cpu-iv	default	new	2	18.31	1056.13	5.74	22415796
+a2	paired	certa-cpu-iv	default	new	2	37.23	2188.89	8.61	22657696
+a2	single-end	certa-cpu-iv	--full-cert	old	2	40.86	2433.40	4.30	30500008
+a2	paired	certa-cpu-iv	--full-cert	old	2	106.86	6440.94	8.21	38050752
+a2	single-end	certa-cpu-iv	--full-cert	new	2	40.69	2412.04	5.22	22329948
+a2	paired	certa-cpu-iv	--full-cert	new	2	106.31	6406.98	8.93	22684500
+a2	single-end	certa-cpu-iv	default	old	3	18.31	1065.71	5.52	30588740
+a2	paired	certa-cpu-iv	default	old	3	37.68	2211.63	7.73	38033756
+a2	single-end	certa-cpu-iv	default	new	3	18.24	1055.63	5.87	22415284
+a2	paired	certa-cpu-iv	default	new	3	37.28	2191.92	8.36	22664588
+a2	single-end	certa-cpu-iv	--full-cert	old	3	40.81	2431.49	4.16	30494560
+a2	paired	certa-cpu-iv	--full-cert	old	3	107.11	6452.66	8.70	38051384
+a2	single-end	certa-cpu-iv	--full-cert	new	3	40.69	2413.25	4.86	22336532
+a2	paired	certa-cpu-iv	--full-cert	new	3	106.23	6406.03	8.96	22690060

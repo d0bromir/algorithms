@@ -521,6 +521,17 @@ intervals, CPU and GPU, default and 7,777-read batches).
   read (its mate, in the pair pass), and a re-run read gets exactly its
   single-pass result (§3), so every read's result, and the formatted
   output written in input order, are the same.
+- *Memory.* `MappedFastq::next_spans` drops the pages of the records parsed
+  before the call (`MADV_DONTNEED`); the mapping is private and never
+  written, so a page read again comes back from the file and every byte
+  read is the same. The bucket directory is held as 32-bit offsets:
+  `load_index` converts each of the file's 64-bit offsets exactly and
+  rejects a file with one ≥ 2^32 (an index of a reference shorter than
+  2^32 bases has fewer than 2^32 entries), so every lookup reads the same
+  values, and Proposition V0 (`certa check-index`) checks the converted
+  directory, which equals the file's. Files keep their format; old ones
+  load. *Tests:* the directory survives the save/load round trip; an
+  offset of 2^32 + n is rejected.
 
 **Pruning the band (`band_best` with a floor; Corollary L-long).** The DP
 needs only alignments above the best score so far, the floor. A cell (or

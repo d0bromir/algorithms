@@ -1,0 +1,72 @@
+Memory changes (2026-10-23): output identity, peak memory and time.
+Builds: 72ff02f (before) and 82b18ec (commits 0eceb42 and 82b18ec: input
+FASTQ pages released once parsed; the bucket directory held as 32-bit
+offsets, in an anonymous mapping with huge pages requested). Index unchanged:
+grch38.s1v3.cidx, format v3, 22,938,956,424 bytes. Memory in GiB
+(max_rss_kb / 1024^2). Scripts: bench/memory_identity.sh (2 M reads / pairs,
+outputs hashed as written), bench/memory_bench.sh (20 M, memory_{galaxy,a2}.tsv).
+
+== Output identity, 82b18ec against 72ff02f, 2,000,000 HG002 reads / pairs
+galaxy: 30 of 30 outputs identical (SAM, uncertified FASTQ -u/-U and the
+  summary lines; default and --full-cert; single-end and paired; fallback and
+  interval mode on the CPU; interval mode on the A100)
+a2:     22 of 22 outputs identical (the same, CPU only)
+Certified (both hosts, both builds): 94.46 % of single-end reads (default).
+
+== Index load ("loaded in", 2 M single-end)
+galaxy: 0.7 s before and after (the directory's conversion overlaps faulting
+  in the rest of the file). a2: 0.04 s before (its page cache maps the file
+  in large folios), 0.2 s after; 0.8 s with 0eceb42, whose zero-filled
+  std::vector cost 0.7 s on one thread (fixed by 82b18ec).
+
+== galaxy, 20 M reads / pairs (memory_galaxy.tsv; medians of 3)
+mode        device config       | wall 72ff02f wall 82b18ec  change | CPU 72ff02f CPU 82b18ec | GiB 72ff02f GiB 82b18ec
+single-end  CPU    default      |     15.79 s     14.77 s   -6.5% |      869 s      815 s |       29.1       21.3
+single-end  CPU    --full-cert  |     38.65 s     36.95 s   -4.4% |     2253 s     2156 s |       29.1       21.3
+single-end  A100   default      |     12.81 s     12.29 s   -4.1% |      522 s      500 s |       31.9       24.3
+single-end  A100   --full-cert  |     34.35 s     32.97 s   -4.0% |     1904 s     1833 s |       31.9       24.3
+paired      CPU    default      |     37.44 s     36.01 s   -3.8% |     2180 s     2096 s |       36.2       21.6
+paired      CPU    --full-cert  |     99.93 s     96.36 s   -3.6% |     5980 s     5769 s |       36.2       21.6
+paired      A100   default      |     28.11 s     27.34 s   -2.7% |     1491 s     1456 s |       39.5       25.0
+paired      A100   --full-cert  |     88.16 s     85.42 s   -3.1% |     5286 s     5127 s |       39.5       25.0
+
+== a2, 20 M (memory_a2.tsv; medians of 3)
+mode        device config       | wall 72ff02f wall 82b18ec  change | CPU 72ff02f CPU 82b18ec | GiB 72ff02f GiB 82b18ec
+single-end  CPU    default      |     18.30 s     18.24 s   -0.3% |     1065 s     1062 s |       29.2       21.4
+single-end  CPU    --full-cert  |     40.86 s     40.69 s   -0.4% |     2437 s     2418 s |       29.1       21.3
+paired      CPU    default      |     37.71 s     37.26 s   -1.2% |     2221 s     2200 s |       36.3       21.6
+paired      CPU    --full-cert  |    106.92 s    106.24 s   -0.6% |     6453 s     6416 s |       36.3       21.6
+
+== galaxy, 2 M (medians of 2)
+mode        device config       | wall 72ff02f wall 82b18ec  change | CPU 72ff02f CPU 82b18ec | GiB 72ff02f GiB 82b18ec
+single-end  CPU    default      |      2.71 s      2.60 s   -3.9% |       88 s       83 s |       22.7       21.1
+single-end  CPU    --full-cert  |      4.97 s      4.79 s   -3.6% |      224 s      215 s |       22.7       21.1
+single-end  A100   default      |      4.95 s      4.81 s   -2.8% |       57 s       55 s |       24.2       22.5
+single-end  A100   --full-cert  |      7.04 s      6.79 s   -3.5% |      193 s      187 s |       24.2       22.6
+paired      CPU    default      |      5.00 s      4.82 s   -3.4% |      219 s      212 s |       23.6       21.3
+paired      CPU    --full-cert  |     11.14 s     10.73 s   -3.7% |      594 s      573 s |       23.7       21.4
+paired      A100   default      |      6.84 s      6.65 s   -2.8% |      157 s      154 s |       26.4       24.2
+paired      A100   --full-cert  |     12.62 s     12.30 s   -2.5% |      530 s      515 s |       26.5       24.4
+
+== a2, 2 M (medians of 2)
+mode        device config       | wall 72ff02f wall 82b18ec  change | CPU 72ff02f CPU 82b18ec | GiB 72ff02f GiB 82b18ec
+single-end  CPU    default      |      2.26 s      2.35 s   +4.0% |      107 s      106 s |       22.8       21.2
+single-end  CPU    --full-cert  |      4.42 s      4.58 s   +3.5% |      242 s      242 s |       22.8       21.2
+paired      CPU    default      |      4.31 s      4.36 s   +1.0% |      223 s      222 s |       23.7       21.4
+paired      CPU    --full-cert  |     11.12 s     11.20 s   +0.7% |      641 s      640 s |       23.8       21.5
+
+== Tried and not kept: 8-bit keys (keys16 held as their high 8 bits, the
+low 8 read from the reference at the entry). Byte-identical (30 of 30 on
+galaxy), 2.7 GiB less, but much slower: in repeats a binary-search step
+then needs two dependent random reads (the position, then the reference),
+and lookup_batch (tier R and find_copies) took 37 % of a single-end
+interval run (perf). Build 0eceb42 against 0eceb42 + 8-bit keys, galaxy:
+mode        device config       | wall 0eceb42  wall keys8  change | CPU 0eceb42  CPU keys8 | GiB 0eceb42  GiB keys8
+single-end  CPU    default      |      2.70 s      4.81 s  +78.7% |       85 s      137 s |       21.1       18.3
+single-end  CPU    --full-cert  |      4.86 s      7.01 s  +44.2% |      216 s      287 s |       21.1       18.4
+single-end  A100   default      |      4.89 s      6.54 s  +33.8% |       57 s       95 s |       22.5       19.8
+single-end  A100   --full-cert  |      6.95 s      8.60 s  +23.8% |      188 s      245 s |       22.6       19.8
+paired      CPU    default      |      4.94 s      7.20 s  +45.8% |      215 s      293 s |       21.3       18.6
+paired      CPU    --full-cert  |     10.89 s     14.19 s  +30.3% |      579 s      722 s |       21.4       18.6
+paired      A100   default      |      6.82 s      8.44 s  +23.6% |      156 s      209 s |       24.2       21.4
+paired      A100   --full-cert  |     12.53 s     15.11 s  +20.6% |      519 s      636 s |       24.4       21.6

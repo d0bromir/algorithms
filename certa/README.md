@@ -110,7 +110,9 @@ position (`certa index ... -s 1`, about 23 GB for GRCh38): pass 3, pass V
 reads single-end and 97.4 % paired (default: 94.4 % and 95.4 %) in about
 2.5 times the default time (galaxy, 64 cores: 38.7 s and 100.1 s; still
 2.6× and 3.3× faster than BWA-MEM2); a second index (`--index2`) adds only
-0.1 points more.
+0.1 points more. Peak memory is the index alone, whatever the input size:
+21.3 GiB single-end and 21.6 GiB paired for GRCh38 (24.3 / 25.0 GiB with an
+A100), as for the default (`bench/results/hg002_2026-10/memory_*.tsv`).
 
 ### Interval output, no fallback (`--intervals`)
 
@@ -318,8 +320,12 @@ no claim, pass.
 - **Single-end only.** Add mate-pair consistency and rescue.
 - **MAPQ:** a provisional 20 × (distance gap) rule, capped at 60. Calibrate
   it on simulated reads from HPRC assemblies (roadmap §2.4).
-- **Reference storage:** 1 byte per base (3.2 GB for GRCh38). Packing to
-  2 bits and memory-mapping the index would cut load time and memory.
+- **Memory:** the index is memory-mapped and is nearly all of it: positions
+  11.0 GiB, keys 5.5 GiB, the reference 2.9 GiB (1 byte per base) and the
+  directory 1 GiB for GRCh38 with `-s 1`. Packing the reference to 2 bits
+  would save 2.2 GiB if decoding it costs the hot loops nothing (to be
+  measured); holding 8 of the keys' 16 bits was measured and costs too
+  much time (FINDINGS.md).
 - **GPU:** one thread per read, with local-memory workspaces. Warp-cooperative
   lookups, overlapping transfers with compute, and a device-side output
   path are the obvious optimizations.

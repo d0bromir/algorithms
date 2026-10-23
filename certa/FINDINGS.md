@@ -906,8 +906,8 @@ verifies the XQ of PR mates too.
   to 77b1df2 (14 files, CPU and A100), and pass V off reproduces 77b1df2's
   `--budget3 4096 --local 2`; with it on, CPU = A100 and fused = serial.
   - *2 M HG002, interval mode, 64 cores:* single-end `--full-cert` 95.65 →
-    97.63 % certified, 3.0 → 5.6 s, 24 GB (the old maximum, `--index2`:
-    96.83 %, 6.3 s, 46 GB; both: 97.73 %, 8.4 s). Paired 96.33 → 97.45 % of
+    97.63 % certified, 3.0 → 5.6 s, 22.7 GiB (the old maximum, `--index2`:
+    96.83 %, 6.3 s, 44.2 GiB; both: 97.73 %, 8.4 s). Paired 96.33 → 97.45 % of
     reads (both mates 94.90 → 96.18 % of pairs), 6.9 → 12.5 s. The
     prototype predicted 97.65 %.
   - *Tests:* the oracle at radius 12 (873 reads, 6 settings, 3 seeds, ARM
@@ -942,11 +942,44 @@ verifies the XQ of PR mates too.
     97.44 % (`--full-cert`), the same on both hosts, CPU and A100. Wall,
     galaxy CPU: 15.8 → 20.9 → 38.7 s single-end, 37.6 → 59.8 → 100.1 s
     paired (A100: 13.0 / 17.5 / 34.7 and 28.4 / 49.2 / 88.6 s); a2: 18.2 →
-    19.5 → 40.9 s and 37.8 → 58.1 → 107.1 s. Peak RSS 30.5 GB single-end,
-    38 GB paired (41 GB with the A100). So `--full-cert` costs about 2.5×
-    the default: slower than minibwa single-end (28.8 s on galaxy), 2.6× and
-    3.3× faster than BWA-MEM2, and it certifies 3.2 and 2.1 points more
-    than the default (pass V alone: 2.0 and 1.2).
+    19.5 → 40.9 s and 37.8 → 58.1 → 107.1 s. Peak RSS 29.1 GiB single-end,
+    36.2 GiB paired (39.5 GiB with the A100; 21.3 and 21.6 GiB since the
+    memory changes below). So `--full-cert` costs about 2.5×
+    the default: slower than minibwa (on galaxy 28.8 s single-end and
+    63.0 s paired; also with the A100 and on a2), 2.6× and 3.3× faster than
+    BWA-MEM2, and it certifies 3.2 and 2.1 points more than the default
+    (pass V alone: 2.0 and 1.2).
+- **Memory: the index alone** (2026-10-23; commits 0eceb42, 82b18ec;
+  `bench/results/hg002_2026-10/memory_{galaxy,a2}.tsv`,
+  `memory_identity.txt`). Peak memory was the whole index file (21.4 GiB,
+  all of it resident) plus every page of the input read so far: 6.9 GiB
+  per 20 M reads, both mates' files when paired. Two changes, every output
+  byte unchanged (30 outputs on galaxy, CPU and A100; 22 on a2):
+  - *Input pages are released once parsed* (`MADV_DONTNEED` on the
+    private, read-only mapping of the FASTQ: a page read again would come
+    back from the file). Memory no longer grows with the input.
+  - *The bucket directory is held as 32-bit offsets* (1 GiB instead of 2):
+    every offset is at most the number of entries, < 2^32. The file keeps
+    format v3, so old indexes load and `certa check-index` (Proposition V0)
+    applies unchanged; an offset ≥ 2^32 is rejected on load. The load
+    converts it on 16 threads into an anonymous mapping (huge pages
+    requested) while one thread faults in the other arrays: 0.7 s on
+    galaxy as before; 0.2 s on a2, where the old load took 0.04 s (its
+    page cache maps the file in large folios).
+  - *20 M reads / pairs, interval mode, medians of three interleaved with
+    the old build:* peak 29.1 → 21.3 GiB single-end and 36.2 → 21.6 GiB
+    paired on both hosts (A100: 31.9 → 24.3 and 39.5 → 25.0 GiB). galaxy is
+    2.7–6.5 % faster in every configuration (single-end default 15.79 →
+    14.77 s, paired `--full-cert` 99.93 → 96.36 s), a2 0.3–1.2 % faster;
+    at 2 M, a2 is 0.7–4 % slower (the 0.2 s load).
+  - *Tried and not kept: 8-bit keys* (the keys' high 8 bits held, the low 8
+    read from the reference at the entry). Byte-identical and 2.7 GiB
+    less, but 21–79 % slower at 2 M: in repeats every binary-search step
+    then needs two dependent random reads (the position, then the
+    reference), and the lookups of tier R and `find_copies` took 37 % of a
+    single-end interval run.
+  - What is left is the index itself: positions 11.0 GiB, keys 5.5 GiB,
+    reference 2.9 GiB (1 byte per base), directory 1 GiB.
 - **HG001 GATK indels** are the one comparison where CERTA's F1 is lower
   (0.9909 vs 0.9922). Look at the 13 extra FP and 14 extra FN.
 - **Long reads:** the mapper's limits (320 bp, 8 parts, radius 5) exclude
