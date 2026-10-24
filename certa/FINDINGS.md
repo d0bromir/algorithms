@@ -990,6 +990,33 @@ verifies the XQ of PR mates too.
     reference 2.9 GiB (1 byte per base), directory 1 GiB. Below that would
     take a compressed index (FM-index or sampled positions), which changes
     what each lookup costs rather than how the arrays are stored.
+- **Where the time goes on recent Illumina reads** (2026-10-24;
+  `bench/results/hg002_2026-10/recent_illumina_costs.txt`; nothing tuned,
+  no default changed). HG002 NovaSeq X (calibration) and HG005 NovaSeq 6000
+  (held out) differ in quality bins (2/9/24/40 vs 2/11/25/37), adapters
+  (trimmed vs 0.5 % of reads) and 3′ quality decline, but share the same
+  cost structure:
+  - *Reads that end uncertified are the cost.* Timing class files: the
+    2.4 % of reads uncertified with `--full-cert` take ~46 % of its CPU
+    (2.1 ms each against 0.11 ms on average), mostly in pass V's failed
+    attempts (1.6 ms each, ~35 % of all `--full-cert` CPU, leaving no trace
+    in the output). By default, the 5.5 % uncertified reads take ~56 %,
+    mostly tier R, which gives them their interval records.
+  - *They are repeat reads beyond the radius, not bad reads.* A failing read
+    verifies ~2,100 clusters (pass V fills its 4,096-hit budget) with ~39 DP
+    rows each; none lies within 11 edits. Base quality does not predict
+    failure (59 % of attempts hold a base below Q20 and fail as often as
+    the rest); only rare extremes do (a run of ≥ 10 low-quality bases, a
+    poly-G tail ≥ 5, ≥ 8 N), worth ~2–3 % of `--full-cert` time.
+  - *Small levers:* exact duplicates are 1.94 % of single-end reads (0.24 %
+    of pairs); N-padded short reads 631 in 20 M.
+  - *Measured and not kept* (output byte-identical): the q-gram lemma as a
+    filter in front of the banded DP (sound: none of 15,380 rejections in
+    tests wrong, but it costs what the ~39 DP rows cost); the DP from the
+    3′ end (2 % slower).
+  - So FASTQ-metric routing, duplicate memoization and DP filters give a few
+    per cent at most on recent data. The large remaining costs are pass V's
+    failed attempts and tier R.
 - **HG001 GATK indels** are the one comparison where CERTA's F1 is lower
   (0.9909 vs 0.9922). Look at the 13 extra FP and 14 extra FN.
 - **Long reads:** the mapper's limits (320 bp, 8 parts, radius 5) exclude

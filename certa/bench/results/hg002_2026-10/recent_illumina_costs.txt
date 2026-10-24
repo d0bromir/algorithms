@@ -1,0 +1,82 @@
+Where CERTA's time goes on recent Illumina reads, and whether read QC
+metrics can steer it (2026-10-24; build 1ae7d4e; galaxy, 64 cores).
+Data: HG002 NovaSeq X 25B (SRR37356339; calibration) and HG005 NovaSeq 6000
+2x151 PCR-free (SRR14724528; profiled only, held out). Nothing here was
+tuned: no parameter or default changed.
+
+== 1. Read specifics (first 500,000 reads of each file)
+                         HG002 NovaSeq X      HG005 NovaSeq 6000
+quality bins             2/9/24/40            2/11/25/37
+bases in the top bin     95.1 % / 95.3 %      92.4 % / 90.8 %   (R1 / R2)
+mean Q, cycles 1-10/last 39.1 / 38.6          36.2 / 35.0 (R1)
+>= 5 of last 10 < Q20    1.0 % / 1.5 %        1.9 % / 2.6 %
+3' poly-G >= 10          0.06 % / 0.31 %      0.11 % / 0.15 %
+adapter AGATCGGAAGAGC    0.003 % / 0.009 %    0.48 % / 0.49 %  (mostly in the last 50 bp)
+reads with N             0.12 % / 0.09 %      0.27 % / 0.05 %
+lengths                  150 (96.9 %), 147, 146 (trimmed)   151 (all; untrimmed)
+Whole 20 M HG002 set: N in 0.82 % (R1) / 0.41 % (R2) of reads, mostly one N
+mid-read; trailing N runs 0.005 %; all-N reads 177; N-padded length-35
+reads 631 (BCL Convert padding is negligible here).
+
+== 2. Exact duplicates (20,001,073 HG002 reads / pairs)
+single-end, strand-canonical 1.94 %, as read 1.46 %; pairs 0.24 %;
+3,580 sequences occur >= 10 times. Memoizing duplicates is worth <= ~2 %.
+
+== 3. CPU per read by class (2 M HG002 single-end reads split into classes;
+100,000 reads per class file, a class's reads repeated under unique names;
+interval mode; medians of 3; the fixed load cost subtracted)
+class                       share of reads   default   --full-cert
+random (every 20th read)    -                 43 us     111 us
+uncertified by default      5.55 %           438 us    1616 us
+uncertified with --full-cert 2.37 %          309 us    2135 us
+low-quality 3' end          1.08 %           255 us    1532 us
+3' poly-G >= 10             0.064 %          763 us    1334 us
+an N                        0.17 %           122 us     416 us
+shorter than 146 bp         0.41 %            46 us     159 us
+Reads that end uncertified with --full-cert take ~46 % of its CPU
+(2.374 % x 2135 / 111); with the default, the 5.5 % uncertified reads take
+~56 % (mostly tier R, which gives them their interval records).
+
+== 4. Per pass (differences between configurations, us per read)
+                 passes 1-2  tier R  pass 3  pass V  pass L
+random                22       22       4      54       2
+uncert. (--fc)        54      256     164    1638     100
+low-quality 3'        47      208     121    1098      46
+poly-G                28      735      -      585       -
+Pass V on the reads it fails to certify: ~39 of its 54 us per average read,
+~35 % of all --full-cert CPU, discarded (a failed pass leaves no output).
+
+== 5. Why failing pass V attempts cost so much (counters, 100,000 reads)
+uncertified with --full-cert: 2,126 clusters and 1,540 banded DPs per read,
+38.8 DP rows per call on average (early stop); 2 of 154 M DPs ran all rows.
+Each such read is in a repeat: pass V fills its 4,096-hit budget per strand,
+and no copy lies within 11 edits. The q-gram lemma (k = 6) would reject 77 %
+of these DPs (98 % for low-quality reads), but costs about as much as the
+~39 rows a DP needs to give up.
+
+== 6. Can read QC features predict pass V's failures? (86,924 attempts,
+54.6 % fail; successes lost = pass V certificates a skip would forgo)
+feature (skip if >=)         attempts skipped  of which fail  successes lost
+any base < Q20 (1)           58.7 %            54.7 %         58.7 %
+low-quality run (5)          19.7 %            74.3 %         11.2 %
+low-quality run (10)          4.2 %            93.9 %          0.57 %
+3' poly-G (5)                 0.9 %            95.3 %          0.10 %
+N (8)                         0.3 %           100 %            0      (exact: each N is an edit)
+Quality is no predictor of failure on these data (59 % of attempts hold a
+low-quality base, and they fail as often as the rest); the extreme features
+are rare. Skipping them would save ~2-3 % of --full-cert time at a small
+certified-set cost: not worth a lossy mode.
+
+== 7. Measured and not kept (output byte-identical in each case)
+- q-gram filter (Lemma Q) in front of the banded DP: 40,000 test bands
+  (7,702 at the threshold), 15,380 rejected, none wrongly; but 4 % slower on
+  the failing class, 1-2 % faster on whole runs.
+- the banded DP from the read's 3' end (same distance; diagonal b -> B-1-b):
+  2 % slower (the DP already stops after ~39 rows).
+
+Conclusion: on recent Illumina data the expensive reads are repeat reads
+whose best match lies beyond the certifiable radius, not reads that QC
+metrics flag. Per-read routing by FASTQ metrics, duplicate memoization and
+DP-level filters each offer a few per cent at most. The remaining large
+costs are pass V's failed attempts (~35 % of --full-cert) and tier R
+(~half of default interval-mode CPU).
