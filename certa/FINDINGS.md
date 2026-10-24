@@ -1017,6 +1017,51 @@ verifies the XQ of PR mates too.
   - So FASTQ-metric routing, duplicate memoization and DP filters give a few
     per cent at most on recent data. The large remaining costs are pass V's
     failed attempts and tier R.
+- **Competitors from the literature audit** (SWOT_ANALYSIS.md section K;
+  2026-10-24; `bench/results/hg002_2026-10/k_competitors.{tsv,txt}`,
+  `bench/k_bench.sh`, `bench/k_reliability.sh`).
+  - *DRAGMAP 1.3.0* (Illumina's open-source DRAGEN mapper, standing in for
+    DRAGEN): 103 s single-end and 416 s paired on 20 M reads on a2 (x86-64),
+    BWA-MEM2's speed single-end and 1.6× slower paired, 36–46 GiB; CERTA's
+    interval mode is 5.7× and 11× faster. Its aarch64 build is 4–5× slower.
+  - *Columba 2.0* (lossless; search schemes over a bidirectional FM-index,
+    dynamic partitioning): the fastest lossless mapper measured, 12.5 s
+    single-end and 56.9 s paired on 2 M (11× faster than Yara) in 11 GiB.
+    CERTA `--full-cert` is 2.2× and 4.6× faster at twice the memory.
+    Against CERTA's certificates it is lossless single-end (no certified
+    read within its 6 edits missed or misplaced); paired it trades per-mate
+    optimality for pairing (0.56 % of reads placed with more edits than the
+    proven minimum). Built with `-fsigned-char` on aarch64: with unsigned
+    `char` its FASTQ reader misses EOF and drops the last batch.
+  - *mm2-fast* (AVX-512 minimap2): identical output to minimap2 2.24 but no
+    faster for short reads (97.7 vs 96.2 s; 2.31: 91.9 s).
+  - *Not run:* Parabricks 4.8 (its arm64 build stops with SIGILL on the
+    Ampere Altra; a2 has no GPU), mapquik (needs a 2023 nightly Rust),
+    DRAGEN and Sentieon (licences). Strobealign's multi-context seeds are
+    already benchmarked (0.18.0 uses them by default).
+  - *What CERTA can take from them*, against its measured costs
+    (`recent_illumina_costs.txt`):
+    1. Batched DP across clusters: a failing read verifies ~2,100 clusters
+       against one read, each through the same 16-lane DP. Four clusters
+       fit one AVX-512 register (one per 128-bit lane, where the DP's
+       shuffles already stay) and interleaving helps NEON's ILP; applying
+       the batch's results in order with the sequential limits keeps every
+       output byte. Target: the banded DP, 44–53 % of `--full-cert`.
+    2. Search schemes (Columba; Kucherov et al.; Kianfar et al.): pass V
+       reaches 11 edits through one-edit neighbourhoods (up to 243 hash
+       lookups per part); a search scheme over a bidirectional FM-index
+       prunes earlier and could certify past 11 edits, the reads that now
+       cost ~35 % of `--full-cert` and fail. Cost: a second index (~11 GiB).
+    3. A multigenome reference (DRAGEN): failing reads are repeat reads
+       more than 11 edits from GRCh38; alternate haplotypes as extra linear
+       contigs keep CERTA's certificate machinery and may bring many within
+       reach (to be measured, e.g. against the HG002 Q100 assembly).
+    4. The GPU end to end (Parabricks): CERTA's GPU runs passes 1–2 only;
+       pass V and tier R (~half of default interval-mode CPU) stay on the
+       CPU.
+    5. Not promising here: learned indexes (BWA-MEME; CERTA's directory
+       lookup is already one access), AVX-512 alone (mm2-fast), effort
+       heuristics in repeats (minibwa), which would change certified output.
 - **HG001 GATK indels** are the one comparison where CERTA's F1 is lower
   (0.9909 vs 0.9922). Look at the 13 extra FP and 14 extra FN.
 - **Long reads:** the mapper's limits (320 bp, 8 parts, radius 5) exclude

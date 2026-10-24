@@ -1,0 +1,72 @@
+Section-K competitors (SWOT_ANALYSIS.md, "Recent and previously omitted
+methods") added to the benchmark, 2026-10-24. Raw rows: k_competitors.tsv;
+scripts: bench/k_bench.sh, bench/k_reliability.sh. Medians of three, 64
+cores, HG002 NovaSeq X; peak memory in GiB (max_rss_kb / 1024^2).
+
+== Timings (20 M reads / pairs unless marked 2 M)
+tool (host)                     single-end          paired              CERTA, same host and data
+DRAGMAP 1.3.0 (a2, x86-64)      103.0 s, 36.2 GiB   416.3 s, 45.5 GiB   interval mode 18.2 / 38.0 s
+DRAGMAP 1.3.0 (galaxy, aarch64) 522.3 s, 21.9 GiB   1720.7 s, 33.6 GiB  interval mode 15.4 / 37.8 s
+Columba 2.0, 2 M (galaxy)       12.53 s, 11.0 GiB   56.89 s, 11.5 GiB   --full-cert 5.58 / 12.46 s
+minimap2 2.31 -ax sr (a2)       91.9 s, 12.9 GiB
+minimap2 2.24 -ax sr (a2)       96.2 s, 12.8 GiB
+mm2-fast -ax sr (a2)            97.7 s, 12.9 GiB    (output identical to 2.24's on 2 M reads)
+For scale (final_*.tsv): BWA-MEM2 110.6 / 256.5 s and minibwa 36.9 / 79.4 s
+on a2; Yara -e 4 -y full 138 / 211 s at 2 M on galaxy (slow_galaxy.tsv).
+
+- DRAGMAP (Illumina's open-source re-implementation of the DRAGEN mapper,
+  the clinical standard) runs at BWA-MEM2's speed single-end and 1.6x
+  slower paired on x86-64; CERTA's interval mode is 5.7x and 11x faster.
+  Its aarch64 build is 4-5x slower again (probably because its vector
+  code targets x86-64 only).
+- Columba (lossless, search schemes over a bidirectional FM-index, dynamic
+  partitioning) is the fastest lossless mapper measured: 11x faster than
+  Yara single-end. CERTA --full-cert is 2.2x faster single-end, 4.6x paired,
+  at about twice Columba's memory (an index of every q-mer position against
+  an FM-index).
+- mm2-fast is no faster than minimap2 for short reads (its AVX-512 work is
+  in long-read chaining and extension); minimap2 2.31 is the faster of the
+  three.
+
+== Columba against CERTA's certificates (2 M reads / pairs, as slow_reliability.txt)
+-- se: CERTA --full-cert --intervals against Columba (best, >= 96 %), 2 M
+[map] 2000000 reads: certified 97.63% (S0 exact 73.89%, S1 <=R edits 22.14%, SR repeat 1.53%, SL local 0.07%), ties 5.89%
+reads 2000000; CERTA-certified 1952519 (97.63%); proven exact multi-copy ties 73244
+tool              missed better locus  of which MAPQ>=20   unmapped (<=R edits exist)    overconfident ties (MAPQ>=20)
+Columba:all           477 (0.024%)                170          18353 (0.940%)                0 (0.00% of ties)
+by certificate: end-to-end (S0 S1 SR) 1951185 (proven edits <= 5: 1926770, 6: 6839, >= 7: 17576), local (SL PR) 1334
+tool             e2e: missed better  e2e: elsewhere, NM > XE        e2e: unmapped   local: missed better        local: unmapped
+Columba:all            462 (0.024%)               0 (0.000%)        17832 (0.914%)             15 (1.12%)           521 (39.06%)
+end-to-end unmapped by the proven edit count: tool, <= 5, 6, >= 7
+Columba:all            60 (0.0031%)            200 (2.92%)         17572 (99.98%)
+end-to-end certified 1951185, of which with a proven edit count within 4 % of the length 1933349; unmapped by the tool: 0 within its error rate, 17832 beyond it
+-- pe: CERTA --full-cert --intervals against Columba (best, >= 96 %), 2 M
+[map] 4000000 reads: certified 97.45% (S0 exact 71.17%, S1 <=R edits 19.79%, SR repeat 0.36%, SL local 0.19%), ties 5.27%
+[map] pairs 2000000: both mates certified 96.18% (proper 93.99%); PR pair certificate 5.94% of reads; pair pass tried 9.92% of pairs
+reads 4000000; CERTA-certified 3895550 (97.39%); proven exact multi-copy ties 19560
+tool              missed better locus  of which MAPQ>=20   unmapped (<=R edits exist)    overconfident ties (MAPQ>=20)
+Columba:all         21574 (0.554%)               8211          55223 (1.418%)             2170 (11.09% of ties)
+by certificate: end-to-end (S0 S1 SR) 3650189 (proven edits <= 5: 3600412, 6: 13240, >= 7: 36537), local (SL PR) 245361
+tool             e2e: missed better  e2e: elsewhere, NM > XE        e2e: unmapped   local: missed better        local: unmapped
+Columba:all          20996 (0.575%)           20484 (0.561%)        44845 (1.229%)            578 (0.24%)          10378 (4.23%)
+end-to-end unmapped by the proven edit count: tool, <= 5, 6, >= 7
+Columba:all          7923 (0.2201%)            392 (2.96%)         36530 (99.98%)
+end-to-end certified 3650189, of which with a proven edit count within 4 % of the length 3613152; unmapped by the tool: 7815 within its error rate, 37030 beyond it
+Single-end, Columba is lossless as it claims: none of the reads CERTA
+certifies within its 6 edits is missed, none placed elsewhere with more
+edits than the proven minimum (the 462 "missed better" are equal-edit loci
+that score lower under bwa-mem's affine scheme). The 17,832 reads it leaves
+unmapped all have a proven optimum beyond 6 edits; CERTA certifies them.
+Paired, it trades per-mate optimality for pairing: 0.56 % of reads placed
+elsewhere with more edits than the proven minimum, 7,815 left unmapped
+within its rate.
+
+== Not run
+- NVIDIA Parabricks 4.8.0-1 fq2bam: its arm64 build stops with SIGILL on
+  galaxy's Ampere Altra (ARMv8.2; the build targets Grace, ARMv9), and a2
+  has no GPU. The GPU baseline needs an x86-64 or Grace host with a GPU.
+- mapquik: needs a 2023 nightly Rust toolchain (and its hashing crate is
+  x86-only); not installed.
+- DRAGEN and Sentieon: commercial licences; DRAGMAP stands in for DRAGEN.
+- strobealign with multi-context seeds: already in the benchmark
+  (strobealign 0.18.0, --mcs always by default).

@@ -1,0 +1,31 @@
+# Competitors added from SWOT_ANALYSIS.md section K (2026-10-24), the final protocol's conditions (bench/k_bench.sh): 64 cores (galaxy: taskset -c 0-63; a2: numactl --interleave=all), warmed page cache, three rounds, output to /dev/null (Columba: a scratch SAM, deleted).
+# DRAGMAP 1.3.0 (bioconda; aarch64 build on galaxy, x86-64 on a2), hash table of the same GRCh38 primary assembly as every index; Columba 2.0 (edcc7ce, built with -fsigned-char) best mode, >= 96 % identity, on 2 M reads / pairs; mm2-fast (14fe36c, AVX-512, minimap2 2.24 based) against minimap2 2.24 and 2.31 -ax sr, one .mmi index.
+# Reads: HG002 NovaSeq X, 20,001,073 reads (single-end, R1) or pairs; mode *-2M: the first 2,000,000. Context (final_{galaxy,a2}.tsv, slow_galaxy.tsv): CERTA interval mode 15.4 / 37.8 s galaxy, 18.2 / 38.0 s a2 (single-end / paired, 20 M); --full-cert 5.58 / 12.46 s at 2 M on galaxy.
+host	mode	pipeline	config	rep	wall_s	user_s	sys_s	max_rss_kb
+galaxy	single-end	dragmap	-	1	522.38	32974.54	84.41	23012448
+galaxy	paired	dragmap	-	1	1720.74	74199.70	77.43	35256652
+galaxy	single-end	dragmap	-	2	522.31	32978.65	88.19	23013464
+galaxy	paired	dragmap	-	2	1720.71	74194.79	80.84	35253072
+galaxy	single-end	dragmap	-	3	522.29	32974.44	83.59	23010408
+galaxy	paired	dragmap	-	3	1719.68	74191.69	80.10	35255440
+galaxy	single-end-2M	columba	best, >= 96 %	1	12.32	157.34	6.56	11560212
+galaxy	paired-2M	columba	best, >= 96 %	1	67.53	752.44	377.16	12118820
+galaxy	single-end-2M	columba	best, >= 96 %	2	12.56	159.07	6.88	11562288
+galaxy	paired-2M	columba	best, >= 96 %	2	55.70	710.64	508.02	12115928
+galaxy	single-end-2M	columba	best, >= 96 %	3	12.53	159.20	6.98	11560252
+galaxy	paired-2M	columba	best, >= 96 %	3	56.89	713.34	509.45	12052840
+a2	single-end	minimap2	2.31 -ax sr	1	91.74	3630.61	22.54	13505752
+a2	single-end	minimap2	2.24 -ax sr	1	93.92	3903.53	18.59	13442260
+a2	single-end	mm2-fast	-ax sr	1	98.53	3986.89	19.09	13559812
+a2	single-end	minimap2	2.31 -ax sr	2	94.42	3630.60	22.50	13508220
+a2	single-end	minimap2	2.24 -ax sr	2	96.22	3902.89	18.52	13432300
+a2	single-end	mm2-fast	-ax sr	2	96.42	3986.44	19.34	13542388
+a2	single-end	minimap2	2.31 -ax sr	3	91.91	3629.80	22.05	13521932
+a2	single-end	minimap2	2.24 -ax sr	3	96.28	3902.84	18.43	13458060
+a2	single-end	mm2-fast	-ax sr	3	97.71	3991.27	19.10	13555368
+a2	single-end	dragmap	-	1	102.91	5723.79	191.39	37993024
+a2	paired	dragmap	-	1	414.75	18902.14	190.97	47676760
+a2	single-end	dragmap	-	2	103.00	5726.92	193.14	37993568
+a2	paired	dragmap	-	2	416.72	19001.91	189.68	47673672
+a2	single-end	dragmap	-	3	103.13	5729.87	194.03	37992048
+a2	paired	dragmap	-	3	416.26	18880.78	186.42	47674760
