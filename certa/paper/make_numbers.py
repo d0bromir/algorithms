@@ -516,6 +516,38 @@ put('SlHifiWmX', fx(ww / (mw + lw), 1), src)
 put('SlHifiWmIdx', fx(grab(r'winnowmap: ([\d.]+) s of its run to index the FASTA',
                            text('hg002_2026-10/slow_hifi_and_logs.txt')), 1), 'hg002_2026-10/slow_hifi_and_logs.txt')
 
+# Section-K competitors (DRAGMAP, Columba): hg002_2026-10/k_competitors.{tsv,txt}, same protocol.
+src = 'hg002_2026-10/k_competitors.tsv'
+kc = {}
+for r in rows(src):
+    kc.setdefault((r['host'], r['mode'], r['pipeline']), []).append(r)
+
+
+def k_run(host, mode, pipe):
+    rs = sorted(kc[(host, mode, pipe)], key=lambda r: float(r['wall_s']))
+    r = rs[len(rs) // 2]
+    return float(r['wall_s']), float(r['user_s']) + float(r['sys_s']), float(r['max_rss_kb']) / 1024 ** 2
+
+
+for mode, mk, fc in (('single-end-2M', 'Se', 'Fc'), ('paired-2M', 'Pe', 'Fc')):
+    w, c, m = k_run('galaxy', mode, 'columba')
+    put(f'SlCol{mk}Wall', fx(w), src)
+    put(f'SlCol{mk}Cpu', grp(round(c)), src)
+    put(f'SlCol{mk}Rss', fx(m, 1), src)
+    put(f'SlCol{mk}X', fx(w / sl[(mk, fc)][0], 1), src)
+for host, hk, iv in (('a2', 'A', 'A'), ('galaxy', 'G', 'G')):
+    for mode, mk in (('single-end', 'S'), ('paired', 'P')):
+        w, _, _ = k_run(host, mode, 'dragmap')
+        put(f'KDrag{hk}{mk}Wall', fx(w, 1), src)
+        put(f'KDrag{hk}{mk}X', fx(w / final[(iv, mk, 'CpuIv')][0], 1), src)
+src = 'hg002_2026-10/k_competitors.txt'
+s = text(src).split('-- se: CERTA --full-cert --intervals against Columba')[1].split('-- pe:')[0]
+m = re.search(r'^Columba:all\s+\d+ \([\d.]+%\)\s+(\d+) \(', s, re.M)
+put('SlColElse', grp(int(m.group(1))), src)
+within, beyond = re.search(r'unmapped by the tool: (\d+) within its error rate, (\d+) beyond it', s).groups()
+put('SlColUnmWithin', grp(int(within)), src)
+put('SlColUnmBeyond', grp(int(beyond)), src)
+
 # Reliability against pass V's certificates (bench/weaknesses.py, within_rate.py).
 src = 'hg002_2026-10/slow_reliability.txt'
 s = text(src)

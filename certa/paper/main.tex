@@ -611,7 +611,12 @@ aligner on both hosts. On CPU alone, interval mode takes \FGSCpuIvWall~s on gala
 faster than minibwa, the fastest of the other aligners, and
 \FGSCpuIvXBwa$\times$ and \FASCpuIvXBwa$\times$ faster than BWA-MEM2. With
 the A100 it takes \FGSGpuIvWall~s (\FGSGpuIvXMini$\times$ minibwa,
-\FGSGpuIvXBwa$\times$ BWA-MEM2).
+\FGSGpuIvXBwa$\times$ BWA-MEM2). DRAGMAP~1.3.0, Illumina's open-source
+version of the DRAGEN mapper (\url{https://github.com/Illumina/DRAGMAP}),
+was timed later under the same protocol. It takes \KDragASWall~s
+single-end and \KDragAPWall~s paired on a2, so CERTA's interval mode is
+\KDragASX$\times$ and \KDragAPX$\times$ faster. Its ARM64 build is slower
+still (\KDragGSWall~s single-end on galaxy).
 
 Paired, interval mode is again the fastest: \FGPCpuIvWall~s on galaxy's
 CPU and \FAPCpuIvWall~s on a2's (\FGPCpuIvXMini$\times$ and
@@ -712,12 +717,20 @@ the same 64 cores of galaxy as CERTA's interval mode on the CPU
 single-end reads; Yara takes \SlSeYaraWall~s (\SlSeYaraX$\times$), and
 \SlPeYaraX$\times$ CERTA's time on pairs. RazerS~3 needs \SlRazWall~s for
 the first 200,000 reads, against \SlRazCertaWall~s (\SlRazX$\times$), and
-its paired mode aborted for lack of memory. The two guarantees differ in
-scope. Yara and RazerS~3 cover every read up to their error limit, but
-only end-to-end alignments. CERTA's radius adapts per read (up to 12 edits
+its paired mode aborted for lack of memory. Columba~2.0
+\citep{renders2025columba}, which runs optimized search schemes over a
+bidirectional FM-index, is the fastest lossless mapper we measured
+(\texttt{best} mode, at least 96\% identity). It takes \SlColSeWall~s
+(\SlColSeX$\times$ CERTA's full certification) and \SlColPeWall~s on pairs
+(\SlColPeX$\times$), in \SlColSeRss~GiB. The two guarantees differ in
+scope. The three lossless mappers cover every read up to their error
+limit, but only end-to-end alignments. CERTA's radius adapts per read (up to 12 edits
 end to end with pass~V) and its local tier also covers clipped alignments,
-but some reads stay uncertified. Within their own error limit, neither tool
-misses a read that CERTA certifies. Of the \SlYaraEtoE{} reads that CERTA
+but some reads stay uncertified. Within their own error limit, none of the
+three misses a read that CERTA certifies single-end. Columba places
+\SlColElse{} certified reads at a locus with more edits than the proven
+minimum, and leaves \SlColUnmWithin{} unmapped within its limit and
+\SlColUnmBeyond{} beyond it. Of the \SlYaraEtoE{} reads that CERTA
 certifies end to end, Yara places \SlYaraElse{} of them at a locus with more
 edits than the proven minimum. It leaves \SlYaraUnm{} of them unmapped,
 \SlYaraUnmWithin{} with a proven distance within 4\% of the read length and
@@ -744,7 +757,7 @@ certificates or larger radii.
 \caption{CERTA against fully sensitive mappers: share of reads certified
 (\%), wall and CPU time (s), 2,000,000 HG002 reads or pairs, galaxy, 64
 cores, CPU only. CERTA in interval mode (every read gets a record), median
-of three runs; Yara one run. RazerS~3 ran on the first 200,000 reads only
+of three runs; Yara one run, Columba median of three in a later session. RazerS~3 ran on the first 200,000 reads only
 (its paired mode aborted).}
 \label{tab:slow}
 \small
@@ -758,6 +771,7 @@ CERTA \texttt{-{}-full-cert}, no pass~V & \SlSeNoVCert & \SlSeNoVWall & \SlSeNoV
 CERTA \texttt{-{}-full-cert} & \SlSeFcCert & \SlSeFcWall & \SlSeFcCpu & \SlPeFcCert & \SlPeFcWall & \SlPeFcCpu\\
 CERTA \texttt{-{}-full-cert -{}-index2} & \SlSeIxCert & \SlSeIxWall & \SlSeIxCpu & \SlPeIxCert & \SlPeIxWall & \SlPeIxCpu\\
 Yara \texttt{-e 4 -y full} & -- & \SlSeYaraWall & \SlSeYaraCpu & -- & \SlPeYaraWall & \SlPeYaraCpu\\
+Columba \texttt{best}, $\geq$ 96\% & -- & \SlColSeWall & \SlColSeCpu & -- & \SlColPeWall & \SlColPeCpu\\
 \midrule
 \multicolumn{7}{@{}l}{\emph{First 200,000 reads}}\\
 CERTA \texttt{-{}-full-cert} & \SlRazCertaCert & \SlRazCertaWall & \SlRazCertaCpu & -- & -- & --\\
