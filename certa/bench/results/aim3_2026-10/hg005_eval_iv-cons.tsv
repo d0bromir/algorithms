@@ -1,0 +1,4 @@
+HG005	iv-cons	gatk	snps	    1.000              12611          12611        776      55981     0.9420       0.1839     0.3077
+HG005	iv-cons	gatk	indels	    1.000               2948           2948        275       5501     0.9147       0.3489     0.5051
+HG005	iv-cons	bcftools	snps	     None              44415          44415        166      24177     0.9963       0.6475     0.7849
+HG005	iv-cons	bcftools	indels	     None               3626           3626        339       4823     0.9145       0.4292     0.5842

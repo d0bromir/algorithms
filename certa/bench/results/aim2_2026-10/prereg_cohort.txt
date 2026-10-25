@@ -1,0 +1,91 @@
+######## HG002 tier R config t256
+all repeat-limited (|S| < P): 70908 reads; exact or proven ambiguous 35806 (50.5%)
+      exact: q15 (Aim 1)                      5345    7.54%
+      exact: q22 large budget                19944   28.13%
+      exact: tier R                           4421    6.23%
+      exact: tier R (proven tie)              4742    6.69%
+      interval only                          35102   49.50%
+      proven ambiguous: tier R                1354    1.91%
+  of which aligner score >= 120 (near-perfect): 42715 reads; exact or proven ambiguous 35002 (81.9%)
+      exact: q15 (Aim 1)                      5045   11.81%
+      exact: q22 large budget                19520   45.70%
+      exact: tier R                           4387   10.27%
+      exact: tier R (proven tie)              4720   11.05%
+      interval only                           7713   18.06%
+      proven ambiguous: tier R                1330    3.11%
+  of which aligner score < 120 or unmapped: 28193 reads; exact or proven ambiguous 804 (2.9%)
+      exact: q15 (Aim 1)                       300    1.06%
+      exact: q22 large budget                  424    1.50%
+      exact: tier R                             34    0.12%
+      exact: tier R (proven tie)                22    0.08%
+      interval only                          27389   97.15%
+      proven ambiguous: tier R                  24    0.09%
+validity: aligner score above the bound for 0 reads; unexplained 0
+######## HG002 tier R config big
+all repeat-limited (|S| < P): 70908 reads; exact or proven ambiguous 37705 (53.2%)
+      exact: q15 (Aim 1)                      5345    7.54%
+      exact: q22 large budget                19944   28.13%
+      exact: tier R                           5134    7.24%
+      exact: tier R (proven tie)              6458    9.11%
+      interval only                          33203   46.83%
+      proven ambiguous: tier R                 824    1.16%
+  of which aligner score >= 120 (near-perfect): 42715 reads; exact or proven ambiguous 36862 (86.3%)
+      exact: q15 (Aim 1)                      5045   11.81%
+      exact: q22 large budget                19520   45.70%
+      exact: tier R                           5078   11.89%
+      exact: tier R (proven tie)              6427   15.05%
+      interval only                           5853   13.70%
+      proven ambiguous: tier R                 792    1.85%
+  of which aligner score < 120 or unmapped: 28193 reads; exact or proven ambiguous 843 (3.0%)
+      exact: q15 (Aim 1)                       300    1.06%
+      exact: q22 large budget                  424    1.50%
+      exact: tier R                             56    0.20%
+      exact: tier R (proven tie)                31    0.11%
+      interval only                          27350   97.01%
+      proven ambiguous: tier R                  32    0.11%
+validity: aligner score above the bound for 0 reads; unexplained 0
+######## HG005 tier R config t256
+all repeat-limited (|S| < P): 79767 reads; exact or proven ambiguous 34949 (43.8%)
+      exact: q15 (Aim 1)                      5626    7.05%
+      exact: q22 large budget                18977   23.79%
+      exact: tier R                           4920    6.17%
+      exact: tier R (proven tie)              4046    5.07%
+      interval only                          44818   56.19%
+      proven ambiguous: tier R                1380    1.73%
+  of which aligner score >= 120 (near-perfect): 43861 reads; exact or proven ambiguous 34604 (78.9%)
+      exact: q15 (Aim 1)                      5317   12.12%
+      exact: q22 large budget                18955   43.22%
+      exact: tier R                           4918   11.21%
+      exact: tier R (proven tie)              4046    9.22%
+      interval only                           9257   21.11%
+      proven ambiguous: tier R                1368    3.12%
+  of which aligner score < 120 or unmapped: 35906 reads; exact or proven ambiguous 345 (1.0%)
+      exact: q15 (Aim 1)                       309    0.86%
+      exact: q22 large budget                   22    0.06%
+      exact: tier R                              2    0.01%
+      interval only                          35561   99.04%
+      proven ambiguous: tier R                  12    0.03%
+validity: aligner score above the bound for 0 reads; unexplained 0
+######## HG005 tier R config big
+all repeat-limited (|S| < P): 79767 reads; exact or proven ambiguous 36710 (46.0%)
+      exact: q15 (Aim 1)                      5626    7.05%
+      exact: q22 large budget                18977   23.79%
+      exact: tier R                           5693    7.14%
+      exact: tier R (proven tie)              5500    6.90%
+      interval only                          43057   53.98%
+      proven ambiguous: tier R                 914    1.15%
+  of which aligner score >= 120 (near-perfect): 43861 reads; exact or proven ambiguous 36345 (82.9%)
+      exact: q15 (Aim 1)                      5317   12.12%
+      exact: q22 large budget                18955   43.22%
+      exact: tier R                           5676   12.94%
+      exact: tier R (proven tie)              5499   12.54%
+      interval only                           7516   17.14%
+      proven ambiguous: tier R                 898    2.05%
+  of which aligner score < 120 or unmapped: 35906 reads; exact or proven ambiguous 365 (1.0%)
+      exact: q15 (Aim 1)                       309    0.86%
+      exact: q22 large budget                   22    0.06%
+      exact: tier R                             17    0.05%
+      exact: tier R (proven tie)                 1    0.00%
+      interval only                          35541   98.98%
+      proven ambiguous: tier R                  16    0.04%
+validity: aligner score above the bound for 0 reads; unexplained 0

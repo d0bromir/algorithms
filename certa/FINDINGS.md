@@ -193,8 +193,11 @@ the forward mate's.
   skipped anchors' bounds, the floor) is ≤ R1, then R1 is the maximum pair
   score over all proper pairs in the reference. ∎
 - *Also reported:* S2 is the largest of those other bounds and drives a
-  BWA-MEM-style pair MAPQ. S2 is not a uniqueness proof: a second, equal
-  partner inside the winning anchor's own window is bounded only by R1.
+  BWA-MEM-style pair MAPQ. Since Aim 5, S2 bounds every proper pair that
+  differs from R1's pair in some mate, including a second partner inside
+  the winning anchor's own window, and the mate placed elsewhere in its own
+  chain (THEORY.md, Proposition P2). Before that fix, such a pair was
+  bounded only by R1.
 - *Tags:* `XT:Z:PR`, `AS` (each mate's score), `XF` (floor), `XS` (S2).
 - *Pipeline:* when the pair cannot be certified, a mate keeps its
   single-end certificate. Both mates still go to the fallback mapper so
@@ -258,14 +261,21 @@ the forward mate's.
     partner-bound bugs (a missing nearby-partner bound, and treating
     unfinished chains as finished), and the kernel test catches a deletion
     recurrence off by one. Seven threshold mutations, off by 2–3 points in
-    the floor, band pad or window threshold, survive. They need pairs
-    exactly at those thresholds, for example a ~46-bp deletion against a
-    decoy one point below.
+    the floor, band pad or window threshold, survived these tests. Aim 5
+    closed this gap (§7): pairs placed exactly at each threshold, a direct
+    test of the window search, and an oracle for S2. Every PR mutant is now
+    killed, or proven to change no claim (THEORY.md §9a).
 - **Real data:**
   - 1,672,120 certified HG002 reads were compared with BWA-MEM2's unclipped
     alignments. BWA-MEM2 never has fewer edits than the certified minimum,
     except 3 reads whose windows contain a reference `N` (W4).
-  - Output is byte-identical on ARM64, x86-64 and an A100.
+  - Output is byte-identical on ARM64, x86-64 and an A100. One regression
+    broke this. From the local-tier commit (`3664ae6`) on, the host's wider
+    band also widened the end-to-end cluster limit, so about 78 reads in 2 M
+    (tandem repeats) were certified S1 on the CPU but SL on the GPU. Both
+    were valid proofs, but the output was not identical. Fixed in Aim 1
+    with a shared `BAND_E2E = 48`; SAM bodies and uncertified reads are
+    byte-identical again on 2 M HG002 reads (CPU vs A100).
   - CI covers native x86-64 and ARM64.
 
 ## 4. End-to-end results (pilot, HG002 NovaSeq X, single-end)
@@ -419,6 +429,50 @@ threads, one run; `results/hg002_2026-10/galaxy_timing_pe.tsv`):
 - *Options:* send only the uncertified mate, with no mate rescue in the
   fallback; restrict the pair pass to the one-uncertified pairs; or move
   the pair pass to the GPU.
+- *Update 2026-10-15 (`results/hg002_2026-10/galaxy_timing_pe_v2.tsv`):*
+  a profile of the pair pass showed its time in the window search (an
+  O(n³) span bound, a binary search per reference position) and in two
+  DPs. Four changes, with byte-identical SAM and fallback output:
+  - Lemma S's closed form for the span bound, used only when its
+    hypotheses hold (the lemma is machine-checked);
+  - a hash for the window's part keys;
+  - band_score's deletion pass vectorized (16-bit lanes);
+  - affine_align's per-cell bounds checks and branches hoisted.
+
+  CERTA's own side at 32 threads drops from 56.7 s to 47.7 s, and the
+  pipeline's CPU from 2,984 s to 2,680 s. End to end, the best split (CERTA
+  24 threads, minibwa 40) takes 72.8 s, against 77.0 s before and 61.6 s
+  for minibwa.
+- *Update 2026-10-16 (`results/hg002_2026-10/galaxy_timing_pe_v3.tsv`,
+  `pe_profile.txt`): level with minibwa.* A profile showed two things.
+  - *The GPU and the CPU took turns.* Each batch ran its GPU passes
+    (13.9 s in all), then the CPU pair pass and output (29 s at 32 threads),
+    then the next batch. Now the GPU stage of batch n + 1 runs while the CPU
+    stage writes batch n. Three batches are in flight; one CPU stage at a
+    time, in input order, so the output does not change.
+  - *The pair pass was 40 % traceback DP.* `affine_align`'s fill is now
+    vectorized (4 lanes; THEORY.md "The traceback DP, vectorized"), with
+    every traceback byte equal to the scalar fill's. A first version was
+    slower than scalar: under Ubuntu's `_FORTIFY_SOURCE`, its `memcpy`s at a
+    variable offset into stack arrays became checked library calls. With
+    plain vector accesses it is 1.65× faster per cell.
+
+  CERTA's own side at 24 threads: 56.9 s → 39.0 s (CPU 909 s → 801 s). End
+  to end, CERTA 20 threads + minibwa 44: **60.6 s, against 61.4 s for
+  minibwa** in the same session, with 28 % less CPU (2,603 s vs 3,595 s).
+  SAM and fallback files are byte-identical to the previous build.
+- *What is left is the fallback.* On 2 M pairs, 6.4 % of pairs go to minibwa
+  (an earlier note here said 12.9 % of reads; it is 6.4 % of reads):
+  - 2.8 % of pairs have both mates uncertified; minibwa spends 1,118 µs per
+    read on them;
+  - 3.7 % have one, at 461 µs per read;
+  - the average over all reads is 88 µs.
+
+  The fallback is 6.4 % of reads but 54 % of minibwa's own CPU for the whole
+  sample. A smaller minibwa batch (`-K`) would overlap better, but it changes
+  minibwa's per-batch insert-size estimate: with `-K 20m`, 18,658 fallback
+  records change. So the fallback keeps minibwa's defaults until an
+  accuracy run says otherwise.
 
 **Variant-calling accuracy on chr20 vs GIAB v4.2.1, same caller for both
 pipelines.** Both are single-end, 22×. Precision / recall / F1:
@@ -516,11 +570,13 @@ The pilot did not reach 10× over BWA-MEM2:
   but not by proof.
 - **MAPQ is not calibrated from first principles.** It reuses BWA-MEM's
   formula. Calibrating it on certified second-best distances is future work.
-- **Speed vs the fastest tool is modest.** The certified tier is fast, but
-  the uncertified ~5.6 % dominate the remaining cost (`bench/RESULTS.md`
-  §5b). The speedup is 4.35× against BWA-MEM2 and only 1.16× against
-  minibwa. Answer: fewer uncertified reads (paired-end, a certified
-  local-alignment mode) or a faster engine for them.
+- **Speed vs the fastest tool depends on the configuration** (2026-10-18,
+  64 cores, paper Table 2). Interval mode, which needs no other aligner, is
+  1.60–2.00× minibwa on pairs on CPU alone and 2.11× with an A100; with
+  minibwa as the fallback, pairs gain only 1.20–1.36×, because minibwa's
+  work on the ~6 % of pairs with an uncertified mate exceeds CERTA's on
+  all of them. Answer: fewer uncertified reads, or interval mode where its
+  proven intervals suffice.
 - **The GPU is part of the claim.** The comparison is A100 + 64 threads vs
   64 threads. Cost per genome (GPU hour vs CPU hours) should be reported
   alongside wall time.
@@ -531,28 +587,507 @@ The pilot did not reach 10× over BWA-MEM2:
 
 ## 7. Open items (state as of 2026-10-03)
 
-- **Speed in paired mode:** 4.0× faster than BWA-MEM2 but slower than
-  minibwa (77 s vs 62 s, 20M pairs). The cost lies in the pair pass (about
-  1,050 CPU-s) and in the fallback's hard reads. Sending only the
-  uncertified mate (`--fallback-mates single`) barely helps. Candidates:
-  move the pair pass to the GPU; restrict it to the one-uncertified pairs;
-  improve the fallback.
-- **PR tests:** seven threshold mutations, off by 2–3 points in the floor,
-  band pad or window threshold, survive. Adversarial pairs placed exactly
-  at those thresholds would close the gap.
-- **S2 in tier PR** bounds pairs from other anchors only. It is not yet a
-  uniqueness proof, because a second partner inside the winning anchor's
-  window is not separately bounded.
+*Update 2026-10-08, Aim 1 of
+[EXACT_ALIGNMENT_PROPOSAL.md](../EXACT_ALIGNMENT_PROPOSAL.md) §6.1.*
+A second index (q = 15, 10 parts per read) breaks the q = 22 ceiling.
+Single-end, the certified share rises:
+- HG002: from 95.65 % to 96.29 % at about 0.27 ms per residual read, or to
+  96.83 % with large budgets;
+- HG005: from 93.53 % to 94.66 %, or to 95.31 %.
+
+The new certificates show no unexplained violation against BWA-MEM2.
+
+*Update 2026-10-11, Aim 2 (proposal §6.2).* Tier R (`certa repeat`,
+`include/certa/repeat.h`) handles repeats: long rare or absent parts found
+by anchor extension, copy-sampled lower bounds, and count-based tie proofs.
+- **Repeat-limited reads** (|S| < P, 3.55 % of HG002, 3.99 % of HG005):
+  50.5 % and 43.8 % become exact or proven ambiguous; 53.2 % and 46.0 %
+  with larger limits.
+- **Near-perfect copies among them:** 79–86 %.
+- **The rest** are lossy reads beyond any exact-part certificate.
+- **Validity:** 0 violations of tier R's bounds against BWA-MEM2 on 180,804
+  residual reads.
+- **Tests:** all 6 injected faults are caught.
+
+*Update 2026-10-11, Aim 3 (proposal §6.3).* `certa map --intervals`
+(`include/certa/interval.h`) writes every read itself; nothing goes to a
+fallback mapper. Each record carries:
+- [XL, XU], which contains OPT;
+- XQ, a certified lower bound of BWA-MEM's MAPQ formula.
+
+Findings:
+- **HG005 (725.8 M reads):** 84.9 % of records are proven exact (XL = XU).
+  The pre-registered go criterion is met. Variant-calling F1 against
+  CERTA + minibwa, with no fallback:
+  - GATK SNVs 0.9933 (+0.0007), GATK indels 0.9938 (0);
+  - bcftools SNVs 0.9937 (+0.0011), bcftools indels 0.9464 (−0.0008);
+  - above BWA-MEM2 in all 4.
+
+  Cost: +13 % CPU over CERTA + minibwa on 2 M HG002 pairs.
+- **XQ as MAPQ fails (F1 0.31–0.78): it is biased toward the reference.**
+  Beyond the radius, Lemma E bounds SUB at one point per edit (a locus
+  that matches all but d clipped bases); a SNV costs 5.
+  - A one-SNV read at radius 2 gets XQ ≈ 10; reads matching the
+    reference get 26–40.
+  - Callers' MAPQ ≥ 20 filters therefore drop exactly the variant
+    reads.
+  - A SUB bound from Lemma L (exact parts, as tier SL builds its floor)
+    would fix this (open).
+- **Edit-distance certificates are not affine certificates.** On HG002,
+  27 % of S1 reads have XL < XU: another locus, where a clipped or gapped
+  alignment needs more edits, could still score higher under BWA-MEM's
+  scores. Lemma E gives the bound; running tier SL on these reads would
+  close most of them (open).
+- **Over-confident MAPQ of certified reads at small radius** (a
+  pre-existing issue, shared with the current pipeline). With R = 0 or 1
+  and no second locus within R, `mapq_of` assumes sub = 19 and reports
+  MAPQ 60, although a locus one edit further was never searched. On
+  simulated pairs:
+  - these reads cause most misplaced records with MAPQ ≥ 20: 257 of the
+    539 (208 at R = 0, 49 at R = 1);
+  - their XQ is 7–18, which flags them correctly.
+- **XQ bounds the formula, not the error rate.** On simulated pairs:
+  - all 173 misplaced records with XQ ≥ 20 are PR pairs whose score-optimal
+    placement is not the true origin;
+  - 150 of them are tandem shifts, which by definition count as the same
+    locus;
+  - BWA-MEM2 places the other 23 at the same loci, with MAPQ 0–27.
+- **Bug fixed:** `Workspace::ub_magic` was never initialised. Heap memory
+  that last held a Workspace kept the magic while its touched list was
+  overwritten, so the PR pass wrote out of bounds. Interval mode's
+  allocation pattern exposed it on HG005; it had been latent since tier PR.
+
+*Update 2026-10-12, Aim 4 (proposal §6.4).* `certa check` (`src/check.cpp`)
+is an independent checker of the interval output (Theorem V). It shares no
+alignment, bound or lookup code with the mapper. It recomputes Lemma L,
+enumerates every probe occurrence from an index that `certa check-index`
+has validated against the FASTA, rebuilds the chains, and searches with its
+own banded DP.
+- **Honest records:** all accepted, 4 M each on HG002 and HG005 (2 M pairs
+  each).
+- **Faults false by construction:** all 23,733 injected into real SAM were
+  rejected, with 0 false alarms.
+- **Mapper mutants:** all 6 flagged on real data. One is a wrong constant in
+  the mapper's own Lemma L.
+- **Cost:** 89–134 µs CPU per record, about the mapper's. Index validation
+  takes 34 s once per reference.
+- **A real bug found:** records whose alignment runs off the circular chrM
+  kept XL and XQ after the alignment was dropped. Fixed.
+- **Gap:** the XQ of PR records (about 4 %) rests on the pair certificate,
+  which the checker did not re-derive. Closed on 2026-10-14 (below).
+
+*Update 2026-10-13, Aim 5 (proposal §6.5).* [THEORY.md](THEORY.md) holds
+written proofs of every bound the implementation uses. Each one is traced to
+its code, its oracle tests and the mutants that break it.
+- **Exhaustive checks** of the finite lemmas (`tests/verify_lemmas.cpp`, in
+  CI): Lemma L on 52.8 M and Lemma H on 502 M transcript-layout pairs, no
+  violation. Their part-length conditions are necessary: 2- and 3-base parts
+  give counterexamples.
+- **Mutation tests** (`tests/mutants.tsv`, `tests/run_mutants.sh`): 56
+  faults, 50 killed. The other 6 change no claim on any input, which
+  THEORY.md §9a proves.
+- **Two bugs in tier PR's S2, found and fixed:**
+  - S2 did not bound a second partner inside the winning anchor's window, or
+    the mate elsewhere in its own chain. This closes the S2 open item
+    listed here before.
+  - The window search's band pad went negative for high thresholds, missing
+    an exact partner.
+  - On 2 M HG002 pairs, 0.29 % of records change MAPQ (4,419 fall below
+    20).
+  - HG005 re-run with the fixes: variant-calling F1 stays within the
+    Aim 3 margin and above BWA-MEM2 in all 4 comparisons. GATK SNVs
+    0.9933, GATK indels 0.9935, bcftools SNVs 0.9938, bcftools indels
+    0.9467.
+- **Checker:** it now also rejects a record whose own alignment scores above
+  its XU.
+- **Open:** review of THEORY.md by a second person. The optional Lean 4
+  mechanization has started: Lemmas L, E, H, S and W, Lemma C's core,
+  Theorem G, the long-read band pruning and the vector DP row are
+  machine-checked (`lean/`, 2026-10-15).
+
+*Update 2026-10-13, Aim 6 (proposal §6.6, criterion pre-registered).*
+`tools/lr_ceiling` measures whether long reads fit the exact-part
+certificate. For each read it takes the Lemma L ceiling U₁ over greedy
+parts that occur ≤ 16 times, and compares it with the score σ of the read's
+minimap2 alignment.
+- **Sample:** 242,534 real HG002 HiFi reads against GRCh38.
+- **Result:** 93.29 % fit (σ > U₁), against a go threshold of 90 %. A
+  typical read's loss (247 points) is a tenth of its ceiling (2,605).
+- **Checks:** every part count and U₁ was recomputed independently, and
+  every CIGAR checked against the reference. All agree.
+- **Misses:**
+  - 2.3 % clipped (mostly split alignments);
+  - 2.1 % high loss (mostly an SV gap of ≥ 500 bases);
+  - 1.8 % repeat-limited;
+  - 0.5 % unmapped.
+- **Not measured:** the verification cost, i.e. the exact alignment of the
+  candidate loci.
+  - *Measured on 2026-10-14 (proposal §6.6):* a known alignment of score
+    lb narrows the band to L − lb − 7 (about ±250). A banded DP over the
+    chains that need it (median 1) proves OPT for 226,330 reads (93.32 %),
+    every read that fits.
+  - *Cost:* median 3.1 ms of DP per read, 0.86× minimap2's CPU in all.
+    Three changes on 2026-10-15 took it there from 20 ms and 2.8×:
+    a vectorized DP row, batched index lookups, and pruning the DP to the
+    cells that can beat lb. None changes a certificate.
+  - *OPT vs minimap2:* OPT beats minimap2's alignment under CERTA's scores
+    for 17.8 % of them.
+  - *Check:* on 2,005 reads, a full DP around the known locus never beat
+    the proven OPT.
+
+*Update 2026-10-14 (proposal §6.4).* The Aim 4 gap is closed: `certa check`
+verifies the XQ of PR mates too.
+- **What it checks:** BWA-MEM's pairing rule, with XS proven from both
+  records. Each mate's pair-certificate parts come in the new witness tag
+  `XY`. Pairs with no exact part are bounded by Lemma L; the rest by
+  exhaustive DP, pairing every chain of a mate's part occurrences with every
+  partner placement within D.
+- **Real data:** 8 M records (2 M pairs each of HG002 and HG005) accepted.
+  All 303,682 XS claims were proven, and 24,306 of 24,306 false-by-
+  construction faults rejected, among them three new pair faults.
+- **Cost:** 181–232 µs CPU per record, up from 89–134 µs.
+- **A coarse first version:** it left 12 honest HG002 pairs unproven. The
+  mapper's S2 held in every case; the check was the problem.
+- **Mutation tests:** 10 new mutants of the pair check (C10–C19), all
+  killed. The suite now has 66 mutants: 60 killed, 6 proven equivalent.
+
+- **Speed in paired mode:** 5.1× faster than BWA-MEM2 and level with minibwa
+  since 2026-10-16 (60.6 s vs 61.4 s, 20M pairs; it was 77 s). What is left
+  is the fallback's hard reads, 6.4 % of reads at about 54 % of minibwa's
+  whole-sample CPU. Sending only the uncertified mate
+  (`--fallback-mates single`) barely helps. Candidates: certify more of
+  those reads; a smaller minibwa batch, once an accuracy run shows its
+  changed pairing statistics do no harm.
+  - *Update 2026-10-18.* The smaller batch is safe: on HG005, minibwa
+    `-K 10m` changes 16,761 chr20 records of CERTA + minibwa but no F1 in
+    the fourth decimal (GATK and bcftools, SNVs and indels;
+    `bench/results/hg002_2026-10/hg005_fallback_batch_f1.tsv`).
+  - *Where paired time went (a2, 64 cores, 20M pairs, build 80646c3).*
+    CERTA alone took 35 s, 34 s of it in the input stage: a serial
+    boundary scan, a serial interleave of the mates and the freeing of
+    temporary records. minibwa on the fallback pairs alone took 1,939 CPU-s,
+    more than CERTA's 1,553 for every pair, so the fallback pipeline is
+    bound by minibwa's work and can gain at most ~1.3× over minibwa.
+    Interval mode needs no fallback.
+  - *Three changes, output byte-identical* (both hosts, CPU and A100, every
+    mode): FASTQ boundaries found on several threads and records parsed in
+    place; every pass of a batch run chunk by chunk (64 reads), so tier R's
+    slow repeats no longer idle the other cores at each pass's end; tier R
+    and `find_copies` prefetch the reference at the hit 16 ahead. a2: paired
+    interval mode 51.7 → 41.0 s (minibwa 79.5 s: 1.55× → 1.94×), CERTA
+    alone with fallback 34.7 → 26.2 s, fallback + minibwa (`-K 10m`)
+    65.2 → 59.4 s, single-end interval mode 22.8 → 19.3 s.
+  - *Variance on a2:* with the kernel's NUMA balancing, two of four
+    fallback + minibwa runs took 90–92 s instead of 58–60 s, with ~40 %
+    more page migrations, more kernel time and fewer CPU-seconds (cores
+    idle). Under `numactl --interleave=all` four runs took 57.6–58.0 s
+    (`bench/results/hg002_2026-10/a2_fallback_numa.txt`), so the final
+    protocol runs every a2 pipeline that way and takes medians of three
+    runs, paired too.
+  - *Final protocol, build 84dfa83* (`final_{galaxy,a2}.tsv`; the
+    80646c3 runs are kept as `final_*_80646c3.tsv`): paired interval mode
+    39.45 s on galaxy and 39.49 s on a2 (1.60× and 2.00× minibwa; it was
+    1.38× and 1.55×), 29.85 s with the A100 (2.11×, was 1.77×); the
+    fallback with `-K 10m` 1.20× and 1.36×. Single-end interval mode 1.76×
+    and 1.92× (was 1.63× and 1.57×), 2.10× with the A100.
+  - *Tried after that, no gain (not kept):* reading the DP kernels'
+    previous row as stored vectors and shifting it in registers, instead of
+    the `+ b + 1` loads that straddle two stores, gave identical output but
+    was 1.5–2 % slower on both hosts (paired interval mode 40.1 vs 39.5 s
+    on a2, 40.2 vs 39.5 s on galaxy). GPU batch size: 0.5 M and 1 M reads
+    are equal (29.7 s), 2 M and 4 M slower (30.5, 32.6 s).
+  - *Where paired interval mode's CPU goes now* (galaxy, perf): tier R 26 %
+    (its index lookups 9.5 %, of which `find_copies` 3.2 %), the DP fills
+    for CIGARs and the pair certificate ~22 % (`certify_pair`'s tracebacks
+    6.3 %, mate rescue's 10 %), passes 1–2 22 %, the pair certificate's
+    window scans 7 %. Each remaining fix is worth 2–5 %; larger gains need a
+    GPU pair pass or GPU tier R.
+  - *Two of them, kept* (77b1df2, output identical): `find_copies` reuses
+    the read's own index ranges, and `band_score_vec` keeps its window as
+    16-bit lanes and skips the start mask in rows that exclude no start.
+    Final protocol (`final_{galaxy,a2}.tsv`; 84dfa83's kept as
+    `final_*_84dfa83.tsv`): paired interval mode 37.82 s on galaxy and
+    37.97 s on a2 (1.66× and 2.09× minibwa), 28.31 s with the A100 (2.22×);
+    single-end interval mode 1.88× and 2.02×, 2.32× with the A100. The same
+    changes in `affine_fill_vec16` and `band_distance_vec16` were neutral
+    (0.5 % faster on a2, 1 % slower single-end on galaxy) and not kept.
+- **Maximum certification and the slow, reliable mappers** (2026-10-22,
+  ea812d8; `bench/results/hg002_2026-10/slow_*`).
+  - *Options:* `certa map --full-cert` turns on pass 3 (budget 4096) and
+    pass L (t = 2); `--index2 q15.cidx` runs every pass again on a second
+    index for the reads still uncertified (the Aim 1 cascade). The default
+    output is unchanged (byte-identical to 77b1df2 in every mode).
+  - *Certified, 2 M HG002 reads:* single-end 94.46 → 95.65 % with
+    `--full-cert`, 96.83 % with `--index2` too; paired 95.42 → 96.33 →
+    96.87 % of reads (both mates: 93.59 → 94.90 → 95.43 % of pairs).
+  - *Paired `--full-cert` was 6.4× slower than the default:* the pair
+    certificate's partner-chain lookup scanned every chain of the other
+    mate, quadratic once 4096 hits per part are enumerated (80 % of the
+    time). Binary search over the sorted chains (THEORY.md, Theorem P):
+    22.1 → 5.9 s, output identical; mutant P17 killed.
+  - *Speed* (galaxy, 64 cores, interval mode, CPU, medians of three; Yara
+    and RazerS 3 one run): single-end 2.67 / 2.97 / 6.21 s (default /
+    `--full-cert` / `--index2`), paired 4.95 / 6.85 / 12.28 s. Yara 1.0.5
+    `-e 4 -y full` (every alignment with ≤ 4 % errors): 138.2 s and
+    211.2 s, 22–46× and 17–31× CERTA's wall time and 9–17× and 7–12× its
+    CPU (Yara keeps 13–19 of 64 cores busy). RazerS 3 `-i 96 -rr 100`
+    (100 % recognition at ≥ 96 % identity) on the first 200,000 reads:
+    239.6 s against CERTA's 3.2 s (75× wall, 510× CPU); its paired mode
+    aborts with `std::bad_alloc` at the end of every run (also with
+    `-le 150`). The A100 is slower than the CPU at 2 M reads (fixed
+    start-up costs). CERTA with `--index2` holds two 23 GB indexes
+    (~46 GB RSS; Yara 5.5 GB).
+  - *Reliability* (`bench/weaknesses.py`, split by certificate): on the
+    1.91 M reads certified end-to-end, Yara single-end places none
+    elsewhere with more edits than the proven minimum; 89 differ only
+    under BWA's affine scores (equal edits); 14 (0.001 %) are unmapped
+    although ≤ 5 edits exist. Paired, Yara places 2,442 mates (0.07 %)
+    elsewhere with more edits than proven, the price of its pairing.
+    RazerS 3 maps every end-to-end certified read, but flags its first
+    match primary, not its best: by primary it is "wrong" for 6.6 %, by its
+    best record for 0.01 % (affine-score differences). Both leave ~56 % of
+    local (SL) certificates unmapped: end-to-end mappers cannot clip.
+  - *Long reads:* Winnowmap 2.03 has no short-read mode; on 242,534 HiFi
+    reads it takes 610.4 s (88.5 s of it indexing the FASTA: its dumped
+    index crashes on load) against 163.4 s for minimap2 + `lr_ceiling
+    --certify` (3.7× wall, 4.1× CPU), which proves the optimum for
+    93.32 %. On Winnowmap's alignments `lr_ceiling` proves the optimum for
+    93.31 %, above Winnowmap's own alignment for 70,653 reads (minimap2:
+    40,265), under CERTA's +1/−4 scores; Winnowmap's preset scores +2/−4,
+    so this is not an error count.
+  - *What is left for their patterns* (`bench/headroom.py`,
+    `slow_headroom.txt`, 2 M reads single-end): Yara maps 96.83 % within 6
+    edits, as many as CERTA certifies with `--full-cert --index2`
+    (96.83 %), but not the same reads (CERTA's 1.09 % SL is out of Yara's
+    reach). Of the 3.17 % CERTA leaves uncertified, Yara at 12 edits
+    (`-e 8`, 2,405 s for these 63,368 reads) finds the best end-to-end
+    alignment within 6 edits for 0.62 % of all reads (mostly with parts
+    over the hit budget: 0.53 %), within 7–11 edits for 0.60 %, and none
+    within 12 edits for 1.82 %. Default settings leave 1.98 %
+    repeat-limited reads within 5 edits; `--full-cert --index2` already
+    took three quarters of them.
+  - *Patterns worth taking, by that headroom:* parts chosen by their
+    rarity (Winnowmap's weighted minimizers, the optimal seed solver; the
+    parts are fixed today and only their first 22-mer is looked up; Lemma
+    L allows any disjoint parts, as in `lr_ceiling`) and repeats handled as
+    index intervals or merged adjacent parts (Yara's bidirectional FM
+    index) for the 0.62 %; parts that may match with one error (Yara's
+    search schemes; radius 2|S| − 1, up to 11) for the 0.60 %; bit-parallel
+    banded verification (Myers/Hyyrö, RazerS 3 and Yara) for the cost of
+    `--full-cert`. Not worth taking: exhaustive search at a larger radius
+    (Yara at 12 edits costs 1.3 CPU-s per read), RazerS 3's scan of the
+    genome, and end-to-end-only alignment: the remaining 1.82 % have no
+    end-to-end alignment within 12 edits, so only clipped (local)
+    certificates or larger radii can reach them.
+  - *Their payoff, measured* (`tools/payoff`, `bench/payoff_union.py`,
+    `slow_payoff.txt`): a standalone certifier of the minimum end-to-end
+    edit distance, one part choice per technique, on the reads CERTA leaves
+    uncertified. Every certified distance agrees with Yara's (31
+    comparisons, none with fewer edits; no two techniques disagree on a
+    read). On top of `--full-cert` (95.65 %), on the q = 22 index alone:
+    rarest disjoint 22-mers +0.85 points, one-edit parts (the six rarest
+    22-mers' neighbourhoods; radius up to 11) +1.55, both in a cascade
+    +2.00 (97.65 %) for 344 more CPU-s in this prototype (CERTA's whole
+    run: 105 s; 4.0 ms per residual read). That beats
+    `--index2` (96.83 %, two 23 GB indexes); with it too, 97.75 %; every
+    technique on both indexes, 97.99 % for 20× the CPU, against a ceiling
+    of 98.18 % (the 1.82 % without an end-to-end alignment within 12 edits).
+    Long exact parts add little once these run, and cost most here (24–41
+    ms per read through hash-index extension). CERTA's own parts with
+    support 1 at budget 4096 and every hit verified on its own band
+    (pass 3 uses support 2 and drops wide clusters) give +0.57 points
+    alone. Next: rare parts and one-edit parts in the mapper itself.
+- **Pass V: adaptive parts in the mapper** (2026-10-22; THEORY.md Lemma N,
+  Theorem A; `bench/results/hg002_2026-10/pass_v_check.txt`). For reads
+  still uncertified after pass 3: the rarest disjoint q-mers as parts
+  (radius |S| − 1), then q-mers searched with one edit (radius 2|S| − 1, at
+  most 12). On with `--full-cert` (unless `--witness`), or
+  `--adaptive-parts 1|2`; opt-in, so the default output is byte-identical
+  to 77b1df2 (14 files, CPU and A100), and pass V off reproduces 77b1df2's
+  `--budget3 4096 --local 2`; with it on, CPU = A100 and fused = serial.
+  - *2 M HG002, interval mode, 64 cores:* single-end `--full-cert` 95.65 →
+    97.63 % certified, 3.0 → 5.6 s, 22.7 GiB (the old maximum, `--index2`:
+    96.83 %, 6.3 s, 44.2 GiB; both: 97.73 %, 8.4 s). Paired 96.33 → 97.45 % of
+    reads (both mates 94.90 → 96.18 % of pairs), 6.9 → 12.5 s. The
+    prototype predicted 97.65 %.
+  - *Tests:* the oracle at radius 12 (873 reads, 6 settings, 3 seeds, ARM
+    and x86), Lemma N directly, the DP against brute force, the hit budget;
+    11 mutants V1–V11 killed (141 in all: 133 killed, 8 equivalent).
+  - *Against the slow mappers* (`slow_reliability.txt`): within their own
+    error rate (4 % of the read length) Yara and RazerS 3 miss none of the
+    reads CERTA certifies; every read they leave unmapped has its proven
+    optimum beyond that rate (17,836 single-end reads, 0.89 %; distances
+    rechecked against the reference). CERTA now certifies those too.
+  - *Where pass V's time goes* (galaxy, perf, paired `--full-cert`): about
+    56 % of the run, of which the exact verification of clusters is 40
+    points (the banded DP itself 44 % of a single-end run), its lookups and
+    part choice 17. A read in a repeat has up to 4,096 hits per strand, and a
+    unique read keeps b2 at R + 1, so every cluster that could hold a second
+    locus within R must be verified: that is the claim d2 makes.
+  - *Faster, output unchanged* (byte-identical to c9ee1c7 in 15 outputs:
+    default and `--full-cert`, single-end and paired, fallback and interval
+    mode, CPU and A100; ARM = x86): batched, prefetched index lookups in
+    pass V; the reference windows of clusters prefetched six ahead; and a
+    support bound (THEORY.md, Theorem A) that skips a cluster whose parts
+    imply more edits than the current limit. 2 M reads, `--full-cert`:
+    single-end 5.58 → 4.96 s (CPU 260 → 221 s), paired 12.45 → 11.10 s
+    (675 → 591 s). Two alternatives were measured and not kept: a two-phase
+    verification at a smaller radius (the same speed, but a changed radius
+    for some records), and a smaller pass V budget (1,024 hits: 24 % faster
+    single-end, but 0.34 points fewer certified).
+  - *At full scale* (`full_cert_{galaxy,a2}.tsv`, `full_cert_certified.txt`;
+    20,001,073 reads or pairs, interval mode, medians of three, final
+    protocol's pinning): certified single-end / paired 94.38 / 95.39 %
+    (default), 95.59 / 96.29 % (`--full-cert --adaptive-parts 0`), 97.61 /
+    97.44 % (`--full-cert`), the same on both hosts, CPU and A100. Wall,
+    galaxy CPU: 15.8 → 20.9 → 38.7 s single-end, 37.6 → 59.8 → 100.1 s
+    paired (A100: 13.0 / 17.5 / 34.7 and 28.4 / 49.2 / 88.6 s); a2: 18.2 →
+    19.5 → 40.9 s and 37.8 → 58.1 → 107.1 s. Peak RSS 29.1 GiB single-end,
+    36.2 GiB paired (39.5 GiB with the A100; 21.3 and 21.5 GiB since the
+    memory changes below). So `--full-cert` costs about 2.5×
+    the default: slower than minibwa (on galaxy 28.8 s single-end and
+    63.0 s paired; also with the A100 and on a2), 2.6× and 3.3× faster than
+    BWA-MEM2, and it certifies 3.2 and 2.1 points more than the default
+    (pass V alone: 2.0 and 1.2).
+- **Memory: the index alone** (2026-10-23; commits 0eceb42, 82b18ec;
+  `bench/results/hg002_2026-10/memory_{galaxy,a2}.tsv`,
+  `memory_identity.txt`). Peak memory was the whole index file (21.4 GiB,
+  all of it resident) plus every page of the input read so far: 6.9 GiB
+  per 20 M reads, both mates' files when paired. Two changes, every output
+  byte unchanged (30 outputs on galaxy, CPU and A100; 22 on a2):
+  - *Input pages are released once parsed* (`MADV_DONTNEED` on the
+    private, read-only mapping of the FASTQ: a page read again would come
+    back from the file). Memory no longer grows with the input.
+  - *The bucket directory is held as 32-bit offsets* (1 GiB instead of 2):
+    every offset is at most the number of entries, < 2^32. The file keeps
+    format v3, so old indexes load and `certa check-index` (Proposition V0)
+    applies unchanged; an offset ≥ 2^32 is rejected on load. The load
+    converts it on 16 threads into an anonymous mapping (huge pages
+    requested) while one thread faults in the other arrays: 0.7 s on
+    galaxy as before; 0.2 s on a2, where the old load took 0.04 s (its
+    page cache maps the file in large folios).
+  - *20 M reads / pairs, interval mode, medians of three interleaved with
+    the old build (peak memory of the median run, as in the paper):* peak
+    29.1 → 21.3 GiB single-end and 36.2 → 21.5 GiB paired on galaxy (a2:
+    21.4 and 21.6 GiB; A100: 31.9 → 24.3 and 39.5 → 25.0 GiB). galaxy is
+    2.8–6.9 % faster in every configuration (old time / new time − 1;
+    single-end default 15.79 → 14.77 s, paired `--full-cert` 99.93 →
+    96.36 s), a2 0.3–1.2 % faster; at 2 M, a2 is 0.7–4 % slower (the 0.2 s
+    load).
+  - *Tried and not kept: 8-bit keys* (the keys' high 8 bits held, the low 8
+    read from the reference at the entry). Byte-identical and 2.7 GiB
+    less, but 21–79 % slower at 2 M: in repeats every binary-search step
+    then needs two dependent random reads (the position, then the
+    reference), and the lookups of tier R and `find_copies` took 37 % of a
+    single-end interval run.
+  - *Tried and not kept: a 2-bit reference* (`--packed-ref`; N runs kept
+    apart, windows unpacked by table and lazily). Byte-identical and
+    2.2 GiB less, but pass V and the pair passes compare many short-lived
+    bands, which the byte reference serves by vector loads in place: at
+    2 M, `--full-cert` 9 % slower on galaxy and 17–19 % on a2, paired
+    default 8 % / 13 % more CPU; even switched off it cost 0.5–0.8 % CPU.
+  - What is left is the index itself: positions 11.0 GiB, keys 5.5 GiB,
+    reference 2.9 GiB (1 byte per base), directory 1 GiB. Below that would
+    take a compressed index (FM-index or sampled positions), which changes
+    what each lookup costs rather than how the arrays are stored.
+- **Where the time goes on recent Illumina reads** (2026-10-24;
+  `bench/results/hg002_2026-10/recent_illumina_costs.txt`; nothing tuned,
+  no default changed). HG002 NovaSeq X (calibration) and HG005 NovaSeq 6000
+  (held out) differ in quality bins (2/9/24/40 vs 2/11/25/37), adapters
+  (trimmed vs 0.5 % of reads) and 3′ quality decline, but share the same
+  cost structure:
+  - *Reads that end uncertified are the cost.* Timing class files: the
+    2.4 % of reads uncertified with `--full-cert` take ~46 % of its CPU
+    (2.1 ms each against 0.11 ms on average), mostly in pass V's failed
+    attempts (1.6 ms each, ~35 % of all `--full-cert` CPU, leaving no trace
+    in the output). By default, the 5.5 % uncertified reads take ~56 %,
+    mostly tier R, which gives them their interval records.
+  - *They are repeat reads beyond the radius, not bad reads.* A failing read
+    verifies ~2,100 clusters (pass V fills its 4,096-hit budget) with ~39 DP
+    rows each; none lies within 11 edits. Base quality does not predict
+    failure (59 % of attempts hold a base below Q20 and fail as often as
+    the rest); only rare extremes do (a run of ≥ 10 low-quality bases, a
+    poly-G tail ≥ 5, ≥ 8 N), worth ~2–3 % of `--full-cert` time.
+  - *Small levers:* exact duplicates are 1.94 % of single-end reads (0.24 %
+    of pairs); N-padded short reads 631 in 20 M.
+  - *Measured and not kept* (output byte-identical): the q-gram lemma as a
+    filter in front of the banded DP (sound: none of 15,380 rejections in
+    tests wrong, but it costs what the ~39 DP rows cost); the DP from the
+    3′ end (2 % slower).
+  - So FASTQ-metric routing, duplicate memoization and DP filters give a few
+    per cent at most on recent data. The large remaining costs are pass V's
+    failed attempts and tier R.
+- **Competitors from the literature audit** (SWOT_ANALYSIS.md section K;
+  2026-10-24; `bench/results/hg002_2026-10/k_competitors.{tsv,txt}`,
+  `bench/k_bench.sh`, `bench/k_reliability.sh`).
+  - *DRAGMAP 1.3.0* (Illumina's open-source DRAGEN mapper, standing in for
+    DRAGEN): 103 s single-end and 416 s paired on 20 M reads on a2 (x86-64),
+    BWA-MEM2's speed single-end and 1.6× slower paired, 36–46 GiB; CERTA's
+    interval mode is 5.7× and 11× faster. Its aarch64 build is 4–5× slower.
+  - *Columba 2.0* (lossless; search schemes over a bidirectional FM-index,
+    dynamic partitioning): the fastest lossless mapper measured, 12.5 s
+    single-end and 56.9 s paired on 2 M (11× faster than Yara) in 11 GiB.
+    CERTA `--full-cert` is 2.2× and 4.6× faster at twice the memory.
+    Against CERTA's certificates it is lossless single-end (no certified
+    read within its 6 edits missed or misplaced); paired it trades per-mate
+    optimality for pairing (0.56 % of reads placed with more edits than the
+    proven minimum). Built with `-fsigned-char` on aarch64: with unsigned
+    `char` its FASTQ reader misses EOF and drops the last batch.
+  - *mm2-fast* (AVX-512 minimap2): identical output to minimap2 2.24 but no
+    faster for short reads (97.7 vs 96.2 s; 2.31: 91.9 s).
+  - *Not run:* Parabricks 4.8 (its arm64 build stops with SIGILL on the
+    Ampere Altra; a2 has no GPU), mapquik (needs a 2023 nightly Rust),
+    DRAGEN and Sentieon (licences). Strobealign's multi-context seeds are
+    already benchmarked (0.18.0 uses them by default).
+  - *What CERTA can take from them*, against its measured costs
+    (`recent_illumina_costs.txt`):
+    1. Batched DP across clusters: a failing read verifies ~2,100 clusters
+       against one read, each through the same 16-lane DP. Four clusters
+       fit one AVX-512 register (one per 128-bit lane, where the DP's
+       shuffles already stay) and interleaving helps NEON's ILP; applying
+       the batch's results in order with the sequential limits keeps every
+       output byte. Target: the banded DP, 44–53 % of `--full-cert`.
+    2. Search schemes (Columba; Kucherov et al.; Kianfar et al.): pass V
+       reaches 11 edits through one-edit neighbourhoods (up to 243 hash
+       lookups per part); a search scheme over a bidirectional FM-index
+       prunes earlier and could certify past 11 edits, the reads that now
+       cost ~35 % of `--full-cert` and fail. Cost: a second index (~11 GiB).
+    3. A multigenome reference (DRAGEN): failing reads are repeat reads
+       more than 11 edits from GRCh38; alternate haplotypes as extra linear
+       contigs keep CERTA's certificate machinery and may bring many within
+       reach (to be measured, e.g. against the HG002 Q100 assembly).
+    4. The GPU end to end (Parabricks): CERTA's GPU runs passes 1–2 only;
+       pass V and tier R (~half of default interval-mode CPU) stay on the
+       CPU.
+    5. Not promising here: learned indexes (BWA-MEME; CERTA's directory
+       lookup is already one access), AVX-512 alone (mm2-fast), effort
+       heuristics in repeats (minibwa), which would change certified output.
 - **HG001 GATK indels** are the one comparison where CERTA's F1 is lower
   (0.9909 vs 0.9922). Look at the 13 extra FP and 14 extra FN.
-- **Long reads:** the current limits (320 bp, 8 parts, radius 5) exclude
-  them. In principle HiFi fits, with an error rate well below the ~4.5 %
-  limit of 22-base parts. A full long-read CERTA would likely be slower than
-  shmap-rs, which does no base-level alignment: about 11.7 s for 2,000
-  HG002 HiFi reads single-threaded (a2:`~/shmap-rs/profiling/other-mappers/`).
-  A more promising idea is to certify only the reads shmap-rs flags as
-  ambiguous. First step, needing no downloads: measure on a2's HiFi data
-  what fraction of reads fall within the certifiable error range.
+- **Long reads:** the mapper's limits (320 bp, 8 parts, radius 5) exclude
+  them. `tools/lr_ceiling --certify` certifies them (Aim 6, below): OPT is
+  proven for 93.3 % of real HiFi reads, at 0.86× minimap2's CPU.
+  - *Reads that span SVs:* a split (jump) objective is defined, and Lemma
+    L-J bounds it (`certa/longread.h`). With it, 94.4 % of reads fit at
+    P = 30, about a fifth of the clipped and high-loss misses.
+  - *The exact certificate of the split optimum* (`certify_jump`) is
+    oracle-tested. On the reads that fit only the split objective it proves
+    OPT_J for 1,551 (0.64 % of all reads), so 93.96 % are now certified
+    exact.
+  - *Its pruning* is now iterative: exact prefix and suffix values of the
+    chains evaluated first, read windows, lb raised to the best alignment
+    found, and a static step when rounds cost more. That cut the median from
+    45 s to 3.4 s per read and the CPU in half. The first version had used a
+    single loose bound. The vectorized DP row then took the median to 1.4 s
+    (39 % of the first version's CPU).
+  - *Still open:* reads with a long lossy stretch (for example an insertion
+    of repeat sequence) stay costly and keep wide intervals; and building
+    all this into the mapper with a faster DP.
+
+  A full long-read CERTA would likely be slower than shmap-rs, which does
+  no base-level alignment: about 11.7 s for 2,000 HG002 HiFi reads
+  single-threaded (a2:`~/shmap-rs/profiling/other-mappers/`). A more
+  promising idea is to certify only the reads shmap-rs flags as ambiguous.
 - **Data on the hosts:**
   - galaxy:
     - HG005 FASTQs (52 GB, `~/certa-data/SRR14724528_*`); delete them if

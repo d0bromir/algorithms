@@ -1,0 +1,26 @@
+# Aim 6 follow-up, galaxy, 2026-10-14: tools/lr_ceiling --certify (tau 16) on the pre-registered sample (hifi_1x.fa, 242,534 reads, minimap2 PAF as before). For each fitting read: chains of part occurrences with pad = L - lb - 7 (lb = the best known alignment, primary or its best sub-path), banded DP over every chain whose Lemma L bound exceeds the best so far: OPT proven. Single-threaded scalar Gotoh; times are per read.
+
+== run
+reads 242534, fit 226253 (93.29 %), with the trimmed path 226330; CIGARs failing the base check 0; tau 16, cmax 4096
+certify: OPT proven for 226327 reads (93.32 %), above the best known alignment for 40265; over the cell cap 3
+User time (seconds): 11628.78
+Elapsed (wall clock) time (h:mm:ss or m:ss): 3:15.19
+minimap2 (map + align, same reads, 64 threads): User time (seconds): 4171.23, Elapsed (wall clock) time (h:mm:ss or m:ss): 1:34.14
+
+misses: clipped 5627 (2.32 % of reads); high loss 4987 (2.06 % of reads); repeat-limited 4379 (1.81 % of reads); unmapped 1288 (0.53 % of reads)
+certified (OPT proven): 226327 = 93.32 % of reads; over the cell cap 3
+OPT above the best known alignment: 40265 reads (17.8 %), by 50% 1, 90% 7, 99% 73, max 2094
+DP cells per read: 50% 6.06e+06, 90% 2.1e+07, 99% 6.6e+07, max 3.71e+09, mean 1.06e+07
+DP time per read (one thread): 50% 20.2 ms, 90% 68.9 ms, 99% 216.7 ms, max 12219 ms, mean 35.0 ms
+chains searched by DP: median 1, 99% 2, max 83 (of chains built: median 136, max 1643)
+
+== verified subsample: every 121st read (2,005), --certify --verify: parts recounted, U1 brute force, and a full DP over +-1,000 bp around the known locus must not exceed OPT
+reads 2005, fit 1879 (93.72 %), with the trimmed path 1879; CIGARs failing the base check 0; tau 16, cmax 4096, verify: all parts and U1 recounted equal
+certify: OPT proven for 1879 reads (93.72 %), above the best known alignment for 329; over the cell cap 0 ; full DP near the known locus: 1879 reads, equal to OPT for 1876, above it for 0
+
+== where OPT beats the best known alignment (the primary line or its best sub-path)
+39,993 of the 40,265 also beat the best of all minimap2 lines (primary, supplementary, secondary).
+Of the 549 with a gain >= 50, 333 keep it against all lines. Largest cases: a primary that
+scores poorly under CERTA's scores while another minimap2 line scores far higher (OPT 13,058 vs
+primary 3,628 and another line 13,055), or an optimum that extends through bases minimap2
+clipped (OPT 10,763 vs 9,158 for a primary leaving 2,323 bases unaligned).

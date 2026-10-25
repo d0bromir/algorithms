@@ -1,0 +1,34 @@
+certa check on PR mates (closes the Aim 4 gap), galaxy, 2026-10-14.
+Mapper and checker built from the tree of this commit (CUDA, A100 #1);
+index ~/certa-bench/idx/grch38.s1v3.cidx (q = 22, s = 1).
+
+  certa map IDX R1 R2 -t 32 --gpu --device 1 --intervals --witness -o X.sam
+  certa check IDX X.sam -t 32 --failures fail.txt
+  bench/aim4_tamper.py X.sam tampered.sam faults.tsv 0.01 1
+  certa check IDX tampered.sam -t 32 --failures f.txt; bench/aim4_score.py faults.tsv f.txt
+
+HG002: the first 2 M pairs of the NovaSeq X run used in Aim 4. HG005: the
+first 2 M reads of each SRR14724528 FASTQ.
+
+Files:
+  map_*_witness.log, check_*_2M.log   the honest records: all accepted
+  tamper_hg002.tsv                    fault injection (1 % of records/pairs)
+  check_hg002_2M_first_version.log    the first version of the pair check
+
+The first version bounded the pairs through a chain of mate x by the best
+x in the chain's band plus the best y anywhere in its partner window. It
+left 24 HG002 records (12 pairs) unproven. A debug harness gave the
+failing chain for each, and an exact oracle (per-start bests of both
+mates over the region, paired under the proper-pair constraint, the shown
+pair excluded) gave the best other proper pair there:
+  - 7 pairs hit the DP-cell cap (pairs in high-copy repeats, 450-1,600
+    part occurrences, every chain searched);
+  - 5 pairs failed a chain where the exact best other proper pair was
+    below XS (e.g. XS 253: a chain value of 270 combined an x 663 bp from
+    the shown one with the shown partner about 1,000 bp from that x; the
+    exact best other pair there is 245; XS 275: chain 281, exact 153).
+  The mapper's S2 held in every case. The fix: pair x's and y's per-start
+  maxima exactly (every pair counted is then a real proper pair), and skip
+  a chain when its bound plus a bound on y there (U_t(y), or the bound of
+  a chain of y whose start range meets the window) cannot exceed XS.
+  With it, all 4 M records of each sample are accepted.

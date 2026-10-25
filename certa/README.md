@@ -104,6 +104,78 @@ build-*/certa map grch38.cidx sample_R1.fastq.gz -k 2 --gpu \
 minibwa ... uncertified.fq > fallback.sam      # or bwa-mem2 mem ...
 ```
 
+For the most certified reads, use `--full-cert` on an index of every
+position (`certa index ... -s 1`, about 23 GB for GRCh38): pass 3, pass V
+(adaptive parts) and pass L. On 20 M HG002 reads it certifies 97.6 % of
+reads single-end and 97.4 % paired (default: 94.4 % and 95.4 %) in about
+2.5 times the default time (galaxy, 64 cores: 38.7 s and 100.1 s; still
+2.6× and 3.3× faster than BWA-MEM2); a second index (`--index2`) adds only
+0.1 points more. Peak memory is the index alone, whatever the input size:
+21.3 GiB single-end and 21.5 GiB paired for GRCh38 (24.3 / 25.0 GiB with an
+A100), as for the default (`bench/results/hg002_2026-10/memory_*.tsv`).
+
+### Interval output, no fallback (`--intervals`)
+
+```bash
+build-*/certa map grch38.cidx R1.fastq.gz R2.fastq.gz --gpu --intervals -o all.sam --stats stats.json
+```
+
+Every read goes to SAM; none is passed to another aligner.
+- **Uncertified reads** go through tier R (`include/certa/repeat.h`).
+- **Pairs with an uncertified mate** are placed from the alignments found,
+  plus an exhaustive search of each mate's proper-pair window
+  (`include/certa/interval.h`).
+
+Each record carries:
+
+| tag | meaning |
+|---|---|
+| `XL`, `XU` | the best local score over the whole reference (BWA-MEM scoring, both strands) lies in [XL, XU]; XL = XU means the alignment is proven optimal |
+| `XQ` | a certified lower bound of BWA-MEM's MAPQ formula, from a proven upper bound on the best score at any non-overlapping locus |
+| `XT` | the tier: `S0`/`S1`/`SR`/`SL`/`PR` certified; `R` exact by tier R; `IV` an interval; `MR` placed in the mate's window; `UN` unmapped |
+
+**MAPQ.** By default MAPQ is a point estimate: BWA-MEM's formula, using the
+best other locus found. A pair is trusted no more than its more confident
+mate. `--iv-mapq cons` writes XQ instead.
+
+**Tier R options:** `--iv-tau 256`, `--iv-margin 20`, `--iv-chains 8`,
+`--iv-fallback 8`.
+
+Results: [EXACT_ALIGNMENT_PROPOSAL.md §6.3](../EXACT_ALIGNMENT_PROPOSAL.md).
+
+### Checking the output independently (`certa check`)
+
+```bash
+build-*/certa check-index grch38.cidx GRCh38.fa         # once per reference build (34 s for GRCh38)
+build-*/certa map grch38.cidx R1.fq.gz R2.fq.gz --gpu --intervals --witness -o all.sam
+build-*/certa check grch38.cidx all.sam                  # every record
+build-*/certa check grch38.cidx all.sam --sample 100000  # or an audit sample
+```
+
+- **`--witness`** adds:
+  - `XW`, the probes and support the bounds were proven from;
+  - `XH`, the SUB bound behind XQ;
+  - `XV`, the alignment attaining XL when it is not the record's own (for
+    a PR mate: its single-end alignment);
+  - `XY` (PR mates), the proper-pair distance D and each mate's parts of
+    the pair certificate, which prove `XS`, the bound on every other
+    proper pair.
+- **`certa check`** (`src/check.cpp`) shares no alignment, bound or lookup
+  code with the mapper. For each record it verifies:
+  - AS, by rescoring;
+  - XL, by a shown alignment;
+  - XU and XH, by recomputing the bound and enumerating every probe
+    occurrence itself;
+  - XQ, against BWA-MEM's formula. For PR mates it uses BWA-MEM's pairing
+    rule, with XS proven from both records of the pair: every chain of
+    each mate's part occurrences is paired, by exhaustive DP, with every
+    partner placement within D.
+- **It exits** with status 2 if any record fails; `--failures f.txt` lists
+  them. The two records of a pair must be adjacent (as `certa map` writes
+  them); `--sample` samples pairs whole.
+
+Results: [EXACT_ALIGNMENT_PROPOSAL.md §6.4](../EXACT_ALIGNMENT_PROPOSAL.md).
+
 `stats.json` records the certified fraction by tier, why the other reads
 were not certified (radius < 0 = repetitive, not found = more than R edits
 or no locus, …), and a timing breakdown (index load, GPU upload,
@@ -120,21 +192,54 @@ Parameters:
 | `-k` (map) | 2 | edit budget, 0–5; reads need length ≥ (k+1)(q+s−1) (87 bp for k=2 with the defaults; 145 bp for k=4) |
 | `--cap` | 32 | max hits enumerated per part (≤ 32) |
 | `--batch` | 200 000 CPU / 1 000 000 GPU | reads per batch |
+| `--serial-stages` | off | without a GPU, run a batch in two stages, one after the other (passes 1 and 2 over the whole batch, then the CPU passes and formatting), instead of all stages in one pass over chunks of reads (same output either way) |
+| `--budget3` / `--support3` | 0 / 2 | pass 3 (CPU): reads whose parts did not all fit pass 2's budget are re-run with up to this many hits per part (≤ 4096), verifying clusters hit by ≥ `--support3` parts |
+| `--local` | 0 | pass L (CPU): certified local alignment (tier SL) for reads still uncertified, verifying chains hit by ≥ t parts (2 is the cheap setting) |
+| `--full-cert` | off | maximum certification: `--budget3 4096`, `--adaptive-parts 2` (unless `--witness`) and `--local 2` unless given; slower |
+| `--adaptive-parts` / `--vbudget` | 0 / 4096 | pass V (CPU, s = 1 index): for reads still uncertified after pass 3, parts chosen per read: 1 = the rarest disjoint q-mers (radius \|S\| − 1); 2 = then q-mers searched with up to one edit (radius 2\|S\| − 1, at most 12); hits per strand ≤ `--vbudget`. Not with `--witness` |
+| `--index2` | none | not recommended since pass V: a second index of the same reference (e.g. built with `-q 15 -s 1`, about 23 GB for GRCh38) on which reads still uncertified after every pass get every pass again (CPU). With `--full-cert` it adds 0.1 points for twice the memory and 50 % more time (HG002). Not with `--witness` or `--serial-stages` |
 
 ## Results on real data: GIAB HG002, NovaSeq X
 
-Full details, raw timings and caveats are in [bench/RESULTS.md](bench/RESULTS.md).
+The current numbers are in the paper ([paper/main.tex](paper/main.tex),
+Table 2 for speed), every one generated from `bench/results/` by
+[paper/make_numbers.py](paper/make_numbers.py). Earlier runs and their
+caveats are in [bench/RESULTS.md](bench/RESULTS.md).
 
-- **Certified fraction:** 83.4 % of all 444.5 M reads are certified at
-  k = 2 (68.7 % exact).
-- **Certificate check:** no unexplained violation among 1.67 M certified
-  reads checked against BWA-MEM2. The 3 flagged cases are reference `N`s
-  that BWA indexes as random bases.
-- **Complete mapping, galaxy:** CERTA on the A100, streaming uncertified
-  reads into minibwa, takes 24.4 s vs 26.5 s for minibwa (1.08×) with 23 %
-  less CPU time. It beats strobealign, minimap2, BWA-MEM2 and bowtie2.
-- **Complete mapping, CPU only:** CERTA + fallback is slower than minibwa.
-  The 17 % of reads that cannot be certified cost ~70 % of minibwa's time.
+- **Certified fraction:** 95.4 % of all reads in paired mode (HG002), 92.9 %
+  for HG001 and HG005 (NovaSeq 6000); 94.4 % single-end.
+- **Speed (20 M reads or pairs, every pipeline on the same 64 cores, one
+  session per host, build 77b1df2):** on CPU alone CERTA is faster than
+  every other aligner timed, single-end and paired, on galaxy (ARM64) and
+  a2 (x86-64). Against minibwa, the fastest of them, on galaxy / a2:
+  single-end 1.88× / 2.02× in interval mode and 1.59× / 1.85× with the
+  minibwa fallback; paired 1.66× / 2.09× in interval mode and 1.21× /
+  1.38× with the fallback. With one A100 (galaxy): 2.32× single-end, 2.22×
+  paired. BWA-MEM2 is 6.0–8.8× slower than CERTA's interval mode on CPU.
+- **Independent checker:** `certa check` accepts all 8 M honest records
+  (HG002 and HG005) and rejects all 24,306 injected faults.
+- **Maximum certification against the slow, reliable mappers** (2 M HG002
+  reads or pairs, galaxy, 64 cores, CPU, interval mode;
+  [bench/results/hg002_2026-10/slow_galaxy.tsv](bench/results/hg002_2026-10/slow_galaxy.tsv)):
+
+  | | certified, single-end / paired | single-end | paired |
+  |---|---|---|---|
+  | CERTA (default) | 94.5 % / 95.4 % | 2.7 s | 5.1 s |
+  | CERTA `--full-cert --adaptive-parts 0` (no pass V) | 95.7 % / 96.3 % | 3.0 s | 6.9 s |
+  | CERTA `--full-cert` (with pass V) | 97.6 % / 97.5 % | 5.6 s | 12.5 s |
+  | CERTA `--full-cert --index2` (q = 15) | 97.7 % / 97.5 % | 8.5 s | 17.0 s |
+  | Yara 1.0.5 `-e 4 -y full` | — | 138.2 s | 211.2 s |
+  | RazerS 3 `-i 96 -rr 100` | — | est. ~2,400 s (timed: 239.6 s for the first 200 k reads, CERTA 1.6 s) | aborts (`std::bad_alloc`) |
+
+  Yara and RazerS 3 find every alignment within 4 % errors (6 edits at
+  150 bp); they give no proof. CERTA's certificates (radius ≤ 5, with pass V
+  up to 12) agree with them: within their own error rate they miss no read
+  CERTA certifies and place none elsewhere with more edits than the proven
+  minimum; the reads they leave unmapped have their proven optimum beyond
+  that rate (0.89 % of single-end reads), and CERTA certifies those too
+  ([slow_reliability.txt](bench/results/hg002_2026-10/slow_reliability.txt)).
+  Long reads: CERTA's HiFi pipeline (minimap2 + `tools/lr_ceiling --certify`,
+  optimum proven for 93.3 % of 242,534 reads) takes 163 s, Winnowmap2 610 s.
 
 ## Results so far (synthetic data)
 
@@ -177,24 +282,49 @@ NovaSeq X FASTQ (the Aim 1 measurement).
 ## Layout
 
 ```
-include/certa/core.h   per-read algorithm (host + device)
-src/index.*            FASTA loading, sampled q-mer index, save/load
-src/seqio.*            FASTQ/FASTA reading (plain or gzip)
-src/mapper_cpu.cpp     multi-threaded CPU driver
-src/mapper_gpu.cu      CUDA driver (one thread per read)
-src/main.cpp           CLI, SAM/FASTQ output, statistics
-tests/test_certa.cpp   brute-force certificate test
-tools/simulate.py      synthetic genome/reads and placement evaluation
-scripts/               build.sh, demo.sh
+include/certa/core.h       per-read algorithm (host + device)
+include/certa/pair.h       pair certificate (tier PR)
+include/certa/repeat.h     repeats (tier R)
+include/certa/interval.h   interval output (--intervals)
+include/certa/longread.h   long reads: Lemma L bounds, incl. split (jump) alignments
+src/index.*                FASTA loading, sampled q-mer index, save/load
+src/seqio.*                FASTQ/FASTA reading (plain or gzip)
+src/check.*                independent checker (certa check, check-index)
+src/mapper_cpu.cpp         multi-threaded CPU driver
+src/mapper_gpu.cu          CUDA driver (one thread per read)
+src/main.cpp               CLI, SAM/FASTQ output, statistics
+tests/test_certa.cpp       brute-force oracle tests of every bound
+tests/verify_lemmas.cpp    exhaustive checks of the finite lemmas
+tests/test_longread.cpp    long-read certificates against a brute-force DP (planted SVs)
+tests/mutants.tsv          one mutant per bound; tests/run_mutants.sh runs them
+tools/simulate.py          synthetic genome/reads and placement evaluation
+tools/lr_ceiling.cpp       long reads: Lemma L ceiling vs best known alignment; --certify proves OPT (Aim 6)
+tools/payoff.cpp           part choices taken from the slow mappers, certified on CERTA's uncertified reads
+scripts/                   build.sh, demo.sh
+THEORY.md                  the proofs, with code, tests and mutants per statement
+lean/                      machine-checked proofs (Lean 4; lake build): Lemmas L, E, H, S, W, C; Theorem G; band pruning, DP row
+paper/                     the paper (LaTeX); make_numbers.py and make_figures.py regenerate every number and figure from bench/results
 ```
+
+**Mutation tests** (from `certa/`; about an hour on 12 cores):
+
+```bash
+tests/run_mutants.sh 12
+```
+
+Each mutant must fail an oracle check, or, when THEORY.md proves it changes
+no claim, pass.
 
 ## Known limitations and next steps
 
 - **Single-end only.** Add mate-pair consistency and rescue.
 - **MAPQ:** a provisional 20 × (distance gap) rule, capped at 60. Calibrate
   it on simulated reads from HPRC assemblies (roadmap §2.4).
-- **Reference storage:** 1 byte per base (3.2 GB for GRCh38). Packing to
-  2 bits and memory-mapping the index would cut load time and memory.
+- **Memory:** the index is memory-mapped and is nearly all of it: positions
+  11.0 GiB, keys 5.5 GiB, the reference 2.9 GiB (1 byte per base) and the
+  directory 1 GiB for GRCh38 with `-s 1`. A 2-bit reference (2.2 GiB less)
+  and 8-bit keys (2.7 GiB less) were measured and cost too much time
+  (9–20 % and 21–79 %; FINDINGS.md).
 - **GPU:** one thread per read, with local-memory workspaces. Warp-cooperative
   lookups, overlapping transfers with compute, and a device-side output
   path are the obvious optimizations.

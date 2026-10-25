@@ -388,6 +388,26 @@ ARM64) and CUDA (A100 target), with one shared per-read core.
   S2/S3 fallback, paired-end), to heterogeneous GPU + CPU scheduling, and
   to the certificate as a correctness guarantee.
 
+**Update (October 2026).** The prototype has moved well past the figures
+above; [certa/FINDINGS.md](certa/FINDINGS.md) has the details:
+- **Certified share:** 94.4 % of HG002 reads single-end and 95.4 %
+  paired-end, with local and paired certificates added (Theorems L and P).
+- **Accuracy:** paired-end variant-calling F1 above BWA-MEM2 in 11 of 12
+  comparisons across HG001, HG002 and HG005.
+- **Speed:** 4.0× BWA-MEM2's speed in paired mode.
+
+### 3.10 Next step: exact completion
+
+The heuristic S2/S3 tiers above are the part of CERTA without a guarantee.
+[EXACT_ALIGNMENT_PROPOSAL.md](EXACT_ALIGNMENT_PROPOSAL.md) proposes
+replacing them with exact refinement tiers. Every read then gets either a
+proven optimum or a proven interval around it, with a checkable witness. The
+proposal also contains:
+- **the theory:** a completeness theorem, an affine ceiling on
+  error-tolerant seeds, optimal part selection, and count-based tie proofs;
+- **a cost model** built from the measurements;
+- **aims** with go/no-go criteria.
+
 ---
 
 ## 4. Benchmark protocol

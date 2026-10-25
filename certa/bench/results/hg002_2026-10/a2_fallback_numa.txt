@@ -1,0 +1,29 @@
+# a2 (4 NUMA nodes, kernel NUMA balancing on): CERTA + minibwa -K 10m, paired, 20M HG002 pairs, 64+64 threads, four runs each
+# without and with numactl --interleave=all (build 84dfa83 sources, 2026-10-18). Columns: wall user sys involuntary-cs voluntary-cs (s);
+# /proc/vmstat before and after each run. Script: like bench/final_bench.sh's pe_pipe, in a loop.
+== default memory policy
+rep 1	60.45	3350.06	68.29	769213	198077	total 58.57 s	Real time: 60.388 sec
+  before: pgfault=32779152929 pgmajfault=54913 numa_hint_faults=6395834559 numa_pages_migrated=3702634318 pgmigrate_success=4420162274 compact_stall=6452978 thp_fault_alloc=20245421 
+  after:  pgfault=32784944245 pgmajfault=54913 numa_hint_faults=6399552027 numa_pages_migrated=3704247769 pgmigrate_success=4422055316 compact_stall=6463708 thp_fault_alloc=20254466 
+rep 2	89.79	3263.83	99.37	753724	192455	total 87.77 s	Real time: 89.742 sec
+  before: pgfault=32784945664 pgmajfault=54913 numa_hint_faults=6399552027 numa_pages_migrated=3704247769 pgmigrate_success=4422055316 compact_stall=6463708 thp_fault_alloc=20254466 
+  after:  pgfault=32790894681 pgmajfault=54913 numa_hint_faults=6403372659 numa_pages_migrated=3706500275 pgmigrate_success=4424608726 compact_stall=6470403 thp_fault_alloc=20263703 
+rep 3	57.78	3251.83	58.38	755759	183174	total 55.82 s	Real time: 57.766 sec
+  before: pgfault=32790896227 pgmajfault=54913 numa_hint_faults=6403372659 numa_pages_migrated=3706500275 pgmigrate_success=4424608726 compact_stall=6470403 thp_fault_alloc=20263703 
+  after:  pgfault=32795710187 pgmajfault=54913 numa_hint_faults=6406422392 numa_pages_migrated=3708020622 pgmigrate_success=4426447192 compact_stall=6474995 thp_fault_alloc=20272758 
+rep 4	91.89	3292.58	92.78	735996	182810	total 89.98 s	Real time: 91.839 sec
+  before: pgfault=32795711756 pgmajfault=54913 numa_hint_faults=6406422392 numa_pages_migrated=3708020622 pgmigrate_success=4426447192 compact_stall=6474995 thp_fault_alloc=20272758 
+  after:  pgfault=32801919537 pgmajfault=54913 numa_hint_faults=6410552502 numa_pages_migrated=3710226780 pgmigrate_success=4429018888 compact_stall=6481348 thp_fault_alloc=20281988 
+== numactl --interleave=all
+rep 1	57.61	3302.79	21.35	765871	185125	total 55.64 s	Real time: 57.555 sec
+  before: pgfault=32801957476 pgmajfault=54913 numa_hint_faults=6410552504 numa_pages_migrated=3710226780 pgmigrate_success=4429020140 compact_stall=6481348 thp_fault_alloc=20281988 
+  after:  pgfault=32802906261 pgmajfault=54913 numa_hint_faults=6410552507 numa_pages_migrated=3710226788 pgmigrate_success=4429236459 compact_stall=6481348 thp_fault_alloc=20291171 
+rep 2	57.89	3326.36	22.03	770671	176160	total 56.24 s	Real time: 57.845 sec
+  before: pgfault=32802907843 pgmajfault=54913 numa_hint_faults=6410552507 numa_pages_migrated=3710226788 pgmigrate_success=4429236459 compact_stall=6481348 thp_fault_alloc=20291171 
+  after:  pgfault=32803870003 pgmajfault=54913 numa_hint_faults=6410552510 numa_pages_migrated=3710226800 pgmigrate_success=4429475992 compact_stall=6481348 thp_fault_alloc=20300218 
+rep 3	57.95	3319.75	22.24	774742	190723	total 56.26 s	Real time: 57.898 sec
+  before: pgfault=32803871561 pgmajfault=54913 numa_hint_faults=6410552510 numa_pages_migrated=3710226800 pgmigrate_success=4429475992 compact_stall=6481348 thp_fault_alloc=20300218 
+  after:  pgfault=32804871761 pgmajfault=54914 numa_hint_faults=6410552512 numa_pages_migrated=3710226808 pgmigrate_success=4429700331 compact_stall=6481348 thp_fault_alloc=20309772 
+rep 4	57.57	3311.10	20.79	762034	193692	total 56.14 s	Real time: 57.515 sec
+  before: pgfault=32804873387 pgmajfault=54914 numa_hint_faults=6410552512 numa_pages_migrated=3710226808 pgmigrate_success=4429700331 compact_stall=6481348 thp_fault_alloc=20309772 
+  after:  pgfault=32805879404 pgmajfault=54914 numa_hint_faults=6410552516 numa_pages_migrated=3710226821 pgmigrate_success=4429881219 compact_stall=6481348 thp_fault_alloc=20319077 

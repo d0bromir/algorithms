@@ -1,0 +1,14 @@
+# Aim 3 mutation tests (a2, x86-64; seeds 1 and 2; one mutated tree per line):
+# description | seed 1 | seed 2
+M1 Lemma E bound 1 too low  | 370 check(s) FAILED | 227 check(s) FAILED
+M2 in-band overlap term too low  | pass | pass
+M3 S0\/S1 d* = R + 2  | 52 check(s) FAILED | 24 check(s) FAILED
+M4 SL drops the left side of its own chain  | 15 check(s) FAILED | 15 check(s) FAILED
+M5 certified XU with d* + 1  | 181 check(s) FAILED | 112 check(s) FAILED
+M6 tier R sub_hi - 3  | 178 check(s) FAILED | 169 check(s) FAILED
+M7 tier R away() too lenient  | 23 check(s) FAILED | 18 check(s) FAILED
+M8 tier R drops the left side of its own chain  | 10 check(s) FAILED | 10 check(s) FAILED
+M9 tier R claims a copy for every read  | 773 check(s) FAILED | 781 check(s) FAILED
+M10 tier R sub_hi = lo for open intervals  | 5 check(s) FAILED | 4 check(s) FAILED
+M11 tier R drops the right side of its own chain  | 2 check(s) FAILED | 8 check(s) FAILED
+M12 SL drops the right side of its own chain  | 9 check(s) FAILED | 12 check(s) FAILED

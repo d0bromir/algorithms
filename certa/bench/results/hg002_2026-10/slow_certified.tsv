@@ -1,0 +1,14 @@
+# Certified share of all reads for the CERTA rows of slow_galaxy.tsv (build c9ee1c7): CERTA's own summary line ("[map] N reads: certified X%"), galaxy, 2026-10-22 (2 M: pass_v_check.txt; 200,000: logged with the timing runs). Interval mode and the fallback mode certify the same reads, the CPU and the A100 too. Paired: reads of both mates. The ea812d8 shares are in slow_certified_ea812d8.tsv.
+data	config	reads	certified_pct
+single-end	default	2000000	94.46
+single-end	--full-cert --adaptive-parts 0	2000000	95.65
+single-end	--full-cert	2000000	97.63
+single-end	--full-cert --index2 q15	2000000	97.73
+paired	default	4000000	95.42
+paired	--full-cert --adaptive-parts 0	4000000	96.33
+paired	--full-cert	4000000	97.45
+paired	--full-cert --index2 q15	4000000	97.48
+single-end-200000	--full-cert	200000	97.65
+single-end-200000	--full-cert --index2 q15	200000	97.75
+paired-200000	--full-cert	400000	97.48
+paired-200000	--full-cert --index2 q15	400000	97.52

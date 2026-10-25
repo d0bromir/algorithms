@@ -1,0 +1,104 @@
+# Pass V (adaptive parts, core.h certify_vparts), galaxy, 2026-10-22: default output against 77b1df2 (byte for byte); pass V off (--full-cert --adaptive-parts 0) against 77b1df2's --budget3 4096 --local 2; with pass V on, CPU = A100 and fused = serial stages (SAM without the @PG line, which records the options); then certification and time on 2 M HG002 reads (single-end) or pairs, interval mode, 64 threads on cores 0-63, two rounds (mutation tests ran on cores 64-127 meanwhile). wall/user/sys in s, maxrss in kB. Script: bench/pass_v_check.sh (galaxy:~/certa-fc; 77b1df2 in ~/certa-final).
+== 12:40:51 default output: new vs 77b1df2 (byte for byte, @PG included)
+default output: 14 of 14 files identical
+== 12:42:10 pass V off: new --full-cert --adaptive-parts 0 vs 77b1df2 --budget3 4096 --local 2
+identical (but @PG): paired fallback SAM
+identical: paired unmapped mates 1
+identical: paired unmapped mates 2
+identical (but @PG): single-end interval SAM
+== 12:42:49 pass V on: CPU = GPU, fused = serial stages
+identical (but @PG): paired --full-cert CPU vs GPU
+identical: paired --full-cert CPU vs GPU, mates 1
+identical (but @PG): single-end --full-cert fused vs serial
+identical: single-end --full-cert fused vs serial, unmapped
+identical (but @PG): single-end --full-cert interval CPU vs GPU
+== 12:43:49 certification and time, 2 M reads / pairs, interval mode, 64 threads
+-- SE --full-cert --adaptive-parts 0: wall/user/sys/maxrss 3.03 102.07 2.40 23819032
+[map] 2000000 reads: certified 95.65% (S0 exact 73.78%, S1 <=R edits 20.02%, SR repeat 1.53%, SL local 0.32%), ties 5.28%
+-- SE --full-cert --adaptive-parts 1: wall/user/sys/maxrss 4.02 161.42 2.38 23829932
+[map] pass V: adaptive parts (rarest q-mers), budget=4096, radius <= 12
+[map] 2000000 reads: certified 96.51% (S0 exact 73.89%, S1 <=R edits 20.88%, SR repeat 1.53%, SL local 0.21%), ties 5.71%
+[map] pass V (CPU, adaptive parts): 4.66% of reads tried, 0.96% certified there
+-- SE --full-cert: wall/user/sys/maxrss 5.60 259.92 2.39 23823376
+[map] pass V: adaptive parts (rarest q-mers, then one-edit q-mers), budget=4096, radius <= 12
+[map] 2000000 reads: certified 97.63% (S0 exact 73.89%, S1 <=R edits 22.14%, SR repeat 1.53%, SL local 0.07%), ties 5.89%
+[map] pass V (CPU, adaptive parts): 4.66% of reads tried, 2.22% certified there
+-- SE --full-cert --index2: wall/user/sys/maxrss 8.44 326.38 3.71 46296108
+[map] pass V: adaptive parts (rarest q-mers, then one-edit q-mers), budget=4096, radius <= 12
+[map] second index idx/grch38.s1q15.cidx: q=15 s=1, 2948610883 entries, loaded and checked in 1.3 s
+[map] 2000000 reads: certified 97.73% (S0 exact 73.89%, S1 <=R edits 22.14%, SR repeat 1.53%, SL local 0.17%), ties 5.90%
+[map] pass V (CPU, adaptive parts): 4.66% of reads tried, 2.22% certified there
+[map] second index (CPU, every pass): 2.37% of reads tried, 0.11% certified there
+-- SE --full-cert --adaptive-parts 0 --index2: wall/user/sys/maxrss 6.34 193.52 3.75 46302836
+[map] second index idx/grch38.s1q15.cidx: q=15 s=1, 2948610883 entries, loaded and checked in 1.3 s
+[map] 2000000 reads: certified 96.83% (S0 exact 73.81%, S1 <=R edits 20.38%, SR repeat 1.55%, SL local 1.09%), ties 5.53%
+[map] second index (CPU, every pass): 4.35% of reads tried, 1.18% certified there
+-- PE --full-cert --adaptive-parts 0: wall/user/sys/maxrss 6.91 331.92 2.93 24866860
+[map] 4000000 reads: certified 96.33% (S0 exact 70.61%, S1 <=R edits 17.46%, SR repeat 0.36%, SL local 0.43%), ties 4.93%
+[map] pairs 2000000: both mates certified 94.90% (proper 93.64%); PR pair certificate 7.47% of reads; pair pass tried 11.00% of pairs
+-- PE --full-cert: wall/user/sys/maxrss 12.49 674.61 2.97 24865604
+[map] pass V: adaptive parts (rarest q-mers, then one-edit q-mers), budget=4096, radius <= 12
+[map] 4000000 reads: certified 97.45% (S0 exact 71.17%, S1 <=R edits 19.79%, SR repeat 0.36%, SL local 0.19%), ties 5.27%
+[map] pass V (CPU, adaptive parts): 5.26% of reads tried, 2.29% certified there
+[map] pairs 2000000: both mates certified 96.18% (proper 93.99%); PR pair certificate 5.94% of reads; pair pass tried 9.92% of pairs
+-- PE --full-cert --index2: wall/user/sys/maxrss 17.05 835.45 4.44 47339324
+[map] pass V: adaptive parts (rarest q-mers, then one-edit q-mers), budget=4096, radius <= 12
+[map] second index idx/grch38.s1q15.cidx: q=15 s=1, 2948610883 entries, loaded and checked in 1.3 s
+[map] 4000000 reads: certified 97.48% (S0 exact 71.22%, S1 <=R edits 19.81%, SR repeat 0.36%, SL local 0.30%), ties 5.27%
+[map] pass V (CPU, adaptive parts): 5.26% of reads tried, 2.29% certified there
+[map] second index (CPU, every pass): 2.78% of reads tried, 0.12% certified there
+[map] pairs 2000000: both mates certified 96.23% (proper 94.01%); PR pair certificate 5.79% of reads; pair pass tried 9.76% of pairs
+-- SE --full-cert, A100: wall/user/sys/maxrss 7.66 225.24 5.49 25410740
+[map] pass V: adaptive parts (rarest q-mers, then one-edit q-mers), budget=4096, radius <= 12
+[map] 2000000 reads: certified 97.63% (S0 exact 73.89%, S1 <=R edits 22.14%, SR repeat 1.53%, SL local 0.07%), ties 5.89%
+[map] pass V (CPU, adaptive parts): 4.66% of reads tried, 2.22% certified there
+-- PE --full-cert, A100: wall/user/sys/maxrss 13.83 606.13 6.34 27738440
+[map] pass V: adaptive parts (rarest q-mers, then one-edit q-mers), budget=4096, radius <= 12
+[map] 4000000 reads: certified 97.45% (S0 exact 71.17%, S1 <=R edits 19.79%, SR repeat 0.36%, SL local 0.19%), ties 5.27%
+[map] pass V (CPU, adaptive parts): 5.26% of reads tried, 2.29% certified there
+[map] pairs 2000000: both mates certified 96.18% (proper 93.99%); PR pair certificate 5.94% of reads; pair pass tried 9.92% of pairs
+-- SE --full-cert --adaptive-parts 0: wall/user/sys/maxrss 3.05 102.18 2.39 23812504
+[map] 2000000 reads: certified 95.65% (S0 exact 73.78%, S1 <=R edits 20.02%, SR repeat 1.53%, SL local 0.32%), ties 5.28%
+-- SE --full-cert --adaptive-parts 1: wall/user/sys/maxrss 4.02 161.03 2.34 23839224
+[map] pass V: adaptive parts (rarest q-mers), budget=4096, radius <= 12
+[map] 2000000 reads: certified 96.51% (S0 exact 73.89%, S1 <=R edits 20.88%, SR repeat 1.53%, SL local 0.21%), ties 5.71%
+[map] pass V (CPU, adaptive parts): 4.66% of reads tried, 0.96% certified there
+-- SE --full-cert: wall/user/sys/maxrss 5.59 259.92 2.35 23824084
+[map] pass V: adaptive parts (rarest q-mers, then one-edit q-mers), budget=4096, radius <= 12
+[map] 2000000 reads: certified 97.63% (S0 exact 73.89%, S1 <=R edits 22.14%, SR repeat 1.53%, SL local 0.07%), ties 5.89%
+[map] pass V (CPU, adaptive parts): 4.66% of reads tried, 2.22% certified there
+-- SE --full-cert --index2: wall/user/sys/maxrss 8.44 326.59 3.71 46309960
+[map] pass V: adaptive parts (rarest q-mers, then one-edit q-mers), budget=4096, radius <= 12
+[map] second index idx/grch38.s1q15.cidx: q=15 s=1, 2948610883 entries, loaded and checked in 1.3 s
+[map] 2000000 reads: certified 97.73% (S0 exact 73.89%, S1 <=R edits 22.14%, SR repeat 1.53%, SL local 0.17%), ties 5.90%
+[map] pass V (CPU, adaptive parts): 4.66% of reads tried, 2.22% certified there
+[map] second index (CPU, every pass): 2.37% of reads tried, 0.11% certified there
+-- SE --full-cert --adaptive-parts 0 --index2: wall/user/sys/maxrss 6.31 193.61 3.70 46291456
+[map] second index idx/grch38.s1q15.cidx: q=15 s=1, 2948610883 entries, loaded and checked in 1.3 s
+[map] 2000000 reads: certified 96.83% (S0 exact 73.81%, S1 <=R edits 20.38%, SR repeat 1.55%, SL local 1.09%), ties 5.53%
+[map] second index (CPU, every pass): 4.35% of reads tried, 1.18% certified there
+-- PE --full-cert --adaptive-parts 0: wall/user/sys/maxrss 6.94 331.74 3.01 24864024
+[map] 4000000 reads: certified 96.33% (S0 exact 70.61%, S1 <=R edits 17.46%, SR repeat 0.36%, SL local 0.43%), ties 4.93%
+[map] pairs 2000000: both mates certified 94.90% (proper 93.64%); PR pair certificate 7.47% of reads; pair pass tried 11.00% of pairs
+-- PE --full-cert: wall/user/sys/maxrss 12.46 675.32 3.00 24854264
+[map] pass V: adaptive parts (rarest q-mers, then one-edit q-mers), budget=4096, radius <= 12
+[map] 4000000 reads: certified 97.45% (S0 exact 71.17%, S1 <=R edits 19.79%, SR repeat 0.36%, SL local 0.19%), ties 5.27%
+[map] pass V (CPU, adaptive parts): 5.26% of reads tried, 2.29% certified there
+[map] pairs 2000000: both mates certified 96.18% (proper 93.99%); PR pair certificate 5.94% of reads; pair pass tried 9.92% of pairs
+-- PE --full-cert --index2: wall/user/sys/maxrss 17.06 835.30 4.44 47356832
+[map] pass V: adaptive parts (rarest q-mers, then one-edit q-mers), budget=4096, radius <= 12
+[map] second index idx/grch38.s1q15.cidx: q=15 s=1, 2948610883 entries, loaded and checked in 1.3 s
+[map] 4000000 reads: certified 97.48% (S0 exact 71.22%, S1 <=R edits 19.81%, SR repeat 0.36%, SL local 0.30%), ties 5.27%
+[map] pass V (CPU, adaptive parts): 5.26% of reads tried, 2.29% certified there
+[map] second index (CPU, every pass): 2.78% of reads tried, 0.12% certified there
+[map] pairs 2000000: both mates certified 96.23% (proper 94.01%); PR pair certificate 5.79% of reads; pair pass tried 9.76% of pairs
+-- SE --full-cert, A100: wall/user/sys/maxrss 7.62 225.37 5.27 25411848
+[map] pass V: adaptive parts (rarest q-mers, then one-edit q-mers), budget=4096, radius <= 12
+[map] 2000000 reads: certified 97.63% (S0 exact 73.89%, S1 <=R edits 22.14%, SR repeat 1.53%, SL local 0.07%), ties 5.89%
+[map] pass V (CPU, adaptive parts): 4.66% of reads tried, 2.22% certified there
+-- PE --full-cert, A100: wall/user/sys/maxrss 13.83 606.21 6.41 27739900
+[map] pass V: adaptive parts (rarest q-mers, then one-edit q-mers), budget=4096, radius <= 12
+[map] 4000000 reads: certified 97.45% (S0 exact 71.17%, S1 <=R edits 19.79%, SR repeat 0.36%, SL local 0.19%), ties 5.27%
+[map] pass V (CPU, adaptive parts): 5.26% of reads tried, 2.29% certified there
+[map] pairs 2000000: both mates certified 96.18% (proper 93.99%); PR pair certificate 5.94% of reads; pair pass tried 9.92% of pairs
+ALL_DONE

@@ -1,0 +1,10 @@
+# Interval mode on HG005 (725,804,508 reads, paired), build 80646c3 (galaxy, A100): are its chr20 records the ones whose F1 was measured
+# (acc_HG005/iv.chr20.bam, mapper 906161c, aim5_2026-10/hg005_rerun_f1.tsv)? Script: bench/acc_interval_identity.sh (2026-10-17).
+== 22:00:44 interval mode, current build
+wall 1171 s
+[map] 725804508 reads: certified 92.87% (S0 exact 63.66%, S1 <=R edits 20.57%, SR repeat 0.93%, SL local 0.00%), ties 4.95%
+[map] pairs 362902254: both mates certified 90.31% (proper 88.76%); PR pair certificate 7.71% of reads; pair pass tried 13.83% of pairs
+[map] intervals: tier R on 7.13% of reads (tau 256); records: tier R exact 0.98%, interval 3.87%, pair window 0.95%, unmapped 1.58% (proven unalignable 0.00%); exact (XL = XU) 84.85%; XU - XL 1-5 6.22%, 6-10 1.76%, 11-25 2.19%, 26-50 2.00%, >50 1.39%; MAPQ >= 20 90.77%, XQ >= 20 64.64%
+[map] intervals: proper pairs 94.10%
+[map] time: load 0.62 s, upload 1.99 s, read+encode 1141.54 s (overlapped; waited 850.29 s), map 805.50 s (901062 reads/s), output 126.76 s, total 1145.80 s (633449 reads/s end to end)
+records: evaluated cce6b6846a229c7efe6e7a281bccae00, current cce6b6846a229c7efe6e7a281bccae00: identical

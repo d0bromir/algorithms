@@ -1,0 +1,7 @@
+metric,value,unit
+reads,242534,reads
+fit_pct,93.29,%
+proven,226330,reads
+split_proven,1551,reads
+opt_above_minimap2,40265,reads
+opt_above_minimap2_pct,17.8,% of proven

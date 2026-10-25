@@ -388,7 +388,9 @@ accelerators) is in [SWOT_ANALYSIS.md](SWOT_ANALYSIS.md). Future research
 directions, a proposed adaptive aligner, and a clinical benchmarking
 protocol are in [RESEARCH_ROADMAP.md](RESEARCH_ROADMAP.md). A prototype of
 that aligner's certified short-read fast path (C++17 for x86-64/ARM64, plus
-CUDA) is in [certa/](certa/README.md).
+CUDA) is in [certa/](certa/README.md). The proposal for an exact, provably
+optimal aligner that builds on it is in
+[EXACT_ALIGNMENT_PROPOSAL.md](EXACT_ALIGNMENT_PROPOSAL.md).
 
 ## Applications
 

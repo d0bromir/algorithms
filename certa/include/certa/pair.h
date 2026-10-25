@@ -24,8 +24,12 @@
 // actually realized (mate x at the best place in C, mate y the best in its
 // exact window). The best realized pair R1 is the certified maximum when
 // R1 > floor, every anchor of that pair has up == R1, and every other
-// anchor's up, every skipped anchor's bound and the floor are <= R1. The
-// largest of these other bounds, S2, bounds every other pair (MAPQ).
+// anchor's up, every skipped anchor's bound and the floor are <= R1.
+// S2 bounds every other proper pair: one with a mate that does not overlap
+// R1's (MAPQ). The bounds of the other anchors cover the pairs through
+// them; a pair through an anchor of R1's pair either keeps mate x where R1
+// has it and moves mate y elsewhere in the window, or moves x elsewhere in
+// its chain, and both are bounded by searches that exclude R1's mates.
 #pragma once
 #include <algorithm>
 #include <cstdint>
@@ -59,7 +63,23 @@ constexpr int kWinParts = 24;
 
 // Lemma L bound for parts [off[k], end[k]) of a read of length L: the best
 // score of an alignment in which no part in `counted` occurs exactly.
+// When the counted parts are disjoint, in order, in [0, L) and each >= 5
+// long, the full span attains the maximum (Lemma S; lean/Certa/LemmaS.lean,
+// lemmaS), so the bound is L - 5 per counted part. Otherwise every span
+// candidate is tried.
 inline int span_bound(int L, int n, const int* off, const int* end, uint32_t counted) {
+  static_assert(kMatch == 1 && kMatch + kMismatch == 5, "Lemma S is stated for +1 / -4");
+  {
+    int c = 0, prev = 0;
+    bool ok = true;
+    for (int k = 0; k < n && ok; ++k)
+      if ((counted >> k) & 1) {
+        ok = off[k] >= prev && end[k] - off[k] >= 5 && end[k] <= L;
+        prev = end[k];
+        ++c;
+      }
+    if (ok) return L * kMatch - (kMatch + kMismatch) * c;
+  }
   int xs[kWinParts + 1], ys[kWinParts + 1], nx = 0, ny = 0;
   xs[nx++] = 0;
   ys[ny++] = L;
@@ -121,7 +141,8 @@ inline int window_search(const IndexView& ix, const uint8_t* rd, int L, int64_t 
   if (t < need) t = need;
   *thr = t;
   if (t >= L * kMatch) return kNoSub;
-  const int pad = L * kMatch - t - 7;
+  // Gap total of an alignment scoring > t; 0 (no gap at all) once t >= L - 7.
+  const int pad = std::max(0, L * kMatch - t - 7);
   // Part keys (first wq bases; parts with N can never occur exactly).
   sc.keys.clear();
   for (int k = 0; k < n; ++k) {
@@ -134,6 +155,20 @@ inline int window_search(const IndexView& ix, const uint8_t* rd, int L, int64_t 
     if (ok) sc.keys.push_back({key, k});
   }
   std::sort(sc.keys.begin(), sc.keys.end());
+  // The first index of each key in sc.keys, by open addressing: most window
+  // positions match no part and cost one probe.
+  constexpr int kH = 64;
+  int16_t hidx[kH];
+  uint32_t hkey[kH];
+  for (int h = 0; h < kH; ++h) hidx[h] = -1;
+  auto slot = [](uint32_t key) { return (int)((key * 2654435761u) >> 26); };
+  for (size_t x = 0; x < sc.keys.size(); ++x) {
+    if (x > 0 && sc.keys[x].first == sc.keys[x - 1].first) continue;
+    int h = slot(sc.keys[x].first);
+    while (hidx[h] >= 0) h = (h + 1) & (kH - 1);
+    hidx[h] = (int16_t)x;
+    hkey[h] = sc.keys[x].first;
+  }
   // Scan [smin, smax + L + pad): an alignment starting in [smin, smax] lies there.
   const int64_t lo = smin < 0 ? 0 : smin;
   const int64_t hi = std::min<int64_t>((int64_t)ix.ref_len, smax + L + pad);
@@ -147,8 +182,10 @@ inline int window_search(const IndexView& ix, const uint8_t* rd, int L, int64_t 
     key = ((key << 2) | c) & mask;
     if (++valid < wq) continue;
     const int64_t s = j - wq + 1;  // occurrence start
-    auto it = std::lower_bound(sc.keys.begin(), sc.keys.end(), std::make_pair(key, -1));
-    for (; it != sc.keys.end() && it->first == key; ++it) {
+    int h = slot(key);
+    while (hidx[h] >= 0 && hkey[h] != key) h = (h + 1) & (kH - 1);
+    if (hidx[h] < 0) continue;
+    for (auto it = sc.keys.begin() + hidx[h]; it != sc.keys.end() && it->first == key; ++it) {
       const int k = it->second;
       bool ok = s + (end[k] - off[k]) <= hi;
       for (int i = wq; ok && i < end[k] - off[k]; ++i) ok = ix.ref[s + i] == rd[off[k] + i];
@@ -187,7 +224,8 @@ inline int window_search(const IndexView& ix, const uint8_t* rd, int L, int64_t 
       while (e < (size_t)ch.end && sc.hits[e].first - d0 <= BMAX - 2 * pad - 1) ++e;
       const int64_t blo = d0 - pad;
       const int B = (int)(sc.hits[e - 1].first - d0) + 2 * pad + 1;
-      const int v = band_score(ix, rd, L, blo, B, smin, smax);
+      // Only a band beating both the best so far and t can change the result.
+      const int v = band_score(ix, rd, L, blo, B, smin, smax, std::max(best, t));
       if (v > best) {
         best = v;
         out->lo = blo;
@@ -203,6 +241,7 @@ inline int window_search(const IndexView& ix, const uint8_t* rd, int L, int64_t 
 struct Mate {
   const uint8_t* codes = nullptr;
   int L = 0, P = 0, m = 0, U = 0, B = 0, nch = 0;
+  int n0 = 0;  // chains [0, n0) are on the forward strand, [n0, nch) on the reverse
   Workspace* ws = nullptr;
   std::vector<int> ub;
   std::vector<int64_t> slo, shi;  // start range of each chain
@@ -237,13 +276,13 @@ inline void chain_mate(Mate& M, int pad) {
   M.ub.assign(M.nch, 0);
   M.slo.assign(M.nch, 0);
   M.shi.assign(M.nch, 0);
-  for (int st = 0; st < 2; ++st)
-    for (int x = 0; x < 256; ++x) ws.ubmemo[st][x] = kNoSub;
+  ubmemo_begin(ws);
   M.B = M.U;
+  M.n0 = 0;
   for (int x = 0; x < M.nch; ++x) {
     const Cluster& cl = ws.clusters[x];
-    int16_t& u = ws.ubmemo[cl.strand][cl.pmask];
-    if (u == kNoSub) u = (int16_t)local_bound(ws, cl.strand, M.L, M.P, M.m, cl.pmask, 0);
+    M.n0 += cl.strand == 0;
+    const int u = ub_of_mask(ws, cl.strand, M.L, M.P, M.m, cl.pmask);
     M.ub[x] = u;
     M.B = std::max(M.B, (int)u);
     // A member diagonal d puts the first aligned base in [d - pad, d + pad + L - 1].
@@ -268,7 +307,7 @@ inline PairOut certify_pair(const IndexView& ix, const PairParams& pp, const uin
   if (floor < Ltot - pp.max_loss) floor = Ltot - pp.max_loss;   // narrower bands, less work
   po.floor = floor;
   if (floor >= Ltot) return po;
-  const int pad = Ltot - floor - 7;
+  const int pad = std::max(0, Ltot - floor - 7);
   chain_mate(M[0], pad);
   chain_mate(M[1], pad);
   const int64_t D = pp.max_dist;
@@ -280,6 +319,11 @@ inline PairOut certify_pair(const IndexView& ix, const PairParams& pp, const uin
   struct Anchor { int bound, mate, chain, nbeg, nend; };
   std::vector<Anchor> anchors;
   std::vector<int> near;  // per anchor: chains of the other mate within reach
+  // build_chains emits each strand's chains in diagonal order, each starting
+  // more than pad diagonals after the previous one ends, so within a strand
+  // both slo and shi increase: the chains of mate y within reach of an
+  // anchor (shi >= plo and slo <= phi) are one index range, found by binary
+  // search instead of a scan of every chain (quadratic with --budget3 4096).
   for (int x = 0; x < 2; ++x) {
     const Mate& X = M[x];
     const Mate& Y = M[1 - x];
@@ -289,11 +333,13 @@ inline PairOut certify_pair(const IndexView& ix, const PairParams& pp, const uin
       partner_range(st, X.slo[c], X.shi[c], &plo, &phi);
       int ny = Y.U;  // mate y near this chain: no exact part, or one of its chains
       const size_t nb = near.size();
-      for (int c2 = 0; c2 < Y.nch; ++c2)
-        if (Y.ws->clusters[c2].strand == 1 - st && Y.shi[c2] >= plo && Y.slo[c2] <= phi) {
-          ny = std::max(ny, Y.ub[c2]);
-          near.push_back(c2);
-        }
+      const int yb = st == 1 ? 0 : Y.n0, ye = st == 1 ? Y.n0 : Y.nch;  // chains on strand 1 - st
+      const int c2b = (int)(std::lower_bound(Y.shi.begin() + yb, Y.shi.begin() + ye, plo) - Y.shi.begin());
+      const int c2e = (int)(std::upper_bound(Y.slo.begin() + yb, Y.slo.begin() + ye, phi) - Y.slo.begin());
+      for (int c2 = c2b; c2 < c2e; ++c2) {
+        ny = std::max(ny, Y.ub[c2]);
+        near.push_back(c2);
+      }
       const int b = X.ub[c] + ny;
       if (b > floor) anchors.push_back({b, x, c, (int)nb, (int)near.size()});
       else near.resize(nb);
@@ -317,6 +363,13 @@ inline PairOut certify_pair(const IndexView& ix, const PairParams& pp, const uin
     return a.chain < b.chain;
   });
   int R1 = floor, upb = -BIG, S2 = floor, evaluated = 0;
+  // The anchors that realized R1's pair, with what bounding their other
+  // pairs needs.
+  struct Win {
+    int mate, chain, apad, sx, fu, thr, need, relevant;
+    int64_t ulo, uhi;
+  };
+  std::vector<Win> wins;
   bool confirmed = false;  // R1's pair re-found by a full anchor evaluation (its up is known)
   int id_strand = -1;      // mate 1's strand in the best pair
   Result best[2];          // the best pair's two alignments
@@ -413,9 +466,11 @@ inline PairOut certify_pair(const IndexView& ix, const PairParams& pp, const uin
     const Result& a1 = an.mate == 0 ? ax : ay;
     const Result& a2 = an.mate == 0 ? ay : ax;
     const int s1 = an.mate == 0 ? st : 1 - st;  // mate 1's strand
+    const Win win{an.mate, an.chain, apad, sx, fu, thr, need, relevant, ulo, uhi};
     if (id_strand >= 0 && same_pair(s1, a1, a2)) {
       upb = confirmed ? std::max(upb, up) : up;
       confirmed = true;
+      wins.push_back(win);
       if (r > R1) {  // the full band found a better alignment of the same pair
         R1 = r;
         best[0] = a1;
@@ -429,11 +484,47 @@ inline PairOut certify_pair(const IndexView& ix, const PairParams& pp, const uin
       id_strand = s1;
       best[0] = a1;
       best[1] = a2;
+      wins.assign(1, win);
     } else {
       S2 = std::max(S2, up);
     }
   }
   if (id_strand < 0 || !confirmed || R1 <= floor || upb > R1 || S2 > R1) return po;
+  // The other pairs through R1's anchors. Pairs at or below `relevant` (the
+  // anchor's bands were narrowed to it) are bounded by it.
+  for (const Win& w : wins) {
+    const Mate& X = M[w.mate];
+    const Mate& Y = M[1 - w.mate];
+    const Cluster& cl = X.ws->clusters[w.chain];
+    const Result& ax = best[w.mate];
+    const Result& ay = best[1 - w.mate];
+    auto span = [](const Result& a) {
+      int64_t n = 0;
+      for (int c = 0; c < a.n_cigar; ++c)
+        if ((a.cigar[c] & 0xF) == kOpM || (a.cigar[c] & 0xF) == kOpD) n += a.cigar[c] >> 4;
+      return n;
+    };
+    S2 = std::max(S2, w.relevant);
+    // x where R1 has it (<= sx), y starting before R1's y or after its end.
+    const uint8_t* ry = Y.ws->seq[1 - cl.strand];
+    auto ywin = [&](int64_t a, int64_t b) {
+      if (b < a) return;
+      Band bd;
+      int t;
+      const int v = window_search(ix, ry, Y.L, a, b, pp.wq, w.need, sc, &bd, &t);
+      S2 = std::max(S2, w.sx + std::max(v, t));
+    };
+    ywin(w.ulo, std::min(w.uhi, ay.ref_pos - 1));
+    ywin(std::max(w.ulo, ay.ref_pos + span(ay)), w.uhi);
+    // x elsewhere in its chain (starting before R1's x or after its end), y
+    // anywhere in the window (<= max(fu, thr)).
+    int64_t blo;
+    int bB;
+    const int xo = std::max(chain_best(ix, X.L, cl, w.apad, *X.ws, &blo, &bB, INT64_MIN, ax.ref_pos - 1),
+                            chain_best(ix, X.L, cl, w.apad, *X.ws, &blo, &bB, ax.ref_pos + span(ax), INT64_MAX));
+    if (xo != kNoSub) S2 = std::max(S2, xo + std::max(w.fu, w.thr));
+  }
+  S2 = std::min(S2, R1);  // every pair scores <= R1 = OPT
   po.certified = true;
   po.score = R1;
   po.sub = S2;
@@ -459,6 +550,13 @@ inline PairOut certify_pair(const IndexView& ix, const PairParams& pp, const uin
     o.sub_score = (int16_t)S2;
     o.parts = (uint8_t)M[x].P;
     o.used = (uint8_t)M[x].m;
+    // Witness (Theorem V): the parts this mate enumerated per strand, with
+    // support 1. Lemma P0's floor and S2 rest on them.
+    for (int st = 0; st < 2; ++st) {
+      o.probes[st] = 0;
+      for (int k = 0; k < M[x].m; ++k) o.probes[st] |= (uint16_t)(1u << M[x].ws->order[st][k]);
+    }
+    o.support = 1;
   }
   return po;
 }

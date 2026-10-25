@@ -1,0 +1,167 @@
+reference: bwa-mem2; 148151 reads; 137997 mapped; 70551 with MAPQ >= 30
+
+tool            mapped %   agree %   agree % (ref MAPQ>=30)
+bwa-mem2          93.146    93.146                  100.000
+
+CERTA certified reads: 51809 (34.97% of input)
+tier  MAPQ      reads  agree with ref %  ref MAPQ>=30 %
+S0      60       1746           100.000          72.050
+S0      59          1           100.000           0.000
+S0      55        150           100.000           8.000
+S0      51          4           100.000           0.000
+S0      48          6           100.000           0.000
+S0      44          9           100.000           0.000
+S0      37        173           100.000           1.734
+S0      29          1           100.000           0.000
+S0      26          5           100.000           0.000
+S0      23          9           100.000           0.000
+S0      15        305           100.000           1.311
+S0       0       1299            18.553           0.000
+S1      60       8436            99.419          90.920
+S1      59         12           100.000          16.667
+S1      58          4           100.000          50.000
+S1      57          4            75.000          25.000
+S1      56          5            80.000           0.000
+S1      54          4            75.000           0.000
+S1      53        113            97.345          10.619
+S1      52         61            90.164          19.672
+S1      51         52            96.154          26.923
+S1      50          6            83.333           0.000
+S1      49         19            94.737          10.526
+S1      48         23            95.652           8.696
+S1      46         16            87.500          25.000
+S1      45          4            75.000           0.000
+S1      44          4           100.000           0.000
+S1      43         16            93.750          12.500
+S1      42          6           100.000          33.333
+S1      41          7           100.000          14.286
+S1      39          5           100.000          40.000
+S1      38          6           100.000          16.667
+S1      37          1           100.000           0.000
+S1      36        116            96.552           2.586
+S1      35         80            93.750           3.750
+S1      34         63            84.127           3.175
+S1      33         37           100.000           5.405
+S1      32         58            98.276           6.897
+S1      31          1           100.000           0.000
+S1      30          2           100.000           0.000
+S1      29          9           100.000           0.000
+S1      28          3            66.667           0.000
+S1      27          6            83.333           0.000
+S1      26         21            76.190           0.000
+S1      25          8            75.000          12.500
+S1      24         10            60.000           0.000
+S1      23         10            90.000           0.000
+S1      22         10           100.000           0.000
+S1      21          8            87.500           0.000
+S1      20         15            80.000           6.667
+S1      19          8           100.000           0.000
+S1      18          4            75.000           0.000
+S1      17          6            16.667           0.000
+S1      16          3            33.333           0.000
+S1      15        297            93.266           1.684
+S1      14        316            92.722           1.899
+S1      13        246            90.244           0.813
+S1      11          5            60.000           0.000
+S1      10          8            37.500           0.000
+S1       9          1           100.000           0.000
+S1       8          3            66.667           0.000
+S1       7         11            72.727           0.000
+S1       6          2            50.000           0.000
+S1       4         14            71.429           0.000
+S1       3          5            40.000           0.000
+S1       1          2           100.000           0.000
+S1       0       8185            13.684           0.159
+SL      60      22955            99.826          98.846
+SL      59         31           100.000          70.968
+SL      58         15           100.000          40.000
+SL      57          8           100.000          75.000
+SL      56         16            93.750          62.500
+SL      55          4           100.000          50.000
+SL      54         15           100.000          60.000
+SL      53         22           100.000          59.091
+SL      52          7           100.000          28.571
+SL      51         18           100.000          50.000
+SL      50         45           100.000          33.333
+SL      49         14           100.000          28.571
+SL      48         29            96.552          37.931
+SL      47         67            98.507          26.866
+SL      46         25           100.000          56.000
+SL      45         51           100.000          15.686
+SL      44         50            94.000          12.000
+SL      43          7           100.000          42.857
+SL      42         12           100.000          41.667
+SL      41         10           100.000          50.000
+SL      40         20           100.000          20.000
+SL      39         10           100.000          10.000
+SL      38         10           100.000          10.000
+SL      37         25           100.000           4.000
+SL      36         16           100.000          18.750
+SL      35         22           100.000           9.091
+SL      34         28           100.000          17.857
+SL      33         22            95.455           4.545
+SL      32         29           100.000           6.897
+SL      31        180            98.333           1.667
+SL      30        128            98.438           2.344
+SL      29        117            94.872           4.274
+SL      28         17           100.000           5.882
+SL      27         16           100.000           6.250
+SL      26         18            88.889           5.556
+SL      25         37            97.297           8.108
+SL      24         44            95.455           0.000
+SL      23          4           100.000           0.000
+SL      22         22            95.455           9.091
+SL      21         37            94.595           2.703
+SL      20          8           100.000           0.000
+SL      19         23           100.000           4.348
+SL      18         26           100.000           0.000
+SL      17         26           100.000           3.846
+SL      16        463            95.032           1.296
+SL      15        706            93.768           0.425
+SL      14         31            93.548           0.000
+SL      13         21           100.000           0.000
+SL      12         89            82.022           0.000
+SL      10          9            66.667           0.000
+SL       9        104            81.731           0.000
+SL       7         12            75.000           0.000
+SL       6        105            74.286           0.952
+SL       4          1           100.000           0.000
+SL       3        126            75.397           0.794
+SL       0       2925            30.769           0.205
+SR       0        846            16.548           0.000
+
+certificate check: 22035 certified reads with an unclipped bwa-mem2 alignment; and 28878 SL reads it maps; 33 where bwa-mem2 reports fewer edits than CERTA's certified minimum (S0/S1/SR) or a higher score than its certified maximum (SL, and 0 PR pairs that bwa-mem2 pairs properly)
+  SRR14724528.4495381: CERTA 3:93470349+ NM=-1 score=113  bwa-mem2 3:93470349+ NM=4 score=116  -> explained: 13 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.16066129: CERTA 3:93470358- NM=-1 score=107  bwa-mem2 3:93470358- NM=8 score=111  -> explained: 4 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.21325340: CERTA 3:93470348+ NM=-1 score=112  bwa-mem2 3:93470348+ NM=4 score=115  -> explained: 14 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.23954338: CERTA 3:93470337- NM=-1 score=111  bwa-mem2 3:93470337- NM=2 score=114  -> explained: 25 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.25300630: CERTA 3:93470350- NM=-1 score=114  bwa-mem2 3:93470350- NM=4 score=117  -> explained: 12 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.30237446: CERTA 3:93470351+ NM=-1 score=110  bwa-mem2 3:93470351+ NM=5 score=113  -> explained: 11 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.45010082: CERTA 3:93470351- NM=-1 score=110  bwa-mem2 3:93470351- NM=5 score=113  -> explained: 11 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.94321540: CERTA 3:93470358- NM=-1 score=112  bwa-mem2 3:93470358- NM=7 score=116  -> explained: 4 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.95038261: CERTA 3:93470336- NM=-1 score=110  bwa-mem2 3:93470336- NM=2 score=113  -> explained: 26 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.97405072: CERTA 3:93470356- NM=-1 score=120  bwa-mem2 3:93470356- NM=4 score=123  -> explained: 6 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.99963935: CERTA 3:93470358- NM=-1 score=112  bwa-mem2 3:93470358- NM=7 score=116  -> explained: 4 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.100336741: CERTA 3:93470345+ NM=-1 score=109  bwa-mem2 3:93470345+ NM=4 score=112  -> explained: 17 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.115537880: CERTA 3:93470351- NM=-1 score=120  bwa-mem2 3:93470351- NM=3 score=123  -> explained: 11 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.116694629: CERTA 3:93470347+ NM=-1 score=111  bwa-mem2 3:93470347+ NM=4 score=114  -> explained: 15 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.117353223: CERTA 3:93470347- NM=-1 score=116  bwa-mem2 3:93470347- NM=3 score=119  -> explained: 15 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.119735124: CERTA 3:93470349+ NM=-1 score=108  bwa-mem2 3:93470349+ NM=5 score=111  -> explained: 13 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.142355421: CERTA 3:93470351+ NM=-1 score=110  bwa-mem2 3:93470351+ NM=5 score=113  -> explained: 11 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.151505637: CERTA 3:93470353+ NM=-1 score=107  bwa-mem2 3:93470353+ NM=6 score=110  -> explained: 9 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.168819722: CERTA 3:93470357+ NM=-1 score=121  bwa-mem2 3:93470357+ NM=4 score=124  -> explained: 5 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.170679675: CERTA 3:93470356+ NM=-1 score=125  bwa-mem2 3:93470356+ NM=3 score=128  -> explained: 6 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.193323623: CERTA 3:93470336- NM=-1 score=115  bwa-mem2 3:93470336- NM=1 score=118  -> explained: 26 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.222939403: CERTA 3:93470355- NM=-1 score=114  bwa-mem2 3:93470355- NM=5 score=117  -> explained: 7 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.224874136: CERTA 3:93470346+ NM=-1 score=115  bwa-mem2 3:93470346+ NM=3 score=118  -> explained: 16 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.249473413: CERTA 3:93470340- NM=-1 score=109  bwa-mem2 3:93470340- NM=3 score=112  -> explained: 22 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.261423816: CERTA 3:93470355+ NM=-1 score=114  bwa-mem2 3:93470355+ NM=5 score=117  -> explained: 7 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.262489574: CERTA 3:93470361- NM=-1 score=111  bwa-mem2 3:93470361- NM=7 score=116  -> explained: 1 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.263385152: CERTA KI270442.1:20412+ NM=-1 score=128  bwa-mem2 KI270442.1:20412+ NM=1 score=129  -> explained: 22 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.291783191: CERTA 3:93470359+ NM=-1 score=113  bwa-mem2 3:93470359+ NM=6 score=121  -> explained: 3 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.307801058: CERTA 3:93470359- NM=-1 score=118  bwa-mem2 3:93470359- NM=5 score=126  -> explained: 3 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.308748649: CERTA X:59487504- NM=-1 score=115  bwa-mem2 X:59487504- NM=0 score=116  -> explained: 31 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.323141977: CERTA 3:93470356- NM=-1 score=110  bwa-mem2 3:93470356- NM=6 score=113  -> explained: 6 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.339787458: CERTA 3:93470354- NM=-1 score=123  bwa-mem2 3:93470354- NM=3 score=126  -> explained: 8 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+  SRR14724528.346471083: CERTA 3:93470359- NM=-1 score=108  bwa-mem2 3:93470359- NM=7 score=116  -> explained: 3 non-ACGT reference base(s) in window (random base in bwa-mem2 index)
+unexplained violations: 0

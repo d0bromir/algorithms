@@ -1,0 +1,11 @@
+# LaTeX build products (numbers.tex and figures/ are committed)
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+main.pdf
+__pycache__/

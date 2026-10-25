@@ -1,0 +1,20 @@
+# Aim 6, the split (jump) objective, bound side (certa/longread.h, THEORY.md Lemma L-J): tools/lr_ceiling --jump 10,30,60 on the pre-registered sample (hifi_1x.fa, 242,534 reads), galaxy, 2026-10-14. U_J: the Lemma L bound of jump alignments with no exact part; lb_J: the best jump alignment made of pieces of minimap2 lines (each also split at gaps longer than P - 6); a read fits when lb_J > U_J. Exploratory: not part of the pre-registered criterion.
+
+reads 242534, fit 226253 (93.29 %), with the trimmed path 226330; CIGARs failing the base check 0; tau 16, cmax 4096
+jump P = 10: fit 229400 (94.58 %), of which 3150 do not fit the single-piece objective
+jump P = 30: fit 228925 (94.39 %), of which 2674 do not fit the single-piece objective
+jump P = 60: fit 228709 (94.30 %), of which 2458 do not fit the single-piece objective
+
+== a6_jump.tsv
+reads 242534; fit 226253 = 93.29 % (95 % CI 93.19-93.39 %); go criterion (>= 90 %): met
+misses: clipped 5627 (2.32 % of reads); high loss 4987 (2.06 % of reads); repeat-limited 4379 (1.81 % of reads); unmapped 1288 (0.53 % of reads)
+split objective, P = 10: fit 229400 = 94.58 %; of the misses above, clipped 1419 of 5627; high loss 1005 of 4987; repeat-limited 726 of 4379; fit single but not split 3
+split objective, P = 30: fit 228925 = 94.39 %; of the misses above, clipped 1307 of 5627; high loss 837 of 4987; repeat-limited 530 of 4379; fit single but not split 2
+split objective, P = 60: fit 228709 = 94.30 %; of the misses above, clipped 1211 of 5627; high loss 753 of 4987; repeat-limited 494 of 4379; fit single but not split 2
+
+U_J(30) - U1: > 0 for 4,329 reads, max 628 (the two strands' partitions skip different stretches,
+and a split alignment can use the less charged strand in each); mean 0.42.
+The misses that stay: unmapped reads; reads in centromeric satellites, chrY and diverged segmental
+duplications (minimap2 identity 0.87-0.95: the reference does not hold the read's sequence closely
+enough for any exact-part certificate); repeat-limited reads. On the 500 debug reads, 6 of the 30
+misses fit the split objective, all at P = 10, 30 and 60.

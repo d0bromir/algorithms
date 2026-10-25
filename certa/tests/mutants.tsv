@@ -1,0 +1,143 @@
+# Mutants of every bound (Aim 5), run by tests/run_mutants.sh.
+# id<TAB>file<TAB>sed expression<TAB>expected (killed | equivalent)<TAB>what it breaks
+E1	include/certa/core.h	s/  const int R = m - t;/  const int R = m - t + 1;/	killed	Thm 1: radius overclaimed by one
+E2	include/certa/core.h	s/  if (found < 2) return false;/  if (found < 1) return false;/	killed	Thm 4: SR proof from one copy
+E3	include/certa/core.h	s/        ws.cand\[st\]\[n++\] = ((int64_t)ix.pos\[e\] - (off + t)) \* 16 + j;  \/\/ diagonal, part/        if (t + 1 < ix.s || ix.s == 1) ws.cand[st][n++] = ((int64_t)ix.pos[e] - (off + t)) * 16 + j;/	killed	Thm 1: last sampling shift dropped
+E4	include/certa/core.h	s/build_clusters(ws, 2 \* R, false);  \/\/ indels shift <= R/build_clusters(ws, 2 * R - 1, false);  \/\/ indels shift <= R/	killed	Thm 2: band narrowed by one
+E5	include/certa/core.h	s/    const int limit = b2 - 1;/    const int limit = b2 - 2;/	killed	Thm 3: verification limit too strict
+E6	include/certa/core.h	s/    if (d < b1) { b2 = b1; b1 = d; }/    if (d < b1) { b1 = d; }/	killed	Thm 3: previous best lost
+E7	include/certa/core.h	s/    const uint16_t k = (uint16_t)(key \& ((1ull << shift) - 1));/    const uint16_t k = (uint16_t)(key \& ((1ull << shift) - 2));/	killed	index: 16-bit key mask wrong
+L1	include/certa/core.h	s/    const int b = local_bound(ws, st, L, P, m, 0, t - 1);/    const int b = local_bound(ws, st, L, P, m, 0, t - 1) - 1;/	killed	Thm L: floor 1 too low (SUB at the floor, planted)
+L2	include/certa/core.h	s/    const int b = local_bound(ws, st, L, P, m, 0, t - 1);/    const int b = local_bound(ws, st, L, P, m, 0, t - 1) - 3;/	killed	Thm L: floor 3 too low
+L3	include/certa/core.h	s/  int pad = L \* kMatch - floor - 1 - kGapOpen;/  int pad = L * kMatch - floor - 1 - kGapOpen - 2;/	killed	Thm L: band pad 2 too narrow (planted f)
+L4	include/certa/core.h	s/    u = (int16_t)local_bound(ws, st, L, P, m, mask, 0);/    u = (int16_t)local_bound(ws, st, L, P, m, mask, 0) - 2;/	killed	Lemma L: chain bound 2 too low (planted g)
+L5	include/certa/core.h	s/      n = n > extra ? n - extra : 0;/      n = n > extra ? n - extra + 1 : 0;/	killed	Lemma L: one extra part charged
+L6	include/certa/core.h	s/    xs\[nx++\] = off\[x\] + 1;/    xs[nx++] = off[x] + 3;/	equivalent	Lemma L: span start shifted (never the maximizer for parts >= 5; THEORY.md)
+L7	include/certa/core.h	s/      while (j < nc \&\& diag_of(c\[j\]) - dmax <= pad) {/      while (j < nc \&\& diag_of(c[j]) - dmax <= pad \/ 2) {/	killed	Thm L: chains split at pad / 2 (planted h, support 3)
+L8	include/certa/core.h	s/    if (ws.lub\[x\] <= s2) continue;/    if (ws.lub[x] <= s2 + 2) continue;/	killed	Thm L: skip test off by 2 (planted i)
+P1	include/certa/pair.h	s/  int floor = M\[0\].U + M\[1\].U;/  int floor = M[0].U + M[1].U - 3;/	killed	Thm P: floor 3 too low (family A)
+P2	include/certa/pair.h	s/  const int pad = std::max(0, Ltot - floor - 7);/  const int pad = std::max(0, Ltot - floor - 9);/	equivalent	Thm P: band pad 2 too narrow (a pair at the band edge has an exact partner whose anchor covers it; THEORY.md)
+P3	include/certa/pair.h	s/  \*thr = t;/  *thr = t - 3;/	killed	Thm P: window threshold 3 too low (family D)
+P4	include/certa/pair.h	s/std::min<int64_t>((int64_t)ix.ref_len, smax + L + pad)/std::min<int64_t>((int64_t)ix.ref_len, smax + L)/	equivalent	Thm P: window scan without pad (the union window covers it; THEORY.md)
+P5	include/certa/pair.h	s/        ny = std::max(ny, Y.ub\[c2\]);/        ny = ny;/	killed	Thm P: nearby-partner bound missing
+P6	include/certa/pair.h	s/    const int up = sx + std::max(fu, thr);/    const int up = sx + std::max(fu, thr) - 3;/	killed	Thm P: anchor bound 3 too low
+P7	include/certa/pair.h	s/      if (!done\[1 - an.mate\]\[near\[k\]\]) ny/      if (false) ny/	killed	Thm P: unfinished chains treated as finished
+P8	include/certa/pair.h	s/std::min(pad, Ltot - relevant - 7))/std::min(pad, Ltot - relevant - 10))/	equivalent	Thm P: narrowed band 3 too narrow (the partner's anchor covers it; THEORY.md)
+P9	include/certa/core.h	s/      const int f = pm - kGapOpen - kGapExt \* b;/      const int f = pm - kGapOpen - kGapExt * b + 1;/	killed	band_score: deletion recurrence off by one
+P10	include/certa/pair.h	s/    if (ch.ub <= best) break;/    if (ch.ub <= best + 3) break;/	killed	Thm P: window chain skip off by 3 (family E)
+P11	include/certa/pair.h	s/      S2 = std::max(S2, w.sx + std::max(v, t));/      (void)v; (void)t;/	killed	Thm P, S2: other partners in R1's window ignored
+P12	include/certa/pair.h	s/    if (xo != kNoSub) S2 = std::max(S2, xo + std::max(w.fu, w.thr));/    (void)xo;/	killed	Thm P, S2: mate x elsewhere in R1s chain ignored (family F)
+P13	include/certa/pair.h	s/    S2 = std::max(S2, w.relevant);/    (void)w.relevant;/	equivalent	Thm P, S2: the relevant term dropped (implied by the window term, t >= need; THEORY.md)
+P14	include/certa/pair.h	s/  const int pad = std::max(0, L \* kMatch - t - 7);/  const int pad = L * kMatch - t - 7;/	killed	Thm P: window pad not clamped at 0 (found by the S2 oracle; the Lemma WS test)
+R1	include/certa/repeat.h	s/  const int Ueff = std::max(U, L \* kMatch - 7 - kPadMax);/  const int Ueff = std::max(U - 3, L * kMatch - 7 - kPadMax);/	killed	tier R: U_eff 3 too low
+R2	include/certa/repeat.h	s/  const int pad = std::max(0, L \* kMatch - Ueff - 7);/  const int pad = std::max(0, L * kMatch - Ueff - 9);/	killed	tier R: band pad 2 too narrow
+R3	include/certa/repeat.h	s/    if (o.first <= std::max(lo, Ueff)) break;/    if (o.first <= std::max(lo, Ueff) + 3) break;/	killed	tier R: chain skip off by 3
+R4	include/certa/repeat.h	s/          while (c + q + R < L \&\& same_base/          while (c + q + R + 1 < L \&\& same_base/	killed	Thm G: hit extension one short (planted j)
+R5	include/certa/repeat.h	s/        if (cnt(i) == 0) { babs = i + q; break; }/        if (cnt(i) <= 1) { babs = i + q; break; }/	killed	Thm G: rare q-mers treated as absent
+R6	include/certa/repeat.h	s/      if (orient == 0 \&\& start + n > p \&\& p + n > start) continue;  \/\/ overlaps/      if (false) continue;  \/\/ overlaps/	killed	Thm R: overlapping copy counted as a tie
+A1	include/certa/core.h	s/L \* kMatch - d - (d >= 2 ? 5 : 4);/L * kMatch - d - (d >= 2 ? 6 : 4);/	killed	Lemma E: bound 1 too low
+A2	include/certa/core.h	s/int band = L \* kMatch - r.score + 2 \* width + 6;/int band = L * kMatch - r.score + 2 * width - 40;/	equivalent	Lemma O: in-band term (never binds for reads >= 98 bp; THEORY.md)
+A3	include/certa/core.h	s/const int dstar = n_best > 1 ? b1 : (r.d2 >= 0 ? r.d2 : R + 1);/const int dstar = n_best > 1 ? b1 : (r.d2 >= 0 ? r.d2 : R + 2);/	killed	S0/S1 SUB: d* = R + 2
+A4	include/certa/core.h	s/    if (left > sh) sh = left;/    if (false) sh = left;/	killed	SL SUB: own chain, left side dropped
+A5	include/certa/interval.h	s/\*xu = std::max<int>(r.score, edit_bound(L, dstar));/*xu = std::max<int>(r.score, edit_bound(L, dstar + 1));/	killed	S0/S1 XU: d* + 1
+A6	include/certa/repeat.h	s/  out.sub_hi = std::min(sh, lo);/  out.sub_hi = std::min(sh, lo) - 3;/	killed	tier R SUB: sub_hi 3 too low
+A7	include/certa/repeat.h	s/blo + B + L - 2 < p0;/blo + B < p0;/	killed	tier R SUB: away() too lenient
+A8	include/certa/repeat.h	s/      b = std::max(left, right);/      b = right;/	killed	tier R SUB: own chain, left side dropped
+A9	include/certa/repeat.h	s/      b = std::max(left, right);/      b = left;/	killed	tier R SUB: own chain, right side dropped
+A10	include/certa/core.h	s/    if (right > sh) sh = right;/    if (false) sh = right;/	killed	SL SUB: own chain, right side dropped
+A11	include/certa/repeat.h	s/if (out.copies >= 2) out.sub_lo = lo;/if (out.copies >= 1) out.sub_lo = lo;/	killed	tier R: a copy claimed for every read
+A12	include/certa/repeat.h	s/  if (!out.exact) return out;  \/\/ sub_hi = hi/  if (!out.exact) { out.sub_hi = lo; return out; }/	killed	tier R SUB: sub_hi = lo for open intervals
+C1	src/check.cpp	s/      best = std::max(best, (y - x) \* kM - (kM + kX) \* k - (x > 0 ? kC : 0) - (y < L ? kC : 0));/      best = std::max(best, (y - x) * kM - (kM + kX + 1) * k - (x > 0 ? kC : 0) - (y < L ? kC : 0));/	killed	checker: Lemma L charges 6 per part
+C2	src/check.cpp	s/  const int pad = std::max(0, L \* kM - bound - kO - kE);/  const int pad = std::max(0, L * kM - bound - kO - kE - 2);/	killed	checker: pad 2 too narrow
+C3	src/check.cpp	s/occ\[j\].first - occ\[j - 1\].first <= pad) mask/occ[j].first - occ[j - 1].first <= pad \/ 2) mask/	killed	checker: chains split at pad / 2 (unmapped XU = OPT - 1 tamper)
+C4	src/check.cpp	s/  for (int i = 0; i < s_ \&\& i + q_ <= len; ++i) {/  for (int i = 0; i < (s_ > 1 ? s_ - 1 : s_) \&\& i + q_ <= len; ++i) {/	killed	checker: last sampling shift dropped
+C5	src/check.cpp	s/      if (distinct >= c.t \&\& lemma_l(L, P, mask, 0) > bound) {/      if (distinct > c.t \&\& lemma_l(L, P, mask, 0) > bound) {/	killed	checker: chains with exactly t probes skipped
+C6	src/check.cpp	s/        const int64_t dlo = occ\[i\].first - pad, dhi = occ\[j - 1\].first + pad;/        const int64_t dlo = occ[i].first - pad + 2, dhi = occ[j - 1].first + pad;/	killed	checker: band 2 too narrow
+C7	src/check.cpp	s/      if (c.xq > mapq_formula(c.as, c.xh, L)) return kWrongXQ;/      if (false) return kWrongXQ;/	killed	checker: XQ formula not checked (XQ + 5 tamper)
+C8	src/check.cpp	s/  if (total != n) return fail(/  if (false) return fail(/	killed	index validation: count not checked
+C9	src/check.cpp	s/        if (__atomic_fetch_or(\&seen\[p \/ s \/ 64\], bit, __ATOMIC_RELAXED) \& bit)/        if (false)/	killed	index validation: duplicates not checked
+C10	src/check.cpp	s/const int64_t s_lo = st == 0 ? a_lo : a_lo - D, s_hi = st == 0 ? a_hi + D : a_hi;/const int64_t s_lo = a_lo, s_hi = a_hi;/	killed	checker pair: partner window without D
+C11	src/check.cpp	s/          else pairs = std::max(pairs, std::max(xo\[f\] + ma\[f\], xa\[f\] + mo\[f\]));/          else pairs = std::max(pairs, xa[f] + mo[f]);/	killed	checker pair: x elsewhere in R1's chain ignored (family I)
+C12	src/check.cpp	s/          else pairs = std::max(pairs, std::max(xo\[f\] + ma\[f\], xa\[f\] + mo\[f\]));/          else pairs = std::max(pairs, xo[f] + ma[f]);/	killed	checker pair: y elsewhere in R1's window ignored (family J)
+C13	src/check.cpp	s/  if (u0 + u1 > bound) return false;  \/\/ (P1)/  (void)u0; (void)u1;/	killed	checker pair: (P1) U1 + U2 not checked (family G)
+C14	src/check.cpp	s/const int pad = std::max(0, (L\[0\] + L\[1\]) \* kM - bound - kO - kE);/const int pad = std::max(0, (L[0] + L[1]) * kM - bound - kO - kE - 2);/	killed	checker pair: pad 2 too narrow (family H)
+C15	src/check.cpp	s/pair = r.pos >= f.pos \&\& r.pos - f.pos <= a.pd;/pair = r.pos >= f.pos;/	killed	checker pair: D not checked (D tamper)
+C16	src/check.cpp	s/margin_mapq(a.as + b.as - bound)/margin_mapq(a.as + b.as - bound + 1)/	killed	checker pair: q_pe margin one too high (XQ + 1 tamper)
+C17	src/check.cpp	s/        int yub = U\[y\]\[sy\];/        int yub = U[y][sy] - 3;/	killed	checker pair: partner bound U 3 too low (tie tamper, family F)
+C18	src/check.cpp	s/yub = std::max(yub, e.ub);/yub = std::max(yub, e.ub - 3);/	killed	checker pair: partner chain bound 3 too low (tie tamper)
+C19	src/check.cpp	s/        if (bx + yub <= bound) continue;/        if (bx + yub <= bound + 3) continue;/	killed	checker pair: chain skip off by 3 (tie tamper)
+LR1	include/certa/longread.h	s/return std::max(0L, (long)L - lbt - 7);/return std::max(0L, (long)L - lbt - 9);/	killed	split certificate: pad 2 too narrow (tight lb)
+LR2	include/certa/longread.h	/^inline LrCert certify_single/,/^}/ s/(long)L - lb - 7);/(long)L - lb - 9);/	killed	Corollary L-long: pad 2 too narrow (small-del reads, tight lb)
+LR3	include/certa/longread.h	s/if (pot > lbt) add.push_back/if (pot > lbt + 3) add.push_back/	killed	split certificate: chain pruning 3 too lenient
+LR4	include/certa/longread.h	s/const long upper = jump_pass(ix, fw, L, bf, tb, {{0, nullptr}, {1, nullptr}}, P/const long upper = jump_pass(ix, fw, L, bf, tb, {}, P/	killed	split certificate: unwitnessed pieces dropped (diverged-ins)
+LR5	include/certa/longread.h	s/case 1: return lr_comp(ref_at(ix, N - 1 - u));/case 1: return ref_at(ix, N - 1 - u);/	killed	split certificate: strand-1 target not complemented (inversions)
+LR6	include/certa/longread.h	s/const long G = std::max(f > 0 ? -(long)kClip : 0L, prefix - P);/const long G = std::max(0L, prefix - P);/	killed	split certificate: the first piece's clip penalty omitted
+LR7	include/certa/longread.h	s/const long G = std::max(f > 0 ? -(long)kClip : 0L, prefix - P);/const long G = std::max(f > 0 ? -(long)kClip : 0L, prefix);/	killed	split certificate: the jump penalty omitted
+LR8	include/certa/longread.h	s/          if (cc == 0 \&\& charge) v -= c5;/          if (cc == 0 \&\& charge) v -= c5 + 1;/	killed	Lemma L-J: 6 charged per part (verify_lemmas)
+LR9	include/certa/longread.h	s/      C += !(free \&\& (\*free)\[j\]);/      C += 1;/	killed	Lemma L: free parts charged (tight lb)
+LR10	include/certa/longread.h	s/occ\[j - 1\].first <= pad0) ++j;/occ[j - 1].first <= pad0 \/ 2) ++j;/	killed	split certificate: chains split at pad / 2
+LR11	include/certa/longread.h	s/const std::vector<PieceType> vf = {{0, nullptr}, {1, nullptr}, {0, \&any\[0\]}, {1, \&any\[1\]}};/const std::vector<PieceType> vf = {{0, nullptr}, {1, nullptr}};/	killed	split certificate: pieces of unevaluated chains left out of the prefix values (three loci)
+LR12	include/certa/longread.h	s/default: return lr_comp(ref_at(ix, u));/default: return ref_at(ix, u);/	killed	split certificate: strand-1 target of the reversed pass not complemented (suffix values)
+LR13	include/certa/longread.h	s/if (k == 0 \&\& charge) nx\[k\] -= kMismatch + kMatch;/if (k == 0 \&\& charge) nx[k] -= kMismatch + kMatch + 1;/	killed	split certificate: 6 charged per part in the pass and in pot
+LR14	include/certa/longread.h	s/return JumpBand{ch.strand + 2, N - L - ch.chi - pad, N - L - ch.clo + pad, L - ch.w1, L - ch.w0};/return JumpBand{ch.strand + 2, N - L - ch.clo + pad, N - L - ch.clo + pad, L - ch.w1, L - ch.w0};/	killed	split certificate: the reversed pass on one diagonal of a chain's band
+LR15	include/certa/longread.h	s/suf1\[b\] = mrev\[L - b\];/suf1[b] = mrev[std::max(0, L - b - 1)];/	killed	split certificate: suffix values shifted by one base
+LR16	include/certa/longread.h	s/out.push_back({L - q->end, L - q->off, q->occ});/out.push_back(*q);/	killed	split certificate: parts of the reversed read not mirrored (verify_lemmas)
+LR17	include/certa/longread.h	s/ch.free, ch.free_rev, pre, suf2, P, lbt/ch.free, ch.free_rev, pre, suf1, P, lbt/	killed	split certificate: windows from the one-sided suffix values (three loci)
+LR18	include/certa/longread.h	s/    \*w1 = b;/    *w1 = b - 1;/	killed	split certificate: read window one base short at its end
+LR19	include/certa/longread.h	s/    \*w0 = L - y;/    *w0 = L - y + 1;/	killed	split certificate: read window one base short at its start
+LR20	include/certa/longread.h	s/ch.free_rev.assign(ch.free.rbegin(), ch.free.rend());/ch.free_rev = ch.free;/	killed	split certificate: free parts of a chain not mirrored for the reversed read
+LR21	include/certa/longread.h	s/return JumpBand{ch.strand + 2, N - L - ch.chi - pad, N - L - ch.clo + pad, L - ch.w1, L - ch.w0};/return JumpBand{ch.strand + 2, N - L - ch.chi - pad, N - L - ch.clo + pad, L - ch.w1 + 1, L - ch.w0};/	killed	split certificate: a chain's rows in the reversed pass one short
+LR22	include/certa/longread.h	s/const long piece = std::max(in\[1\], in\[3\]);/const long piece = in[1];/	killed	split certificate: pot ignores pieces ending outside every part (too low)
+LR23	include/certa/longread.h	s/c.hi = std::max(lbt, ub_all);/c.hi = lbt;/	killed	split certificate: a capped read claimed at lb
+LR24	include/certa/longread.h	s/lbt = std::max(lbt, jump_pass(ix, fw, L, bf, tb, {}, P, nullptr, \&c.cells));/lbt = std::max(lbt, jump_pass(ix, fw, L, bf, tb, {{0, nullptr}, {1, nullptr}}, P, nullptr, \&c.cells));/	killed	split certificate: lb raised to a bound with unwitnessed pieces, not a real alignment
+LR25	include/certa/longread.h	s/chains\[k\].free, pre0, suf20, P);/chains[k].free, pre0, suf1, P);/	killed	split certificate: the static pot from one-sided suffix values
+LR26	include/certa/longread.h	s/evaluated\[k\] = pot0\[k\] > lbt;/evaluated[k] = pot0[k] > lbt + 3;/	killed	split certificate: the static set 3 too lenient
+LR27	include/certa/longread.h	s/ch.free, ch.free_rev, pre0, suf20, P, lbt/ch.free, ch.free_rev, pre0, suf1, P, lbt/	killed	split certificate: static windows from one-sided suffix values
+LR28	include/certa/longread.h	s/  return vmax(x, __builtin_shufflevector(x, x, 0, 1, 0, 1));/  return x;/	killed	band_row: the 4-lane prefix maximum without its 2-lane step
+LR29	include/certa/longread.h	s/store(H + b, vmax(h0, incl - idx - del0));/store(H + b, vmax(h0, incl - idx - del0 + splat(1)));/	killed	band_row: a deletion 1 too cheap
+LR30	include/certa/longread.h	s/    carry = last(incl);/    carry = incl;/	killed	band_row: the carry lane by lane, not the last lane
+LR31	include/certa/longread.h	s/H\[b\] = std::max(h0, cs - b - kGapOpen);/H[b] = std::max(h0, cs - b - kGapOpen + 1);/	killed	band_row: the tail's deletion 1 too cheap
+LR32	include/certa/longread.h	s/      l = ix.dir\[b\];/      l = ix.dir[b] + 1;/	killed	lookup_batch: a bucket searched from its second entry
+LR33	include/certa/longread.h	s/      ok\[i - q + 1\] = run >= q;/      ok[i - q + 1] = run >= q - 1;/	killed	qmer_keys: a q-mer holding an N taken as valid
+LR34	include/certa/longread.h	s/) <= thr) {/) <= thr + 1) {/g	killed	band_best: cells that can reach floor + 1 pruned
+LR35	include/certa/longread.h	s/      r0 = c0;/      r0 = c0 + 1;/	killed	band_best: a row's range one cell short on the left
+LR36	include/certa/longread.h	s/if (start + kMatch + rem <= floor) {/if (start + kMatch + rem <= floor + 3) {/	killed	band_best: new pieces cut off 3 rows early
+LR37	include/certa/longread.h	s/      r1 = c1;/      r1 = c1 - 1;/	killed	band_best: a row's range one cell short on the right
+P15	include/certa/pair.h	s/ok = off\[k\] >= prev \&\& end\[k\] - off\[k\] >= 5 \&\& end\[k\] <= L;/ok = off[k] >= prev \&\& end[k] - off[k] >= 4 \&\& end[k] <= L;/	killed	span_bound: Lemma S's closed form for parts of length 4 (false: verify_lemmas)
+P16	include/certa/pair.h	s/while (hidx\[h\] >= 0 \&\& hkey\[h\] != key) h = (h + 1) \& (kH - 1);/while (hidx[h] >= 0 \&\& hkey[h] != key) h = (h + 2) \& (kH - 1);/	killed	window_search: the key lookup probes with the wrong step (parts missed in the window)
+E8	include/certa/core.h	s/    x = vmax(x, __builtin_shufflevector(x, x, 0, 1, 2, 3, 0, 1, 2, 3));//	killed	band_del16: the deletion pass's prefix maximum without its 4-lane step
+E9	include/certa/core.h	s/if (start >= diag \&\& b >= blo \&\& b <= bhi)/if (start >= diag \&\& b > blo \&\& b <= bhi)/	killed	affine_align: the start range one cell short
+E10	include/certa/core.h	s/const v4 f = bv > splat(0) ? excl - bv - splat(kGapOpen + kGapExt - 1) : vneg;/const v4 f = bv > splat(0) ? excl - bv - splat(kGapOpen + kGapExt - 2) : vneg;/	killed	affine_fill_vec: a deletion one point too cheap
+E11	include/certa/core.h	s/const v4 fbit = (fm1 + splat(kGapOpen + kGapExt - 1) > hm1)/const v4 fbit = (fm1 + splat(kGapOpen + kGapExt) > hm1)/	killed	affine_fill_vec: the 'F extends F' traceback bit off by one point
+E12	include/certa/core.h	s/if (end\[l\] > best) { best = end\[l\]; best_i = i; best_b = b + l; }/if (end[l] >= best) { best = end[l]; best_i = i; best_b = b + l; }/	killed	affine_fill_vec: ties for the best end cell resolved to the last one
+E13	include/certa/core.h	s/const v4 st = (start >= hpv) \& (bv >= splat(blo))/const v4 st = (start >= hpv) \& (bv > splat(blo))/	killed	affine_fill_vec: the start range one cell short
+E14	include/certa/core.h	s/      x = vmin(x, __builtin_shufflevector(x, hi, 8, 9, 10, 11, 0, 1, 2, 3));//	killed	band_distance_vec16: the deletion pass's prefix minimum without its 4-lane step
+E15	include/certa/core.h	s/      x = vmin(x, __builtin_shufflevector(x, capv, 16, 17, 18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4, 5, 6, 7));//	killed	band_distance_vec8: the deletion pass's prefix minimum without its 8-lane step
+E16	include/certa/core.h	s/  const int cap = limit + 1;/  const int cap = limit + 2;/	killed	band_distance_vec8: values capped one above limit + 1
+E17	include/certa/core.h	s/      if (b + W > B) out = bv < splat(B) ? out : capv;/      if (false) out = capv;/	killed	band_distance_vec8: lanes past the band not reset to the cap
+E18	include/certa/core.h	s/    const v16 cv = splat(c < 4 ? c : -1);  \/\/ an N matches nothing/    const v16 cv = splat(c);/	killed	band_distance_vec8: an N in the read matches an N in the reference
+E19	include/certa/core.h	s/    const auto ok = (a == b) \& (a < four);  \/\/ -1 where the bases match/    const auto ok = (a == b);/	killed	hamming_vec: an N in the read matches an N in the reference
+E20	include/certa/core.h	s/      x = vmax(x, __builtin_shufflevector(x, x, 0, 1, 2, 3, 0, 1, 2, 3));//	killed	band_score_vec: the deletion pass's prefix maximum without its 4-lane step
+E21	include/certa/core.h	s/    if (hb + (L - i) <= theta \&\& L - i - kClip <= theta) break;/    if (hb + (L - i) - 1 <= theta \&\& L - i - kClip <= theta) break;/	killed	band_score_vec: stops one point too early under a threshold
+E22	include/certa/core.h	s/      inc = vmax(inc, __builtin_shufflevector(inc, ninf, 8, 9, 10, 11, 0, 1, 2, 3));//	killed	affine_fill_vec16: the deletion's prefix maximum without its 4-lane step
+E23	include/certa/core.h	s/  return best < NEG \/ 2 ? best - NEG - (1 << 20) : best;/  return best;/	killed	affine_fill_vec16: 'no allowed start' returned in 16-bit form
+E24	include/certa/repeat.h	s/      const uint64_t bad = (((a ^ b) + 0x7f7f7f7f7f7f7f7full) | (a + 0x7c7c7c7c7c7c7c7cull)) \& high;/      const uint64_t bad = ((a ^ b) + 0x7f7f7f7f7f7f7f7full) \& high;/	killed	match_run: an N in the read matches an N in the reference
+E25	include/certa/core.h	s/      while (a < r \&\& ix.keys16\[a\] == k) ++a;/      while (a + 1 < r \&\& ix.keys16[a] == k) ++a;/	killed	lookup_bucket: the linear scan misses the bucket's last entry
+S1	src/seqio.cpp	s/        e |= x == from || base_\[x - 1\] == '\\n' ||/        e |= x == from ||/	killed	FASTQ parallel scan: an empty line after a newline ('\n\n') not seen, so records are counted across it
+S2	src/seqio.cpp	s/             (base_\[x - 1\] == '\\r' \&\& (x - 1 == from || base_\[x - 2\] == '\\n'));/             false;/	equivalent	FASTQ parallel scan: an empty CRLF line ('\r\n') not seen; the record-start check covers it (THEORY.md)
+S3	src/seqio.cpp	s/            cr_start = x + 1 < size_ \&\& base_\[x + 1\] == '\\r';/            cr_start = false;/	killed	FASTQ parallel scan: a record starting with a stray '\r' (which the serial scan skips) kept
+S4	src/seqio.cpp	s/          if (++k % 4 == 0) {/          if (++k % 4 == 1) {/	killed	FASTQ parallel scan: records end one line early
+S5	src/seqio.cpp	s/bytes_per_record_ \* 1.02/bytes_per_record_ * 0.5/	equivalent	FASTQ parallel scan: half the bytes scanned in parallel; the serial scan finds the rest (THEORY.md)
+E26	include/certa/core.h	s/    const bool open = blo == 0 \&\& bhi >= B - 1;/    const bool open = true;/	killed	band_score_vec: every row taken as excluding no start (start ranges ignored)
+P17	include/certa/pair.h	s/const int yb = st == 1 ? 0 : Y.n0, ye = st == 1 ? Y.n0 : Y.nch;/const int yb = st == 0 ? 0 : Y.n0, ye = st == 0 ? Y.n0 : Y.nch;/	killed	Thm P: partner chains looked up on the wrong strand (the binary-search range)
+V1	include/certa/core.h	s/R = 2 \* m - 1 < cap ? 2 \* m - 1 : cap;/R = 2 * m < cap ? 2 * m : cap;/	killed	Thm A (A2): one-edit radius 2|S| instead of 2|S| - 1
+V2	include/certa/core.h	s/int R = m - 1 < cap ? m - 1 : cap;/int R = m < cap ? m : cap;/	killed	Thm A (A1): exact-part radius |S| instead of |S| - 1
+V3	include/certa/core.h	s/for (int j = 0; j < q; ++j) if (j != i) w\[k++\] = s\[j\];/for (int j = 0; j < q; ++j) if (j != i) w[k++] = s[j]; continue;/	killed	Lemma N: read bases missing from the reference not in the neighbourhood
+V4	include/certa/core.h	s/for (int j = i; k < q; ++j) w\[k++\] = s\[j\];/for (int j = i; k < q; ++j) w[k++] = s[j]; continue;/	killed	Lemma N: reference bases inserted in the part not in the neighbourhood
+V5	include/certa/core.h	s/for (int j = 0; j < i; ++j) w\[k++\] = s\[j\];/if (i == 0) continue; for (int j = 0; j < i; ++j) w[k++] = s[j];/	killed	Lemma N: a reference base before the part (attributed to it) not in the neighbourhood
+V6	include/certa/core.h	s/evaluate_clusters(ix, L, nclust, R, p.reverse_order, nclust, 1, ws, &b1, &b2, m, lb_per);/evaluate_clusters(ix, L, nclust, R, p.reverse_order, nclust, 2, ws, \&b1, \&b2, m, lb_per);/	killed	Thm A: clusters need two parts while R assumes one
+V7	include/certa/core.h	s/const int nclust = build_clusters(ws, R + 1, false, BMAX);/const int nclust = build_clusters(ws, R - 1, false, BMAX);/	killed	Thm A: band pad R - 1 (an alignment drifting R diagonals is cut)
+V8	include/certa/core.h	s/int m = mst\[0\] < mst\[1\] ? mst\[0\] : mst\[1\];/int m = mst[0] > mst[1] ? mst[0] : mst[1];/	killed	Thm A: the larger strand's |S| used on both strands (sound, but over the hit budget)
+V9	include/certa/core.h	s/if (ws.vf\[st\]\[k\]\[L\] <= budget) m = k;/if (ws.vf[st][k][L] < budget) m = k;/	killed	Thm A, DP: parts that fit the budget exactly left out
+V10	include/certa/core.h	s/if (lb_per \* (lb_parts - popcount16(cl.pmask)) > limit) continue;/if (lb_per * (lb_parts - popcount16(cl.pmask)) >= limit) continue;/	killed	Thm A, support bound: clusters that could hold an alignment at the limit skipped
+V11	include/certa/core.h	s/vparts_verify(ix, p, L, R, m, 2, name_hash, ws, r);/vparts_verify(ix, p, L, R, m, 3, name_hash, ws, r);/	killed	Thm A (A2), support bound: 3 edits per missing one-edit part instead of 2

@@ -1,0 +1,16 @@
+Effect of the Aim 5 tier-PR fixes (window pad clamp; S2 exclusion windows)
+on real data: 2 M HG002 NovaSeq X pairs, default `certa map` (with fallback
+outputs discarded: -u /dev/null -U /dev/null), 16 threads, a2.
+old = 969468f (Aim 4), new = the Aim 5 tree. Compared by (QNAME, FLAG) with
+cmp_mapq.py (per tier XT; "placement" = RNAME, POS, CIGAR).
+
+records: old 3816179 new 3816649, only in new 7310, only in old 6840
+PR: MAPQ changed 10901 (fell below 20: 4419, rose to >= 20: 23); placement changed 751
+S0: MAPQ changed 1 (fell below 20: 0, rose to >= 20: 1); placement changed 0
+SR: MAPQ changed 1 (fell below 20: 0, rose to >= 20: 1); placement changed 30
+
+Reading: 0.29 % of records change MAPQ, almost all of them PR. S2 now also
+bounds partners inside the winning anchor's window and mate placements
+elsewhere in its own chain; where such a pair exists, S2 rises and MAPQ
+falls. "Only in" records are pairs that changed certification status (the
+uncertified ones go to the fallback outputs, discarded here).

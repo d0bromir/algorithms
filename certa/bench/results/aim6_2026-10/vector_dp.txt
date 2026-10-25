@@ -1,0 +1,27 @@
+# The vectorized band DP row (certa/longread.h band_row; THEORY.md "The band DP row"), 2026-10-15.
+# W cells at a time with GCC vector extensions: W = 4 on galaxy (aarch64, Neoverse-N1, NEON, GCC 15.2),
+# W = 8 on a2 (x86, Xeon Gold 5218, AVX2/AVX-512 with -march=native, GCC 13.3), W = 4 on x86 without AVX2.
+# Every run below gives results identical to the scalar recurrence (band_row_scalar), field by field.
+
+== the row kernel alone (scratch microbenchmark: one band of width B over random rows; ns per cell, one thread)
+galaxy  B = 500: scalar 2.83, vector 1.23 (2.3x);  B = 64: scalar 2.83, vector 1.28 (2.2x)
+a2 AVX2 B = 500: scalar 3.12, vector 0.39 (8.1x);  B = 64: scalar 7.44, vector 0.69 (10.7x)
+a2 SSE  B = 500: scalar 2.41, vector 1.29 (1.9x)
+(an 8-lane build on aarch64 was 1.4x slower than scalar: two NEON registers per vector, and
+cross-register shuffles; 4 lanes and an inclusive prefix maximum with in-register shuffles fixed it)
+
+== lr_ceiling on galaxy, 500 HiFi reads (debug500), --certify --jump 30 --jump-certify 30, 16 threads
+certificate of the local optimum: 15.1 s -> 6.1 s (2.47x); split certificate: 198.4 s -> 94.8 s (2.09x);
+non-time fields identical in all 500 rows
+
+== the full sample (242,534 HG002 HiFi reads), galaxy, 64 threads, lr_ceiling --certify (as 2026-10-14)
+certify: OPT proven for 226327 reads (93.32 %), above the best known alignment for 40265; over the cell cap 3  (unchanged)
+non-time fields identical for all 242,534 reads
+whole run CPU (user): 11,629 s -> 6,836 s; wall 3:15 -> 2:00
+DP time per certified read: median 20.2 -> 7.9 ms, mean 35.0 -> 13.5 ms, 99% 217 -> 83 ms; total 7,925 -> 3,065 s
+against minimap2's mapping and alignment (4,171 s CPU): certifying costs 1.64x minimap2 (was 2.79x)
+
+== the split certificate on the 2,674 split-only reads (lr_ceiling --jump 30 --jump-certify 30 --jump-certify-new --max-cells 3e10)
+OPT_J proven 1551, an interval 1043, over the cell cap 80 (unchanged); non-time fields identical for all 2,674
+time per read: median 3.35 -> 1.43 s, mean 27.37 -> 18.95 s, 99% 178 -> 135 s; total 73,194 -> 50,662 s
+run user time 88,749 -> 66,783 s; wall 24:22 -> 18:15

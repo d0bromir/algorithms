@@ -1,0 +1,18 @@
+[map] index /home/mpiuser/certa-bench/idx/grch38.s1v3.cidx: q=22 s=1, 2948602603 entries, loaded in 0.6 s
+[map] pass 1: k=2 budget=16; pass 2: k=5 budget=256 S2<=0; parts are >= 22 bases
+[map] GPU NVIDIA A100 80GB PCIe (sm_80, 81152 MiB), index uploaded in 2.1 s (overlapped with input)
+[map] 725804508 reads: certified 92.86% (S0 exact 63.68%, S1 <=R edits 20.58%, SR repeat 1.03%, SL local 0.00%), ties 4.86%
+[map]   uncertified/bad_length: 0.00%
+[map]   uncertified/radius_negative: 0.34%
+[map]   uncertified/not_found: 6.76%
+[map]   uncertified/cluster_too_wide: 0.04%
+[map]   uncertified/cross_contig: 0.00%
+[map] placed without certificate (S2, <= 0 edits): 0.00%; to fallback: 7.14%
+[map] second pass (budget 256, S2 <= 0): 14.81% of reads; third pass (CPU, budget 256): 0.00%
+[map] local pass (CPU, support 0): 0.00% of reads
+[map] pairs 362902254: both mates certified 90.28% (proper 88.62%); PR pair certificate 7.56% of reads; pair pass tried 13.83% of pairs
+[map] intervals: tier R on 7.14% of reads (tau 256); records: tier R exact 0.99%, interval 3.87%, pair window 0.96%, unmapped 1.58% (proven unalignable 0.00%); exact (XL = XU) 84.85%; XU - XL 1-5 6.22%, 6-10 1.76%, 11-25 2.19%, 26-50 2.00%, >50 1.39%; MAPQ >= 20 90.92%, XQ >= 20 64.84%
+[map] intervals: proper pairs 93.98%
+[map] candidates enumerated per read (last pass): 13.9
+[map] uncertified by parts searched |S|: 0:0.34% 1:0.50% 2:0.35% 3:0.39% 4:0.67% 5:1.13% 6:3.76% 7:0.00% 8:0.00% 9:0.00% 10:0.00% 11:0.00% 12:0.00% 13:0.00% 14:0.00% 15:0.00% 16:0.00%
+[map] time: load 0.59 s, upload 2.14 s, read+encode 1178.95 s (overlapped; waited 0.03 s), map 1144.08 s (634401 reads/s), output 1473.48 s, total 2621.68 s (276847 reads/s end to end)

@@ -1,0 +1,34 @@
+host,mode,pipeline,config,hardware,reads,wall_s,cpu_s,runs,complete
+galaxy,single-end,BWA-MEM2,-,"ARM64, 64 of 128 cores",20001073,100.04,5196.74,3,yes
+galaxy,single-end,minibwa,-,"ARM64, 64 of 128 cores",20001073,28.79,1356.22,3,yes
+galaxy,single-end,strobealign,-,"ARM64, 64 of 128 cores",20001073,38.68,1078.14,3,yes
+galaxy,single-end,minimap2 -x sr,-,"ARM64, 64 of 128 cores",20001073,70.66,3105.09,3,yes
+galaxy,single-end,Bowtie 2,-,"ARM64, 64 of 128 cores",20001073,187.96,11844.17,3,yes
+galaxy,single-end,CERTA CPU + minibwa,64+64,"ARM64, 64 of 128 cores",20001073,18.13,1079.35,3,yes
+galaxy,single-end,CERTA CPU interval mode,64,"ARM64, 64 of 128 cores",20001073,15.34,855.74,3,yes
+galaxy,single-end,CERTA GPU + minibwa,16+48,"ARM64, 64 of 128 cores + A100",20001073,17.55,690.23,3,yes
+galaxy,single-end,CERTA GPU + minibwa,64+64,"ARM64, 64 of 128 cores + A100",20001073,14.75,699.68,3,yes
+galaxy,single-end,CERTA GPU interval mode,64,"ARM64, 64 of 128 cores + A100",20001073,12.43,507.64,3,yes
+galaxy,single-end,CERTA CPU certified tier only,64,"ARM64, 64 of 128 cores",20001073,8.23,407.24,1,no
+galaxy,single-end,CERTA GPU certified tier only,16,"ARM64, 64 of 128 cores + A100",20001073,10.69,37.49,1,no
+galaxy,paired,BWA-MEM2,-,"ARM64, 64 of 128 cores",20001073,334.38,16857.56,1,yes
+galaxy,paired,CERTA CPU + minibwa,64+64 Kdefault,"ARM64, 64 of 128 cores",20001073,54.52,3135.19,1,yes
+galaxy,paired,minibwa,-,"ARM64, 64 of 128 cores",20001073,62.97,3572.69,3,yes
+galaxy,paired,CERTA CPU + minibwa,64+64 K10m,"ARM64, 64 of 128 cores",20001073,52.0,3164.76,3,yes
+galaxy,paired,CERTA CPU interval mode,64,"ARM64, 64 of 128 cores",20001073,37.82,2216.84,3,yes
+galaxy,paired,CERTA GPU interval mode,64,"ARM64, 64 of 128 cores + A100",20001073,28.31,1507.52,3,yes
+galaxy,paired,CERTA GPU + minibwa,20+44 K10m,"ARM64, 64 of 128 cores + A100",20001073,47.8,2400.73,3,yes
+galaxy,paired,CERTA GPU + minibwa,64+64 K10m,"ARM64, 64 of 128 cores + A100",20001073,43.23,2423.48,3,yes
+a2,single-end,BWA-MEM2,-,"x86-64, 64 cores, memory interleaved over 4 NUMA nodes",20001073,110.56,5198.63,3,yes
+a2,single-end,minibwa,-,"x86-64, 64 cores, memory interleaved over 4 NUMA nodes",20001073,36.88,1553.7,3,yes
+a2,single-end,strobealign,-,"x86-64, 64 cores, memory interleaved over 4 NUMA nodes",20001073,61.47,978.46,3,yes
+a2,single-end,minimap2 -x sr,-,"x86-64, 64 cores, memory interleaved over 4 NUMA nodes",20001073,94.22,3654.31,3,yes
+a2,single-end,Bowtie 2,-,"x86-64, 64 cores, memory interleaved over 4 NUMA nodes",20001073,159.37,9953.8,3,yes
+a2,single-end,CERTA CPU + minibwa,64+64,"x86-64, 64 cores, memory interleaved over 4 NUMA nodes",20001073,19.94,1200.17,3,yes
+a2,single-end,CERTA CPU interval mode,64,"x86-64, 64 cores, memory interleaved over 4 NUMA nodes",20001073,18.28,1067.9,3,yes
+a2,single-end,CERTA CPU certified tier only,64,"x86-64, 64 cores, memory interleaved over 4 NUMA nodes",20001073,8.83,466.65,1,no
+a2,paired,BWA-MEM2,-,"x86-64, 64 cores, memory interleaved over 4 NUMA nodes",20001073,256.53,13923.57,1,yes
+a2,paired,CERTA CPU + minibwa,64+64 Kdefault,"x86-64, 64 cores, memory interleaved over 4 NUMA nodes",20001073,67.91,3773.42,1,yes
+a2,paired,minibwa,-,"x86-64, 64 cores, memory interleaved over 4 NUMA nodes",20001073,79.44,3962.08,3,yes
+a2,paired,CERTA CPU + minibwa,64+64 K10m,"x86-64, 64 cores, memory interleaved over 4 NUMA nodes",20001073,57.56,3299.97,3,yes
+a2,paired,CERTA CPU interval mode,64,"x86-64, 64 cores, memory interleaved over 4 NUMA nodes",20001073,37.97,2238.39,3,yes

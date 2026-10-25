@@ -36,20 +36,87 @@ void encode_batch(const std::vector<FastqRecord>& recs, ReadBatch& out, int thre
   for (auto& th : pool) th.join();
 }
 
+namespace {
+
+// The q-mer keys count_parts looks up for a read: every part, both strands,
+// every sampling offset (parts with an N give fewer keys; that only means
+// fewer prefetches).
+constexpr int kMaxKeys = 2 * PMAX * SMAX;
+int part_keys(const IndexView& ix, const uint8_t* codes, int L, uint64_t* keys) {
+  const int P = L <= LMAX ? part_count(L, ix.q, ix.s) : 0;
+  if (P < 1) return 0;
+  uint8_t rc[LMAX];
+  for (int i = 0; i < L; ++i) {
+    const uint8_t c = codes[L - 1 - i];
+    rc[i] = c < 4 ? (uint8_t)(3 - c) : (uint8_t)4;
+  }
+  int n = 0;
+  for (int st = 0; st < 2; ++st) {
+    const uint8_t* s = st ? rc : codes;
+    for (int j = 0; j < P; ++j) {
+      int off, len;
+      part_geometry(L, P, j, &off, &len);
+      for (int t = 0; t < ix.s; ++t) {
+        uint64_t k;
+        if (kmer_key(s + off + t, ix.q, &k)) keys[n++] = k;
+      }
+    }
+  }
+  return n;
+}
+
+}  // namespace
+
+void map_reads(const IndexView& ix, const Params& p, const ReadBatch& batch, const size_t* idx, size_t n,
+               Result* out, Workspace& ws) {
+  // Every lookup costs two dependent random reads of the index (the bucket
+  // directory, then the bucket), and enumeration a third (the hits'
+  // positions). They are pipelined across reads: while read k is mapped, the
+  // buckets and positions of read k + 1 and the directory entries of read
+  // k + 2 are prefetched. Results do not change.
+  const int shift = 2 * ix.q - ix.dir_bits;
+  uint64_t keys[3][kMaxKeys];
+  int nk[3] = {0, 0, 0};
+  auto read_keys = [&](size_t k) {
+    const size_t i = idx[k];
+    const int slot = static_cast<int>(k % 3);
+    nk[slot] = part_keys(ix, batch.codes.data() + batch.offs[i], batch.lens[i], keys[slot]);
+    for (int j = 0; j < nk[slot]; ++j) __builtin_prefetch(ix.dir + (keys[slot][j] >> shift));
+  };
+  auto prefetch_buckets = [&](size_t k) {
+    const int slot = static_cast<int>(k % 3);
+    for (int j = 0; j < nk[slot]; ++j) {
+      const uint64_t l = ix.dir[keys[slot][j] >> shift];
+      if (ix.keys16) __builtin_prefetch(ix.keys16 + l);
+      else __builtin_prefetch(ix.keys + l);
+      __builtin_prefetch(ix.pos + l);
+    }
+  };
+  if (n > 0) read_keys(0);
+  if (n > 1) read_keys(1);
+  if (n > 0) prefetch_buckets(0);
+  for (size_t k = 0; k < n; ++k) {
+    if (k + 2 < n) read_keys(k + 2);
+    if (k + 1 < n) prefetch_buckets(k + 1);
+    const size_t i = idx[k];
+    process_read(ix, p, batch.codes.data() + batch.offs[i], batch.lens[i], batch.hashes[i], ws, out[k]);
+  }
+}
+
 void map_cpu(const IndexView& ix, const Params& p, const ReadBatch& batch,
              std::vector<Result>& out, int threads) {
   out.resize(batch.size());
   std::atomic<size_t> next{0};
-  const size_t chunk = 256;
+  constexpr size_t chunk = 256;
   auto worker = [&] {
     std::unique_ptr<Workspace> ws(new Workspace);
+    size_t idx[chunk];
     for (;;) {
-      size_t a = next.fetch_add(chunk);
+      const size_t a = next.fetch_add(chunk);
       if (a >= batch.size()) break;
-      size_t b = std::min(batch.size(), a + chunk);
-      for (size_t i = a; i < b; ++i)
-        process_read(ix, p, batch.codes.data() + batch.offs[i], batch.lens[i],
-                     batch.hashes[i], *ws, out[i]);
+      const size_t b = std::min(batch.size(), a + chunk);
+      for (size_t i = a; i < b; ++i) idx[i - a] = i;
+      map_reads(ix, p, batch, idx, b - a, out.data() + a, *ws);
     }
   };
   std::vector<std::thread> pool;

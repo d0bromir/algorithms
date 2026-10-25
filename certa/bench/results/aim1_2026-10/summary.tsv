@@ -1,0 +1,10 @@
+sample	baseline	baseline_certified_pct	residual_reads	q15_config	residual_certified_pct	gain_points	certified_after_pct	q15_cpu_ms_per_residual_read	candidates_per_read
+HG002	q22 default (--local 2)	94.66	106868	t=2 budget 256	16.95	0.91	95.57	0.242	201.8
+HG002	q22 default (--local 2)	94.66	106868	t=2 budget 4096	37.80	2.02	96.68	1.953	2562.7
+HG002	q22 best (--budget3 4096 --local 2)	95.65	86924	t=2 budget 256	14.64	0.64	96.29	0.272	222.6
+HG002	q22 best (--budget3 4096 --local 2)	95.65	86924	t=2 budget 4096	27.10	1.18	96.83	2.189	2455.8
+HG002	q22 default (--local 2)	94.66	106868	t=1 budget 256	21.02	1.12	95.78	3.118	201.8
+HG005	q22 default (--local 2)	92.58	148151	t=2 budget 256	18.84	1.40	93.98	0.249	202.0
+HG005	q22 default (--local 2)	92.58	148151	t=2 budget 4096	34.97	2.59	95.17	1.809	2150.2
+HG005	q22 best (--budget3 4096 --local 2)	93.53	129174	t=2 budget 256	17.47	1.13	94.66	0.267	215.3
+HG005	q22 best (--budget3 4096 --local 2)	93.53	129174	t=2 budget 4096	27.51	1.78	95.31	1.939	2055.1

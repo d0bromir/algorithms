@@ -43,7 +43,7 @@ if(NOT CERTA_CUDA STREQUAL "OFF")
   endif()
 endif()
 
-add_library(certa_core STATIC src/index.cpp src/seqio.cpp src/mapper_cpu.cpp)
+add_library(certa_core STATIC src/index.cpp src/seqio.cpp src/mapper_cpu.cpp src/check.cpp)
 target_include_directories(certa_core PUBLIC include src)
 target_link_libraries(certa_core PUBLIC Threads::Threads)
 if(ZLIB_FOUND)
@@ -64,5 +64,19 @@ enable_testing()
 add_executable(test_certa tests/test_certa.cpp src/gpu_stub.cpp)
 target_link_libraries(test_certa PRIVATE certa_core)
 add_test(NAME certificate COMMAND test_certa)
+# Exhaustive checks of the finite lemmas behind the bounds (THEORY.md).
+add_executable(verify_lemmas tests/verify_lemmas.cpp)
+target_link_libraries(verify_lemmas PRIVATE certa_core)
+add_test(NAME lemmas COMMAND verify_lemmas)
+# Aim 6: the Lemma L ceiling of long reads against their best known alignment.
+add_executable(lr_ceiling tools/lr_ceiling.cpp)
+target_link_libraries(lr_ceiling PRIVATE certa_core)
+# Part choices taken from the slow mappers, certified on CERTA's uncertified reads.
+add_executable(payoff tools/payoff.cpp)
+target_link_libraries(payoff PRIVATE certa_core)
+# The long-read certificates against a brute-force DP (planted SVs).
+add_executable(test_longread tests/test_longread.cpp)
+target_link_libraries(test_longread PRIVATE certa_core)
+add_test(NAME longread COMMAND test_longread)
 
 message(STATUS "CERTA: CUDA back-end ${USE_CUDA} (archs ${CERTA_CUDA_ARCHS}), zlib ${ZLIB_FOUND}")

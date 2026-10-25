@@ -1,0 +1,13 @@
+{
+  "mode": "cpu",
+  "device": "",
+  "threads": 32,
+  "k": 5, "k1": 2, "budget": 16, "budget2": 256, "second_pass": 420896, "q": 22, "s": 1,
+  "reads": 4000000, "bases": 599208073, "certified": 3816179, "s0": 2812844, "s1": 680430, "sr": 46675, "sl": 0, "s2": 0, "s2_limit": 0, "ties": 185331,
+  "uncertified": {"bad_length": 0, "radius_negative": 17699, "not_found": 164882, "cluster_too_wide": 1238, "cross_contig": 2},
+  "certified_by_d1": [2859519, 489069, 115269, 41981, 22772, 11339],
+  "certified_by_radius": [110291, 151131, 3145520, 10468, 14627, 61237],
+  "intervals": {"tier_r_reads": 183821, "tier_r_exact": 31038, "interval": 95173, "pair_window": 35310, "unmapped": 32242, "unalignable": 0, "proper_pairs": 1906455, "mapq20": 3684500, "xq20": 2836246},
+  "iv_width": [3594639, 179360, 47623, 59725, 49368, 37043],
+  "seconds": {"load": 0.572, "upload": 0.000, "read_encode": 2.022, "read_wait": 0.000, "map": 11.771, "output": 4.588, "total": 17.039}
+}

@@ -1,0 +1,48 @@
+# Faster pass V, galaxy, 2026-10-22/23, 2 M HG002 reads and pairs, 64 threads on cores 0-63 (oracle tests ran on cores 64-127 during the first two blocks).
+# Each block compares a build with the c9ee1c7 binary (old): every output file of default and --full-cert runs (single-end, paired, fallback and interval mode, and paired --full-cert on the A100), then --full-cert wall/user/sys/maxrss in interval mode, two rounds. Script: bench/pass_v_identity.sh.
+
+######## 1. batched, prefetched index lookups in pass V + reference windows of clusters prefetched six ahead
+new vs c9ee1c7: 15 of 15 files identical (default and --full-cert; SE/PE; fallback/interval; and PE --full-cert on the A100)
+== time, interval mode, 64 threads, two rounds
+old SE --full-cert: wall/user/sys/maxrss 5.56 259.48 2.34 23817692
+old PE --full-cert: wall/user/sys/maxrss 12.46 675.01 2.93 24871612
+new SE --full-cert: wall/user/sys/maxrss 5.19 235.42 2.37 23825616
+new PE --full-cert: wall/user/sys/maxrss 11.56 619.46 3.04 24852260
+old SE --full-cert: wall/user/sys/maxrss 5.57 259.72 2.34 23824120
+old PE --full-cert: wall/user/sys/maxrss 12.44 674.41 2.96 24847040
+new SE --full-cert: wall/user/sys/maxrss 5.18 235.42 2.44 23844868
+new PE --full-cert: wall/user/sys/maxrss 11.56 620.15 3.14 24849220
+ALL_DONE
+
+######## 2. + the support bound in evaluate_clusters (the committed version)
+new vs c9ee1c7: 15 of 15 files identical (default and --full-cert; SE/PE; fallback/interval; and PE --full-cert on the A100)
+== time, interval mode, 64 threads, two rounds
+old SE --full-cert: wall/user/sys/maxrss 5.60 259.63 2.32 23818920
+old PE --full-cert: wall/user/sys/maxrss 12.46 674.51 2.86 24868900
+new SE --full-cert: wall/user/sys/maxrss 4.97 221.43 2.47 23827848
+new PE --full-cert: wall/user/sys/maxrss 11.08 591.03 3.09 24856156
+old SE --full-cert: wall/user/sys/maxrss 5.57 259.33 2.33 23812464
+old PE --full-cert: wall/user/sys/maxrss 12.44 674.49 2.89 24846948
+new SE --full-cert: wall/user/sys/maxrss 4.95 221.50 2.46 23828504
+new PE --full-cert: wall/user/sys/maxrss 11.13 591.22 3.17 24862844
+ALL_DONE
+
+######## not kept: a smaller pass V budget (c9ee1c7 binary, --full-cert --vbudget B, interval mode; wall user | certified | pass V)
+vbudget 4096 SE: wall/user 5.63 259.83 | certified 97.63% | pass V (CPU, adaptive parts): 4.66% of reads tried, 2.22% certified there
+vbudget 4096 PE: wall/user 12.51 675.31 | certified 97.45% | pass V (CPU, adaptive parts): 5.26% of reads tried, 2.29% certified there
+vbudget 1024 SE: wall/user 4.28 179.08 | certified 97.29% | pass V (CPU, adaptive parts): 4.66% of reads tried, 1.88% certified there
+vbudget 1024 PE: wall/user 9.71 503.29 | certified 97.21% | pass V (CPU, adaptive parts): 5.26% of reads tried, 1.93% certified there
+vbudget 512 SE: wall/user 4.06 165.53 | certified 97.10% | pass V (CPU, adaptive parts): 4.66% of reads tried, 1.67% certified there
+vbudget 512 PE: wall/user 9.20 472.96 | certified 97.08% | pass V (CPU, adaptive parts): 5.26% of reads tried, 1.73% certified there
+vbudget 256 SE: wall/user 3.93 159.36 | certified 96.92% | pass V (CPU, adaptive parts): 4.66% of reads tried, 1.47% certified there
+vbudget 256 PE: wall/user 8.94 458.47 | certified 96.96% | pass V (CPU, adaptive parts): 5.26% of reads tried, 1.52% certified there
+
+######## not kept: two-phase verification (clusters hit by >= 2 parts first, certified at radius R - 1 / R - 2 when enough; changes XR and d2 of some records) against block 1's build (old); default output identical
+old SE: wall/user/sys/maxrss 5.20 235.22 2.51 23823976 | certified 97.63%
+old PE: wall/user/sys/maxrss 11.60 619.35 3.00 24850344 | certified 97.45%
+new SE: wall/user/sys/maxrss 5.00 223.94 2.42 23809312 | certified 97.63%
+new PE: wall/user/sys/maxrss 11.14 593.76 3.10 24850328 | certified 97.45%
+old SE: wall/user/sys/maxrss 5.18 235.29 2.43 23819400 | certified 97.63%
+old PE: wall/user/sys/maxrss 11.56 619.61 3.13 24864228 | certified 97.45%
+new SE: wall/user/sys/maxrss 4.99 224.05 2.51 23813696 | certified 97.63%
+new PE: wall/user/sys/maxrss 11.15 593.88 3.15 24851852 | certified 97.45%

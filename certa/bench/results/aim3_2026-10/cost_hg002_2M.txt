@@ -1,0 +1,20 @@
+# CPU cost, HG002 2M pairs (4M reads), galaxy: 32 threads + A100 (--gpu --device 1),
+# /usr/bin/time; the HG005 variant calling ran concurrently (wall times are indicative).
+#
+# pipeline                                   wall s   user s   sys s   CPU s   us/read
+certa map (default) -u -U                       8.67   122.78    4.63   127.4      31.9
+minibwa map on the uncertified pairs            7.48   174.16    1.37   175.5      43.9
+  current pipeline, total                      16.15                    302.9      75.7
+certa map --intervals (no fallback)            16.25   337.84    4.74   342.6      85.6
+#
+# certa internals (from the logs): default map 5.01 s + output 0.43 s;
+# --intervals map 9.01 s (tier R on 4.60 % of reads) + output 4.09 s (pair
+# placement with window searches). Extra CPU of --intervals over default:
+# 215 CPU s for 184 k tier R reads and their pairs, ~1.2 ms per read, at the
+# proposal's break-even budget (section 2.2: <= 1.2 ms keeps CERTA's CPU at
+# or below minibwa's). For reference, BWA-MEM2 costs 423 us CPU per read
+# (section 2.2), about 5x the interval pipeline.
+#
+# HG005 full run (725.8 M reads, 64 threads + A100): --intervals wall 2647 s,
+# CPU 74,347 s (process time); the current pipeline took 2409 s wall with
+# minibwa's fallback alone at 41,422 CPU s (certa's own CPU was not recorded).

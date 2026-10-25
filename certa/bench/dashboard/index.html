@@ -1,0 +1,1039 @@
+<style>
+.cx { display: flex; flex-direction: column; gap: var(--cds-gap-xl); font-family: var(--font-anthropic-sans); color: var(--color-fg); }
+.cx-head { display: flex; flex-direction: column; gap: var(--cds-gap-xs); }
+.cx-head h1 { margin: 0; font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); text-wrap: balance; }
+.cx-take { margin: 0; max-width: 72ch; font-size: var(--cds-font-size-body); line-height: 1.55; color: var(--color-fg-muted); }
+.cx-take .cx-v { color: var(--color-fg); font-variant-numeric: tabular-nums; }
+.cx-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); gap: var(--cds-gap-md); }
+.cx-kpi { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-lg); display: flex; flex-direction: column; gap: var(--cds-gap-xs); min-width: 0; }
+.cx-kpi .cx-lbl { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+.cx-kpi .cx-num { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); line-height: 1.15; font-variant-numeric: tabular-nums; min-height: 1.15em; }
+.cx-kpi .cx-sub { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); line-height: 1.45; }
+.cx-good { color: var(--color-ok); }
+.cx-bad { color: var(--color-bad); }
+.cx-sec { display: flex; flex-direction: column; gap: var(--cds-gap-md); }
+.cx-sec h2 { margin: 0; font-size: var(--cds-font-size-heading); font-weight: var(--cds-font-weight-medium); }
+.cx-sec > p { margin: 0; max-width: 75ch; font-size: var(--cds-font-size-body); line-height: 1.55; color: var(--color-fg-muted); }
+.cx-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: var(--cds-gap-md); }
+.cx-card { position: relative; background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-lg); display: flex; flex-direction: column; gap: var(--cds-gap-sm); min-width: 0; }
+.cx-card h3 { margin: 0; font-size: var(--cds-font-size-heading); font-weight: var(--cds-font-weight-medium); }
+.cx-note { margin: 0; font-size: var(--cds-font-size-caption); line-height: 1.45; color: var(--color-fg-muted); }
+.cx-chart { width: 100%; }
+.cx-svg text { font-size: var(--cds-font-size-caption); fill: var(--color-fg-muted); font-variant-numeric: tabular-nums; }
+.cx-svg text.cx-lab { fill: var(--color-fg); }
+.cx-svg text.cx-val { fill: var(--color-fg); }
+.cx-legend { display: flex; flex-wrap: wrap; gap: var(--cds-gap-xs) var(--cds-gap-md); font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+.cx-legend span { display: inline-flex; align-items: center; gap: .35rem; }
+.cx-sw { display: inline-block; width: .7rem; height: .7rem; border-radius: 2px; }
+.cx-tip { position: absolute; z-index: 2; pointer-events: none; background: var(--cds-surface-popover); border: 1px solid var(--cds-border); border-radius: var(--cds-radius); box-shadow: var(--cds-shadow-popover); padding: var(--cds-pad-xs) var(--cds-pad-sm); font-size: var(--cds-font-size-caption); line-height: 1.45; max-width: 18rem; }
+.cx-tip .cx-tip-h { color: var(--cds-text-secondary); }
+.cx-tbl-wrap { overflow-x: auto; }
+.cx-tbl { width: 100%; border-collapse: collapse; font-size: var(--cds-font-size-caption); font-variant-numeric: tabular-nums; }
+.cx-tbl th, .cx-tbl td { padding: .4rem .55rem; text-align: right; border-bottom: 1px solid var(--color-border-line); white-space: nowrap; }
+.cx-tbl th:first-child, .cx-tbl td:first-child { text-align: left; }
+.cx-tbl td.cx-txt, .cx-tbl th.cx-txt { text-align: left; }
+.cx-tbl th { color: var(--color-fg-muted); font-weight: var(--cds-font-weight-medium); }
+.cx-tbl tbody tr:last-child td { border-bottom: none; }
+.cx-fail { display: flex; align-items: center; justify-content: center; gap: .45rem; min-height: inherit; padding: var(--cds-pad-md); font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+.cx-fail::before { content: ""; width: .375rem; height: .375rem; border-radius: 50%; background: var(--color-bad); }
+[data-dash-source-state=empty] { color: transparent; }
+[data-dash-source-state=refreshing] { opacity: .5; transition: opacity var(--cds-dur-slow); }
+</style>
+
+<div class="cx">
+  <header class="cx-head">
+    <h1 id="top">CERTA vs competitors</h1>
+    <p class="cx-take" id="takeaway">
+      On GIAB HG002 NovaSeq X reads and two 64-core servers, an ARM64 and an x86-64, CERTA on CPU alone maps single-end reads
+      <span class="cx-v dash-skeleton" data-source="headline" data-field="se_cpu_lo" data-row="0">—</span> to
+      <span class="cx-v dash-skeleton" data-source="headline" data-field="se_cpu_hi" data-row="0">—</span>
+      as fast as minibwa, the fastest other aligner, and pairs
+      <span class="cx-v dash-skeleton" data-source="headline" data-field="pe_cpu_lo" data-row="0">—</span> to
+      <span class="cx-v dash-skeleton" data-source="headline" data-field="pe_cpu_hi" data-row="0">—</span>
+      as fast. It makes no provable placement error on the reads it certifies, and its variant calls have the higher F1 in
+      <span class="cx-v dash-skeleton" data-source="headline" data-field="f1_wins_pe" data-row="0">—</span> of
+      <span class="cx-v dash-skeleton" data-source="headline" data-field="f1_n_pe" data-row="0">—</span>
+      paired comparisons with BWA-MEM2. With every certification pass on, it is still
+      <span class="cx-v dash-skeleton" data-source="slow_vs" data-field="se_lo" data-row="0">—</span> to
+      <span class="cx-v dash-skeleton" data-source="slow_vs" data-field="se_hi" data-row="0">—</span>
+      faster than Yara, which finds every alignment within 4 % errors but proves nothing; CERTA certifies the reads beyond
+      that rate too.
+    </p>
+  </header>
+
+  <div class="cx-kpis" id="headline">
+    <div class="cx-kpi">
+      <span class="cx-lbl">Single-end speed vs minibwa, CPU only</span>
+      <span class="cx-num dash-skeleton"><span data-source="headline" data-field="se_cpu_lo" data-row="0">—</span>–<span data-source="headline" data-field="se_cpu_hi" data-row="0">—</span></span>
+      <span class="cx-sub">Fastest CERTA pipeline on each server. Against BWA-MEM2:
+        <span data-source="headline" data-field="se_cpu_bwa_lo" data-row="0">—</span>–<span data-source="headline" data-field="se_cpu_bwa_hi" data-row="0">—</span>.</span>
+    </div>
+    <div class="cx-kpi">
+      <span class="cx-lbl">Paired speed vs minibwa, CPU only</span>
+      <span class="cx-num dash-skeleton"><span data-source="headline" data-field="pe_cpu_lo" data-row="0">—</span>–<span data-source="headline" data-field="pe_cpu_hi" data-row="0">—</span></span>
+      <span class="cx-sub">Fastest CERTA pipeline on each server. Against BWA-MEM2:
+        <span data-source="headline" data-field="pe_cpu_bwa_lo" data-row="0">—</span>–<span data-source="headline" data-field="pe_cpu_bwa_hi" data-row="0">—</span>.</span>
+    </div>
+    <div class="cx-kpi">
+      <span class="cx-lbl">With one A100, vs minibwa</span>
+      <span class="cx-num dash-skeleton"><span data-source="headline" data-field="se_gpu" data-row="0">—</span> · <span data-source="headline" data-field="pe_gpu" data-row="0">—</span></span>
+      <span class="cx-sub">Single-end · paired, on the ARM64 server.</span>
+    </div>
+    <div class="cx-kpi">
+      <span class="cx-lbl">Variant calls with the higher F1</span>
+      <span class="cx-num dash-skeleton" id="kpi-f1"><span data-source="headline" data-field="f1_wins_pe" data-row="0">—</span> of <span data-source="headline" data-field="f1_n_pe" data-row="0">—</span></span>
+      <span class="cx-sub">Paired, 3 samples, GATK and bcftools, SNVs and indels, vs BWA-MEM2. Single-end:
+        <span data-source="headline" data-field="f1_wins_se" data-row="0">—</span> of
+        <span data-source="headline" data-field="f1_n_se" data-row="0">—</span>.</span>
+    </div>
+    <div class="cx-kpi">
+      <span class="cx-lbl">Vs Yara, full sensitivity, CPU only</span>
+      <span class="cx-num"><span data-source="slow_vs" data-field="se_lo" data-row="0">—</span>–<span data-source="slow_vs" data-field="se_hi" data-row="0">—</span></span>
+      <span class="cx-sub">Single-end, CERTA with every certification pass. Paired:
+        <span data-source="slow_vs" data-field="pe_lo" data-row="0">—</span>–<span data-source="slow_vs" data-field="pe_hi" data-row="0">—</span>.</span>
+    </div>
+    <div class="cx-kpi">
+      <span class="cx-lbl">HiFi: CPU to prove the optimum</span>
+      <span class="cx-num dash-skeleton" data-source="headline" data-field="hifi_cpu_ratio" data-row="0">—</span>
+      <span class="cx-sub">Of minimap2's CPU time to map and align the same reads.</span>
+    </div>
+  </div>
+
+  <section class="cx-sec" id="errors">
+    <h2>Provable errors</h2>
+    <p>For a certified read CERTA proves the best alignment in the whole genome. Every other aligner's
+      alignment was rescored from its CIGAR under BWA-MEM's scores; a read is misplaced when the tool reports
+      another locus that scores at least one edit (5 points) lower. Sample: the first 2 M reads of the timing
+      set, of which <span data-source="provable_errors" data-field="certified_reads" data-row="0">—</span> are certified.</p>
+    <div class="cx-grid">
+      <div class="cx-card">
+        <h3 id="h-errors-speed">Misplaced reads against speed</h3>
+        <p class="cx-note">Misplaced reads per million certified reads, against the single-end wall time for 20 M reads on
+          galaxy's 64 cores (log scale). CERTA's certified reads have none by construction, on CPU and GPU alike: its four
+          complete pipelines sit at zero. Faster heuristic tools make more.</p>
+        <div class="cx-legend" id="legend-errors" data-source="errors_speed">
+          <span><i class="cx-sw" id="sw-e-gpu"></i>CERTA with a GPU</span>
+          <span><i class="cx-sw" id="sw-e-cpu"></i>CERTA on CPU only</span>
+          <span><i class="cx-sw" id="sw-e-oth"></i>Other aligners</span>
+          <span><svg width="10" height="10" aria-hidden="true"><circle cx="5" cy="5" r="4" fill="currentColor"/></svg>interval mode</span>
+          <span><svg width="10" height="10" aria-hidden="true"><rect x="1" y="1" width="8" height="8" fill="currentColor"/></svg>+ minibwa fallback</span>
+        </div>
+        <div class="cx-chart dash-skeleton" id="chart-errors" data-source="errors_speed" style="min-height: 260px"></div>
+      </div>
+      <div class="cx-card">
+        <h3>Error counts by kind</h3>
+        <p class="cx-note">Unmapped: no alignment reported although one with at most five edits exists. Tie: a read proven to occur in two or more identical copies, given MAPQ 20 or more.</p>
+        <div class="cx-tbl-wrap dash-skeleton" id="wrap-errors">
+          <table class="cx-tbl" id="tbl-errors" data-source="provable_errors" data-row-key="tool">
+            <thead><tr>
+              <th data-field="tool">Aligner</th>
+              <th data-field="misplaced">Misplaced</th>
+              <th data-source="errors_rate" data-field="per_million">Per million</th>
+              <th data-field="misplaced_mapq20">… MAPQ ≥ 20</th>
+              <th data-field="unmapped">Unmapped</th>
+              <th data-field="overconfident_ties">Ties, MAPQ ≥ 20</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="cx-sec" id="speed">
+    <h2>Speed</h2>
+    <p>Complete mapping of <span data-source="speed" data-field="reads" data-row="0">—</span> HG002 reads or pairs, every pipeline
+      on the same 64 cores, timed in one session per server: <em>galaxy</em> (Ampere Altra ARM64, 64 of its 128 cores, one NVIDIA
+      A100) and <em>a2</em> (four Xeon Gold 5218, x86-64, no GPU). CERTA runs in two complete configurations: with a fallback, it
+      streams the reads it cannot certify into minibwa, which runs at the same time; in interval mode it places every read itself,
+      a certified read at its optimum and any other read in a proven interval. CPU and GPU runs certify the same reads and write
+      the same bytes.</p>
+    <div class="cx-legend" id="legend-speed" data-source="speed">
+      <span><i class="cx-sw" id="sw-gpu"></i>CERTA with a GPU</span>
+      <span><i class="cx-sw" id="sw-cpu"></i>CERTA on CPU only</span>
+      <span><i class="cx-sw" id="sw-oth"></i>Other aligners</span>
+    </div>
+    <div class="cx-grid">
+      <div class="cx-card">
+        <h3 id="h-galaxy-se">galaxy (ARM64), single-end</h3>
+        <p class="cx-note">Median of three runs.</p>
+        <div class="cx-chart dash-skeleton" id="chart-galaxy-se" data-source="speed speed_vs" style="min-height: 330px"></div>
+      </div>
+      <div class="cx-card">
+        <h3 id="h-galaxy-pe">galaxy (ARM64), paired</h3>
+        <p class="cx-note">One run each. K10m / Kdefault: the fallback minibwa's batch size.</p>
+        <div class="cx-chart dash-skeleton" id="chart-galaxy-pe" data-source="speed speed_vs" style="min-height: 280px"></div>
+      </div>
+      <div class="cx-card">
+        <h3 id="h-a2-se">a2 (x86-64), single-end</h3>
+        <p class="cx-note">Median of three runs.</p>
+        <div class="cx-chart dash-skeleton" id="chart-a2-se" data-source="speed speed_vs" style="min-height: 230px"></div>
+      </div>
+      <div class="cx-card">
+        <h3 id="h-a2-pe">a2 (x86-64), paired</h3>
+        <p class="cx-note">One run each.</p>
+        <div class="cx-chart dash-skeleton" id="chart-a2-pe" data-source="speed speed_vs" style="min-height: 180px"></div>
+      </div>
+    </div>
+    <div class="cx-card">
+      <h3 id="h-timings">All timings</h3>
+      <p class="cx-note">CPU is user plus system time. Config: CERTA's and minibwa's threads (both start 64 on the 64 cores) and, paired,
+        the fallback minibwa's batch size. A certified tier alone is not a complete mapping: it leaves the uncertified reads unmapped.</p>
+      <div class="cx-tbl-wrap dash-skeleton" id="wrap-speed">
+        <table class="cx-tbl" id="tbl-speed" data-source="speed" data-row-key="host,mode,pipeline,config">
+          <thead><tr>
+            <th class="cx-txt" data-field="host">Server</th>
+            <th class="cx-txt" data-field="mode">Mode</th>
+            <th class="cx-txt" data-field="pipeline">Pipeline</th>
+            <th class="cx-txt" data-field="config">Config</th>
+            <th data-field="wall_s">Wall (s)</th>
+            <th data-field="cpu_s">CPU (s)</th>
+            <th data-source="speed_vs" data-field="vs_minibwa">Speed vs minibwa</th>
+            <th data-source="speed_vs" data-field="vs_bwa">Speed vs BWA-MEM2</th>
+            <th data-field="runs">Runs</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="cx-sec" id="slow">
+    <h2>Against the slow, reliable mappers</h2>
+    <p>Yara and RazerS 3 search exhaustively: each reports every alignment within an error rate, set here to cover CERTA's
+      certificate radius (Settings, in the table below). They prove nothing about a read; CERTA proves each certified read
+      optimal over the whole genome. CERTA runs in interval mode, so every read gets a record: at its default certification;
+      with <code>--full-cert --adaptive-parts 0</code> (the larger budget and local certificates); with <code>--full-cert</code>,
+      which adds pass V, parts chosen per read: the rarest q-mers, then q-mers searched with one edit, certifying up to 12 edits;
+      and with <code>--full-cert --index2</code> (every pass again on a second index of 15-base parts). Winnowmap2 maps long
+      reads only, so it is compared on HiFi reads. All on galaxy's 64 cores, index loading included.</p>
+    <div class="cx-kpis" id="slow-kpis">
+      <div class="cx-kpi">
+        <span class="cx-lbl">Vs Yara, single-end</span>
+        <span class="cx-num"><span data-source="slow_vs" data-field="se_lo" data-row="0">—</span>–<span data-source="slow_vs" data-field="se_hi" data-row="0">—</span></span>
+        <span class="cx-sub">Yara's wall time over CERTA's, with and without the second index.</span>
+      </div>
+      <div class="cx-kpi">
+        <span class="cx-lbl">Vs Yara, paired</span>
+        <span class="cx-num"><span data-source="slow_vs" data-field="pe_lo" data-row="0">—</span>–<span data-source="slow_vs" data-field="pe_hi" data-row="0">—</span></span>
+        <span class="cx-sub">The same, on pairs.</span>
+      </div>
+      <div class="cx-kpi">
+        <span class="cx-lbl">Vs RazerS 3, single-end</span>
+        <span class="cx-num dash-skeleton" data-source="slow_vs" data-field="razers" data-row="0">—</span>
+        <span class="cx-sub">On its <span data-source="slow_speed" data-field="reads" data-row="16">—</span> reads, CERTA with <code>--full-cert</code>. Its paired mode aborted.</span>
+      </div>
+      <div class="cx-kpi">
+        <span class="cx-lbl">HiFi vs Winnowmap2</span>
+        <span class="cx-num dash-skeleton" data-source="slow_vs" data-field="hifi" data-row="0">—</span>
+        <span class="cx-sub">Winnowmap2's wall time over minimap2 + lr_ceiling's, which proves the optimum.</span>
+      </div>
+    </div>
+    <div class="cx-legend" id="legend-slow" data-source="slow_speed">
+      <span><i class="cx-sw" id="sw-s-gpu"></i>CERTA with a GPU</span>
+      <span><i class="cx-sw" id="sw-s-cpu"></i>CERTA on CPU only</span>
+      <span><i class="cx-sw" id="sw-s-oth"></i>Slow, reliable mappers</span>
+    </div>
+    <div class="cx-grid">
+      <div class="cx-card">
+        <h3 id="h-slow-se">Single-end, wall time</h3>
+        <p class="cx-note"><span data-source="slow_speed" data-field="reads" data-row="0">—</span> HG002 reads. Log scale; CERTA
+          median of three runs, the others one run. Hover a bar for its settings and certified share.</p>
+        <div class="cx-chart dash-skeleton" id="chart-slow-se" data-source="slow_speed" style="min-height: 250px"></div>
+      </div>
+      <div class="cx-card">
+        <h3 id="h-slow-pe">Paired, wall time</h3>
+        <p class="cx-note"><span data-source="slow_speed" data-field="reads" data-row="4">—</span> HG002 pairs. Log scale.</p>
+        <div class="cx-chart dash-skeleton" id="chart-slow-pe" data-source="slow_speed" style="min-height: 250px"></div>
+      </div>
+      <div class="cx-card">
+        <h3 id="h-slow-rz">RazerS 3, on fewer reads</h3>
+        <p class="cx-note">The first <span data-source="slow_speed" data-field="reads" data-row="16">—</span> reads or pairs:
+          RazerS 3 on all of them would take most of an hour. Its paired run aborted with an out-of-memory exception at the end
+          (time to the abort). Log scale.</p>
+        <div class="cx-chart dash-skeleton" id="chart-slow-rz" data-source="slow_speed" style="min-height: 150px"></div>
+      </div>
+      <div class="cx-card">
+        <h3 id="h-slow-hifi">HiFi long reads, wall time</h3>
+        <p class="cx-note"><span data-source="slow_speed" data-field="reads" data-row="22">—</span> HG002 HiFi reads. CERTA's
+          pipeline maps with minimap2, then proves each read's optimum with lr_ceiling. Winnowmap2's saved index crashes on load,
+          so it builds its index in every run.</p>
+        <div class="cx-legend" id="legend-slow-hifi" data-source="slow_speed"></div>
+        <div class="cx-chart dash-skeleton" id="chart-slow-hifi" data-source="slow_speed" style="min-height: 110px"></div>
+      </div>
+    </div>
+    <div class="cx-grid">
+      <div class="cx-card">
+        <h3 id="h-slow-rel">Agreement with CERTA's certificates</h3>
+        <p class="cx-note">On the reads CERTA certifies with <code>--full-cert</code>. End-to-end certificates prove the fewest
+          edits (up to 12); "more edits" counts reads placed elsewhere with more edits than that, wrong under any scoring, while
+          "worse locus" uses BWA-MEM's scores, under which equal edits can differ. "Unmapped" splits by the mapper's own error
+          rate (4 % of the read length): within it they miss nothing; beyond it CERTA still proves the optimum. Local
+          certificates prove the best clipped alignment, which these end-to-end mappers cannot report. RazerS 3 marks its first
+          match primary, not its best, so both are shown.</p>
+        <div class="cx-tbl-wrap dash-skeleton" id="wrap-slow-rel">
+          <table class="cx-tbl" id="tbl-slow-rel" data-source="slow_reliability" data-row-key="data,tool">
+            <thead><tr>
+              <th class="cx-txt" data-field="data">Reads</th>
+              <th class="cx-txt" data-field="tool">Mapper</th>
+              <th data-field="end_to_end_certified">End-to-end certified</th>
+              <th data-field="e2e_more_edits">More edits</th>
+              <th data-field="e2e_missed_better">Worse locus</th>
+              <th data-field="unmapped_within_error_rate">Unmapped, within its error rate</th>
+              <th data-field="unmapped_beyond_error_rate">… beyond it</th>
+              <th data-field="local_certified">Local certified</th>
+              <th data-field="local_unmapped">… unmapped</th>
+              <th data-field="overconfident_ties">Ties, MAPQ ≥ 20</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="cx-card">
+        <h3 id="h-slow-hifi-out">HiFi: the proven optimum against each aligner</h3>
+        <p class="cx-note">lr_ceiling proves the optimum starting from each aligner's alignments, under CERTA's scores (+1/−4, gaps
+          −6−k). Winnowmap2's preset scores differently, so "above the aligner" is not an error count.</p>
+        <div class="cx-tbl-wrap dash-skeleton" id="wrap-slow-hifi">
+          <table class="cx-tbl" id="tbl-slow-hifi" data-source="slow_hifi" data-row-key="aligner">
+            <thead><tr>
+              <th class="cx-txt" data-field="aligner">Aligner</th>
+              <th data-field="reads_aligned">Reads aligned</th>
+              <th data-field="proven">Optimum proven</th>
+              <th data-field="proven_above_aligner">Optimum above the aligner</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="cx-card">
+      <h3 id="h-slow-timings">All timings against the slow mappers</h3>
+      <p class="cx-note">CPU is user plus system time; memory is the peak resident size. Certified: CERTA's share of all reads
+        (paired: of both mates).</p>
+      <div class="cx-tbl-wrap dash-skeleton" id="wrap-slow-speed">
+        <table class="cx-tbl" id="tbl-slow-speed" data-source="slow_speed" data-row-key="data,tool,config">
+          <thead><tr>
+            <th class="cx-txt" data-field="data">Reads</th>
+            <th class="cx-txt" data-field="tool">Tool</th>
+            <th class="cx-txt" data-field="config">Config</th>
+            <th class="cx-txt" data-field="settings">Settings</th>
+            <th data-field="wall_s">Wall (s)</th>
+            <th data-field="cpu_s">CPU (s)</th>
+            <th data-field="rss_gb">Memory (GB)</th>
+            <th data-field="certified">Certified</th>
+            <th data-field="runs">Runs</th>
+            <th class="cx-txt" data-field="status">Status</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="cx-sec" id="certification">
+    <h2>How many reads carry a proof</h2>
+    <p>Share of all reads of each sample that CERTA certifies, by the kind of proof. The rest go to the fallback aligner.
+      HG001 and HG005 were sequenced on a NovaSeq 6000 with 151 bp reads and more errors.</p>
+    <div class="cx-card">
+      <h3>Certified share by proof type</h3>
+      <div class="cx-legend" id="legend-cert" data-source="cert_share"></div>
+      <div class="cx-chart dash-skeleton" id="chart-cert" data-source="cert_share" style="min-height: 150px"></div>
+    </div>
+  </section>
+
+  <section class="cx-sec" id="variants">
+    <h2>Variant-calling accuracy</h2>
+    <p>Chromosome 20 against the GIAB v4.2.1 benchmark, with the same caller settings for both pipelines
+      (rtg vcfeval). Each point is CERTA's F1 minus BWA-MEM2's; right of zero, CERTA is better.</p>
+    <div class="cx-grid">
+      <div class="cx-card">
+        <h3>F1 difference, CERTA minus BWA-MEM2</h3>
+        <p class="cx-note">In paired mode CERTA's gain comes from precision: fewer false positives, slightly lower recall.</p>
+        <div class="cx-chart dash-skeleton" id="chart-f1" data-source="f1_pairs" style="min-height: 430px"></div>
+      </div>
+      <div class="cx-card">
+        <h3>F1 by sample, caller and variant type</h3>
+        <p class="cx-note">CERTA includes its minibwa fallback for the uncertified reads.</p>
+        <div class="cx-tbl-wrap dash-skeleton" id="wrap-f1">
+          <table class="cx-tbl" id="tbl-f1" data-source="f1_pairs" data-row-key="sample,mode,caller,variant_type">
+            <thead><tr>
+              <th data-field="sample">Sample</th>
+              <th class="cx-txt" data-field="mode">Mode</th>
+              <th class="cx-txt" data-field="caller">Caller</th>
+              <th class="cx-txt" data-field="variant_type">Type</th>
+              <th data-field="certa_f1">CERTA</th>
+              <th data-field="bwa_f1">BWA-MEM2</th>
+              <th data-field="delta">Δ</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="cx-sec" id="longreads">
+    <h2>Long reads: proving the optimum against minimap2</h2>
+    <p>On <span data-source="hifi_outcome" data-field="value" data-where="metric=reads">—</span> HG002 PacBio HiFi reads,
+      minimap2's alignment gives a lower bound and CERTA proves the optimum with a banded DP over the chains that could beat it.</p>
+    <div class="cx-grid">
+      <div class="cx-card">
+        <h3>CPU time for the whole sample</h3>
+        <p class="cx-note">Each CERTA version proves the same optima; the last is the current one. 64 threads.</p>
+        <div class="cx-chart dash-skeleton" id="chart-hifi" data-source="hifi_cost" style="min-height: 170px"></div>
+      </div>
+      <div class="cx-card">
+        <h3>Outcome</h3>
+        <div class="cx-kpis">
+          <div class="cx-kpi">
+            <span class="cx-lbl">Optimum proven</span>
+            <span class="cx-num dash-skeleton" data-source="hifi_summary" data-field="exact_share" data-row="0">—</span>
+            <span class="cx-sub">Of all reads, including <span data-source="hifi_outcome" data-field="value" data-where="metric=split_proven">—</span> that span structural variants.</span>
+          </div>
+          <div class="cx-kpi">
+            <span class="cx-lbl">Optimum beats minimap2</span>
+            <span class="cx-num dash-skeleton" data-source="hifi_summary" data-field="above_share" data-row="0">—</span>
+            <span class="cx-sub">Of proven reads, minimap2's alignment scores lower than the optimum under the same scores.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+dash.calc('speed_vs', {
+  inputs: ['speed'],
+  title: 'Speed vs minibwa and BWA-MEM2',
+  description: "minibwa's and BWA-MEM2's wall time divided by each pipeline's, on the same server and in the same mode.",
+  fn: (speed) => speed.map((r) => {
+    const wall = (p) => +speed.find((x) => x.host === r.host && x.mode === r.mode && x.pipeline === p).wall_s;
+    return { host: r.host, mode: r.mode, pipeline: r.pipeline, config: r.config,
+      vs_minibwa: wall('minibwa') / +r.wall_s, vs_bwa: wall('BWA-MEM2') / +r.wall_s };
+  }),
+});
+
+dash.calc('errors_rate', {
+  inputs: ['provable_errors'],
+  title: 'Misplaced per million',
+  description: 'Misplaced reads per million certified reads, for each aligner.',
+  fn: (provable_errors) => provable_errors.map((r) => ({
+    tool: r.tool, misplaced: +r.misplaced, per_million: +r.misplaced / +r.certified_reads * 1e6,
+  })),
+});
+
+dash.calc('errors_speed', {
+  inputs: ['provable_errors', 'speed'],
+  title: 'Misplaced reads against speed',
+  description: "Each complete single-end pipeline on galaxy (64 cores), in its fastest configuration: its median wall time for 20 M reads, and its aligner's misplaced reads per million certified reads (every CERTA pipeline: CERTA's row, zero by construction).",
+  fn: (provable_errors, speed) => speed
+    .filter((s) => s.host === 'galaxy' && s.mode === 'single-end' && s.complete === 'yes')
+    .filter((s, _, all) => !all.some((o) => o.pipeline === s.pipeline && o.mode === s.mode && o.host === s.host
+      && +o.wall_s < +s.wall_s))
+    .map((s) => {
+      // An aligner's error row is the one whose tool starts with the pipeline's first word (BWA-MEM2 2.3 for BWA-MEM2).
+      const e = s.pipeline.startsWith('CERTA') ? provable_errors.find((r) => r.tool === 'CERTA')
+        : provable_errors.find((r) => r.tool.split(' ')[0] === s.pipeline.split(' ')[0]);
+      return {
+        pipeline: s.pipeline, config: s.config, wall_s: +s.wall_s, misplaced: +e.misplaced,
+        per_million: +e.misplaced / +e.certified_reads * 1e6,
+      };
+    }),
+});
+
+dash.calc('cert_share', {
+  inputs: ['certification'],
+  title: 'Certified share by proof',
+  description: 'Each proof type and the uncertified reads as a share of all reads of the sample.',
+  fn: (certification) => certification.map((r) => {
+    const n = +r.reads;
+    return {
+      sample: r.sample, mode: r.mode, certified: +r.certified / n, exact_s0: +r.exact_s0 / n, edits_s1: +r.edits_s1 / n,
+      repeat_sr: +r.repeat_sr / n, pair_pr: +r.pair_pr / n, not_certified: +r.not_certified / n,
+    };
+  }),
+});
+
+dash.calc('f1_pairs', {
+  inputs: ['variant_calling'],
+  title: 'F1, CERTA vs BWA-MEM2',
+  description: "CERTA's and BWA-MEM2's F1 side by side for each sample, mode, caller and variant type, and their difference.",
+  fn: (variant_calling) => variant_calling.filter((r) => r.pipeline === 'CERTA').map((r) => {
+    const b = variant_calling.find((x) => x.pipeline === 'BWA-MEM2' && x.sample === r.sample && x.mode === r.mode
+      && x.caller === r.caller && x.variant_type === r.variant_type);
+    return {
+      sample: r.sample, mode: r.mode, caller: r.caller, variant_type: r.variant_type, certa_f1: +r.f1, bwa_f1: +b.f1,
+      delta: +r.f1 - +b.f1, certa_fp: +r.fp, bwa_fp: +b.fp, certa_fn: +r.fn, bwa_fn: +b.fn,
+    };
+  }),
+});
+
+dash.calc('hifi_summary', {
+  inputs: ['hifi_outcome', 'hifi_cost'],
+  title: 'HiFi shares and CPU ratio',
+  description: "Reads with a proven optimum as a share of all reads, the share where it beats minimap2, and CERTA's CPU over minimap2's.",
+  fn: (hifi_outcome, hifi_cost) => {
+    const v = (m) => +hifi_outcome.find((r) => r.metric === m).value;
+    const certa = hifi_cost.find((r) => r.step === 'CERTA, + batched lookups and pruning');
+    const mm2 = hifi_cost.find((r) => r.tool === 'minimap2');
+    return [{
+      proven_share: v('proven') / v('reads'), exact_share: (v('proven') + v('split_proven')) / v('reads'),
+      above_share: v('opt_above_minimap2') / v('proven'), cpu_ratio: +certa.cpu_s / +mm2.cpu_s,
+    }];
+  },
+});
+
+dash.calc('slow_vs', {
+  inputs: ['slow_speed'],
+  title: 'Speed vs the slow mappers',
+  description: "Yara's, RazerS 3's and Winnowmap2's wall time over CERTA's (CPU) on the same reads: CERTA with --full-cert (hi; RazerS 3) and with --full-cert --index2 (lo); HiFi: CERTA's pipeline is minimap2 + lr_ceiling.",
+  fn: (slow_speed) => {
+    const w = (data, tool, config) => +slow_speed.find((r) => r.data === data && r.tool === tool
+      && (config === undefined || r.config === config)).wall_s;
+    const fc = '--full-cert', fx = '--full-cert --index2 q15';
+    return [{
+      se_lo: w('single-end', 'Yara 1.0.5') / w('single-end', 'CERTA', fx),
+      se_hi: w('single-end', 'Yara 1.0.5') / w('single-end', 'CERTA', fc),
+      pe_lo: w('paired', 'Yara 1.0.5') / w('paired', 'CERTA', fx),
+      pe_hi: w('paired', 'Yara 1.0.5') / w('paired', 'CERTA', fc),
+      razers: w('single-end-200000', 'RazerS 3 3.5.12') / w('single-end-200000', 'CERTA', fc),
+      hifi: w('hifi', 'Winnowmap 2.03')
+        / (w('hifi', 'minimap2 2.31') + w('hifi', 'lr_ceiling', '--certify (minimap2 alignments)')),
+    }];
+  },
+});
+
+dash.calc('headline', {
+  inputs: ['speed_vs', 'f1_pairs', 'hifi_summary'],
+  title: 'Headline figures',
+  description: "The fastest complete CERTA pipeline's speed vs minibwa and BWA-MEM2 on each server (CPU only; and with the A100), F1 wins over BWA-MEM2 by mode, and the HiFi CPU ratio.",
+  fn: (speed_vs, f1_pairs, hifi_summary) => {
+    // The fastest complete CERTA pipeline of a kind ('CERTA CPU' or 'CERTA GPU') on each server.
+    const best = (mode, kind) => ['galaxy', 'a2'].map((h) => speed_vs.filter((r) => r.host === h && r.mode === mode
+      && r.pipeline.startsWith(kind) && !r.pipeline.endsWith('tier only'))).filter((rs) => rs.length > 0)
+      .map((rs) => rs.reduce((a, b) => (b.vs_minibwa > a.vs_minibwa ? b : a)));
+    const se = best('single-end', 'CERTA CPU'), pe = best('paired', 'CERTA CPU');
+    const lo = (rs, f) => Math.min(...rs.map((r) => r[f])), hi = (rs, f) => Math.max(...rs.map((r) => r[f]));
+    const fpe = f1_pairs.filter((r) => r.mode === 'paired');
+    const fse = f1_pairs.filter((r) => r.mode === 'single-end');
+    return [{
+      se_cpu_lo: lo(se, 'vs_minibwa'), se_cpu_hi: hi(se, 'vs_minibwa'),
+      se_cpu_bwa_lo: lo(se, 'vs_bwa'), se_cpu_bwa_hi: hi(se, 'vs_bwa'),
+      pe_cpu_lo: lo(pe, 'vs_minibwa'), pe_cpu_hi: hi(pe, 'vs_minibwa'),
+      pe_cpu_bwa_lo: lo(pe, 'vs_bwa'), pe_cpu_bwa_hi: hi(pe, 'vs_bwa'),
+      se_gpu: best('single-end', 'CERTA GPU')[0].vs_minibwa, pe_gpu: best('paired', 'CERTA GPU')[0].vs_minibwa,
+      f1_wins_pe: fpe.filter((r) => r.delta > 0).length, f1_n_pe: fpe.length,
+      f1_wins_se: fse.filter((r) => r.delta > 0).length, f1_n_se: fse.length,
+      hifi_cpu_ratio: hifi_summary[0].cpu_ratio,
+    }];
+  },
+});
+
+(() => {
+  const fInt = d3.format(',');
+  const fX = (v) => d3.format('.2f')(v) + '×';
+  const fX1 = (v) => d3.format('.1f')(v) + '×';
+  const fN2 = d3.format('.2f');  // the low end of a range ("1.38–1.55×")
+  const fN1 = d3.format('.1f');
+  const fPct = d3.format('.1%');
+  const fPct2 = d3.format('.2%');
+  const fSec = (v) => d3.format(',.1f')(v) + ' s';
+  const fF1 = d3.format('.4f');
+  const fD = (v) => (v >= 0 ? '+' : '−') + d3.format('.4f')(Math.abs(v));
+  const CERTA_ = (name) => name.startsWith('CERTA');
+  const speedColor = (name) => (name.startsWith('CERTA GPU') ? dash.colors[0]
+    : name.startsWith('CERTA CPU') ? dash.colors[1] : 'var(--cds-chart-muted)');
+  const callerName = { gatk: 'GATK', bcftools: 'bcftools' };
+
+  const st = (id) => dash.data(id);
+  const ok = (...ids) => ids.every((id) => st(id).status === 'ok');
+  const failed = (...ids) => ids.some((id) => st(id).status === 'error' || st(id).status === 'missing');
+
+  function failLine() {
+    const d = document.createElement('div');
+    d.className = 'cx-fail';
+    d.textContent = 'Failed to load';
+    return d;
+  }
+
+  // A box that waits on sources: skeleton while loading, one line on failure.
+  function gate(el, ids) {
+    if (ok(...ids)) { el.classList.remove('dash-skeleton'); return true; }
+    if (failed(...ids)) { el.classList.remove('dash-skeleton'); el.replaceChildren(failLine()); return false; }
+    el.classList.add('dash-skeleton');
+    return false;
+  }
+
+  function setText(sel, ids, fmt) {
+    document.querySelectorAll(sel).forEach((el) => {
+      const id = el.dataset.source;
+      if (!ok(id)) { el.textContent = '—'; if (!failed(id)) el.classList.add('dash-skeleton'); else el.classList.remove('dash-skeleton'); return; }
+      const rows = st(id).data;
+      let row = null;
+      if (el.dataset.row !== undefined) row = rows[+el.dataset.row];
+      else if (el.dataset.where) {
+        const [k, v] = el.dataset.where.split('=').map(decodeURIComponent);
+        row = rows.find((r) => String(r[k]) === v);
+      }
+      el.classList.remove('dash-skeleton');
+      el.textContent = row ? fmt(el.dataset.field, row[el.dataset.field], id) : '—';
+    });
+  }
+
+  const headFmt = {
+    se_cpu_lo: fN2, se_cpu_hi: fX, pe_cpu_lo: fN2, pe_cpu_hi: fX, se_cpu_bwa_lo: fN1, se_cpu_bwa_hi: fX1,
+    pe_cpu_bwa_lo: fN1, pe_cpu_bwa_hi: fX1, se_gpu: fX, pe_gpu: fX, hifi_cpu_ratio: fX,
+    f1_wins_pe: fInt, f1_n_pe: fInt, f1_wins_se: fInt, f1_n_se: fInt,
+  };
+  function fmtValue(field, v, id) {
+    if (id === 'headline') return headFmt[field](v);
+    if (id === 'slow_vs') return field.endsWith('_lo') ? d3.format('.0f')(v) : field === 'hifi' ? fX1(v) : d3.format('.0f')(v) + '×';
+    if (id === 'hifi_summary') return field === 'exact_share' ? fPct2(v) : fPct(v);
+    return fInt(+v);
+  }
+
+  // ---- tooltip
+  function tipOf(card) {
+    let t = card.querySelector(':scope > .cx-tip');
+    if (!t) { t = document.createElement('div'); t.className = 'cx-tip'; t.hidden = true; card.appendChild(t); }
+    return t;
+  }
+  function hover(sel, el, lines) {
+    const card = el.closest('.cx-card');
+    const tip = tipOf(card);
+    sel.on('mousemove', (ev) => {
+      const L = lines();
+      tip.replaceChildren(...L.map((s, i) => {
+        const d = document.createElement('div');
+        d.textContent = s;
+        if (i === 0) d.className = 'cx-tip-h';
+        return d;
+      }));
+      tip.hidden = false;
+      const cr = card.getBoundingClientRect();
+      let left = ev.clientX - cr.left + 14;
+      const top = ev.clientY - cr.top + 14;
+      if (left + tip.offsetWidth > card.clientWidth - 8) left = ev.clientX - cr.left - tip.offsetWidth - 14;
+      tip.style.left = Math.max(8, left) + 'px';
+      tip.style.top = top + 'px';
+    }).on('mouseleave', () => { tip.hidden = true; });
+  }
+
+  function newSvg(el, H) {
+    el.replaceChildren();
+    const W = Math.max(280, el.clientWidth || 600);
+    const svg = d3.select(el).append('svg').attr('class', 'cx-svg').attr('width', '100%')
+      .attr('viewBox', `0 0 ${W} ${H}`).attr('role', 'img');
+    return { svg, W };
+  }
+  function measure(svg, texts, cls) {
+    const g = svg.append('g').attr('class', cls || '').style('visibility', 'hidden');
+    let w = 0;
+    texts.forEach((t) => { w = Math.max(w, g.append('text').attr('class', cls || '').text(t).node().getComputedTextLength()); });
+    g.remove();
+    return w;
+  }
+
+  // Horizontal bars from one baseline, value at the tip.
+  function hbars(el, data, o) {
+    const bh = 20, gap = 12, axisH = 22;
+    const H = data.length * (bh + gap) - gap + axisH + 6;
+    const { svg, W } = newSvg(el, H);
+    const lw = measure(svg, data.map(o.label), 'cx-lab') + 10;
+    const vw = measure(svg, data.map((d) => o.fmt(o.value(d))), 'cx-val') + 10;
+    const max = d3.max(data, o.value) || 1;
+    const x = d3.scaleLinear([0, max], [lw, W - vw]).nice();
+    const ticks = x.ticks(Math.max(2, Math.floor((W - lw - vw) / 80)));
+    const plotH = H - axisH;
+    svg.append('g').selectAll('line').data(ticks).join('line')
+      .attr('x1', x).attr('x2', x).attr('y1', 0).attr('y2', plotH).style('stroke', 'var(--cds-chart-grid)');
+    svg.append('line').attr('x1', x(0)).attr('x2', x(0)).attr('y1', 0).attr('y2', plotH).style('stroke', 'var(--cds-chart-axis)');
+    svg.append('g').selectAll('text').data(ticks).join('text')
+      .attr('x', x).attr('y', H - 4).attr('text-anchor', 'middle').text(o.tick || d3.format('~s'));
+    data.forEach((d, i) => {
+      const y = i * (bh + gap);
+      const v = o.value(d);
+      svg.append('text').attr('class', 'cx-lab').attr('x', lw - 10).attr('y', y + bh / 2).attr('dy', '0.35em')
+        .attr('text-anchor', 'end').text(o.label(d));
+      const r = svg.append('rect').attr('x', x(0)).attr('y', y).attr('height', bh)
+        .attr('width', Math.max(0, x(v) - x(0))).attr('rx', 4).style('fill', o.color(d));
+      svg.append('text').attr('class', 'cx-val').attr('x', x(v) + 6).attr('y', y + bh / 2).attr('dy', '0.35em').text(o.fmt(v));
+      const hit = svg.append('rect').attr('x', 0).attr('y', y - gap / 2).attr('width', W).attr('height', bh + gap).style('fill', 'transparent');
+      if (o.tip) hover(hit, el, () => o.tip(d));
+    });
+  }
+
+  // Misplaced reads (y) against wall time (x, log): every complete single-end
+  // pipeline on galaxy; CERTA's CPU and GPU pipelines all at zero.
+  function drawErrors() {
+    document.getElementById('sw-e-gpu').style.background = dash.colors[0];
+    document.getElementById('sw-e-cpu').style.background = dash.colors[1];
+    document.getElementById('sw-e-oth').style.background = 'var(--cds-chart-muted)';
+    const el = document.getElementById('chart-errors');
+    if (!gate(el, ['errors_speed'])) return;
+    const data = st('errors_speed').data;
+    const H = 260, padL = 60, padB = 34, padT = 12;
+    const { svg, W } = newSvg(el, H);
+    const padR = 16;
+    const x = d3.scaleLog([8, 260], [padL, W - padR]);
+    const ymax = d3.max(data, (d) => d.per_million) || 1;
+    const y = d3.scaleLinear([-0.08 * ymax, ymax * 1.08], [H - padB, padT]).nice();
+    const xt = [10, 20, 50, 100, 200];
+    svg.append('g').selectAll('line').data(xt).join('line').attr('x1', x).attr('x2', x)
+      .attr('y1', padT).attr('y2', H - padB).style('stroke', 'var(--cds-chart-grid)');
+    const yt = y.ticks(5).filter((v) => v >= 0);
+    svg.append('g').selectAll('line').data(yt).join('line').attr('x1', padL).attr('x2', W - padR)
+      .attr('y1', y).attr('y2', y).style('stroke', (v) => (v === 0 ? 'var(--cds-chart-axis)' : 'var(--cds-chart-grid)'));
+    svg.append('g').selectAll('text').data(xt).join('text').attr('x', x).attr('y', H - padB + 16)
+      .attr('text-anchor', 'middle').text((v) => v);
+    svg.append('text').attr('x', (padL + W - padR) / 2).attr('y', H - 3).attr('text-anchor', 'middle')
+      .text('wall time, 20 M reads, 64 cores (s)');
+    svg.append('g').selectAll('text').data(yt).join('text').attr('x', padL - 8).attr('y', y).attr('dy', '0.35em')
+      .attr('text-anchor', 'end').text(d3.format(','));
+    const isGpu = (d) => d.pipeline.startsWith('CERTA GPU');
+    const isCerta = (d) => d.pipeline.startsWith('CERTA');
+    const color = (d) => (isGpu(d) ? dash.colors[0] : isCerta(d) ? dash.colors[1] : 'var(--cds-chart-muted)');
+    const tip = (d) => [`${d.pipeline}${d.config !== '-' ? ` (${d.config})` : ''}`, `wall ${fSec(d.wall_s)}`,
+      `${d3.format(',.0f')(d.per_million)} misplaced per million certified reads (${fInt(d.misplaced)} in all)`];
+    // Other aligners: labelled points.
+    data.filter((d) => !isCerta(d)).forEach((d) => {
+      const cx = x(d.wall_s), cy = y(d.per_million);
+      const c = svg.append('circle').attr('cx', cx).attr('cy', cy).attr('r', 5).style('fill', color(d))
+        .style('stroke', 'var(--color-panel)').style('stroke-width', 1.5);
+      const right = cx < W - 120;
+      svg.append('text').attr('class', 'cx-lab').attr('x', cx + (right ? 9 : -9)).attr('y', cy).attr('dy', '0.35em')
+        .attr('text-anchor', right ? 'start' : 'end').text(d.pipeline);
+      hover(c, el, () => tip(d));
+    });
+    // CERTA: a circle for interval mode, a square with the minibwa fallback; one label for the group.
+    const certa = data.filter(isCerta).sort((a, b) => a.wall_s - b.wall_s);
+    certa.forEach((d) => {
+      const cx = x(d.wall_s), cy = y(0);
+      const m = d.pipeline.includes('interval')
+        ? svg.append('circle').attr('cx', cx).attr('cy', cy).attr('r', 5.5)
+        : svg.append('rect').attr('x', cx - 5).attr('y', cy - 5).attr('width', 10).attr('height', 10);
+      m.style('fill', color(d)).style('stroke', 'var(--color-panel)').style('stroke-width', 1.5);
+      hover(m, el, () => tip(d));
+    });
+    if (certa.length) {
+      svg.append('text').attr('class', 'cx-lab').attr('x', x(certa[0].wall_s)).attr('y', y(0) - 13)
+        .attr('text-anchor', 'start').text('CERTA');
+    }
+    svg.append('text').attr('transform', `translate(12, ${(padT + H - padB) / 2}) rotate(-90)`)
+      .attr('text-anchor', 'middle').text('misplaced per million');
+  }
+
+  function drawSpeed() {
+    document.getElementById('sw-gpu').style.background = dash.colors[0];
+    document.getElementById('sw-cpu').style.background = dash.colors[1];
+    document.getElementById('sw-oth').style.background = 'var(--cds-chart-muted)';
+    const short = (p) => p.replace('CERTA CPU', 'CERTA').replace('CERTA GPU', 'CERTA A100').replace(' interval mode', ', interval');
+    for (const host of ['galaxy', 'a2']) {
+      for (const [m, mode] of [['se', 'single-end'], ['pe', 'paired']]) {
+        const el = document.getElementById(`chart-${host}-${m}`);
+        if (!gate(el, ['speed', 'speed_vs'])) continue;
+        const rel = st('speed_vs').data;
+        const rows = st('speed').data.filter((r) => r.host === host && r.mode === mode && r.complete === 'yes')
+          .sort((a, b) => +a.wall_s - +b.wall_s);
+        // The configuration goes in the label only where one pipeline was timed in several.
+        const many = (d) => rows.filter((r) => r.pipeline === d.pipeline).length > 1;
+        hbars(el, rows, {
+          label: (d) => short(d.pipeline) + (many(d) ? ` (${d.config})` : ''), value: (d) => +d.wall_s, fmt: fSec,
+          tick: (v) => d3.format('~s')(v), color: (d) => speedColor(d.pipeline),
+          tip: (d) => {
+            const s = rel.find((x) => x.host === d.host && x.mode === d.mode && x.pipeline === d.pipeline && x.config === d.config);
+            return [`${d.pipeline} (${d.config}), ${d.mode}`, `wall ${fSec(+d.wall_s)}, CPU ${d3.format(',.0f')(+d.cpu_s)} s`,
+              `${fX(s.vs_minibwa)} minibwa's speed, ${fX1(s.vs_bwa)} BWA-MEM2's`, d.hardware];
+          },
+        });
+      }
+    }
+  }
+
+  const SEG = [
+    ['exact_s0', 'Exact (S0)'], ['edits_s1', '1 to R edits (S1)'], ['repeat_sr', 'Proven repeat (SR)'],
+    ['pair_pr', 'Pair proof (PR)'], ['not_certified', 'Not certified'],
+  ];
+  const segColor = (i) => (i < 4 ? dash.colors[i] : 'var(--cds-chart-muted)');
+
+  function drawCert() {
+    const legend = document.getElementById('legend-cert');
+    legend.replaceChildren(...SEG.map(([, name], i) => {
+      const s = document.createElement('span');
+      const sw = document.createElement('i');
+      sw.className = 'cx-sw';
+      sw.style.background = segColor(i);
+      s.append(sw, name);
+      return s;
+    }));
+    const el = document.getElementById('chart-cert');
+    if (!gate(el, ['cert_share'])) return;
+    const data = st('cert_share').data;
+    const bh = 22, gap = 12, axisH = 22;
+    const H = data.length * (bh + gap) - gap + axisH + 6;
+    const { svg, W } = newSvg(el, H);
+    const label = (d) => `${d.sample} ${d.mode}`;
+    const lw = measure(svg, data.map(label), 'cx-lab') + 10;
+    const vw = measure(svg, data.map((d) => fPct2(d.certified)), 'cx-val') + 12;
+    const x = d3.scaleLinear([0, 1], [lw, W - vw]);
+    const plotH = H - axisH;
+    const ticks = [0, 0.25, 0.5, 0.75, 1];
+    svg.append('g').selectAll('text').data(ticks).join('text')
+      .attr('x', x).attr('y', H - 4).attr('text-anchor', 'middle').text(d3.format('.0%'));
+    data.forEach((d, i) => {
+      const y = i * (bh + gap);
+      svg.append('text').attr('class', 'cx-lab').attr('x', lw - 10).attr('y', y + bh / 2).attr('dy', '0.35em')
+        .attr('text-anchor', 'end').text(label(d));
+      let left = 0;
+      SEG.forEach(([k, name], j) => {
+        const w = d[k];
+        if (w <= 0) return;
+        const r = svg.append('rect').attr('x', x(left)).attr('y', y).attr('height', bh)
+          .attr('width', Math.max(0, x(left + w) - x(left) - 2)).style('fill', segColor(j));
+        hover(r, el, () => [label(d), `${name}: ${fPct2(w)}`, `certified in all: ${fPct2(d.certified)}`]);
+        left += w;
+      });
+      svg.append('text').attr('class', 'cx-val').attr('x', W - vw + 8).attr('y', y + bh / 2).attr('dy', '0.35em').text(fPct2(d.certified));
+    });
+    svg.append('line').attr('x1', x(0)).attr('x2', x(0)).attr('y1', 0).attr('y2', plotH).style('stroke', 'var(--cds-chart-axis)');
+  }
+
+  function drawF1() {
+    const el = document.getElementById('chart-f1');
+    if (!gate(el, ['f1_pairs'])) return;
+    const data = st('f1_pairs').data.slice().sort((a, b) =>
+      d3.ascending(a.mode === 'paired' ? 0 : 1, b.mode === 'paired' ? 0 : 1) || d3.ascending(a.sample, b.sample)
+      || d3.ascending(a.caller, b.caller) || d3.ascending(a.variant_type, b.variant_type));
+    const label = (d) => `${d.sample} ${d.mode === 'paired' ? 'PE' : 'SE'} · ${callerName[d.caller]} ${d.variant_type}`;
+    const rh = 22, axisH = 22;
+    const H = data.length * rh + axisH + 4;
+    const { svg, W } = newSvg(el, H);
+    const lw = measure(svg, data.map(label), 'cx-lab') + 12;
+    const ext = d3.extent(data, (d) => d.delta);
+    const lo = Math.min(0, ext[0]), hi = Math.max(0, ext[1]);
+    const pad = (hi - lo) * 0.08;
+    const x = d3.scaleLinear([lo - pad, hi + pad], [lw, W - 14]);
+    const plotH = data.length * rh;
+    const ticks = x.ticks(Math.max(2, Math.floor((W - lw) / 85)));
+    svg.append('g').selectAll('line').data(ticks).join('line')
+      .attr('x1', x).attr('x2', x).attr('y1', 0).attr('y2', plotH).style('stroke', 'var(--cds-chart-grid)');
+    svg.append('g').selectAll('text').data(ticks).join('text')
+      .attr('x', x).attr('y', H - 4).attr('text-anchor', 'middle').text((v) => (v > 0 ? '+' : v < 0 ? '−' : '') + d3.format('.3f')(Math.abs(v)));
+    svg.append('line').attr('x1', x(0)).attr('x2', x(0)).attr('y1', 0).attr('y2', plotH)
+      .style('stroke', 'var(--cds-chart-reference)').style('stroke-width', 1.5);
+    data.forEach((d, i) => {
+      const y = i * rh + rh / 2;
+      svg.append('text').attr('class', 'cx-lab').attr('x', lw - 12).attr('y', y).attr('dy', '0.35em')
+        .attr('text-anchor', 'end').text(label(d));
+      svg.append('line').attr('x1', x(0)).attr('x2', x(d.delta)).attr('y1', y).attr('y2', y)
+        .style('stroke', 'var(--cds-chart-muted)').style('stroke-width', 2);
+      const c = svg.append('circle').attr('cx', x(d.delta)).attr('cy', y).attr('r', 5)
+        .style('fill', d.delta > 0 ? dash.colors[0] : 'var(--cds-chart-status-critical)')
+        .style('stroke', 'var(--color-panel)').style('stroke-width', 2);
+      const hit = svg.append('rect').attr('x', 0).attr('y', i * rh).attr('width', W).attr('height', rh).style('fill', 'transparent');
+      hover(hit, el, () => [label(d), `F1 ${fF1(d.certa_f1)} vs ${fF1(d.bwa_f1)} (${fD(d.delta)})`,
+        `false positives ${fInt(d.certa_fp)} vs ${fInt(d.bwa_fp)}`, `false negatives ${fInt(d.certa_fn)} vs ${fInt(d.bwa_fn)}`]);
+      c.raise();
+    });
+  }
+
+  function drawHifi() {
+    const el = document.getElementById('chart-hifi');
+    if (!gate(el, ['hifi_cost'])) return;
+    const rows = st('hifi_cost').data;
+    const last = rows.filter((r) => r.tool === 'CERTA').slice(-1)[0];
+    hbars(el, rows, {
+      label: (d) => d.step.replace('CERTA, ', 'CERTA: '), value: (d) => +d.cpu_s, fmt: (v) => d3.format(',')(v) + ' s',
+      tick: (v) => d3.format('~s')(v),
+      color: (d) => (d.tool === 'minimap2' ? dash.colors[1] : d === last ? dash.colors[0] : 'var(--cds-chart-muted)'),
+      tip: (d) => [d.step, `CPU ${d3.format(',')(+d.cpu_s)} s, wall ${d.wall}`],
+    });
+  }
+
+  // Horizontal bars on a log scale (times that span three decades); a bar
+  // marked failed is drawn hollow.
+  function hbarsLog(el, data, o) {
+    const bh = 20, gap = 12, axisH = 22;
+    const H = data.length * (bh + gap) - gap + axisH + 6;
+    const { svg, W } = newSvg(el, H);
+    const lw = measure(svg, data.map(o.label), 'cx-lab') + 10;
+    const vw = measure(svg, data.map((d) => o.fmt(o.value(d))), 'cx-val') + 10;
+    const lo = 10 ** Math.floor(Math.log10(d3.min(data, o.value) / 1.5));
+    const hi = d3.max(data, o.value) * 1.05;
+    const x = d3.scaleLog([lo, hi], [lw, W - vw]);
+    const cand = [1, 2, 5].flatMap((m) => d3.range(-1, 6).map((e) => m * 10 ** e))
+      .filter((t) => t >= lo && t <= hi).sort((a, b) => a - b);
+    const ticks = [];
+    cand.forEach((t) => { if (!ticks.length || x(t) - x(ticks[ticks.length - 1]) >= 34) ticks.push(t); });
+    const plotH = H - axisH;
+    svg.append('g').selectAll('line').data(ticks).join('line')
+      .attr('x1', x).attr('x2', x).attr('y1', 0).attr('y2', plotH).style('stroke', 'var(--cds-chart-grid)');
+    svg.append('line').attr('x1', x(lo)).attr('x2', x(lo)).attr('y1', 0).attr('y2', plotH).style('stroke', 'var(--cds-chart-axis)');
+    svg.append('g').selectAll('text').data(ticks).join('text')
+      .attr('x', x).attr('y', H - 4).attr('text-anchor', 'middle').text((v) => d3.format(',')(v) + (v === ticks[ticks.length - 1] ? ' s' : ''));
+    data.forEach((d, i) => {
+      const y = i * (bh + gap);
+      const v = o.value(d);
+      svg.append('text').attr('class', 'cx-lab').attr('x', lw - 10).attr('y', y + bh / 2).attr('dy', '0.35em')
+        .attr('text-anchor', 'end').text(o.label(d));
+      const bar = svg.append('rect').attr('x', x(lo)).attr('y', y).attr('height', bh)
+        .attr('width', Math.max(0, x(v) - x(lo))).attr('rx', 4);
+      if (o.failed && o.failed(d)) {
+        bar.style('fill', 'none').style('stroke', 'var(--cds-chart-status-critical)').style('stroke-width', 1.5)
+          .style('stroke-dasharray', '4 3');
+      } else bar.style('fill', o.color(d));
+      svg.append('text').attr('class', 'cx-val').attr('x', x(v) + 6).attr('y', y + bh / 2).attr('dy', '0.35em').text(o.fmt(v));
+      const hit = svg.append('rect').attr('x', 0).attr('y', y - gap / 2).attr('width', W).attr('height', bh + gap).style('fill', 'transparent');
+      if (o.tip) hover(hit, el, () => o.tip(d));
+    });
+  }
+
+  const slowColor = (t) => (t === 'CERTA + A100' ? dash.colors[0] : t === 'CERTA' ? dash.colors[1] : 'var(--cds-chart-muted)');
+  const slowCfg = (r) => (r.tool.startsWith('CERTA') ? r.config.replace(' q15', '') : '');
+  const slowTip = (r) => {
+    const L = [`${r.tool} ${r.config}`, r.settings, `wall ${fSec(+r.wall_s)}, CPU ${d3.format(',.0f')(+r.cpu_s)} s, memory ${r.rss_gb} GB`];
+    if (r.certified !== '') L.push(`certified: ${fPct2(+r.certified)} of all reads`);
+    if (r.status !== 'ok') L.push(r.status);
+    return L;
+  };
+
+  function drawSlow() {
+    document.getElementById('sw-s-gpu').style.background = dash.colors[0];
+    document.getElementById('sw-s-cpu').style.background = dash.colors[1];
+    document.getElementById('sw-s-oth').style.background = 'var(--cds-chart-muted)';
+    for (const [id, sets] of [['chart-slow-se', ['single-end']], ['chart-slow-pe', ['paired']],
+      ['chart-slow-rz', ['single-end-200000', 'paired-200000']]]) {
+      const el = document.getElementById(id);
+      if (!gate(el, ['slow_speed'])) continue;
+      const rows = st('slow_speed').data.filter((r) => sets.includes(r.data)).sort((a, b) =>
+        d3.ascending(sets.indexOf(a.data), sets.indexOf(b.data)) || +a.wall_s - +b.wall_s);
+      const mode = (r) => (sets.length > 1 ? `${r.data.split('-200000')[0]}: ` : '');
+      hbarsLog(el, rows, {
+        label: (r) => `${mode(r)}${r.tool}${slowCfg(r) ? ` ${slowCfg(r)}` : ''}${r.status !== 'ok' ? ' (aborted)' : ''}`,
+        value: (r) => +r.wall_s, fmt: fSec, color: (r) => slowColor(r.tool), failed: (r) => r.status !== 'ok', tip: slowTip,
+      });
+    }
+    // HiFi: one stacked bar per pipeline.
+    const SEGS = [['map', 'mapping', 'var(--cds-chart-muted)'], ['index', "Winnowmap2 building its index", 'var(--cds-chart-grid)'],
+      ['prove', 'proving the optimum (lr_ceiling)', dash.colors[1]]];
+    const legend = document.getElementById('legend-slow-hifi');
+    legend.replaceChildren(...SEGS.map(([, name, c]) => {
+      const s = document.createElement('span');
+      const sw = document.createElement('i');
+      sw.className = 'cx-sw';
+      sw.style.background = c;
+      s.append(sw, name);
+      return s;
+    }));
+    const el = document.getElementById('chart-slow-hifi');
+    if (!gate(el, ['slow_speed'])) return;
+    const hifi = st('slow_speed').data.filter((r) => r.data === 'hifi');
+    const get = (tool, cfg) => hifi.find((r) => r.tool === tool && (cfg === undefined || r.config.includes(cfg)));
+    const mm2 = get('minimap2 2.31'), lr = get('lr_ceiling', 'minimap2'), wm = get('Winnowmap 2.03');
+    const bars = [
+      { label: 'CERTA: minimap2 + lr_ceiling', segs: [['map', +mm2.wall_s, mm2], ['prove', +lr.wall_s, lr]] },
+      { label: 'Winnowmap2', segs: [['index', +wm.index_s, wm], ['map', +wm.wall_s - +wm.index_s, wm]] },
+    ];
+    const bh = 22, gap = 14, axisH = 22;
+    const H = bars.length * (bh + gap) - gap + axisH + 6;
+    const { svg, W } = newSvg(el, H);
+    const total = (b) => d3.sum(b.segs, (s) => s[1]);
+    const lw = measure(svg, bars.map((b) => b.label), 'cx-lab') + 10;
+    const vw = measure(svg, bars.map((b) => fSec(total(b))), 'cx-val') + 10;
+    const x = d3.scaleLinear([0, d3.max(bars, total)], [lw, W - vw]).nice();
+    const ticks = x.ticks(Math.max(2, Math.floor((W - lw - vw) / 80)));
+    const plotH = H - axisH;
+    svg.append('g').selectAll('line').data(ticks).join('line')
+      .attr('x1', x).attr('x2', x).attr('y1', 0).attr('y2', plotH).style('stroke', 'var(--cds-chart-grid)');
+    svg.append('g').selectAll('text').data(ticks).join('text')
+      .attr('x', x).attr('y', H - 4).attr('text-anchor', 'middle').text((v) => d3.format(',')(v));
+    bars.forEach((b, i) => {
+      const y = i * (bh + gap);
+      svg.append('text').attr('class', 'cx-lab').attr('x', lw - 10).attr('y', y + bh / 2).attr('dy', '0.35em')
+        .attr('text-anchor', 'end').text(b.label);
+      let left = 0;
+      b.segs.forEach(([k, v, r]) => {
+        const seg = SEGS.find((s) => s[0] === k);
+        const rect = svg.append('rect').attr('x', x(left)).attr('y', y).attr('height', bh)
+          .attr('width', Math.max(0, x(left + v) - x(left) - 2)).style('fill', seg[2]);
+        hover(rect, el, () => [b.label, `${seg[1]}: ${fSec(v)}`, `${r.tool} ${r.config}`, `total ${fSec(total(b))}`]);
+        left += v;
+      });
+      svg.append('text').attr('class', 'cx-val').attr('x', x(total(b)) + 6).attr('y', y + bh / 2).attr('dy', '0.35em').text(fSec(total(b)));
+    });
+    svg.append('line').attr('x1', x(0)).attr('x2', x(0)).attr('y1', 0).attr('y2', plotH).style('stroke', 'var(--cds-chart-axis)');
+  }
+
+  function fillTable(tableId, wrapId, ids, rowsOf, cells, keyOf) {
+    const wrap = document.getElementById(wrapId);
+    const tbody = document.querySelector(`#${tableId} tbody`);
+    if (!ok(...ids)) {
+      tbody.replaceChildren();
+      if (failed(...ids)) { wrap.classList.remove('dash-skeleton'); tbody.replaceChildren(); wrap.querySelector('.cx-fail') || wrap.appendChild(failLine()); }
+      else wrap.classList.add('dash-skeleton');
+      return;
+    }
+    wrap.classList.remove('dash-skeleton');
+    const f = wrap.querySelector('.cx-fail');
+    if (f) f.remove();
+    tbody.replaceChildren(...rowsOf().map((r) => {
+      const tr = document.createElement('tr');
+      if (keyOf) tr.dataset.key = keyOf(r);
+      cells(r).forEach(([txt, cls]) => {
+        const td = document.createElement('td');
+        td.textContent = txt;
+        if (cls) td.className = cls;
+        tr.appendChild(td);
+      });
+      return tr;
+    }));
+  }
+
+  const enc = encodeURIComponent;
+
+  function drawTables() {
+    fillTable('tbl-errors', 'wrap-errors', ['provable_errors', 'errors_rate'], () => st('provable_errors').data,
+      (r) => {
+        const pm = st('errors_rate').data.find((x) => x.tool === r.tool).per_million;
+        return [[r.tool], [fInt(+r.misplaced)], [d3.format(',.0f')(pm)], [fInt(+r.misplaced_mapq20)],
+          [fInt(+r.unmapped)], [fInt(+r.overconfident_ties)]];
+      });
+    fillTable('tbl-speed', 'wrap-speed', ['speed', 'speed_vs'], () => st('speed').data,
+      (r) => {
+        const s = st('speed_vs').data.find((x) => x.host === r.host && x.mode === r.mode && x.pipeline === r.pipeline
+          && x.config === r.config);
+        return [[r.host, 'cx-txt'], [r.mode, 'cx-txt'], [r.pipeline, 'cx-txt'], [r.config, 'cx-txt'], [d3.format(',.2f')(+r.wall_s)],
+          [d3.format(',.0f')(+r.cpu_s)], [fX(s.vs_minibwa)], [fX1(s.vs_bwa)], [r.runs]];
+      }, (r) => [r.host, r.mode, r.pipeline, r.config].map(enc).join(','));
+    fillTable('tbl-slow-rel', 'wrap-slow-rel', ['slow_reliability'], () => st('slow_reliability').data,
+      (r) => [[r.data, 'cx-txt'], [r.tool, 'cx-txt'], [fInt(+r.end_to_end_certified)], [fInt(+r.e2e_more_edits)],
+        [fInt(+r.e2e_missed_better)], [r.unmapped_within_error_rate === '' ? '—' : fInt(+r.unmapped_within_error_rate)],
+        [r.unmapped_beyond_error_rate === '' ? '—' : fInt(+r.unmapped_beyond_error_rate)], [fInt(+r.local_certified)],
+        [fInt(+r.local_unmapped)], [fInt(+r.overconfident_ties)]],
+      (r) => [r.data, r.tool].map(enc).join(','));
+    fillTable('tbl-slow-hifi', 'wrap-slow-hifi', ['slow_hifi'], () => st('slow_hifi').data,
+      (r) => [[r.aligner, 'cx-txt'], [fInt(+r.reads_aligned)], [fInt(+r.proven)], [fInt(+r.proven_above_aligner)]]);
+    fillTable('tbl-slow-speed', 'wrap-slow-speed', ['slow_speed'], () => st('slow_speed').data,
+      (r) => [[r.data, 'cx-txt'], [r.tool, 'cx-txt'], [r.config, 'cx-txt'], [r.settings, 'cx-txt'], [d3.format(',.2f')(+r.wall_s)],
+        [d3.format(',.0f')(+r.cpu_s)], [r.rss_gb], [r.certified === '' ? '' : fPct2(+r.certified)], [r.runs], [r.status, 'cx-txt']],
+      (r) => [r.data, r.tool, r.config].map(enc).join(','));
+    fillTable('tbl-f1', 'wrap-f1', ['f1_pairs'], () => st('f1_pairs').data,
+      (r) => [[r.sample], [r.mode, 'cx-txt'], [callerName[r.caller], 'cx-txt'], [r.variant_type, 'cx-txt'],
+        [fF1(r.certa_f1)], [fF1(r.bwa_f1)], [fD(r.delta)]],
+      (r) => [r.sample, r.mode, r.caller, r.variant_type].map(enc).join(','));
+  }
+
+  dash.onData(() => {
+    setText('[data-source][data-field]:not(th)', null, fmtValue);
+    const kf1 = document.getElementById('kpi-f1');
+    if (ok('headline')) kf1.classList.remove('dash-skeleton');
+    drawErrors();
+    drawSpeed();
+    drawSlow();
+    drawCert();
+    drawF1();
+    drawHifi();
+    drawTables();
+  });
+})();
+</script>

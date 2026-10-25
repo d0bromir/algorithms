@@ -1,0 +1,7 @@
+K1 tier R: XU lowered by 2: accepted 96.5135%; wrong_xl: 388 xu_unproven: 139071 
+K4 the mapper Lemma L charges 6 per part (span_bound): accepted 96.4168%; wrong_xl: 279 xu_unproven: 137856 xh_unproven: 5194 
+K3 tier R: every interval claimed exact: accepted 96.5135%; wrong_xl: 4215 xu_unproven: 135244 
+K5 Lemma E bound 1 too low: accepted 99.9995%; wrong_xl: 3 xu_unproven: 1 xh_unproven: 16 
+K6 S0\/S1 SUB bound: d* = R + 3: accepted 97.3430%; xh_unproven: 106282 
+K2 tier R: XH lowered by 3: accepted 99.7967%; xh_unproven: 8132 
+done

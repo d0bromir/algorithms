@@ -1,0 +1,32 @@
+# Final timing protocol, a2 (2026-10-17): 4 x Intel Xeon Gold 5218 (x86-64, Cascade Lake), 64 cores in 4 NUMA nodes, no GPU, no pinning (64 cores in all).
+# 20,001,073 HG002 reads (single-end, R1) or pairs; SAM to /dev/null; one session; single-end: three rounds, tools in turn; paired: one run each. Build: commit 80646c3 (g++ 13.3 -O3 -march=native).
+# certa-cpu: CERTA streams its uncertified reads into minibwa, both concurrent (config = CERTA:minibwa threads; single-end minibwa -K 10m; paired: minibwa's default batch (Kdefault) or -K 10m).
+# certa-cpu-iv: interval mode (--intervals), no fallback. certa-cpu-tier: certified reads only, not a complete mapping. Script: final_bench.sh (a2:~/certa-bench/cpu/).
+host	mode	pipeline	config	rep	wall_s	user_s	sys_s	max_rss_kb
+a2	single-end	bwa-mem2	-	1	117.46	5581.47	140.66	33259020
+a2	single-end	minibwa	-	1	36.35	1542.49	25.18	9644176
+a2	single-end	strobealign	-	1	57.52	944.03	55.92	13973640
+a2	single-end	minimap2	-	1	95.02	3670.64	76.37	13494040
+a2	single-end	bowtie2	-	1	155.72	9714.13	36.47	4111916
+a2	single-end	certa-cpu	64+64	1	24.39	1232.48	35.07	31764308
+a2	single-end	certa-cpu-iv	64	1	22.93	1228.24	22.73	31625124
+a2	single-end	bwa-mem2	-	2	117.94	5659.94	131.52	33453348
+a2	single-end	minibwa	-	2	35.98	1544.64	24.20	9684776
+a2	single-end	strobealign	-	2	57.22	926.04	54.15	14006424
+a2	single-end	minimap2	-	2	92.80	3663.07	80.32	13472288
+a2	single-end	bowtie2	-	2	157.44	9824.16	34.49	4107840
+a2	single-end	certa-cpu	64+64	2	24.60	1225.98	36.52	31820500
+a2	single-end	certa-cpu-iv	64	2	22.97	1242.50	22.99	31682588
+a2	single-end	bwa-mem2	-	3	114.62	5307.25	134.74	33102604
+a2	single-end	minibwa	-	3	35.38	1545.53	25.89	9648224
+a2	single-end	strobealign	-	3	56.33	939.46	59.31	13962016
+a2	single-end	minimap2	-	3	92.67	3662.61	78.06	13514664
+a2	single-end	bowtie2	-	3	157.48	9830.24	37.06	4110892
+a2	single-end	certa-cpu	64+64	3	22.34	1211.61	30.76	31678216
+a2	single-end	certa-cpu-iv	64	3	22.42	1219.91	22.85	31657072
+a2	single-end	certa-cpu-tier	64	1	12.52	506.34	12.84	31417004
+a2	paired	bwa-mem2	-	1	261.57	14090.70	258.18	33665800
+a2	paired	minibwa	-	1	79.51	3952.99	46.74	10020084
+a2	paired	certa-cpu	64+64 K10m	1	63.97	3369.40	56.07	40102748
+a2	paired	certa-cpu	64+64 Kdefault	1	82.06	3453.54	864.40	40322840
+a2	paired	certa-cpu-iv	64	1	51.46	2660.49	27.23	39972700

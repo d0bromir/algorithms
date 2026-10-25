@@ -1,0 +1,7 @@
+[bam_sort_core] merging from 0 files and 4 in-memory blocks...
+CERTA intervals pipeline wall 2647 s
+[map] 725804508 reads: certified 92.86% (S0 exact 63.68%, S1 <=R edits 20.58%, SR repeat 1.03%, SL local 0.00%), ties 4.86%
+[map] pairs 362902254: both mates certified 90.28% (proper 88.62%); PR pair certificate 7.56% of reads; pair pass tried 13.83% of pairs
+[map] intervals: tier R on 7.14% of reads (tau 256); records: tier R exact 0.99%, interval 3.87%, pair window 0.96%, unmapped 1.58% (proven unalignable 0.00%); exact (XL = XU) 84.85%; XU - XL 1-5 6.22%, 6-10 1.76%, 11-25 2.19%, 26-50 2.00%, >50 1.39%; MAPQ >= 20 90.92%, XQ >= 20 64.84%
+[map] intervals: proper pairs 93.98%
+[map] time: load 0.59 s, upload 2.14 s, read+encode 1178.95 s (overlapped; waited 0.03 s), map 1144.08 s (634401 reads/s), output 1473.48 s, total 2621.68 s (276847 reads/s end to end)

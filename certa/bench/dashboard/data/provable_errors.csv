@@ -1,0 +1,7 @@
+tool,basis,certified_reads,misplaced,misplaced_mapq20,unmapped,overconfident_ties,proven_ties
+BWA-MEM2 2.3,measured,1889110,177,13,0,0,69893
+minibwa 0.7,measured,1889110,420,38,0,0,69893
+strobealign 0.18,measured,1889110,4984,800,11,704,69893
+minimap2 2.31 -x sr,measured,1889110,2237,54,524,0,69893
+Bowtie 2 2.5.5,measured,1889110,921,61,134,0,69893
+CERTA,by construction (certified reads),1889110,0,0,0,0,69893

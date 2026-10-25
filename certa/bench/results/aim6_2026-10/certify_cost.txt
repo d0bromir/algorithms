@@ -1,0 +1,22 @@
+# The cost of certifying HG002 HiFi reads (lr_ceiling --certify, Corollary L-long), 2026-10-15, galaxy
+# (aarch64 Neoverse-N1, GCC 15.2, -O3 -march=native). Three changes, each leaving every certificate
+# unchanged; the last one also counts only the DP cells it computes (the `cells` column).
+
+== 2,005 reads (sub1004.fa, every 121st read), one thread; about 1-2 s of it is loading (index map, PAF)
+vectorized DP row (band_row; vector_dp.txt)     55.2 s
++ batched, prefetched index lookups             41.3 s   (partition_strand: lookup_batch, qmer_keys)
++ the DP pruned to cells that can beat lb       25.2 s   (band_best with a floor)
+profile before the last two (perf, one thread): DP 45 %, partition_strand 50 % (three quarters of it in
+the index lookups: a directory read, then a binary search in a bucket, both random in a 23 GB index);
+only 35.5 % of the band's cells could still lead above lb (their value + the bases after them > lb)
+
+== the full sample (242,534 reads), 64 threads
+                         scalar DP     vector DP    + lookups, pruning
+CPU (user)               11,629 s      6,836 s      3,575 s
+wall                     3:15          2:00         1:09
+DP per certified read    median 20.2 ms, mean 35.0, 99% 217  ->  7.9, 13.5, 83  ->  3.1, 5.0, 30
+DP cells                 median 6.06 M per read, 2.40e12 in all  ->  2.13 M computed, 8.36e11 (35 %)
+OPT proven               226,327 (3 over the cell cap)  ->  226,330: every read that fits (with the
+                         trimmed path); the 3 now fit under the cap, which counts computed cells; each
+                         has OPT = lb; every other field identical for all 242,534 reads
+against minimap2's mapping and alignment (4,171 s CPU): 2.79x -> 1.64x -> 0.86x

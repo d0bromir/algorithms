@@ -1,0 +1,10 @@
+fault	false_by_construction	injected	rejected	rate	verdicts
+as+1	yes	6024	6024	1.0000	wrong_score 6024
+clip	yes	5572	5572	1.0000	wrong_score 5572
+nowitness	yes	1432	1432	1.0000	xu_unproven 1432
+xq+10	yes	4570	4570	1.0000	wrong_xq 4570
+xu<xl	yes	6135	6135	1.0000	wrong_xl 6135
+pos+1	no	6016	6008	0.9987	wrong_score 6008
+probe+1	no	5845	3348	0.5728	xh_unproven 2382, xu_unproven 966
+xh-10	no	4661	4652	0.9981	xh_unproven 4652
+untouched records rejected (false alarms): 0
