@@ -12,7 +12,8 @@ namespace certa {
 // Writes a FILE from its own thread, in the order chunks are put, so mapping
 // never waits on a slow reader: a fallback aligner reading a pipe only a
 // batch ahead would otherwise stall the mapper on every full pipe. Up to
-// `cap` bytes queue in memory; past that, put() waits.
+// `cap` bytes queue in memory; past that, put() waits. The writer owns the
+// FILE and closes it when finished (stdout is only flushed).
 class AsyncWriter {
  public:
   AsyncWriter(std::FILE* f, size_t cap) : f_(f), cap_(cap) { th_ = std::thread([this] { run(); }); }
@@ -27,7 +28,8 @@ class AsyncWriter {
     q_.push_back(std::move(s));
     ready_.notify_one();
   }
-  // Writes everything queued and stops; false if a write failed.
+  // Writes everything queued, stops and closes the file; false if a write
+  // (or the close) failed.
   bool finish() {
     {
       std::lock_guard<std::mutex> lk(m_);
@@ -35,6 +37,10 @@ class AsyncWriter {
     }
     ready_.notify_one();
     if (th_.joinable()) th_.join();
+    if (f_) {
+      if ((f_ == stdout ? std::fflush(f_) : std::fclose(f_)) != 0) failed_ = true;
+      f_ = nullptr;
+    }
     return !failed_;
   }
 

@@ -1,7 +1,8 @@
 #include "map_stats.h"
 
 #include <cstdio>
-#include <stdexcept>
+
+#include "cli.h"
 
 namespace certa {
 
@@ -52,7 +53,6 @@ void Stats::count_iv(const Placement& p) {
   iv_mr += p.r.tier == kTierMR;
   const int w = p.xl == kNoSub ? BIG : p.xu - p.xl;
   ++iv_width[w == 0 ? 0 : w <= 5 ? 1 : w <= 10 ? 2 : w <= 25 ? 3 : w <= 50 ? 4 : 5];
-  iv_point += w == 0;
   iv_mapq20 += p.mapq >= 20;
   iv_xq20 += p.xq >= 20;
 }
@@ -67,7 +67,7 @@ void Stats::add(const Stats& o) {
   cands += o.cands;
   pr += o.pr; pairs += o.pairs; pairs_cert += o.pairs_cert; pairs_proper += o.pairs_proper;
   iv_r += o.iv_r; iv_iv += o.iv_iv; iv_mr += o.iv_mr; iv_un += o.iv_un; iv_unalignable += o.iv_unalignable;
-  iv_point += o.iv_point; iv_proper += o.iv_proper; iv_mapq20 += o.iv_mapq20; iv_xq20 += o.iv_xq20;
+  iv_proper += o.iv_proper; iv_mapq20 += o.iv_mapq20; iv_xq20 += o.iv_xq20;
   for (int i = 0; i < 6; ++i) iv_width[i] += o.iv_width[i];
 }
 
@@ -96,7 +96,7 @@ void print_summary(const MapConfig& c, const Stats& s, const PassCounts& n, cons
   if (c.index2())
     std::fprintf(stderr, "[map] second index (CPU, every pass): %.2f%% of reads tried, %.2f%% certified there\n",
                  pct(n.index2), pct(n.index2_certified));
-  if (c.paired) {
+  if (c.paired()) {
     const double np = s.pairs ? 100.0 / s.pairs : 0.0;
     std::fprintf(stderr,
                  "[map] pairs %llu: both mates certified %.2f%% (proper %.2f%%); PR pair certificate "
@@ -113,7 +113,7 @@ void print_summary(const MapConfig& c, const Stats& s, const PassCounts& n, cons
                  pct(n.tier_r), c.rp.tau, pct(s.iv_r), pct(s.iv_iv), pct(s.iv_mr), pct(s.iv_un),
                  pct(s.iv_unalignable), pct(wd[0]), pct(wd[1]), pct(wd[2]), pct(wd[3]), pct(wd[4]),
                  pct(wd[5]), pct(s.iv_mapq20), pct(s.iv_xq20), c.out.mapq_cons ? " (MAPQ = XQ)" : "");
-    if (c.paired)
+    if (c.paired())
       std::fprintf(stderr, "[map] intervals: proper pairs %.2f%%\n", s.pairs ? 100.0 * s.iv_proper / s.pairs : 0.0);
   }
   std::fprintf(stderr, "[map] candidates enumerated per read (last pass): %.1f\n",
@@ -130,10 +130,9 @@ void print_summary(const MapConfig& c, const Stats& s, const PassCounts& n, cons
                t.total > 0 ? s.reads / t.total : 0.0);
 }
 
-void write_stats_json(const std::string& path, const MapConfig& c, const Index& ix, const std::string& device,
-                      const Stats& s, const PassCounts& n, const Timings& t) {
-  std::FILE* js = std::fopen(path.c_str(), "wb");
-  if (!js) throw std::runtime_error("cannot open stats output");
+void write_stats_json(const MapConfig& c, const Index& ix, const std::string& device, const Stats& s,
+                      const PassCounts& n, const Timings& t) {
+  std::FILE* js = open_output(c.stats_path, "stats output");
   std::fprintf(js, "{\n  \"mode\": \"%s\",\n  \"device\": \"%s\",\n  \"threads\": %d,\n", c.gpu ? "gpu" : "cpu",
                device.c_str(), c.threads);
   std::fprintf(js, "  \"k\": %d, \"k1\": %d, \"budget\": %d, \"budget2\": %d, \"second_pass\": %llu, \"q\": %d, \"s\": %d,\n",

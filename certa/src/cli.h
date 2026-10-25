@@ -1,7 +1,8 @@
-// Command-line arguments and timing, shared by the certa subcommands.
+// What the certa subcommands share: arguments, timing, output files, threads.
 #pragma once
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <iterator>
 #include <map>
@@ -22,6 +23,23 @@ inline double secs(Clock::time_point a) {
 inline int default_threads() {
   unsigned n = std::thread::hardware_concurrency();
   return n ? static_cast<int>(n) : 1;
+}
+
+// Calls work(w) for w in [0, n): w = 0 on this thread, the others on threads
+// of their own.
+template <class F>
+void run_workers(int n, F&& work) {
+  std::vector<std::thread> pool;
+  for (int w = 1; w < n; ++w) pool.emplace_back([&work, w] { work(w); });
+  work(0);
+  for (auto& th : pool) th.join();
+}
+
+// fopen(path, "wb"), or "cannot open <what>".
+inline std::FILE* open_output(const std::string& path, const std::string& what) {
+  std::FILE* f = std::fopen(path.c_str(), "wb");
+  if (!f) throw std::runtime_error("cannot open " + what);
+  return f;
 }
 
 // Positional arguments, and options given as "-x value" (flags as "-x").

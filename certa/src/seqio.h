@@ -1,6 +1,7 @@
 // Buffered line reading for plain or gzip-compressed FASTA/FASTQ.
 #pragma once
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -74,6 +75,28 @@ class MappedFastq {
   size_t size_ = 0, pos_ = 0;
   size_t released_ = 0;          // the pages before this offset were dropped
   double bytes_per_record_ = 0;  // in the previous batch
+};
+
+// A FASTQ input: memory-mapped when it is an uncompressed regular file,
+// streamed otherwise (gzip, pipes).
+class FastqInput {
+ public:
+  explicit FastqInput(const std::string& path) {
+    if (MappedFastq::usable(path)) mapped_.reset(new MappedFastq(path));
+    else stream_.reset(new LineReader(path));
+  }
+  // Up to n records into `out`; they are built on `threads` threads.
+  size_t next_batch(std::vector<FastqRecord>& out, size_t n, int threads) {
+    return mapped_ ? mapped_->next_batch(out, n, threads) : read_fastq_batch(*stream_, out, n, threads);
+  }
+  // Up to n records as text, for parse_spans (a stream is split on one thread).
+  size_t next_spans(FastqSpans& sp, size_t n, int threads) {
+    return mapped_ ? mapped_->next_spans(sp, n, threads) : read_fastq_spans(*stream_, sp, n);
+  }
+
+ private:
+  std::unique_ptr<MappedFastq> mapped_;
+  std::unique_ptr<LineReader> stream_;
 };
 
 }  // namespace certa

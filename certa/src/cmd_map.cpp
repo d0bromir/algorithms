@@ -5,11 +5,10 @@
 // a certified lower bound of its MAPQ.
 #include <cstdio>
 #include <cstring>
-#include <exception>
+#include <future>
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <thread>
 
 #include "async_writer.h"
 #include "cli.h"
@@ -20,24 +19,6 @@
 #include "mapper.h"
 
 namespace certa {
-
-namespace {
-
-std::FILE* open_output(const std::string& path, const char* what) {
-  std::FILE* f = std::fopen(path.c_str(), "wb");
-  if (!f) throw std::runtime_error(std::string("cannot open ") + what);
-  return f;
-}
-
-// Joins a thread when it goes out of scope, also when an exception passes.
-struct JoinGuard {
-  std::thread& t;
-  ~JoinGuard() {
-    if (t.joinable()) t.join();
-  }
-};
-
-}  // namespace
 
 int cmd_map(const Args& a) {
   MapConfig c = MapConfig::from_args(a);
@@ -54,10 +35,7 @@ int cmd_map(const Args& a) {
   if (c.pass3() || c.pass_l())
     std::fprintf(stderr, "[map] pass 3: budget=%d support=%d; pass L: support %d%s\n", c.p3.budget,
                  c.p3.min_support, c.pl.local, c.full_cert ? " (--full-cert)" : "");
-  if (c.pass_v() && ix.s != 1) {
-    std::fprintf(stderr, "[map] pass V needs an index of every position (s = 1); off\n");
-    c.pv.vparts = 0;
-  }
+  c.fit_index(ix.s);
   if (c.pass_v())
     std::fprintf(stderr, "[map] pass V: adaptive parts %s, budget=%d, radius <= %d\n",
                  c.pv.vparts == 1 ? "(rarest q-mers)" : "(rarest q-mers, then one-edit q-mers)", c.pv.budget, VMAX);
@@ -81,7 +59,7 @@ int cmd_map(const Args& a) {
   // Open input and outputs first, so a failure cannot leave the upload
   // thread running.
   FastqInput reads(c.reads_path);
-  std::unique_ptr<FastqInput> mates(c.paired ? new FastqInput(c.mates_path) : nullptr);
+  std::unique_ptr<FastqInput> mates(c.paired() ? new FastqInput(c.mates_path) : nullptr);
   std::FILE* sam = c.sam_path.empty() ? stdout : open_output(c.sam_path, "SAM output");
   std::FILE* fq = c.fq_path.empty() ? nullptr : open_output(c.fq_path, "uncertified FASTQ output");
   std::FILE* fq2 = c.fq2_path.empty() ? nullptr : open_output(c.fq2_path, "uncertified mates output");
@@ -90,53 +68,35 @@ int cmd_map(const Args& a) {
   for (size_t i = 0; i < ref.names.size(); ++i)
     std::fprintf(sam, "@SQ\tSN:%s\tLN:%llu\n", ref.names[i].c_str(), static_cast<unsigned long long>(ref.lengths[i]));
   std::fprintf(sam, "@PG\tID:certa\tPN:certa\tVN:0.5\tCL:%s\n", c.command_line().c_str());
-  // From here on each output is written by its own thread. Two mate files
-  // read in lockstep by one consumer cannot deadlock: each writer moves on as
-  // soon as its own pipe has room.
+  // From here on each output is written (and closed) by its own thread. Two
+  // mate files read in lockstep by one consumer cannot deadlock: each writer
+  // moves on as soon as its own pipe has room.
   constexpr size_t kWriteQueue = size_t(2) << 30;
-  std::unique_ptr<AsyncWriter> w_sam(new AsyncWriter(sam, kWriteQueue));
-  std::unique_ptr<AsyncWriter> w_fq(fq ? new AsyncWriter(fq, kWriteQueue) : nullptr);
-  std::unique_ptr<AsyncWriter> w_fq2(fq2 ? new AsyncWriter(fq2, kWriteQueue) : nullptr);
-  std::unique_ptr<AsyncWriter> w_fqs(fqs ? new AsyncWriter(fqs, kWriteQueue) : nullptr);
+  auto writer = [](std::FILE* f) { return std::unique_ptr<AsyncWriter>(f ? new AsyncWriter(f, kWriteQueue) : nullptr); };
+  MapOutputs out{writer(sam), writer(fq), writer(fq2), writer(fqs)};
 
   // The GPU upload runs in the background, overlapped with reading the
   // first batch; the first map call waits for it.
   std::unique_ptr<GpuMapper> gm;
   double t_upload = 0;
-  std::exception_ptr upload_error;
-  std::thread uploader;
-  JoinGuard upload_guard{uploader};
-  if (c.gpu) {
-    uploader = std::thread([&] {
-      try {
-        auto t = Clock::now();
-        gm.reset(new GpuMapper(ref, ix, c.device));
-        t_upload = secs(t);
-      } catch (...) {
-        upload_error = std::current_exception();
-      }
+  std::future<void> upload;
+  if (c.gpu)
+    upload = std::async(std::launch::async, [&] {
+      auto t = Clock::now();
+      gm.reset(new GpuMapper(ref, ix, c.device));
+      t_upload = secs(t);
     });
-  }
   auto wait_for_gpu = [&]() -> GpuMapper* {
-    if (!uploader.joinable()) return nullptr;
-    uploader.join();
-    if (upload_error) std::rethrow_exception(upload_error);
+    if (!upload.valid()) return nullptr;
+    upload.get();  // rethrows an upload error
     std::fprintf(stderr, "[map] GPU %s, index uploaded in %.1f s (overlapped with input)\n",
                  gm->device_name().c_str(), t_upload);
     return gm.get();
   };
 
-  MapPipeline pipeline(c, ref, view, view2.get(), reads, mates.get(),
-                       MapOutputs{w_sam.get(), w_fq.get(), w_fq2.get(), w_fqs.get()});
+  MapPipeline pipeline(c, ref, view, view2.get(), reads, mates.get(), out);
   pipeline.run(wait_for_gpu);
-  bool wrote = true;
-  for (auto* wr : {w_sam.get(), w_fq.get(), w_fq2.get(), w_fqs.get()})
-    if (wr) wrote = wr->finish() && wrote;
-  if (!wrote) throw std::runtime_error("writing an output failed");
-  if (sam != stdout) std::fclose(sam);
-  if (fq) std::fclose(fq);
-  if (fq2) std::fclose(fq2);
-  if (fqs) std::fclose(fqs);
+  if (!out.finish()) throw std::runtime_error("writing an output failed");
 
   Timings t = pipeline.timings();
   t.load = t_load;
@@ -144,7 +104,7 @@ int cmd_map(const Args& a) {
   t.total = secs(t_all);
   print_summary(c, pipeline.stats(), pipeline.counts(), t);
   if (!c.stats_path.empty())
-    write_stats_json(c.stats_path, c, ix, gm ? gm->device_name() : "", pipeline.stats(), pipeline.counts(), t);
+    write_stats_json(c, ix, gm ? gm->device_name() : "", pipeline.stats(), pipeline.counts(), t);
   return 0;
 }
 

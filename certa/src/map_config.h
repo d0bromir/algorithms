@@ -21,9 +21,8 @@ namespace certa {
 // certificate (paired input) and tier R (--intervals).
 struct MapConfig {
   // Inputs and outputs. Empty: not given (SAM then goes to stdout).
-  std::string index_path, reads_path, mates_path, index2_path;
+  std::string index_path, reads_path, mates_path, index2_path;  // mates_path empty: single-end
   std::string sam_path, fq_path, fq2_path, single_path, stats_path;
-  bool paired = false;     // mates_path given
   bool intervals = false;  // --intervals: every read to SAM, no fallback
   bool full_cert = false;  // --full-cert
   bool gpu = false;
@@ -37,6 +36,7 @@ struct MapConfig {
   RepeatParams rp;            // tier R (interval mode)
   OutputOptions out;
 
+  bool paired() const { return !mates_path.empty(); }
   bool pass2() const { return p2.budget > p1.budget || p2.s2_limit > 0 || p2.k > p1.k; }
   bool pass3() const { return p3.budget > p2.budget; }
   bool pass_v() const { return pv.vparts > 0; }
@@ -45,6 +45,9 @@ struct MapConfig {
 
   // Throws std::runtime_error, with a usage message, on a bad option.
   static MapConfig from_args(const Args& a);
+  // The loaded index's sampling step s: pass V needs s = 1, and is turned off
+  // (with a note on stderr) otherwise.
+  void fit_index(int s);
   // The @PG command line: the passes and their parameters.
   std::string command_line() const;
 };

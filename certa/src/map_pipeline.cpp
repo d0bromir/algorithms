@@ -2,33 +2,15 @@
 
 #include <algorithm>
 #include <atomic>
+#include <future>
+#include <numeric>
 #include <stdexcept>
-#include <thread>
 
 #include "cli.h"
 
 namespace certa {
 
 namespace {
-
-// Calls work(w) for w in [0, n): w = 0 on this thread, the others on threads
-// of their own.
-template <class F>
-void run_workers(int n, F&& work) {
-  std::vector<std::thread> pool;
-  for (int w = 1; w < n; ++w) pool.emplace_back([&work, w] { work(w); });
-  work(0);
-  for (auto& th : pool) th.join();
-}
-
-// Joins a thread even if mapping throws, so the error is reported instead of
-// std::terminate on a joinable thread.
-struct Joiner {
-  std::thread& t;
-  ~Joiner() {
-    if (t.joinable()) t.join();
-  }
-};
 
 // Which reads each pass re-runs (the same on either index).
 // Passes 2 and V: every read still uncertified, except those too short or
@@ -63,13 +45,39 @@ bool wants_tier_r(const Result& r0, const Reference& ref) {
   return r.certified != 1 && r.reason != kBadLength;
 }
 
-// The reason an interval-mode read is counted under: kOk if certified, else
-// why not (a read placed by tier S2 is counted as not found).
-int interval_reason(const Result& r) {
-  return r.certified == 1 ? int(kOk) : (r.reason == kOk ? int(kNotFound) : int(r.reason));
+// The reads of a whole batch that `want` selects.
+template <class Want>
+std::vector<size_t> reads_where(const std::vector<Result>& res, Want want) {
+  std::vector<size_t> idx;
+  for (size_t i = 0; i < res.size(); ++i)
+    if (want(res[i])) idx.push_back(i);
+  return idx;
+}
+
+// The reads of [a0, b0) that `want` selects, into idx; returns how many.
+template <class Want>
+size_t select(const std::vector<Result>& res, size_t a0, size_t b0, Want want, size_t* idx) {
+  size_t m = 0;
+  for (size_t i = a0; i < b0; ++i)
+    if (want(res[i])) idx[m++] = i;
+  return m;
 }
 
 }  // namespace
+
+void MapOutputs::put(Records& r) {
+  sam->put(std::move(r.sam));
+  if (fq) fq->put(std::move(r.fq));
+  if (fq2) fq2->put(std::move(r.fq2));
+  if (single) single->put(std::move(r.single));
+}
+
+bool MapOutputs::finish() {
+  bool ok = true;
+  for (auto* w : {sam.get(), fq.get(), fq2.get(), single.get()})
+    if (w) ok = w->finish() && ok;
+  return ok;
+}
 
 // Per-thread scratch of the fused stage.
 struct MapPipeline::ChunkScratch {
@@ -84,13 +92,13 @@ struct MapPipeline::ChunkScratch {
 };
 
 MapPipeline::MapPipeline(const MapConfig& c, const Reference& ref, const IndexView& view, const IndexView* view2,
-                         FastqInput& reads, FastqInput* mates, const MapOutputs& out)
+                         FastqInput& reads, FastqInput* mates, MapOutputs& out)
     : c_(c), ref_(ref), view_(view), view2_(view2), reads_(reads), mates_(mates), out_(out),
       writer_(ref, view, c.out) {}
 
 PassCounts MapPipeline::counts() const {
-  PassCounts n = gpu_counts_;
-  n.add(cpu_counts_);
+  PassCounts n = first_counts_;
+  n.add(rest_counts_);
   return n;
 }
 
@@ -100,21 +108,21 @@ void MapPipeline::load(int slot) {
   Slot& S = slots_[slot];
   try {
     auto t = Clock::now();
-    if (!c_.paired) {
+    if (!c_.paired()) {
       reads_.next_batch(S.recs, c_.batch_size, c_.io_threads);
     } else {
       // Mates interleaved: read 2i is mate 1, read 2i + 1 its mate 2, each
       // parsed straight into its place (strings reused from the slot's
-      // previous batch).
-      FastqSpans s1, s2;
+      // previous batch). The two files are read at the same time (each is
+      // split, and a gzip file inflated, on one thread).
       const size_t half = std::max<size_t>(1, c_.batch_size / 2);
-      const size_t n1 = reads_.next_spans(s1, half, c_.io_threads);
-      const size_t n2 = mates_->next_spans(s2, half, c_.io_threads);
-      if (n1 != n2) throw std::runtime_error("mate files have different numbers of reads");
+      auto n2 = std::async(std::launch::async, [&] { return mates_->next_spans(spans_[1], half, c_.io_threads); });
+      const size_t n1 = reads_.next_spans(spans_[0], half, c_.io_threads);
+      if (n1 != n2.get()) throw std::runtime_error("mate files have different numbers of reads");
       std::vector<FastqRecord>& out = S.recs;
       out.resize(2 * n1);
-      parse_spans(s1, out.data(), 2, c_.io_threads);
-      parse_spans(s2, out.data() + 1, 2, c_.io_threads);
+      parse_spans(spans_[0], out.data(), 2, c_.io_threads);
+      parse_spans(spans_[1], out.data() + 1, 2, c_.io_threads);
       for (size_t i = 0; i < n1; ++i)
         if (out[2 * i].name != out[2 * i + 1].name)
           throw std::runtime_error("mate names differ: " + out[2 * i].name + " / " + out[2 * i + 1].name);
@@ -159,7 +167,8 @@ size_t MapPipeline::rerun(Slot& S, const std::vector<size_t>& redo, const Params
 }
 
 // The pair certificate on pair `pair` (reads 2 pair, 2 pair + 1): when it
-// certifies, both results are replaced.
+// certifies, both results are replaced, and the single-end ones kept in
+// se_res for MAPQ (only tier PR reads them).
 void MapPipeline::pair_certificate(Slot& S, size_t pair, Workspace& w1, Workspace& w2, PairScratch& sc) const {
   const ReadBatch& b = S.batch;
   const size_t i = 2 * pair, j = 2 * pair + 1;
@@ -167,6 +176,8 @@ void MapPipeline::pair_certificate(Slot& S, size_t pair, Workspace& w1, Workspac
   const PairOut po = certify_pair(view_, c_.pp, b.codes.data() + b.offs[i], b.lens[i], b.codes.data() + b.offs[j],
                                   b.lens[j], w1, w2, sc, r1, r2);
   if (po.certified) {
+    S.se_res[i] = S.res[i];
+    S.se_res[j] = S.res[j];
     S.res[i] = r1;
     S.res[j] = r2;
   }
@@ -179,21 +190,18 @@ RepeatOut MapPipeline::tier_r(const Slot& S, size_t i, Workspace& ws, RepeatScra
 // Formats reads [a0, b0) of a batch (whole pairs in paired mode: a0 and b0
 // even) into `out`, in input order, and counts them into s; psc is scratch
 // for interval mode's mate rescue.
-void MapPipeline::format(const Slot& S, size_t a0, size_t b0, Chunk& out, Stats& s, PairScratch& psc) const {
+void MapPipeline::format(const Slot& S, size_t a0, size_t b0, Records& out, Stats& s, PairScratch& psc) const {
   const std::vector<FastqRecord>& recs = S.recs;
   const std::vector<Result>& res = S.res;
-  if (!c_.paired) {
+  if (!c_.paired()) {
     for (size_t i = a0; i < b0; ++i) {
       int reason;
       if (c_.intervals) {
         Placement pl;
-        writer_.single_interval(res[i], S.iv_ptr[i], recs[i], out.sam, &pl);
-        Result r = res[i];
-        check_contig(r, ref_);
-        reason = interval_reason(r);
+        reason = writer_.single_interval(res[i], S.iv_ptr[i], recs[i], out, &pl);
         s.count_iv(pl);
       } else {
-        reason = writer_.single(res[i], recs[i], out.sam, out.fq);
+        reason = writer_.single(res[i], recs[i], out);
       }
       s.count_read(res[i], recs[i].seq.size(), reason);
     }
@@ -201,48 +209,33 @@ void MapPipeline::format(const Slot& S, size_t a0, size_t b0, Chunk& out, Stats&
   }
   for (size_t i = a0; i < b0; i += 2) {
     int reason[2];
-    ++s.pairs;
+    bool proper;
     if (c_.intervals) {
-      const Result rr[2] = {mate_as_reported(res[i], ref_), mate_as_reported(res[i + 1], ref_)};
       Placement pl[2];
-      if (rr[0].certified == 1 && rr[1].certified == 1) {
-        writer_.pair(&res[i], &S.se_res[i], &recs[i], out.sam, out.fq, out.fq2, nullptr, reason, pl);
-        ++s.pairs_cert;
-        const bool proper = is_proper(rr[0], rr[1], ref_, c_.pp.max_dist);
-        s.pairs_proper += proper;
-        s.iv_proper += proper;
-      } else {
-        const RepeatOut* ivp[2] = {S.iv_ptr[i], S.iv_ptr[i + 1]};
-        const uint8_t* cp[2] = {S.batch.codes.data() + S.batch.offs[i], S.batch.codes.data() + S.batch.offs[i + 1]};
-        s.iv_proper += writer_.pair_interval(&res[i], ivp, cp, &recs[i], psc, out.sam, pl);
-        for (int x = 0; x < 2; ++x) reason[x] = interval_reason(rr[x]);
-      }
+      const RepeatOut* ivp[2] = {S.iv_ptr[i], S.iv_ptr[i + 1]};
+      const uint8_t* cp[2] = {S.batch.codes.data() + S.batch.offs[i], S.batch.codes.data() + S.batch.offs[i + 1]};
+      proper = writer_.pair_interval(&res[i], &S.se_res[i], ivp, cp, &recs[i], psc, out, reason, pl);
+      s.iv_proper += proper;
       s.count_iv(pl[0]);
       s.count_iv(pl[1]);
     } else {
-      writer_.pair(&res[i], &S.se_res[i], &recs[i], out.sam, out.fq, out.fq2, out_.single ? &out.single : nullptr,
-                   reason);
-      if (reason[0] == kOk && reason[1] == kOk) {
-        ++s.pairs_cert;
-        s.pairs_proper += is_proper(res[i], res[i + 1], ref_, c_.pp.max_dist);
-      }
+      proper = writer_.pair(&res[i], &S.se_res[i], &recs[i], out, reason);
+    }
+    ++s.pairs;
+    if (reason[0] == kOk && reason[1] == kOk) {
+      ++s.pairs_cert;
+      s.pairs_proper += proper;
     }
     for (int x = 0; x < 2; ++x) s.count_read(res[i + x], recs[i + x].seq.size(), reason[x]);
   }
 }
 
-// Hands the chunks to the writers, in order.
-void MapPipeline::write(std::vector<Chunk>& chunks) {
-  for (Chunk& ch : chunks) {
-    out_.sam->put(std::move(ch.sam));
-    if (out_.fq) out_.fq->put(std::move(ch.fq));
-    if (out_.fq2) out_.fq2->put(std::move(ch.fq2));
-    if (out_.single) out_.single->put(std::move(ch.single));
-  }
+void MapPipeline::write(std::vector<Records>& chunks) {
+  for (Records& r : chunks) out_.put(r);
 }
 
-// Passes 1 and 2 (on the GPU when there is one).
-void MapPipeline::gpu_stage(Slot& S) {
+// Passes 1 and 2 over the whole batch (on the GPU when there is one).
+void MapPipeline::first_stage(Slot& S) {
   auto t = Clock::now();
   std::vector<Result>& res = S.res;
   if (gm_) gm_->map(c_.p1, S.batch, res);
@@ -250,47 +243,39 @@ void MapPipeline::gpu_stage(Slot& S) {
   if (c_.pass2()) {
     // Pass 2: every read pass 1 could not certify. Certified reads keep
     // their pass-1 results.
-    std::vector<size_t> redo;
-    for (size_t i = 0; i < res.size(); ++i)
-      if (retry(res[i])) redo.push_back(i);
+    const std::vector<size_t> redo = reads_where(res, retry);
     rerun(S, redo, c_.p2, gm_ != nullptr);
-    gpu_counts_.pass2 += redo.size();
+    first_counts_.pass2 += redo.size();
   }
-  time_.map_gpu += secs(t);
+  time_.map_first += secs(t);
 }
 
 // The CPU passes, each over the whole batch, then formatting and writing, in
-// input order (--serial-stages).
+// input order (with a GPU, or --serial-stages).
 void MapPipeline::cpu_stage(Slot& S) {
   auto t = Clock::now();
   std::vector<Result>& res = S.res;
-  PassCounts& n = cpu_counts_;
-  auto reads_where = [&](auto want) {
-    std::vector<size_t> idx;
-    for (size_t i = 0; i < res.size(); ++i)
-      if (want(res[i])) idx.push_back(i);
-    return idx;
-  };
+  PassCounts& n = rest_counts_;
   if (c_.pass3()) {
     // Pass 3, always on the CPU (identical in CPU and GPU runs).
-    const std::vector<size_t> redo = reads_where([&](const Result& r) { return retry_pass3(r, c_.p3); });
+    const std::vector<size_t> redo = reads_where(res, [&](const Result& r) { return retry_pass3(r, c_.p3); });
     rerun(S, redo, c_.p3, false);
     n.pass3 += redo.size();
   }
   if (c_.pass_v()) {
     // Pass V: only a certificate replaces the pass-3 result.
-    const std::vector<size_t> redo = reads_where(retry);
+    const std::vector<size_t> redo = reads_where(res, retry);
     n.pass_v_certified += rerun(S, redo, c_.pv, false, true);
     n.pass_v += redo.size();
   }
   if (c_.pass_l()) {
     // Pass L: certified local alignment (tier SL).
-    const std::vector<size_t> redo = reads_where(retry_local);
+    const std::vector<size_t> redo = reads_where(res, retry_local);
     rerun(S, redo, c_.pl, false);
     n.pass_l += redo.size();
   }
-  if (c_.paired) {
-    S.se_res = res;
+  if (c_.paired()) {
+    S.se_res.resize(res.size());
     std::vector<size_t> todo;  // pairs
     for (size_t i = 0; 2 * i + 1 < res.size(); ++i)
       if (wants_pair_pass(res[2 * i], res[2 * i + 1])) todo.push_back(i);
@@ -304,7 +289,7 @@ void MapPipeline::cpu_stage(Slot& S) {
   }
   if (c_.intervals) {
     // Tier R for every read not certified.
-    const std::vector<size_t> todo = reads_where([&](const Result& r) { return wants_tier_r(r, ref_); });
+    const std::vector<size_t> todo = reads_where(res, [&](const Result& r) { return wants_tier_r(r, ref_); });
     S.iv_store.assign(todo.size(), RepeatOut());
     n.tier_r += todo.size();
     std::atomic<size_t> next{0};
@@ -316,7 +301,7 @@ void MapPipeline::cpu_stage(Slot& S) {
     S.iv_ptr.assign(res.size(), nullptr);
     for (size_t z = 0; z < todo.size(); ++z) S.iv_ptr[todo[z]] = &S.iv_store[z];
   }
-  time_.map_cpu += secs(t);
+  time_.map_rest += secs(t);
 
   // Format in parallel over contiguous chunks, which the threads take in
   // turn (hard reads cluster, so one fixed slice per thread leaves threads
@@ -325,14 +310,14 @@ void MapPipeline::cpu_stage(Slot& S) {
   const size_t nr = S.recs.size();
   const int nt = std::max(1, std::min<int>(c_.threads, static_cast<int>(nr / 1024) + 1));
   const int nc = nt == 1 ? 1 : 8 * nt;
-  std::vector<Chunk> chunks(nc);
+  std::vector<Records> chunks(nc);
   std::vector<Stats> st(nt);
   std::atomic<int> next_chunk{0};
   run_workers(nt, [&](int w) {
     PairScratch psc;  // interval mode: mate rescue
     for (int k; (k = next_chunk.fetch_add(1)) < nc;) {
       size_t a0 = nr * k / nc, b0 = nr * (k + 1) / nc;
-      if (c_.paired) {
+      if (c_.paired()) {
         a0 &= ~size_t(1);
         b0 = k == nc - 1 ? nr : (b0 & ~size_t(1));
       }
@@ -346,7 +331,7 @@ void MapPipeline::cpu_stage(Slot& S) {
 
 // Every stage of a batch in one pass over chunks of reads (whole pairs),
 // which the threads take in turn. Each chunk gets passes 1 and 2 (with
-// `map`; with a GPU they ran in gpu_stage), passes 3, V and L, the second
+// `map`; with a GPU they ran in first_stage), passes 3, V and L, the second
 // index, the pair pass, tier R and formatting, each read exactly what the
 // staged passes give it (no result depends on which reads share a pass, a
 // thread or a workspace). The threads then wait for each other once per
@@ -356,10 +341,10 @@ void MapPipeline::fused_stage(Slot& S, bool map) {
   auto t = Clock::now();
   const size_t n = S.recs.size();
   S.res.resize(n);
-  if (c_.paired) S.se_res.resize(n);
+  if (c_.paired()) S.se_res.resize(n);
   if (c_.intervals) S.iv_ptr.assign(n, nullptr);
   const size_t nc = (n + kChunk - 1) / kChunk;
-  std::vector<Chunk> chunks(nc);
+  std::vector<Records> chunks(nc);
   const int nt = std::max(1, std::min<int>(c_.threads, static_cast<int>(nc)));
   std::vector<Stats> st(nt);
   std::vector<PassCounts> counts(nt);
@@ -377,70 +362,63 @@ void MapPipeline::fused_stage(Slot& S, bool map) {
   });
   for (auto& e : errors)
     if (e) std::rethrow_exception(e);
-  time_.map_cpu += secs(t);
+  time_.map_rest += secs(t);
   t = Clock::now();
   write(chunks);
   for (int w = 0; w < nt; ++w) {
     total_.add(st[w]);
-    cpu_counts_.add(counts[w]);
+    rest_counts_.add(counts[w]);
   }
   time_.output += secs(t);
 }
 
 // The fused stage on reads [a0, b0) of a batch.
-void MapPipeline::fused_chunk(Slot& S, size_t a0, size_t b0, bool map, ChunkScratch& x, Chunk& out, Stats& s,
+void MapPipeline::fused_chunk(Slot& S, size_t a0, size_t b0, bool map, ChunkScratch& x, Records& out, Stats& s,
                               PassCounts& n) const {
   const ReadBatch& batch = S.batch;
   std::vector<Result>& res = S.res;
   size_t* const idx = x.idx;
   Result* const rr = x.rr.get();
-  // idx[0..m) = the reads of the chunk that `want` selects; returns m.
-  auto select = [&](auto want) {
-    size_t m = 0;
-    for (size_t i = a0; i < b0; ++i)
-      if (want(res[i])) idx[m++] = i;
-    return m;
-  };
-  // Re-runs reads idx[0..m) with p.
-  auto rerun_chunk = [&](size_t m, const Params& p) {
+  // Re-runs reads idx[0..m) with p (with only_certified, keeping only
+  // certificates); returns the results taken.
+  auto rerun_chunk = [&](size_t m, const Params& p, bool only_certified = false) {
     map_reads(view_, p, batch, idx, m, rr, *x.ws);
-    for (size_t k = 0; k < m; ++k) res[idx[k]] = rr[k];
+    size_t taken = 0;
+    for (size_t k = 0; k < m; ++k)
+      if (!only_certified || rr[k].certified == 1) {
+        res[idx[k]] = rr[k];
+        ++taken;
+      }
+    return taken;
   };
   if (map) {
-    size_t m = 0;
-    for (size_t i = a0; i < b0; ++i) idx[m++] = i;
-    map_reads(view_, c_.p1, batch, idx, m, res.data() + a0, *x.ws);
+    std::iota(idx, idx + (b0 - a0), a0);
+    map_reads(view_, c_.p1, batch, idx, b0 - a0, res.data() + a0, *x.ws);
     if (c_.pass2()) {
-      m = select(retry);
+      const size_t m = select(res, a0, b0, retry, idx);
       rerun_chunk(m, c_.p2);
       n.pass2 += m;
     }
   }
   if (c_.pass3()) {
-    const size_t m = select([&](const Result& r) { return retry_pass3(r, c_.p3); });
+    const size_t m = select(res, a0, b0, [&](const Result& r) { return retry_pass3(r, c_.p3); }, idx);
     rerun_chunk(m, c_.p3);
     n.pass3 += m;
   }
   if (c_.pass_v()) {
     // Pass V: a certificate found with adaptive parts is taken; the other
     // reads keep their pass-3 results (pass L reads those).
-    const size_t m = select(retry);
-    map_reads(view_, c_.pv, batch, idx, m, rr, *x.ws);
-    for (size_t k = 0; k < m; ++k)
-      if (rr[k].certified == 1) {
-        res[idx[k]] = rr[k];
-        ++n.pass_v_certified;
-      }
+    const size_t m = select(res, a0, b0, retry, idx);
+    n.pass_v_certified += rerun_chunk(m, c_.pv, true);
     n.pass_v += m;
   }
   if (c_.pass_l()) {
-    const size_t m = select(retry_local);
+    const size_t m = select(res, a0, b0, retry_local, idx);
     rerun_chunk(m, c_.pl);
     n.pass_l += m;
   }
   if (view2_) index2_passes(S, a0, b0, x, n);
-  if (c_.paired) {
-    for (size_t i = a0; i < b0; ++i) S.se_res[i] = res[i];
+  if (c_.paired()) {
     for (size_t i = a0 / 2; 2 * i + 1 < b0; ++i) {
       if (!wants_pair_pass(res[2 * i], res[2 * i + 1])) continue;
       ++n.pairs;
@@ -449,7 +427,7 @@ void MapPipeline::fused_chunk(Slot& S, size_t a0, size_t b0, bool map, ChunkScra
   }
   if (c_.intervals) {
     x.civ.clear();
-    const size_t m = select([&](const Result& r) { return wants_tier_r(r, ref_); });
+    const size_t m = select(res, a0, b0, [&](const Result& r) { return wants_tier_r(r, ref_); }, idx);
     for (size_t k = 0; k < m; ++k) x.civ.push_back(tier_r(S, idx[k], *x.wr, x.rsc));
     for (size_t k = 0; k < m; ++k) S.iv_ptr[idx[k]] = &x.civ[k];
     n.tier_r += m;
@@ -463,9 +441,7 @@ void MapPipeline::index2_passes(Slot& S, size_t a0, size_t b0, ChunkScratch& x, 
   const ReadBatch& batch = S.batch;
   std::vector<Result>& res = S.res;
   Result* const rx = x.rx.get();
-  size_t m2 = 0;
-  for (size_t i = a0; i < b0; ++i)
-    if (retry(res[i])) x.id2[m2++] = i;
+  const size_t m2 = select(res, a0, b0, retry, x.id2);
   if (m2 == 0) return;
   map_reads(*view2_, c_.p1, batch, x.id2, m2, rx, *x.wx);
   // One pass re-runs those of rx[0..m2) that `want` selects.
@@ -493,47 +469,30 @@ void MapPipeline::index2_passes(Slot& S, size_t a0, size_t b0, ChunkScratch& x, 
 void MapPipeline::run(const std::function<GpuMapper*()>& wait_for_gpu) {
   load(0);
   gm_ = wait_for_gpu();
-  // Without a GPU each batch runs fused; with one, the CPU passes and
-  // formatting do (overlapping the next batch's GPU passes).
-  // --serial-stages runs the passes over the whole batch, one after the
-  // other, instead.
-  const bool fused = gm_ == nullptr && !c_.serial_stages;
-  std::thread cpu_thread;
-  std::exception_ptr cpu_error;
-  Joiner cpu_joiner{cpu_thread};
-  auto finish_cpu = [&] {
-    if (cpu_thread.joinable()) cpu_thread.join();
-    if (cpu_error) std::rethrow_exception(cpu_error);
+  // Passes 1 and 2 run over the whole batch first with a GPU or
+  // --serial-stages; the rest then runs serially (--serial-stages) or fused,
+  // on its own thread when a GPU maps the next batch meanwhile. Without
+  // either, every pass runs fused.
+  const bool split = gm_ != nullptr || c_.serial_stages;
+  auto rest = [this, split](Slot& S) {
+    if (c_.serial_stages) cpu_stage(S);
+    else fused_stage(S, !split);
   };
+  std::future<void> cpu;  // the previous batch's second stage (with a GPU)
   for (int cur = 0; !slots_[cur].recs.empty(); cur = (cur + 1) % kSlots) {
-    // The slot read into is neither the one the GPU stage maps nor the
-    // one the CPU stage may still be writing (three slots).
-    std::thread prefetch([this, cur] { load((cur + 1) % kSlots); });
-    Joiner joiner{prefetch};
+    // The slot read into is neither the one the first stage maps nor the
+    // one the second stage may still be writing (three slots).
+    auto prefetch = std::async(std::launch::async, [this, cur] { load((cur + 1) % kSlots); });
     Slot& S = slots_[cur];
-    if (fused) {
-      fused_stage(S, true);
-    } else {
-      gpu_stage(S);
-      finish_cpu();  // the previous batch's CPU stage: batches are written in order
-      if (gm_) {
-        cpu_thread = std::thread([this, &S, &cpu_error] {
-          try {
-            if (c_.serial_stages) cpu_stage(S);
-            else fused_stage(S, false);
-          } catch (...) {
-            cpu_error = std::current_exception();
-          }
-        });
-      } else {
-        cpu_stage(S);
-      }
-    }
+    if (split) first_stage(S);
+    if (cpu.valid()) cpu.get();  // batches are written in order
+    if (gm_) cpu = std::async(std::launch::async, rest, std::ref(S));
+    else rest(S);
     auto t = Clock::now();
-    prefetch.join();
+    prefetch.wait();
     time_.read_wait += secs(t);
   }
-  finish_cpu();
+  if (cpu.valid()) cpu.get();
   if (read_error_) std::rethrow_exception(read_error_);
 }
 

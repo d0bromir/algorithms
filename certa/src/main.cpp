@@ -18,7 +18,6 @@
 #include <random>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include "certa/repeat.h"
@@ -51,25 +50,21 @@ int cmd_repeat(const Args& a) {
   load_index(a.pos[0], ref, ix);
   if (ix.s != 1) throw std::runtime_error("tier R needs an index with s = 1");
   const IndexView view = ix.view(ref);
-  LineReader in(a.pos[1]);
+  FastqInput in(a.pos[1]);
   std::vector<FastqRecord> recs, chunk;
-  while (read_fastq_batch(in, chunk, 1 << 20, threads) > 0)
+  while (in.next_batch(chunk, 1 << 20, threads) > 0)
     for (auto& r : chunk) recs.push_back(std::move(r));
   ReadBatch batch;
   encode_batch(recs, batch, threads);
   std::vector<RepeatOut> out(recs.size());
   auto t0 = Clock::now();
   std::atomic<size_t> next{0};
-  auto worker = [&] {
+  run_workers(threads, [&](int) {
     std::unique_ptr<Workspace> ws(new Workspace);
     RepeatScratch sc;
     for (size_t i; (i = next.fetch_add(1)) < recs.size();)
       out[i] = repeat_tier(view, rp, batch.codes.data() + batch.offs[i], batch.lens[i], *ws, sc);
-  };
-  std::vector<std::thread> pool;
-  for (int t = 1; t < threads; ++t) pool.emplace_back(worker);
-  worker();
-  for (auto& th : pool) th.join();
+  });
   const double t_run = secs(t0);
   // Summary. "Ambiguous" means two loci provably score >= lo while OPT <= hi,
   // so OPT - SUB <= hi - lo; at <= 5 that keeps BWA-MEM's MAPQ below 20.
@@ -93,8 +88,7 @@ int cmd_repeat(const Args& a) {
   std::fprintf(stderr, "[repeat] time %.2f s on %d threads (%.3f ms CPU-equivalent per read)\n", t_run, threads,
                n ? t_run * threads * 1000.0 / n : 0.0);
   if (a.has("--tsv")) {
-    std::FILE* f = std::fopen(a.get("--tsv", "").c_str(), "wb");
-    if (!f) throw std::runtime_error("cannot open --tsv output");
+    std::FILE* f = open_output(a.get("--tsv", ""), "--tsv output");
     std::fprintf(f, "read\texact\tlo\thi\tcopies\tstrand\tcontig\tpos\tparts\tabsent\toccurrences\n");
     for (size_t i = 0; i < recs.size(); ++i) {
       const RepeatOut& o = out[i];
@@ -164,7 +158,7 @@ int cmd_check(const Args& a) {
     std::vector<std::vector<check::Work>> w(batch.size());
     auto t = Clock::now();
     std::atomic<size_t> next{0};
-    auto worker = [&] {
+    run_workers(threads, [&](int) {
       for (size_t g; (g = next.fetch_add(1)) < batch.size();) {
         const size_t n = batch[g].line.size();
         v[g].assign(n, check::kMalformed);
@@ -179,11 +173,7 @@ int cmd_check(const Args& a) {
             if (ok[i]) v[g][i] = ck.check(c[i], &w[g][i]);
         }
       }
-    };
-    std::vector<std::thread> pool;
-    for (int k = 1; k < threads; ++k) pool.emplace_back(worker);
-    worker();
-    for (auto& th : pool) th.join();
+    });
     t_check += secs(t);
     for (size_t g = 0; g < batch.size(); ++g)
       for (size_t i = 0; i < batch[g].line.size(); ++i) {

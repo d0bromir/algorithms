@@ -10,6 +10,8 @@ namespace certa {
 
 namespace {
 
+int mapq_of(const Result& r, int L, int s2_limit);
+
 // BWA-MEM's single-end MAPQ, 30 (1 - S2/S1) ln(L), with alignment scores
 // approximated from edit distances (each edit costs match + mismatch = 5).
 int bwa_mapq(int L, int d1, int d2) {
@@ -37,19 +39,14 @@ Placement certified_placement(const Result& r, const Result& mate, const Result&
                               int s2_limit) {
   if (r.tier == kTierPR)
     return pr_placement(r, mate, se, L, mapq, se.certified == 1 ? mapq_of(se, L, s2_limit) : 0);
-  Placement o;
-  o.r = r;
-  o.mapped = true;
-  o.mapq = mapq;
-  certified_bounds(r, L, &o.xl, &o.xu, &o.sub_hi);
-  o.xq = std::min(mapq, mapq_se(r.score, o.sub_hi, L));
-  o.w = witness_of(r, L);
-  return o;
+  return place_single(r, mapq, nullptr, L);
 }
 
 bool within_contig(const Result& r, const Reference& ref) {
   const int c = ref.contig_of(r.ref_pos);
-  return c >= 0 && ref.contig_of(r.ref_pos + ref_span_of(r) - 1) == c;
+  if (c < 0) return false;
+  const int64_t end = r.ref_pos + ref_span_of(r) - 1;  // its last base: in contig c too
+  return end >= static_cast<int64_t>(ref.offsets[c]) && end < static_cast<int64_t>(ref.offsets[c] + ref.lengths[c]);
 }
 
 // An alignment that runs off its contig (e.g. across the end of the
@@ -78,15 +75,20 @@ int64_t tlen(const Result& a, const Result& b, int x) {
   return left ? hi - lo : -(hi - lo);
 }
 
-char comp(char c) {
-  switch (c) {
-    case 'A': case 'a': return 'T';
-    case 'C': case 'c': return 'G';
-    case 'G': case 'g': return 'C';
-    case 'T': case 't': return 'A';
-    default: return 'N';
+// The complement of an ASCII base (A, C, G, T in either case; anything else
+// gives N).
+struct Complement {
+  char c[256];
+  Complement() {
+    for (int i = 0; i < 256; ++i) c[i] = 'N';
+    c['A'] = c['a'] = 'T';
+    c['C'] = c['c'] = 'G';
+    c['G'] = c['g'] = 'C';
+    c['T'] = c['t'] = 'A';
   }
-}
+  char operator()(char b) const { return c[static_cast<uint8_t>(b)]; }
+};
+const Complement comp;
 
 void fastq_record(const FastqRecord& rec, std::string& fq) {
   fq += '@'; fq += rec.name; fq += '\n';
@@ -120,6 +122,15 @@ char* put_str(char* p, const char* s, size_t n) {
   return p + n;
 }
 
+// The CIGAR of r at p (at most 12 characters per operation); returns the end.
+char* put_cigar(char* p, const Result& r) {
+  for (int i = 0; i < r.n_cigar; ++i) {
+    p = put_int(p, r.cigar[i] >> 4);
+    *p++ = "MIDNS"[r.cigar[i] & 0xF];
+  }
+  return p;
+}
+
 // One record, formatted into a buffer and appended once (SAM formatting is
 // a tenth of the CPU pass otherwise). `extra`: further tags, or null.
 void sam_line(const Result& r, const FastqRecord& rec, const Reference& ref, int mapq, const MateInfo& mi,
@@ -143,10 +154,7 @@ void sam_line(const Result& r, const FastqRecord& rec, const Reference& ref, int
   *p++ = '\t';
   p = put_int(p, mapq);
   *p++ = '\t';
-  for (int i = 0; i < r.n_cigar; ++i) {
-    p = put_int(p, r.cigar[i] >> 4);
-    *p++ = "MIDNS"[r.cigar[i] & 0xF];
-  }
+  p = put_cigar(p, r);
   *p++ = '\t';
   p = put_str(p, mi.rnext.data(), mi.rnext.size());
   *p++ = '\t';
@@ -157,7 +165,7 @@ void sam_line(const Result& r, const FastqRecord& rec, const Reference& ref, int
   if (r.strand) {
     for (size_t i = L; i-- > 0;) *p++ = comp(rec.seq[i]);
     *p++ = '\t';
-    for (size_t i = rec.qual.size(); i-- > 0;) *p++ = rec.qual[i];
+    p = std::reverse_copy(rec.qual.begin(), rec.qual.end(), p);
   } else {
     p = put_str(p, rec.seq.data(), L);
     *p++ = '\t';
@@ -225,55 +233,58 @@ void sam_unmapped(const FastqRecord& rec, const Reference& ref, const MateInfo& 
 //                               pair certificate's support and parts, which
 //                               prove XS (the bound on every other proper pair).
 std::string interval_tags(const Placement& p, const Reference& ref, const OutputOptions& opt) {
-  char buf[96];
-  std::string out;
-  if (p.xl != kNoSub) {
-    std::snprintf(buf, sizeof buf, "\tXL:i:%d", p.xl);
-    out += buf;
-  }
-  std::snprintf(buf, sizeof buf, "\tXU:i:%d\tXQ:i:%d", p.xu, p.xq);
-  out += buf;
-  if (!opt.witness) return out;
-  if (p.xq > 0 && (p.r.tier != kTierPR || p.pr_xh)) {
-    std::snprintf(buf, sizeof buf, "\tXH:i:%d", p.sub_hi);
-    out += buf;
-  }
-  auto probes = [&](const Witness& w) {
-    for (int st = 0; st < 2; ++st) {
-      out += ';';
-      for (int j = 0; j < w.n[st]; ++j) {
-        std::snprintf(buf, sizeof buf, "%s%d-%d", j ? "," : "", w.off[st][j], w.end[st][j]);
-        out += buf;
-      }
-    }
+  const int xv = opt.witness && p.xl_sep ? ref.contig_of(p.xl_r.ref_pos) : -1;  // XV's contig
+  // Tags of 6 + 20 characters; two witnesses of up to 2 PMAX probes each,
+  // "o-e," <= 14 characters; XV's contig name and CIGAR.
+  const size_t need = 16 * 26 + 2 * (2 * PMAX * 14 + 16) + (xv >= 0 ? ref.names[xv].size() : 0) + MAX_CIGAR * 12;
+  char local[2048];
+  std::vector<char> big;
+  char* const buf = need <= sizeof local ? local : (big.resize(need), big.data());
+  char* q = buf;
+  auto tag = [&](const char* name, int64_t v) {
+    q = put_str(q, name, 6);  // "\tXX:i:"
+    q = put_int(q, v);
   };
-  if (p.w.t > 0) {
-    std::snprintf(buf, sizeof buf, "\tXW:Z:%d", p.w.t);
-    out += buf;
-    probes(p.w);
-  }
-  if (p.mapped && p.pw.t > 0) {
-    std::snprintf(buf, sizeof buf, "\tXY:Z:%d;%d", opt.max_dist, p.pw.t);
-    out += buf;
-    probes(p.pw);
-  }
-  if (p.xl_sep) {
-    const Result& a = p.xl_r;
-    const int c = ref.contig_of(a.ref_pos);
-    if (c >= 0) {
-      std::snprintf(buf, sizeof buf, "\tXV:Z:%s,%lld,%c,", ref.names[c].c_str(),
-                    static_cast<long long>(a.ref_pos - ref.offsets[c] + 1), a.strand ? '-' : '+');
-      out += buf;
-      for (int i = 0; i < a.n_cigar; ++i) {
-        std::snprintf(buf, sizeof buf, "%u%c", a.cigar[i] >> 4, "MIDNS"[a.cigar[i] & 0xF]);
-        out += buf;
+  if (p.xl != kNoSub) tag("\tXL:i:", p.xl);
+  tag("\tXU:i:", p.xu);
+  tag("\tXQ:i:", p.xq);
+  if (opt.witness) {
+    if (p.xq > 0 && (p.r.tier != kTierPR || p.pr_xh)) tag("\tXH:i:", p.sub_hi);
+    auto probes = [&](const Witness& w) {
+      for (int st = 0; st < 2; ++st) {
+        *q++ = ';';
+        for (int j = 0; j < w.n[st]; ++j) {
+          if (j) *q++ = ',';
+          q = put_int(q, w.off[st][j]);
+          *q++ = '-';
+          q = put_int(q, w.end[st][j]);
+        }
       }
+    };
+    if (p.w.t > 0) {
+      tag("\tXW:Z:", p.w.t);
+      probes(p.w);
+    }
+    if (p.mapped && p.pw.t > 0) {
+      tag("\tXY:Z:", opt.max_dist);
+      *q++ = ';';
+      q = put_int(q, p.pw.t);
+      probes(p.pw);
+    }
+    if (xv >= 0) {
+      const Result& a = p.xl_r;
+      q = put_str(q, "\tXV:Z:", 6);
+      q = put_str(q, ref.names[xv].data(), ref.names[xv].size());
+      *q++ = ',';
+      q = put_int(q, a.ref_pos - static_cast<int64_t>(ref.offsets[xv]) + 1);
+      *q++ = ',';
+      *q++ = a.strand ? '-' : '+';
+      *q++ = ',';
+      q = put_cigar(q, a);
     }
   }
-  return out;
+  return std::string(buf, q);
 }
-
-}  // namespace
 
 int mapq_of(const Result& r, int L, int s2_limit) {
   if (r.n_best > 1) return 0;
@@ -305,14 +316,8 @@ int mapq_of(const Result& r, int L, int s2_limit) {
   return second >= 0 ? bwa_mapq(L, r.d1, second) : 60;
 }
 
-void check_contig(Result& r, const Reference& ref) {
-  if (!r.certified) return;
-  if (!within_contig(r, ref)) {
-    r.certified = 0;
-    r.reason = kCrossContig;
-  }
-}
-
+// A mate's result as paired output reports it: tier S2 is not reported for
+// mates (kNotFound), and the contig check applies.
 Result mate_as_reported(const Result& r0, const Reference& ref) {
   Result r = r0;
   if (r.certified == 2) {
@@ -323,6 +328,8 @@ Result mate_as_reported(const Result& r0, const Reference& ref) {
   return r;
 }
 
+// Proper pair (as certified): one contig, opposite strands, and the reverse
+// mate's first aligned base 0..max_dist after the forward mate's.
 bool is_proper(const Result& a, const Result& b, const Reference& ref, int max_dist) {
   if (a.strand == b.strand || ref.contig_of(a.ref_pos) != ref.contig_of(b.ref_pos)) return false;
   const Result& f = a.strand ? b : a;
@@ -330,7 +337,23 @@ bool is_proper(const Result& a, const Result& b, const Reference& ref, int max_d
   return r.ref_pos >= f.ref_pos && r.ref_pos - f.ref_pos <= max_dist;
 }
 
-int RecordWriter::single(const Result& r0, const FastqRecord& rec, std::string& sam, std::string& fq) const {
+// The reason an interval-mode read is counted under: kOk if certified, else
+// why not (a read placed by tier S2 is counted as not found).
+int interval_reason(const Result& r) {
+  return r.certified == 1 ? int(kOk) : (r.reason == kOk ? int(kNotFound) : int(r.reason));
+}
+
+}  // namespace
+
+void check_contig(Result& r, const Reference& ref) {
+  if (!r.certified) return;
+  if (!within_contig(r, ref)) {
+    r.certified = 0;
+    r.reason = kCrossContig;
+  }
+}
+
+int RecordWriter::single(const Result& r0, const FastqRecord& rec, Records& out) const {
   Result r = r0;
   check_contig(r, ref_);
   if (!r.certified) {
@@ -338,53 +361,21 @@ int RecordWriter::single(const Result& r0, const FastqRecord& rec, std::string& 
       FastqRecord t = rec;
       t.name += " parts=" + std::to_string(r.parts) + " used=" + std::to_string(r.used) +
                 " reason=" + std::to_string(r.reason);
-      fastq_record(t, fq);
+      fastq_record(t, out.fq);
     } else {
-      fastq_record(rec, fq);
+      fastq_record(rec, out.fq);
     }
     return r.reason;
   }
-  sam_line(r, rec, ref_, mapq_of(r, static_cast<int>(rec.seq.size()), opt_.s2_limit), MateInfo(), sam);
+  sam_line(r, rec, ref_, mapq_of(r, static_cast<int>(rec.seq.size()), opt_.s2_limit), MateInfo(), out.sam);
   return kOk;
 }
 
-void RecordWriter::pair(const Result* r0, const Result* se, const FastqRecord* rec, std::string& sam,
-                        std::string& fq1, std::string& fq2, std::string* single_fq, int* reason,
-                        Placement* placed) const {
-  const Result r[2] = {mate_as_reported(r0[0], ref_), mate_as_reported(r0[1], ref_)};
-  if (!r[0].certified && !r[1].certified) {
-    fastq_record(rec[0], fq1);
-    fastq_record(rec[1], fq2);
-    for (int x = 0; x < 2; ++x) reason[x] = r[x].reason;
-    return;
-  }
-  if (!r[0].certified || !r[1].certified) {
-    // One mate (k) keeps its single-end certificate.
-    const int k = r[0].certified ? 0 : 1;
-    const int mapq = mapq_of(r[k], static_cast<int>(rec[k].seq.size()), opt_.s2_limit);
-    MateInfo mi;
-    if (single_fq) {
-      // The other mate is mapped single-end by the fallback, so both records
-      // are written unpaired.
-      sam_line(r[k], rec[k], ref_, mapq, mi, sam);
-      fastq_record(rec[1 - k], *single_fq);
-    } else {
-      // Both mates still go to the fallback (so it can pair them), named
-      // "name~k" where k is the certified mate, whose fallback record is
-      // dropped downstream (bench/drop_certified_mates.awk). Mate fields are
-      // unknown here.
-      mi.flag = 1 | (k == 0 ? 64 : 128);
-      sam_line(r[k], rec[k], ref_, mapq, mi, sam);
-      FastqRecord m0 = rec[0], m1 = rec[1];
-      m0.name += k == 0 ? "~1" : "~2";
-      m1.name = m0.name;
-      fastq_record(m0, fq1);
-      fastq_record(m1, fq2);
-    }
-    reason[k] = kOk;
-    reason[1 - k] = r[1 - k].reason;
-    return;
-  }
+// Both mates certified (r: as reported): their SAM lines, with mate fields;
+// with `placed` (interval mode) also the interval tags. Returns whether the
+// pair is proper.
+bool RecordWriter::certified_pair(const Result* r, const Result* se, const FastqRecord* rec, Records& out,
+                                  Placement* placed) const {
   const bool proper = is_proper(r[0], r[1], ref_, opt_.max_dist);
   const int c0 = ref_.contig_of(r[0].ref_pos), c1 = ref_.contig_of(r[1].ref_pos);
   for (int x = 0; x < 2; ++x) {
@@ -402,17 +393,55 @@ void RecordWriter::pair(const Result* r0, const Result* se, const FastqRecord* r
       Placement pl = certified_placement(a, b, se[x], L, mapq, opt_.s2_limit);
       keep_within_contigs(pl, ref_);
       if (opt_.mapq_cons) pl.mapq = pl.xq;
-      sam_line(a, rec[x], ref_, pl.mapq, mi, sam, interval_tags(pl, ref_, opt_).c_str());
+      sam_line(a, rec[x], ref_, pl.mapq, mi, out.sam, interval_tags(pl, ref_, opt_).c_str());
       placed[x] = pl;
     } else {
-      sam_line(a, rec[x], ref_, mapq, mi, sam);
+      sam_line(a, rec[x], ref_, mapq, mi, out.sam);
     }
-    reason[x] = kOk;
   }
+  return proper;
 }
 
-void RecordWriter::single_interval(const Result& r0, const RepeatOut* iv, const FastqRecord& rec, std::string& sam,
-                                   Placement* out) const {
+bool RecordWriter::pair(const Result* r0, const Result* se, const FastqRecord* rec, Records& out, int* reason) const {
+  const Result r[2] = {mate_as_reported(r0[0], ref_), mate_as_reported(r0[1], ref_)};
+  if (r[0].certified && r[1].certified) {
+    reason[0] = reason[1] = kOk;
+    return certified_pair(r, se, rec, out, nullptr);
+  }
+  for (int x = 0; x < 2; ++x) reason[x] = r[x].reason;
+  if (!r[0].certified && !r[1].certified) {
+    fastq_record(rec[0], out.fq);
+    fastq_record(rec[1], out.fq2);
+    return false;
+  }
+  // One mate (k) keeps its single-end certificate.
+  const int k = r[0].certified ? 0 : 1;
+  reason[k] = kOk;
+  const int mapq = mapq_of(r[k], static_cast<int>(rec[k].seq.size()), opt_.s2_limit);
+  MateInfo mi;
+  if (opt_.single_mates) {
+    // The other mate is mapped single-end by the fallback, so both records
+    // are written unpaired.
+    sam_line(r[k], rec[k], ref_, mapq, mi, out.sam);
+    fastq_record(rec[1 - k], out.single);
+  } else {
+    // Both mates still go to the fallback (so it can pair them), named
+    // "name~k" where k is the certified mate, whose fallback record is
+    // dropped downstream (bench/drop_certified_mates.awk). Mate fields are
+    // unknown here.
+    mi.flag = 1 | (k == 0 ? 64 : 128);
+    sam_line(r[k], rec[k], ref_, mapq, mi, out.sam);
+    FastqRecord m0 = rec[0], m1 = rec[1];
+    m0.name += k == 0 ? "~1" : "~2";
+    m1.name = m0.name;
+    fastq_record(m0, out.fq);
+    fastq_record(m1, out.fq2);
+  }
+  return false;
+}
+
+int RecordWriter::single_interval(const Result& r0, const RepeatOut* iv, const FastqRecord& rec, Records& out,
+                                  Placement* placed) const {
   Result r = r0;
   check_contig(r, ref_);
   const int L = static_cast<int>(rec.seq.size());
@@ -420,31 +449,39 @@ void RecordWriter::single_interval(const Result& r0, const RepeatOut* iv, const 
   keep_within_contigs(p, ref_);
   if (opt_.mapq_cons) p.mapq = p.xq;
   const std::string t = interval_tags(p, ref_, opt_);
-  if (p.mapped) sam_line(p.r, rec, ref_, p.mapq, MateInfo(), sam, t.c_str());
-  else sam_unmapped(rec, ref_, MateInfo(), 0, -1, t.c_str(), sam);
-  *out = p;
+  if (p.mapped) sam_line(p.r, rec, ref_, p.mapq, MateInfo(), out.sam, t.c_str());
+  else sam_unmapped(rec, ref_, MateInfo(), 0, -1, t.c_str(), out.sam);
+  *placed = p;
+  return interval_reason(r);
 }
 
-bool RecordWriter::pair_interval(const Result* r0, const RepeatOut* const* iv, const uint8_t* const* codes,
-                                 const FastqRecord* rec, PairScratch& sc, std::string& sam, Placement* out) const {
+bool RecordWriter::pair_interval(const Result* r0, const Result* se_res, const RepeatOut* const* iv,
+                                 const uint8_t* const* codes, const FastqRecord* rec, PairScratch& sc, Records& out,
+                                 int* reason, Placement* placed) const {
+  const Result r[2] = {mate_as_reported(r0[0], ref_), mate_as_reported(r0[1], ref_)};
+  if (r[0].certified == 1 && r[1].certified == 1) {
+    reason[0] = reason[1] = kOk;
+    return certified_pair(r, se_res, rec, out, placed);
+  }
+  // A mate without a certificate: both placed from their single-end
+  // placements and tier R outputs, with mate rescue in the pair window.
   Placement se[2];
   int L[2];
   for (int x = 0; x < 2; ++x) {
-    Result r = r0[x];
-    check_contig(r, ref_);
+    reason[x] = interval_reason(r[x]);
     L[x] = static_cast<int>(rec[x].seq.size());
-    se[x] = place_single(r, r.certified == 1 ? mapq_of(r, L[x], opt_.s2_limit) : 0, iv[x], L[x]);
+    se[x] = place_single(r[x], r[x].certified == 1 ? mapq_of(r[x], L[x], opt_.s2_limit) : 0, iv[x], L[x]);
     keep_within_contigs(se[x], ref_);
   }
   auto contig_of = [&](int64_t pos) { return ref_.contig_of(pos); };
-  const bool proper = place_pair(view_, opt_.max_dist, 12, se, iv, codes, L, sc, contig_of, out);
+  const bool proper = place_pair(view_, opt_.max_dist, 12, se, iv, codes, L, sc, contig_of, placed);
   if (opt_.mapq_cons)
-    for (int x = 0; x < 2; ++x) out[x].mapq = out[x].xq;
-  const int c0 = out[0].mapped ? ref_.contig_of(out[0].r.ref_pos) : -1;
-  const int c1 = out[1].mapped ? ref_.contig_of(out[1].r.ref_pos) : -1;
+    for (int x = 0; x < 2; ++x) placed[x].mapq = placed[x].xq;
+  const int c0 = placed[0].mapped ? ref_.contig_of(placed[0].r.ref_pos) : -1;
+  const int c1 = placed[1].mapped ? ref_.contig_of(placed[1].r.ref_pos) : -1;
   for (int x = 0; x < 2; ++x) {
-    const Placement& a = out[x];
-    const Placement& b = out[1 - x];
+    const Placement& a = placed[x];
+    const Placement& b = placed[1 - x];
     const int ca = x == 0 ? c0 : c1, cb = x == 0 ? c1 : c0;
     MateInfo mi;
     mi.flag = 1 | (proper ? 2 : 0) | (x == 0 ? 64 : 128) | (b.mapped ? (b.r.strand ? 32 : 0) : 8);
@@ -458,8 +495,8 @@ bool RecordWriter::pair_interval(const Result* r0, const RepeatOut* const* iv, c
     }
     if (a.mapped && b.mapped && ca == cb) mi.tlen = tlen(a.r, b.r, x);
     const std::string t = interval_tags(a, ref_, opt_);
-    if (a.mapped) sam_line(a.r, rec[x], ref_, a.mapq, mi, sam, t.c_str());
-    else sam_unmapped(rec[x], ref_, mi, b.mapped ? b.r.ref_pos : 0, b.mapped ? cb : -1, t.c_str(), sam);
+    if (a.mapped) sam_line(a.r, rec[x], ref_, a.mapq, mi, out.sam, t.c_str());
+    else sam_unmapped(rec[x], ref_, mi, b.mapped ? b.r.ref_pos : 0, b.mapped ? cb : -1, t.c_str(), out.sam);
   }
   return proper;
 }

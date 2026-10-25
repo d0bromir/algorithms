@@ -1,6 +1,7 @@
 #include "map_config.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <stdexcept>
 
 namespace certa {
@@ -15,8 +16,7 @@ MapConfig MapConfig::from_args(const Args& a) {
   c.index_path = a.pos[0];
   c.reads_path = a.pos[1];
   // Paired-end: a second FASTQ with the mates, in the same order.
-  c.paired = a.pos.size() == 3;
-  if (c.paired) c.mates_path = a.pos[2];
+  if (a.pos.size() == 3) c.mates_path = a.pos[2];
 
   // Pass 1 runs every read with the small budget and without S2 (uniform,
   // fast GPU warps). Pass 2 re-runs only the reads pass 1 could not certify,
@@ -144,8 +144,9 @@ MapConfig MapConfig::from_args(const Args& a) {
   if (fb_mode == "single") {
     if (!a.has("-S")) throw std::runtime_error("--fallback-mates single needs -S single_mates.fq");
     c.single_path = a.get("-S", "");
+    c.out.single_mates = true;
   }
-  if (c.paired && a.has("-u") && !a.has("-U")) throw std::runtime_error("paired input: -u needs -U for the mates");
+  if (c.paired() && a.has("-u") && !a.has("-U")) throw std::runtime_error("paired input: -u needs -U for the mates");
 
   c.gpu = a.has("--gpu");
   c.device = a.geti("--device", 0);
@@ -154,6 +155,13 @@ MapConfig MapConfig::from_args(const Args& a) {
   c.io_threads = a.geti("--io-threads", std::max(1, std::min(16, c.threads / 4)));
   c.batch_size = static_cast<size_t>(a.geti("--batch", c.gpu ? 1000000 : 200000));
   return c;
+}
+
+void MapConfig::fit_index(int s) {
+  if (pass_v() && s != 1) {
+    std::fprintf(stderr, "[map] pass V needs an index of every position (s = 1); off\n");
+    pv.vparts = 0;
+  }
 }
 
 std::string MapConfig::command_line() const {

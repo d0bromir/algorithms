@@ -23,7 +23,7 @@ struct Stats {
   // Interval mode, per record: placed by tier R exact / as an interval / by
   // the pair window (MR) / unmapped (of which proven unalignable, XU < T);
   // XU - XL of mapped records: 0, 1-5, 6-10, 11-25, 26-50, > 50.
-  uint64_t iv_r = 0, iv_iv = 0, iv_mr = 0, iv_un = 0, iv_unalignable = 0, iv_point = 0, iv_proper = 0;
+  uint64_t iv_r = 0, iv_iv = 0, iv_mr = 0, iv_un = 0, iv_unalignable = 0, iv_proper = 0;
   uint64_t iv_width[6] = {};
   uint64_t iv_mapq20 = 0, iv_xq20 = 0;
 
@@ -48,18 +48,19 @@ struct PassCounts {
   void add(const PassCounts& o);
 };
 
-// Wall time in seconds. Mapping is summed over both stages (with a GPU they
-// overlap; fused, it includes formatting).
+// Wall time in seconds. Mapping is summed over the first stage (passes 1
+// and 2) and the rest (with a GPU they overlap; fused, the rest includes
+// formatting).
 struct Timings {
-  double load = 0, upload = 0, read_encode = 0, read_wait = 0, map_gpu = 0, map_cpu = 0, output = 0, total = 0;
-  double map() const { return map_gpu + map_cpu; }
+  double load = 0, upload = 0, read_encode = 0, read_wait = 0, map_first = 0, map_rest = 0, output = 0, total = 0;
+  double map() const { return map_first + map_rest; }
 };
 
 // The summary certa map prints on stderr.
 void print_summary(const MapConfig& c, const Stats& s, const PassCounts& n, const Timings& t);
 
-// The --stats JSON; `device` is the GPU's name, or empty.
-void write_stats_json(const std::string& path, const MapConfig& c, const Index& ix, const std::string& device,
-                      const Stats& s, const PassCounts& n, const Timings& t);
+// The --stats JSON, to c.stats_path; `device` is the GPU's name, or empty.
+void write_stats_json(const MapConfig& c, const Index& ix, const std::string& device, const Stats& s,
+                      const PassCounts& n, const Timings& t);
 
 }  // namespace certa
