@@ -39,7 +39,8 @@ else
     echo "== zlib headers not found: gzip input disabled (plain FASTA/FASTQ only)"
   fi
   objs=()
-  for f in index seqio mapper_cpu check main; do
+  cli=(main cmd_map map_config map_pipeline map_stats sam_output)  # the certa program's own sources
+  for f in index seqio mapper_cpu check "${cli[@]}"; do
     "$cxx" "${flags[@]}" -c "$here/src/$f.cpp" -o "$build/$f.o" &
     objs+=("$build/$f.o")
   done
@@ -48,6 +49,8 @@ else
   "$cxx" "${flags[@]}" "$here/tests/verify_lemmas.cpp" -o "$build/verify_lemmas" &
   wait
   core=("$build/index.o" "$build/seqio.o" "$build/mapper_cpu.o" "$build/check.o")
+  cli_objs=()
+  for f in "${cli[@]}"; do cli_objs+=("$build/$f.o"); done
   "$cxx" "${flags[@]}" -o "$build/lr_ceiling" "$here/tools/lr_ceiling.cpp" "$build/index.o" "$build/seqio.o" \
     "${libs[@]}" &
   "$cxx" "${flags[@]}" -o "$build/test_longread" "$here/tests/test_longread.cpp" "$build/index.o" "$build/seqio.o" \
@@ -58,11 +61,11 @@ else
     for a in ${archs//;/ }; do gencode+=(-gencode "arch=compute_$a,code=sm_$a"); done
     nvcc -O3 -std=c++17 --expt-relaxed-constexpr "${gencode[@]}" -I"$here/include" -I"$here/src" \
       -c "$here/src/mapper_gpu.cu" -o "$build/mapper_gpu.o"
-    nvcc -o "$build/certa" "$build/main.o" "$build/mapper_gpu.o" "${core[@]}" -Xcompiler -pthread "${libs[@]}"
+    nvcc -o "$build/certa" "${cli_objs[@]}" "$build/mapper_gpu.o" "${core[@]}" -Xcompiler -pthread "${libs[@]}"
   elif [[ "$cuda" == ON ]]; then
     echo "CERTA_CUDA=ON but nvcc was not found" >&2; exit 1
   else
-    "$cxx" -pthread -o "$build/certa" "$build/main.o" "$build/gpu_stub.o" "${core[@]}" "${libs[@]}"
+    "$cxx" -pthread -o "$build/certa" "${cli_objs[@]}" "$build/gpu_stub.o" "${core[@]}" "${libs[@]}"
   fi
   "$cxx" -pthread -o "$build/test_certa" "$build/test_certa.o" "$build/gpu_stub.o" "${core[@]}" "${libs[@]}"
   wait

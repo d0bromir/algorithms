@@ -292,7 +292,13 @@ src/seqio.*                FASTQ/FASTA reading (plain or gzip)
 src/check.*                independent checker (certa check, check-index)
 src/mapper_cpu.cpp         multi-threaded CPU driver
 src/mapper_gpu.cu          CUDA driver (one thread per read)
-src/main.cpp               CLI, SAM/FASTQ output, statistics
+src/main.cpp               CLI: index, repeat, check, check-index; dispatch
+src/cmd_map.cpp            certa map: load, open outputs, run the pipeline, report
+src/map_config.*           certa map's options, parsed and checked up front
+src/map_pipeline.*         batches through passes 1-3, V, L, pairs, tier R and output
+src/sam_output.*           SAM and fallback FASTQ records, MAPQ
+src/map_stats.*            counts, timing, the stderr summary and --stats JSON
+src/cli.h, async_writer.h  argument parsing; an output file written by its own thread
 tests/test_certa.cpp       brute-force oracle tests of every bound
 tests/verify_lemmas.cpp    exhaustive checks of the finite lemmas
 tests/test_longread.cpp    long-read certificates against a brute-force DP (planted SVs)
