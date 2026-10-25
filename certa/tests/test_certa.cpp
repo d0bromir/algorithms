@@ -1236,6 +1236,62 @@ int main(int argc, char** argv) {
                  bands, bad ? "no" : "yes");
   }
 #endif
+  // ---- The two shortcuts for bands with a one-mismatch ungapped alignment.
+  // evaluate_clusters, Hamming bound 1: the band's distance is 0 exactly when
+  // a diagonal has no mismatch, else 1. align_best, d1 = 1: affine_align
+  // reports the ungapped alignment on the first diagonal with one mismatch.
+  // Reads with no or one substitution or N, from unique sequence and from the
+  // repeats (several diagonals of a band may tie).
+  {
+    std::unique_ptr<Workspace> ws(new Workspace);
+    std::mt19937_64 gu(seed * 7 + 5);
+    const int64_t repeats[] = {10000, 30000, 50000, 60200, 75000};
+    int bands = 0, bad_dist = 0, aligned = 0, bad_aln = 0;
+    for (int it = 0; it < 6000; ++it) {
+      const int L = it % 3 ? 150 : 101;
+      const int c = static_cast<int>(gu() % 2);
+      int64_t a = static_cast<int64_t>(ref.offsets[c]) + 1000 + static_cast<int64_t>(gu() % (ref.lengths[c] - L - 2000));
+      if (it % 2) a = static_cast<int64_t>(ref.offsets[0]) + repeats[gu() % 5] + static_cast<int64_t>(gu() % 1200);
+      std::vector<uint8_t> rd(ref.seq.owned.begin() + a, ref.seq.owned.begin() + a + L);
+      const int x = static_cast<int>(gu() % L);
+      if (it % 7 == 0) {
+        // no edit
+      } else if (it % 5 == 0) {
+        rd[x] = 4;
+      } else {
+        rd[x] = static_cast<uint8_t>((rd[x] + 1 + gu() % 3) % 4);
+      }
+      const int B = 1 + static_cast<int>(gu() % BMAX);
+      const int64_t lo = a - static_cast<int64_t>(gu() % B);
+      int first = -1;
+      bool exact = false;
+      for (int b = 0; b < B; ++b) {
+        const int h = hamming(view, rd.data(), L, lo + b, 1);
+        exact |= h == 0;
+        if (h == 1 && first < 0) first = b;
+      }
+      // The shortcut's case: a diagonal within one mismatch (not, e.g., a read
+      // across the N run, where N mismatches even N).
+      if (!exact && first < 0) continue;
+      const int d = band_distance(view, rd.data(), L, lo, B, 1, ws->row_a, ws->row_b);
+      ++bands;
+      bad_dist += d != (exact ? 0 : 1);
+      if (d != 1 || first < 0) continue;
+      Result r{};
+      const bool ok = affine_align(view, rd.data(), L, lo, B, *ws, r);
+      ++aligned;
+      bad_aln += !(ok && r.n_cigar == 1 && r.cigar[0] == ((static_cast<uint32_t>(L) << 4) | kOpM) &&
+                   r.ref_pos == lo + first && r.nm == 1 && r.score == L * kMatch - (kMatch + kMismatch));
+    }
+    CHECK(bad_dist == 0, "Hamming bound 1: band_distance differs from the zero-mismatch check on %d of %d bands",
+          bad_dist, bands);
+    CHECK(bad_aln == 0, "d1 = 1: affine_align differs from the first one-mismatch ungapped alignment on %d of %d bands",
+          bad_aln, aligned);
+    std::fprintf(stderr,
+                 "Hamming bound 1: band distance = zero-mismatch check on %d bands: %s; d1 = 1: affine_align = the "
+                 "first ungapped one-mismatch alignment on %d bands: %s\n",
+                 bands, bad_dist ? "no" : "yes", aligned, bad_aln ? "no" : "yes");
+  }
   // ---- repeat_detail::match_run must count the leading same_base positions
   // as the scalar loop does: reads copied from the reference with a few
   // mismatches and N, windows reaching past either end.
