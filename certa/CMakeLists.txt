@@ -51,12 +51,15 @@ if(ZLIB_FOUND)
   target_link_libraries(certa_core PUBLIC ZLIB::ZLIB)
 endif()
 
+# The command-line program: subcommands, and certa map's stages and output.
+set(CERTA_CLI_SOURCES src/main.cpp src/cmd_map.cpp src/map_config.cpp src/map_pipeline.cpp src/map_stats.cpp
+    src/sam_output.cpp)
 if(USE_CUDA)
-  add_executable(certa src/main.cpp src/mapper_gpu.cu)
+  add_executable(certa ${CERTA_CLI_SOURCES} src/mapper_gpu.cu)
   set_target_properties(certa PROPERTIES CUDA_SEPARABLE_COMPILATION OFF)
   target_compile_options(certa PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-O3 --expt-relaxed-constexpr>)
 else()
-  add_executable(certa src/main.cpp src/gpu_stub.cpp)
+  add_executable(certa ${CERTA_CLI_SOURCES} src/gpu_stub.cpp)
 endif()
 target_link_libraries(certa PRIVATE certa_core)
 

@@ -1017,6 +1017,29 @@ verifies the XQ of PR mates too.
   - So FASTQ-metric routing, duplicate memoization and DP filters give a few
     per cent at most on recent data. The large remaining costs are pass V's
     failed attempts and tier R.
+  - *Exact shortcuts for one-edit reads* (2026-10-25; output byte-identical
+    in every mode; measured on a synthetic 20 Mbp genome on 4 x86-64 cores,
+    not yet on HG002 or the lab hosts). Callgrind put align_best's affine
+    DP, evaluate_clusters' banded DP and the q-mer keys at over half of
+    single-end mapping. Each replacement returns what the code it skips
+    returns, and test_certa checks both lemmas on random bands:
+    - align_best, d1 = 1 with an ungapped one-mismatch alignment: it scores
+      L - 5, a gapped one ≤ L - 7, a clipped one ≤ L - 6, so the affine
+      fill's first best end cell is that alignment's and the fill is
+      skipped.
+    - evaluate_clusters, Hamming bound 1: the band's distance is 0 or 1, and
+      0 only on a diagonal without a mismatch, so a Hamming check per
+      diagonal replaces the banded DP.
+    - count_parts and the lookup prefetch roll a part's s q-mer keys
+      (q + s - 1 steps instead of s q).
+    Instructions −48 % single-end, −23 % paired. Wall time (median of 5,
+    4 threads): 400 k reads 2.83 → 1.82 s, 150 k pairs 3.31 → 2.66 s;
+    `--full-cert` 2.02 → 1.74 s and 3.71 → 3.36 s. Gzip paired input also
+    gained from reading both mate files at once (3.47 → 2.75 s). The gain
+    on real data depends on the share of reads with exactly one edit.
+    Not done: d1 = 2 (a 2-base deletion beats two mismatches, and a prefix
+    clip can tie with an ungapped alignment, where the fill prefers the
+    clip).
 - **Competitors from the literature audit** (SWOT_ANALYSIS.md section K;
   2026-10-24; `bench/results/hg002_2026-10/k_competitors.{tsv,txt}`,
   `bench/k_bench.sh`, `bench/k_reliability.sh`).

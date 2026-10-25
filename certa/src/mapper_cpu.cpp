@@ -38,9 +38,8 @@ void encode_batch(const std::vector<FastqRecord>& recs, ReadBatch& out, int thre
 
 namespace {
 
-// The q-mer keys count_parts looks up for a read: every part, both strands,
-// every sampling offset (parts with an N give fewer keys; that only means
-// fewer prefetches).
+// The q-mer keys count_parts looks up for a read: every part without an N,
+// both strands, every sampling offset (rolled as count_parts rolls them).
 constexpr int kMaxKeys = 2 * PMAX * SMAX;
 int part_keys(const IndexView& ix, const uint8_t* codes, int L, uint64_t* keys) {
   const int P = L <= LMAX ? part_count(L, ix.q, ix.s) : 0;
@@ -50,16 +49,25 @@ int part_keys(const IndexView& ix, const uint8_t* codes, int L, uint64_t* keys) 
     const uint8_t c = codes[L - 1 - i];
     rc[i] = c < 4 ? (uint8_t)(3 - c) : (uint8_t)4;
   }
+  const uint64_t mask = ix.q >= 32 ? ~0ull : (1ull << (2 * ix.q)) - 1;
   int n = 0;
   for (int st = 0; st < 2; ++st) {
     const uint8_t* s = st ? rc : codes;
     for (int j = 0; j < P; ++j) {
       int off, len;
       part_geometry(L, P, j, &off, &len);
-      for (int t = 0; t < ix.s; ++t) {
-        uint64_t k;
-        if (kmer_key(s + off + t, ix.q, &k)) keys[n++] = k;
+      // One pass over the part: the rolled key ends a q-mer at i = q - 1 + t
+      // for shift t < s; the keys are kept only if the part has no N.
+      uint64_t k = 0;
+      bool has_n = false;
+      for (int i = 0; i < len; ++i) {
+        const uint8_t c = s[off + i];
+        has_n |= c > 3;
+        k = ((k << 2) | (c & 3)) & mask;
+        const int t = i - (ix.q - 1);
+        if (t >= 0 && t < ix.s) keys[n + t] = k;
       }
+      if (!has_n) n += ix.s;
     }
   }
   return n;

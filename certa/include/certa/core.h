@@ -359,10 +359,15 @@ CERTA_HD inline void count_parts(const IndexView& ix, const uint8_t* seq, int L,
     bool has_n = false;
     for (int i = off; i < off + len; ++i) has_n |= (seq[i] > 3);
     uint64_t total = 0;
+    // The part's s q-mers, rolled (each is kmer_key(seq + off + t)): q + s - 1
+    // steps instead of s q. key holds the first q - 1 bases before shift 0.
+    const uint64_t mask = ix.q >= 32 ? ~0ull : (1ull << (2 * ix.q)) - 1;
+    uint64_t key = 0;
+    if (!has_n)
+      for (int i = 0; i < ix.q - 1; ++i) key = (key << 2) | seq[off + i];
     for (int t = 0; t < ix.s; ++t) {
       if (has_n) { ws.rlo[st][j][t] = ws.rhi[st][j][t] = 0; continue; }
-      uint64_t key = 0;
-      kmer_key(seq + off + t, ix.q, &key);
+      key = ((key << 2) | seq[off + t + ix.q - 1]) & mask;
       lookup(ix, key, &ws.rlo[st][j][t], &ws.rhi[st][j][t]);
       total += ws.rhi[st][j][t] - ws.rlo[st][j][t];
     }
@@ -789,6 +794,15 @@ CERTA_HD inline void evaluate_clusters(const IndexView& ix, int L, int nclust, i
     int d;
     if (u == 0) {
       d = 0;
+    } else if (u == 1) {
+      // The band's distance is <= 1 (or, with limit 0, only whether it is 0
+      // matters), and it is 0 only on a diagonal without a mismatch (no
+      // edits: an ungapped path). So a Hamming check per diagonal gives what
+      // the DP below would (tested in test_certa).
+      d = 1;
+      for (int b = 0; b < cl.width && d > 0; ++b)
+        if (hamming(ix, rd, L, cl.lo + b, 0) == 0) d = 0;
+      if (d > limit) continue;  // distance >= b2: irrelevant
     } else {
       const int lim = u <= limit ? u : limit;
       d = band_distance(ix, rd, L, cl.lo, cl.width, lim, ws.row_a, ws.row_b);
@@ -1199,7 +1213,13 @@ CERTA_HD inline int align_best(const IndexView& ix, int L, int nclust, int d1,
   // Report the locus with BWA-MEM's affine scoring (clipping, gap placement),
   // so callers see the same alignment representation as from bwa-mem. The
   // locus and d1 (the certified quantity) do not change.
-  if (d1 > 0) {
+  // With d1 = 1 the ungapped alignment found above (on the first diagonal with
+  // one mismatch) is already what affine_align reports: d1 is the band's
+  // minimum edit distance, so it scores L - 5, while a gapped alignment scores
+  // <= L - 7, a clipped one <= L - 6 and an ungapped one with more mismatches
+  // less. The fill's first best end cell is then in row L on that diagonal,
+  // and its traceback is the ungapped path (tested in test_certa).
+  if (d1 > 0 && !(d1 == 1 && ungapped >= 0)) {
     Result tmp = r;
     if (affine_align(ix, rd, L, cl.lo, cl.width, ws, tmp)) {
       for (int x = 0; x < tmp.n_cigar; ++x) r.cigar[x] = tmp.cigar[x];
