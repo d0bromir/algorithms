@@ -75,6 +75,7 @@ class MappedFastq {
   size_t size_ = 0, pos_ = 0;
   size_t released_ = 0;          // the pages before this offset were dropped
   double bytes_per_record_ = 0;  // in the previous batch
+  FastqSpans spans_;             // next_batch's (buffers reused)
 };
 
 // A FASTQ input: memory-mapped when it is an uncompressed regular file,

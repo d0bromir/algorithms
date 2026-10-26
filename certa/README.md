@@ -289,6 +289,7 @@ include/certa/interval.h   interval output (--intervals)
 include/certa/longread.h   long reads: Lemma L bounds, incl. split (jump) alignments
 src/index.*                FASTA loading, sampled q-mer index, save/load
 src/seqio.*                FASTQ/FASTA reading (plain or gzip)
+src/parallel.h             a loop spread over threads (FASTQ reading, encoding)
 src/check.*                independent checker (certa check, check-index)
 src/mapper_cpu.cpp         multi-threaded CPU driver
 src/mapper_gpu.cu          CUDA driver (one thread per read)

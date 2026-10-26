@@ -1019,7 +1019,7 @@ verifies the XQ of PR mates too.
     failed attempts and tier R.
   - *Exact shortcuts for one-edit reads* (2026-10-25; output byte-identical
     in every mode; measured on a synthetic 20 Mbp genome on 4 x86-64 cores,
-    not yet on HG002 or the lab hosts). Callgrind put align_best's affine
+    and on HG002 on galaxy, below). Callgrind put align_best's affine
     DP, evaluate_clusters' banded DP and the q-mer keys at over half of
     single-end mapping. Each replacement returns what the code it skips
     returns, and test_certa checks both lemmas on random bands:
@@ -1036,10 +1036,35 @@ verifies the XQ of PR mates too.
     4 threads): 400 k reads 2.83 → 1.82 s, 150 k pairs 3.31 → 2.66 s;
     `--full-cert` 2.02 → 1.74 s and 3.71 → 3.36 s. Gzip paired input also
     gained from reading both mate files at once (3.47 → 2.75 s). The gain
-    on real data depends on the share of reads with exactly one edit.
-    Not done: d1 = 2 (a 2-base deletion beats two mismatches, and a prefix
+    on real data depends on the share of reads with exactly one edit. On
+    HG002 (galaxy, 64 threads on cores 0-63, `grch38.s1v3`) mapping 20 M
+    single-end reads took 6.39 → 5.73 s (−10 %, 3.13 → 3.49 M reads/s),
+    and the SAM of 2 M reads was byte-identical to the previous main's,
+    single-end and paired. Not done: d1 = 2 (a 2-base deletion beats two mismatches, and a prefix
     clip can tie with an ungapped alignment, where the fill prefers the
     clip).
+  - *FASTQ reading* (2026-10-26; output byte-identical). On galaxy (20 M
+    HG002 reads, as above) reading did not scale with `--io-threads`: 4, 8,
+    16 and 32 threads took 6.67, 5.71, 4.99 and 5.03 s. It runs while the
+    previous batch maps, so mapping waited only 0.76, 0.15, 0.08 and
+    0.08 s, and the map time stayed at 5.70-5.76 s; but with mapping at
+    5.7 s it was within 13 % of becoming the bottleneck. Three causes:
+    - encoding called an out-of-line `switch` per base, and its loop
+      reloaded the read's length and bases after every store (a `uint8_t`
+      store may alias them): now a table lookup in a loop over locals;
+    - the parallel boundary scan stored every newline's position (four per
+      record) in new vectors, which one thread then walked: now the
+      threads count the newlines in each piece and, from the counts, write
+      the record starts straight into place (THEORY.md §4);
+    - each thread of a step had a fixed share, so one thread that was not
+      scheduled (the readers share the cores with the mapping threads) held
+      up the whole step: the threads now take small pieces in turn
+      (`src/parallel.h`).
+    Reading alone (boundaries, records, codes), 2 M HG002-like reads
+    (712 MB) on 4 x86-64 cores: 4 threads 0.55 → 0.33 s, CPU 1.47 →
+    1.02 s; with four busy
+    threads on the four cores, as the mapping threads on galaxy,
+    1.05 → 0.82 s. Not yet measured on galaxy.
 - **Competitors from the literature audit** (SWOT_ANALYSIS.md section K;
   2026-10-24; `bench/results/hg002_2026-10/k_competitors.{tsv,txt}`,
   `bench/k_bench.sh`, `bench/k_reliability.sh`).

@@ -2,9 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
-#include <exception>
 #include <stdexcept>
-#include <thread>
 
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -14,6 +12,8 @@
 #ifdef CERTA_WITH_ZLIB
 #include <zlib.h>
 #endif
+
+#include "parallel.h"
 
 namespace certa {
 
@@ -130,37 +130,13 @@ void parse_record(const char* p, const char* end, FastqRecord& r) {
     throw std::runtime_error("SEQ/QUAL length mismatch: " + r.name);
 }
 
-// Runs fn(t) for t in [0, threads) on that many threads; rethrows the first
-// error in t order.
-template <class F>
-void run_threads(int threads, F fn) {
-  std::vector<std::exception_ptr> errors(threads);
-  std::vector<std::thread> pool;
-  for (int t = 1; t < threads; ++t)
-    pool.emplace_back([&, t] {
-      try {
-        fn(t);
-      } catch (...) {
-        errors[t] = std::current_exception();
-      }
-    });
-  try {
-    fn(0);
-  } catch (...) {
-    errors[0] = std::current_exception();
-  }
-  for (auto& th : pool) th.join();
-  for (auto& e : errors)
-    if (e) std::rethrow_exception(e);
-}
-
 }  // namespace
 
 void parse_spans(const FastqSpans& sp, FastqRecord* out, size_t stride, int threads) {
+  constexpr size_t kChunk = 1024;  // records per item
   const size_t nrec = sp.size();
-  threads = std::max(1, std::min<int>(threads, static_cast<int>(nrec / 4096) + 1));
-  run_threads(threads, [&](int t) {
-    for (size_t i = nrec * t / threads; i < nrec * (t + 1) / threads; ++i)
+  parallel_for((nrec + kChunk - 1) / kChunk, threads, [&](size_t c) {
+    for (size_t i = c * kChunk, e = std::min(nrec, i + kChunk); i < e; ++i)
       parse_record(sp.base + sp.starts[i], sp.base + sp.starts[i + 1], out[i * stride]);
   });
 }
@@ -213,25 +189,26 @@ size_t MappedFastq::next_spans(FastqSpans& sp, size_t max_records, int threads) 
   starts.reserve(max_records + 1);
   const size_t first = pos_;
   // Parallel part. The bytes that should hold this batch (from the previous
-  // batch's bytes per record) are split among the threads, and each lists the
-  // newlines in its piece. With no empty line among them, records are exactly
+  // batch's bytes per record) are cut into pieces, and the threads count the
+  // newlines in each. With no empty line among them, records are exactly
   // four lines from pos_, so every fourth newline ends one: these are the
-  // boundaries the serial scan below would find. Any empty line (the serial
-  // scan skips those between records), and whatever the piece does not hold
-  // whole, are left to the serial scan.
+  // boundaries the serial scan below would find, and from the counts each
+  // thread knows which of its piece's newlines they are and where in
+  // `starts` they go. Any empty line (the serial scan skips those between
+  // records), and whatever the pieces do not hold whole, are left to the
+  // serial scan.
   if (bytes_per_record_ > 0 && threads > 1 && pos_ < size_ && base_[pos_] != '\n' && base_[pos_] != '\r') {
+    constexpr size_t kPiece = size_t(1) << 18;
     const size_t want = static_cast<size_t>(bytes_per_record_ * 1.02 * static_cast<double>(max_records)) + 4096;
-    const size_t end = std::min(size_, pos_ + want);
-    const int T = std::max(1, std::min<int>(threads, static_cast<int>((end - pos_) >> 16) + 1));
-    std::vector<std::vector<size_t>> nl(T);
-    std::vector<char> empty_line(T, 0);
-    const size_t from = pos_;
-    run_threads(T, [&](int t) {
-      const size_t c0 = from + (end - from) * t / T, c1 = from + (end - from) * (t + 1) / T;
-      std::vector<size_t>& v = nl[t];
-      v.reserve((c1 - c0) / 64 + 16);
+    const size_t from = pos_, end = std::min(size_, pos_ + want);
+    const size_t P = (end - from + kPiece - 1) / kPiece;
+    std::vector<size_t> before(P + 1, 0);  // newlines before piece i (counts until the sum below)
+    std::vector<char> empty_line(P, 0);
+    parallel_for(P, threads, [&](size_t i) {
+      const size_t c1 = std::min(end, from + (i + 1) * kPiece);
+      size_t k = 0;
       bool e = false;
-      for (size_t p = c0; p < c1;) {
+      for (size_t p = from + i * kPiece; p < c1;) {
         const char* q = static_cast<const char*>(std::memchr(base_ + p, '\n', c1 - p));
         if (!q) break;
         const size_t x = static_cast<size_t>(q - base_);
@@ -239,26 +216,35 @@ size_t MappedFastq::next_spans(FastqSpans& sp, size_t max_records, int threads) 
         // or just past the previous newline).
         e |= x == from || base_[x - 1] == '\n' ||
              (base_[x - 1] == '\r' && (x - 1 == from || base_[x - 2] == '\n'));
-        v.push_back(x);
+        ++k;
         p = x + 1;
       }
-      empty_line[t] = e;
+      before[i + 1] = k;
+      empty_line[i] = e;
     });
-    bool any_empty = false;
-    for (char e : empty_line) any_empty |= e != 0;
-    if (!any_empty) {
-      size_t k = 0;  // newlines so far
-      bool cr_start = false;  // a record starting with '\r', which the serial scan would skip
-      starts.push_back(pos_);
-      for (int t = 0; t < T && starts.size() <= max_records && !cr_start; ++t)
-        for (size_t x : nl[t]) {
+    if (std::find(empty_line.begin(), empty_line.end(), 1) == empty_line.end()) {
+      for (size_t i = 0; i < P; ++i) before[i + 1] += before[i];
+      const size_t R = std::min(before[P] / 4, max_records);  // whole records in the pieces
+      starts.resize(R + 1);
+      starts[0] = pos_;
+      std::vector<char> cr(P, 0);  // a record starting with '\r', which the serial scan would skip
+      parallel_for(P, threads, [&](size_t i) {
+        const size_t c1 = std::min(end, from + (i + 1) * kPiece);
+        const size_t k1 = std::min(before[i + 1], 4 * R);  // its newlines, up to the end of record R
+        size_t k = before[i];
+        bool cr_start = false;
+        for (size_t p = from + i * kPiece; k < k1 && !cr_start;) {
+          const char* q = static_cast<const char*>(std::memchr(base_ + p, '\n', c1 - p));  // newline k + 1
+          const size_t x = static_cast<size_t>(q - base_);
           if (++k % 4 == 0) {
+            starts[k / 4] = x + 1;
             cr_start = x + 1 < size_ && base_[x + 1] == '\r';
-            starts.push_back(x + 1);
-            if (starts.size() > max_records || cr_start) break;
           }
+          p = x + 1;
         }
-      if (cr_start) {
+        cr[i] = cr_start;
+      });
+      if (std::find(cr.begin(), cr.end(), 1) != cr.end()) {
         starts.clear();
       } else {
         pos_ = starts.back();  // just past the last whole record
@@ -288,10 +274,9 @@ size_t MappedFastq::next_spans(FastqSpans& sp, size_t max_records, int threads) 
 }
 
 size_t MappedFastq::next_batch(std::vector<FastqRecord>& out, size_t max_records, int threads) {
-  FastqSpans sp;
-  const size_t n = next_spans(sp, max_records, threads);
+  const size_t n = next_spans(spans_, max_records, threads);
   out.resize(n);
-  parse_spans(sp, out.data(), 1, threads);
+  parse_spans(spans_, out.data(), 1, threads);
   return n;
 }
 
