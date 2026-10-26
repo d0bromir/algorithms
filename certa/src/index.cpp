@@ -15,16 +15,6 @@
 
 namespace certa {
 
-uint8_t encode_base(char c) {
-  switch (c) {
-    case 'A': case 'a': return 0;
-    case 'C': case 'c': return 1;
-    case 'G': case 'g': return 2;
-    case 'T': case 't': return 3;
-    default: return 4;
-  }
-}
-
 Reference Reference::load_fasta(const std::string& path) {
   Reference ref;
   LineReader in(path);

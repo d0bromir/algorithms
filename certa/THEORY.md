@@ -502,16 +502,18 @@ byte of the output; each is checked by comparing whole SAM/FASTQ outputs
 with those of the previous build (single-end and paired, with and without
 intervals, CPU and GPU, default and 7,777-read batches).
 - *FASTQ batches.* `MappedFastq::next_spans` finds the next batch's record
-  boundaries on several threads where that is exact: each thread lists the
-  newlines in its piece of the bytes expected to hold the batch, and if no
-  line among them is empty ("" or "\r") and no record would start with
-  '\r', records are exactly four lines from the batch start, so every
-  fourth newline ends one, which is what the serial scan finds (it only
-  differs at empty lines between records, which it skips, and at a stray
-  '\r' before a record). Otherwise, and for whatever the piece does not hold
-  whole, the serial scan runs. Hence the piece's size only decides how much
-  the serial scan has left (mutant S5, half the piece, is equivalent; so is
-  S2, see §9a).
+  boundaries on several threads where that is exact: the bytes expected to
+  hold the batch are cut into pieces, the threads count the newlines in
+  each, and if no line among them is empty ("" or "\r"), records are
+  exactly four lines from the batch start, so every fourth newline ends one,
+  which is what the serial scan finds (it only differs at empty lines
+  between records, which it skips, and at a stray '\r' before a record).
+  The counts tell each thread which of its piece's newlines those are and
+  where they go; if a record would start with '\r', all of them are
+  dropped. Otherwise, and for whatever the pieces do not hold whole, the
+  serial scan runs. Hence the bytes scanned only decide how much the serial
+  scan has left (mutant S5, half of them, is equivalent; so is S2, see
+  §9a).
   *Test:* six random files (LF and CRLF, rare empty lines and stray '\r'
   between records, empty reads, no final newline) in batches of 1 to 9,000
   records on 1, 3 and 8 threads give the written records. *Mutants:* S1, S3, S4.

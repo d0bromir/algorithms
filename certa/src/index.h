@@ -54,6 +54,19 @@ void save_index(const std::string& path, const Reference& ref, const Index& ix);
 // stays alive while `ix` does. Repeated runs reuse the OS page cache.
 void load_index(const std::string& path, Reference& ref, Index& ix);
 
-uint8_t encode_base(char c);
+// A base's code: A, C, G, T (either case) are 0 to 3, anything else 4. A
+// table, so encoding a read is one load per base.
+struct BaseCodes {
+  uint8_t code[256];
+  constexpr BaseCodes() : code() {
+    for (int i = 0; i < 256; ++i) code[i] = 4;
+    code['A'] = code['a'] = 0;
+    code['C'] = code['c'] = 1;
+    code['G'] = code['g'] = 2;
+    code['T'] = code['t'] = 3;
+  }
+};
+inline constexpr BaseCodes kBaseCodes{};
+inline uint8_t encode_base(char c) { return kBaseCodes.code[static_cast<unsigned char>(c)]; }
 
 }  // namespace certa

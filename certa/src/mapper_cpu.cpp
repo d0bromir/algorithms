@@ -3,6 +3,7 @@
 #include <thread>
 
 #include "mapper.h"
+#include "parallel.h"
 
 namespace certa {
 
@@ -19,21 +20,21 @@ void encode_batch(const std::vector<FastqRecord>& recs, ReadBatch& out, int thre
     total += out.lens[i];
   }
   out.codes.resize(total);
-  threads = std::max(1, std::min<int>(threads, static_cast<int>(n / 4096) + 1));
-  std::vector<std::thread> pool;
-  for (int t = 0; t < threads; ++t) {
-    pool.emplace_back([&, t] {
-      for (size_t i = n * t / threads; i < n * (t + 1) / threads; ++i) {
-        const FastqRecord& r = recs[i];
-        uint8_t* dst = out.codes.data() + out.offs[i];
-        for (size_t j = 0; j < out.lens[i]; ++j) dst[j] = encode_base(r.seq[j]);
-        uint64_t h = 1469598103934665603ULL;
-        for (char c : r.name) { h ^= static_cast<uint8_t>(c); h *= 1099511628211ULL; }
-        out.hashes[i] = h;
-      }
-    });
-  }
-  for (auto& th : pool) th.join();
+  constexpr size_t kChunk = 4096;  // reads per item
+  parallel_for((n + kChunk - 1) / kChunk, threads, [&](size_t c) {
+    for (size_t i = c * kChunk, e = std::min(n, i + kChunk); i < e; ++i) {
+      const FastqRecord& r = recs[i];
+      // Locals: stores through uint8_t* may alias anything, so the compiler
+      // would otherwise reload the length and the source on every base.
+      const char* src = r.seq.data();
+      uint8_t* dst = out.codes.data() + out.offs[i];
+      const size_t len = out.lens[i];
+      for (size_t j = 0; j < len; ++j) dst[j] = encode_base(src[j]);
+      uint64_t h = 1469598103934665603ULL;
+      for (char c : r.name) { h ^= static_cast<uint8_t>(c); h *= 1099511628211ULL; }
+      out.hashes[i] = h;
+    }
+  });
 }
 
 namespace {

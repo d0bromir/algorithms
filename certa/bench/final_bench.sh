@@ -11,7 +11,12 @@
 # turn (paired BWA-MEM2, at over four minutes a run, and the paired fallback
 # with minibwa's default batch: one run each).
 #   final_bench.sh HOST CERTA_BIN OUT_DIR
+# CERTA_ONLY=1 times only CERTA's rows (to re-time a new build against the
+# other aligners' rows of an earlier session on the same host).
 set -u
+if [ $# -ne 3 ]; then
+  echo "usage: [CERTA_ONLY=1] final_bench.sh HOST CERTA_BIN OUT_DIR  (HOST: galaxy or a2)" >&2; exit 2
+fi
 host=$1; C=$2; O=$3
 cd ~/certa-bench
 mkdir -p "$O"
@@ -35,23 +40,27 @@ pe_pipe() {  # name config certa-args certa-threads minibwa-threads minibwa-K re
   rm -f "$O/u1" "$O/u2"; mkfifo "$O/u1" "$O/u2"
   run paired "$1" "$2" "$7" "'$C' map $IDX $R1 $R2 -t $4 $3 -o /dev/null -u '$O/u1' -U '$O/u2' 2>/dev/null & '$BIN/minibwa' map -t $5 $6 idx/minibwa '$O/u1' '$O/u2' 2>/dev/null | awk -f '$AWK' > /dev/null; wait"
 }
+other() {  # run, unless CERTA_ONLY: the other aligners' rows
+  [ -n "${CERTA_ONLY:-}" ] || run "$@"
+}
 GPUARG="--gpu --device 1"
 # Warm-up: indexes and reads into the page cache.
 cat $R1 $R2 > /dev/null
 for f in reads/hg002_2M.fq; do
   "$C" map $IDX $f -t 64 -o /dev/null -u /dev/null 2>/dev/null
   "$BIN/minibwa" map -t 64 idx/minibwa $f > /dev/null 2>&1
+  [ -n "${CERTA_ONLY:-}" ] && continue
   "$BIN/bwa-mem2" mem -t 64 idx/bwa-mem2 $f > /dev/null 2>&1
   "$BIN/strobealign" -t 64 --use-index idx/ref.fa $f > /dev/null 2>&1
   "$BIN/minimap2" -ax sr -t 64 idx/minimap2.sr.mmi $f > /dev/null 2>&1
   "$BIN/bowtie2" -p 64 -x idx/bowtie2 -U $f > /dev/null 2>&1
 done
 for rep in 1 2 3; do
-  run single-end bwa-mem2 - $rep "'$BIN/bwa-mem2' mem -t 64 idx/bwa-mem2 $R1 > /dev/null 2>&1"
-  run single-end minibwa - $rep "'$BIN/minibwa' map -t 64 idx/minibwa $R1 > /dev/null 2>&1"
-  run single-end strobealign - $rep "'$BIN/strobealign' -t 64 --use-index idx/ref.fa $R1 > /dev/null 2>&1"
-  run single-end minimap2 - $rep "'$BIN/minimap2' -ax sr -t 64 idx/minimap2.sr.mmi $R1 > /dev/null 2>&1"
-  run single-end bowtie2 - $rep "'$BIN/bowtie2' -p 64 -x idx/bowtie2 -U $R1 > /dev/null 2>&1"
+  other single-end bwa-mem2 - $rep "'$BIN/bwa-mem2' mem -t 64 idx/bwa-mem2 $R1 > /dev/null 2>&1"
+  other single-end minibwa - $rep "'$BIN/minibwa' map -t 64 idx/minibwa $R1 > /dev/null 2>&1"
+  other single-end strobealign - $rep "'$BIN/strobealign' -t 64 --use-index idx/ref.fa $R1 > /dev/null 2>&1"
+  other single-end minimap2 - $rep "'$BIN/minimap2' -ax sr -t 64 idx/minimap2.sr.mmi $R1 > /dev/null 2>&1"
+  other single-end bowtie2 - $rep "'$BIN/bowtie2' -p 64 -x idx/bowtie2 -U $R1 > /dev/null 2>&1"
   se_pipe certa-cpu 64+64 "" 64 64 $rep
   run single-end certa-cpu-iv 64 $rep "'$C' map $IDX $R1 -t 64 --intervals -o /dev/null 2>/dev/null"
   if [ $GPU = 1 ]; then
@@ -62,10 +71,10 @@ for rep in 1 2 3; do
 done
 run single-end certa-cpu-tier 64 1 "'$C' map $IDX $R1 -t 64 -o /dev/null -u /dev/null 2>/dev/null"
 [ $GPU = 1 ] && run single-end certa-gpu-tier 16 1 "'$C' map $IDX $R1 -t 16 $GPUARG -o /dev/null -u /dev/null 2>/dev/null"
-run paired bwa-mem2 - 1 "'$BIN/bwa-mem2' mem -t 64 idx/bwa-mem2 $R1 $R2 > /dev/null 2>&1"
+other paired bwa-mem2 - 1 "'$BIN/bwa-mem2' mem -t 64 idx/bwa-mem2 $R1 $R2 > /dev/null 2>&1"
 pe_pipe certa-cpu "64+64 Kdefault" "" 64 64 "" 1
 for rep in 1 2 3; do
-  run paired minibwa - $rep "'$BIN/minibwa' map -t 64 idx/minibwa $R1 $R2 > /dev/null 2>&1"
+  other paired minibwa - $rep "'$BIN/minibwa' map -t 64 idx/minibwa $R1 $R2 > /dev/null 2>&1"
   pe_pipe certa-cpu "64+64 K10m" "" 64 64 "-K 10m" $rep
   run paired certa-cpu-iv 64 $rep "'$C' map $IDX $R1 $R2 -t 64 --intervals -o /dev/null 2>/dev/null"
   if [ $GPU = 1 ]; then
