@@ -216,6 +216,10 @@ caveats are in [bench/RESULTS.md](bench/RESULTS.md).
   minibwa fallback; paired 1.66× / 2.09× in interval mode and 1.21× /
   1.38× with the fallback. With one A100 (galaxy): 2.32× single-end, 2.22×
   paired. BWA-MEM2 is 6.0–8.8× slower than CERTA's interval mode on CPU.
+  The current build (b4c7696, same output; galaxy, one session, every
+  aligner re-timed): interval mode 2.01× / 1.80× minibwa single-end /
+  paired on CPU, 2.36× / 2.31× with the A100, in 21–25 GiB instead of
+  29–40 GiB ([final_galaxy_b4c7696.tsv](bench/results/hg002_2026-10/final_galaxy_b4c7696.tsv)).
 - **Independent checker:** `certa check` accepts all 8 M honest records
   (HG002 and HG005) and rejects all 24,306 injected faults.
 - **Maximum certification against the slow, reliable mappers** (2 M HG002
