@@ -1064,7 +1064,12 @@ verifies the XQ of PR mates too.
     (712 MB) on 4 x86-64 cores: 4 threads 0.55 → 0.33 s, CPU 1.47 →
     1.02 s; with four busy
     threads on the four cores, as the mapping threads on galaxy,
-    1.05 → 0.82 s. Not yet measured on galaxy.
+    1.05 → 0.82 s. On galaxy (20 M reads as above; test_certa passes on
+    aarch64): 4 reader threads 6.55 → 4.59 s (waited 0.70 → 0.10 s, total
+    7.43 → 6.64 s); 16 (the default at -t 64) 5.05 → 3.53 s (waited
+    0.08 → 0.03 s, total 6.81 → 6.73 s). Reading now leaves mapping 38 %
+    headroom instead of 12 %, and 4 threads do what 16 did. The SAM of 2 M
+    pairs is byte-identical.
 - **Competitors from the literature audit** (SWOT_ANALYSIS.md section K;
   2026-10-24; `bench/results/hg002_2026-10/k_competitors.{tsv,txt}`,
   `bench/k_bench.sh`, `bench/k_reliability.sh`).
