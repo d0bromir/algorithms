@@ -1,7 +1,7 @@
 # Final timing protocol, galaxy (2026-10-26): Ampere Altra 128 cores, every pipeline pinned to cores 0-63 (taskset), one NVIDIA A100 (device 1) for the certa-gpu rows.
 # 20,001,073 HG002 reads (single-end, R1) or pairs; SAM to /dev/null; one session; three rounds, tools in turn (paired bwa-mem2 and certa-cpu Kdefault: one run). Build: commit b4c7696 (code of 56e3d69; default output byte-identical to 77b1df2).
 # certa-cpu / certa-gpu: CERTA streams its uncertified reads into minibwa, both concurrent (config = CERTA:minibwa threads; single-end minibwa -K 10m; paired: minibwa -K 10m, or its default batch (Kdefault)).
-# certa-*-iv: interval mode (--intervals), no fallback. certa-*-tier: certified reads only, not a complete mapping. Script: bench/final_bench.sh (galaxy:~/certa-io, b4c7696). The paper's table is final_galaxy.tsv (77b1df2) until a2 is re-timed with this build.
+# certa-*-iv: interval mode (--intervals), no fallback. certa-*-tier: certified reads only, not a complete mapping. Script: bench/final_bench.sh (galaxy:~/certa-io, b4c7696). The paper's table is final_galaxy.tsv (77b1df2) until --full-cert is re-timed with this build.
 host	mode	pipeline	config	rep	wall_s	user_s	sys_s	max_rss_kb
 galaxy	single-end	bwa-mem2	-	1	100.54	5175.92	28.23	32635384
 galaxy	single-end	minibwa	-	1	28.67	1352.30	3.90	9751916

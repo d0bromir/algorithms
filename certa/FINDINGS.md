@@ -1070,11 +1070,12 @@ verifies the XQ of PR mates too.
     0.08 → 0.03 s, total 6.81 → 6.73 s). Reading now leaves mapping 38 %
     headroom instead of 12 %, and 4 threads do what 16 did. The SAM of 2 M
     pairs is byte-identical.
-  - *The final protocol on galaxy with the current build* (2026-10-26,
-    b4c7696, one session, every aligner;
-    `bench/results/hg002_2026-10/final_galaxy_b4c7696.tsv`). The other
-    aligners reproduce `final_galaxy.tsv` (77b1df2, 2026-10-18) within 1 %
-    (paired BWA-MEM2, one run: 334 → 315 s). CERTA's default output is that
+  - *The final protocol on both hosts with the current build* (2026-10-26,
+    one session per host, every aligner; galaxy b4c7696, a2 00789fe, the
+    same code; `bench/results/hg002_2026-10/final_galaxy_b4c7696.tsv`,
+    `final_a2_00789fe.tsv`). The other aligners reproduce `final_*.tsv`
+    (77b1df2, 2026-10-18) within 1.5 % (galaxy's paired BWA-MEM2, one run:
+    334 → 315 s). CERTA's default output is that
     of 77b1df2, so its change is speed and memory alone (the exact
     shortcuts, the reader, input pages dropped once parsed, the 32-bit
     directory). Medians of three, 20 M reads or pairs, wall time and
@@ -1088,13 +1089,24 @@ verifies the XQ of PR mates too.
     | + minibwa fallback, A100 | 14.75 → 14.61 s (1.95×) | 43.23 → 42.67 s (1.46× → 1.47×) |
     | certified reads only, CPU | 8.23 → 7.04 s | — |
 
-    Peak memory 29-40 GiB → 21-25 GiB. With the GPU the CPU stages were not
-    the limit, so they gain little. CERTA's interval mode on the CPU is 7.0×
-    faster than BWA-MEM2 single-end (9.0× paired), 5.0× than minimap2,
-    2.7× than strobealign and 13× than Bowtie2. The paper's Table 2 and the
-    README keep the 77b1df2 session until a2 is re-timed with this build
-    (the table holds both hosts, and its text compares memory and the
-    `--full-cert` rows with 77b1df2).
+    a2 (x86-64, memory interleaved over four NUMA nodes) gains less:
+
+    | pipeline | single-end | paired |
+    |---|---|---|
+    | interval mode | 18.28 → 17.98 s (2.02× → 2.02×) | 37.97 → 36.73 s (2.09× → 2.14×) |
+    | + minibwa fallback | 19.94 → 19.82 s (1.85× → 1.83×) | 57.56 → 56.27 s (1.38× → 1.40×) |
+    | + minibwa fallback, its default batch | — | 67.91 → 59.70 s (1.17× → 1.32×) |
+    | certified reads only | 8.83 → 8.61 s | — |
+
+    Peak memory 29-40 GiB → 21-25 GiB on both. With the GPU the CPU stages
+    were not the limit, so they gain little. CERTA's interval mode on the
+    CPU is 7.0× / 6.2× faster than BWA-MEM2 single-end on galaxy / a2 (9.0×
+    / 7.0× paired), 5.0× / 5.3× than minimap2, 2.7× / 3.4× than
+    strobealign and 13× / 8.9× than Bowtie2. The paper's Table 2 keeps the
+    77b1df2 session: its `--full-cert` rows come from a later session whose
+    default rows had to reproduce the table's interval rows within 1 s, and
+    the current build's are up to 2.7 s faster, so `--full-cert` is to be
+    re-timed with this build (`bench/full_cert_bench.sh`) first.
 - **Competitors from the literature audit** (SWOT_ANALYSIS.md section K;
   2026-10-24; `bench/results/hg002_2026-10/k_competitors.{tsv,txt}`,
   `bench/k_bench.sh`, `bench/k_reliability.sh`).
