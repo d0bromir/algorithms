@@ -14,6 +14,9 @@
 # CERTA_ONLY=1 times only CERTA's rows (to re-time a new build against the
 # other aligners' rows of an earlier session on the same host).
 set -u
+if [ $# -ne 3 ]; then
+  echo "usage: [CERTA_ONLY=1] final_bench.sh HOST CERTA_BIN OUT_DIR  (HOST: galaxy or a2)" >&2; exit 2
+fi
 host=$1; C=$2; O=$3
 cd ~/certa-bench
 mkdir -p "$O"
