@@ -1072,9 +1072,9 @@ verifies the XQ of PR mates too.
     pairs is byte-identical.
   - *The final protocol on both hosts with the current build* (2026-10-26,
     one session per host, every aligner; galaxy b4c7696, a2 00789fe, the
-    same code; `bench/results/hg002_2026-10/final_galaxy_b4c7696.tsv`,
-    `final_a2_00789fe.tsv`). The other aligners reproduce `final_*.tsv`
-    (77b1df2, 2026-10-18) within 1.5 % (galaxy's paired BWA-MEM2, one run:
+    same code; now `bench/results/hg002_2026-10/final_{galaxy,a2}.tsv`, the
+    paper's Table 2). The other aligners reproduce `final_*_77b1df2.tsv`
+    (2026-10-18) within 1.5 % (galaxy's paired BWA-MEM2, one run:
     334 → 315 s). CERTA's default output is that
     of 77b1df2, so its change is speed and memory alone (the exact
     shortcuts, the reader, input pages dropped once parsed, the 32-bit
@@ -1102,11 +1102,20 @@ verifies the XQ of PR mates too.
     were not the limit, so they gain little. CERTA's interval mode on the
     CPU is 7.0× / 6.2× faster than BWA-MEM2 single-end on galaxy / a2 (9.0×
     / 7.0× paired), 5.0× / 5.3× than minimap2, 2.7× / 3.4× than
-    strobealign and 13× / 8.9× than Bowtie2. The paper's Table 2 keeps the
-    77b1df2 session: its `--full-cert` rows come from a later session whose
-    default rows had to reproduce the table's interval rows within 1 s, and
-    the current build's are up to 2.7 s faster, so `--full-cert` is to be
-    re-timed with this build (`bench/full_cert_bench.sh`) first.
+    strobealign and 13× / 8.9× than Bowtie2.
+    `--full-cert` re-timed in a later session on each host with the same
+    builds (`full_cert_{galaxy,a2}.tsv`; the 7d37d07 session kept as
+    `full_cert_*_7d37d07.tsv`): its default rows reproduce the table's
+    interval rows within 0.3 s, and the certified shares are those of the
+    earlier session. Full certification, CPU, single-end / paired: galaxy
+    38.72 → 35.26 s / 100.08 → 93.46 s, a2 40.89 → 40.08 s / 107.11 →
+    104.73 s; with the A100 34.65 → 31.98 s / 88.58 → 83.67 s; without pass
+    V (CPU) galaxy 20.90 → 18.54 s / 59.77 → 55.60 s, a2 19.54 → 18.92 s /
+    58.08 → 55.79 s. Table 2 and `numbers.tex` now come from these
+    sessions; the paper's memory paragraph quotes the timed build's peak
+    memory and the earlier builds' as history, and its speed paragraph
+    names the one-edit shortcuts (THEORY.md §4). Fig. 2 is still to be
+    redrawn (`paper/make_figures.py`, needs Arial).
 - **Competitors from the literature audit** (SWOT_ANALYSIS.md section K;
   2026-10-24; `bench/results/hg002_2026-10/k_competitors.{tsv,txt}`,
   `bench/k_bench.sh`, `bench/k_reliability.sh`).

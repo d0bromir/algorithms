@@ -1,4 +1,4 @@
-# Certified shares of the full_cert_{galaxy,a2}.tsv runs (CERTA's summary lines, the first round of each configuration). 20,001,073 HG002 reads or pairs; identical on both hosts, CPU and A100.
+# Certified shares of the full_cert_{galaxy,a2}.tsv runs (CERTA's summary lines, the first round of each configuration). 20,001,073 HG002 reads or pairs; identical on both hosts, CPU and A100, and in both sessions (2026-10-23, 7d37d07, and 2026-10-26, b4c7696 / 00789fe).
 == galaxy single-end certa-cpu-iv default
 [map] 20001073 reads: certified 94.38% (S0 exact 72.44%, S1 <=R edits 20.43%, SR repeat 1.52%, SL local 0.00%), ties 4.79%
 == galaxy paired certa-cpu-iv default
