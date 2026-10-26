@@ -1070,6 +1070,28 @@ verifies the XQ of PR mates too.
     0.08 → 0.03 s, total 6.81 → 6.73 s). Reading now leaves mapping 38 %
     headroom instead of 12 %, and 4 threads do what 16 did. The SAM of 2 M
     pairs is byte-identical.
+  - *CERTA re-timed on galaxy* (2026-10-26, build b4c7696, `CERTA_ONLY=1
+    bench/final_bench.sh`; `bench/results/hg002_2026-10/final_galaxy_certa_b4c7696.tsv`).
+    Same protocol as `final_galaxy.tsv` (77b1df2, 2026-10-18), whose other
+    aligners' rows it is compared with; a different session. The default
+    output is that of 77b1df2, so the change is speed and memory alone (the
+    exact shortcuts, the reader, input pages dropped once parsed, the 32-bit
+    directory). Medians of three, 20 M reads or pairs, wall time and against
+    minibwa (28.79 s single-end, 62.97 s paired):
+
+    | pipeline | single-end | paired |
+    |---|---|---|
+    | interval mode, CPU | 15.34 → 14.27 s (1.88× → 2.02×) | 37.82 → 34.83 s (1.66× → 1.81×) |
+    | + minibwa fallback, CPU | 18.13 → 16.99 s (1.59× → 1.69×) | 52.00 → 49.19 s (1.21× → 1.28×) |
+    | interval mode, A100 | 12.43 → 12.14 s (2.32× → 2.37×) | 28.31 → 27.19 s (2.22× → 2.32×) |
+    | + minibwa fallback, A100 | 14.75 → 14.78 s (1.95×) | 43.23 → 42.74 s (1.46× → 1.47×) |
+    | certified reads only, CPU | 8.23 → 7.06 s | — |
+
+    Peak memory 29-36 GiB → 21-25 GiB. With the GPU the CPU stages were not
+    the limit, so they gain little. Against the other aligners CERTA's
+    interval mode on the CPU is now 7.0× faster than BWA-MEM2 single-end
+    (9.6× paired), 4.9× than minimap2, 2.7× than strobealign and 13× than
+    Bowtie2. The paper and README keep the one-session numbers of 77b1df2.
 - **Competitors from the literature audit** (SWOT_ANALYSIS.md section K;
   2026-10-24; `bench/results/hg002_2026-10/k_competitors.{tsv,txt}`,
   `bench/k_bench.sh`, `bench/k_reliability.sh`).
