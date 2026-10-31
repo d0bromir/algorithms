@@ -81,5 +81,9 @@ target_link_libraries(payoff PRIVATE certa_core)
 add_executable(test_longread tests/test_longread.cpp)
 target_link_libraries(test_longread PRIVATE certa_core)
 add_test(NAME longread COMMAND test_longread)
+# --bio: the certified maximum-likelihood placement against a whole-reference DP.
+add_executable(test_bio tests/test_bio.cpp)
+target_link_libraries(test_bio PRIVATE certa_core)
+add_test(NAME bio COMMAND test_bio)
 
 message(STATUS "CERTA: CUDA back-end ${USE_CUDA} (archs ${CERTA_CUDA_ARCHS}), zlib ${ZLIB_FOUND}")

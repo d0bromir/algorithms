@@ -171,7 +171,7 @@ void sam_line(const Result& r, const FastqRecord& rec, const Reference& ref, int
     *p++ = '\t';
     p = put_str(p, rec.qual.data(), rec.qual.size());
   }
-  static const char* const kTierNames[] = {"S0", "S1", "SR", "S2", "SL", "PR", "R", "IV", "MR"};
+  static const char* const kTierNames[] = {"S0", "S1", "SR", "S2", "SL", "PR", "R", "IV", "MR", "BM"};
   // NM: edits in the reported (affine, possibly clipped) alignment.
   // XE: the certified minimum end-to-end edit distance over the reference
   // (-1 for SL). SL: AS (clip penalties included) is the certified maximum
@@ -186,8 +186,10 @@ void sam_line(const Result& r, const FastqRecord& rec, const Reference& ref, int
   p = put_str(p, "\tXT:Z:", 6);
   p = put_str(p, kTierNames[r.tier], std::strlen(kTierNames[r.tier]));
   tag("\tXR:i:", r.radius);
-  tag("\tXD:i:", r.d2);
-  tag("\tXB:i:", r.n_best);
+  if (r.tier != kTierBM) {  // BM: ties and the second locus are in the Y tags (extra)
+    tag("\tXD:i:", r.d2);
+    tag("\tXB:i:", r.n_best);
+  }
   if (r.tier == kTierSL) tag("\tXF:i:", r.floor);
   // PR: XF is the threshold the certified pair score exceeds, XS a bound on
   // every other proper pair.
@@ -337,6 +339,37 @@ bool is_proper(const Result& a, const Result& b, const Reference& ref, int max_d
   return r.ref_pos >= f.ref_pos && r.ref_pos - f.ref_pos <= max_dist;
 }
 
+// --bio: the claims of a BM record (penalties in Phred: -10 log10 of the
+// likelihood relative to a perfect match). YP: the reported alignment's
+// penalty, the certified least over the reference unless the mate moved it
+// (YT); YS: the best other locus's, exact, or -1 if no other locus lies
+// below YH; YH: every alignment at no listed locus costs >= YH; YB: loci
+// tied at the read's least penalty; YA: how far the alignment can shift at
+// the same penalty within its locus (bases between the first and last such
+// end position, 0 if none: a tandem repeat shifted by its period). Placed
+// jointly with its mate: YT, the pair's penalty (both mates and the insert
+// term), certified least over proper and improper pairs, and YI, its insert
+// term.
+std::string bio_tags(const BioOut& o) {
+  const BioLocus& l = o.loci[o.chosen];
+  const int ys = o.chosen != 0 ? o.loci[0].pen : (o.loci.size() > 1 ? o.loci[1].pen : -1);
+  char b[192];
+  const int n = std::snprintf(b, sizeof b, "\tYP:i:%d\tYS:i:%d\tYH:i:%d\tYB:i:%d\tYA:i:%d", l.pen, ys, o.yh, o.n_best,
+                              l.amb);
+  if (o.pair_ok) std::snprintf(b + n, sizeof b - n, "\tYT:i:%d\tYI:i:%d", o.pair_pen, o.ins_pen);
+  return b;
+}
+
+// --bio: whether a read gets a SAM line (after the contig check).
+bool bio_reportable(const Result& r) { return r.certified == 1 && (r.tier == kTierBM || r.tier == kTierSR); }
+
+// --bio: the posterior MAPQ, of the pair when the mates were placed jointly;
+// a proven repeat (SR, >= 2 exact copies) gets 0.
+int bio_mapq(const Result& r, const BioOut& o) {
+  if (r.tier != kTierBM) return 0;
+  return o.pair_ok ? o.pair_mapq : o.mapq;
+}
+
 // The reason an interval-mode read is counted under: kOk if certified, else
 // why not (a read placed by tier S2 is counted as not found).
 int interval_reason(const Result& r) {
@@ -400,6 +433,71 @@ bool RecordWriter::certified_pair(const Result* r, const Result* se, const Fastq
     }
   }
   return proper;
+}
+
+int RecordWriter::bio_single(const Result& r0, const BioOut& o, const FastqRecord& rec, Records& out) const {
+  Result r = r0;
+  check_contig(r, ref_);
+  if (!bio_reportable(r)) {
+    fastq_record(rec, out.fq);
+    return r.reason;
+  }
+  const std::string t = r.tier == kTierBM ? bio_tags(o) : std::string();
+  sam_line(r, rec, ref_, bio_mapq(r, o), MateInfo(), out.sam, t.empty() ? nullptr : t.c_str());
+  return kOk;
+}
+
+bool RecordWriter::bio_pair(const Result* r0, const BioOut* o, const FastqRecord* rec, Records& out,
+                            int* reason) const {
+  Result r[2] = {r0[0], r0[1]};
+  bool rep[2];
+  for (int x = 0; x < 2; ++x) {
+    check_contig(r[x], ref_);
+    rep[x] = bio_reportable(r[x]);
+    reason[x] = rep[x] ? int(kOk) : int(r[x].reason);
+  }
+  if (!rep[0] && !rep[1]) {
+    fastq_record(rec[0], out.fq);
+    fastq_record(rec[1], out.fq2);
+    return false;
+  }
+  std::string t[2];
+  for (int x = 0; x < 2; ++x)
+    if (rep[x] && r[x].tier == kTierBM) t[x] = bio_tags(o[x]);
+  auto extra = [&](int x) { return t[x].empty() ? nullptr : t[x].c_str(); };
+  if (rep[0] && rep[1]) {
+    const bool proper = is_proper(r[0], r[1], ref_, opt_.max_dist);
+    const int c0 = ref_.contig_of(r[0].ref_pos), c1 = ref_.contig_of(r[1].ref_pos);
+    for (int x = 0; x < 2; ++x) {
+      const Result& a = r[x];
+      const Result& b = r[1 - x];
+      MateInfo mi;
+      mi.flag = 1 | (proper ? 2 : 0) | (b.strand ? 32 : 0) | (x == 0 ? 64 : 128);
+      const int cb = x == 0 ? c1 : c0;
+      mi.rnext = c0 == c1 ? "=" : ref_.names[cb];
+      mi.pnext = b.ref_pos - static_cast<int64_t>(ref_.offsets[cb]) + 1;
+      if (c0 == c1) mi.tlen = tlen(a, b, x);
+      sam_line(a, rec[x], ref_, bio_mapq(a, o[x]), mi, out.sam, extra(x));
+    }
+    return proper;
+  }
+  // One mate (k) reportable: written as pair() writes a lone certified mate.
+  const int k = rep[0] ? 0 : 1;
+  const int mapq = bio_mapq(r[k], o[k]);
+  MateInfo mi;
+  if (opt_.single_mates) {
+    sam_line(r[k], rec[k], ref_, mapq, mi, out.sam, extra(k));
+    fastq_record(rec[1 - k], out.single);
+  } else {
+    mi.flag = 1 | (k == 0 ? 64 : 128);
+    sam_line(r[k], rec[k], ref_, mapq, mi, out.sam, extra(k));
+    FastqRecord m0 = rec[0], m1 = rec[1];
+    m0.name += k == 0 ? "~1" : "~2";
+    m1.name = m0.name;
+    fastq_record(m0, out.fq);
+    fastq_record(m1, out.fq2);
+  }
+  return false;
 }
 
 bool RecordWriter::pair(const Result* r0, const Result* se, const FastqRecord* rec, Records& out, int* reason) const {

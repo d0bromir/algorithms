@@ -2,6 +2,7 @@
 #pragma once
 #include <string>
 
+#include "certa/bio.h"
 #include "certa/interval.h"
 #include "index.h"
 #include "seqio.h"
@@ -58,6 +59,16 @@ class RecordWriter {
   // is proper.
   bool pair_interval(const Result* r, const Result* se, const RepeatOut* const* iv, const uint8_t* const* codes,
                      const FastqRecord* rec, PairScratch& sc, Records& out, int* reason, Placement* placed) const;
+
+  // --bio, single-end: a SAM line for a certified maximum-likelihood
+  // placement (tier BM, with the Y tags) or a proven repeat (SR), else the
+  // FASTQ record for the fallback. Returns the final reason.
+  int bio_single(const Result& r, const BioOut& o, const FastqRecord& rec, Records& out) const;
+
+  // --bio, a pair (r, o and rec point at both mates): both mates as SAM
+  // lines if both are reportable (BM or SR), placed jointly when o[x].pair_ok;
+  // one reportable mate as in pair(). Returns whether the pair is proper.
+  bool bio_pair(const Result* r, const BioOut* o, const FastqRecord* rec, Records& out, int* reason) const;
 
  private:
   bool certified_pair(const Result* r, const Result* se, const FastqRecord* rec, Records& out,

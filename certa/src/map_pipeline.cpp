@@ -89,12 +89,13 @@ struct MapPipeline::ChunkScratch {
   std::vector<RepeatOut> civ;     // the chunk's tier R outputs
   size_t idx[kChunk], id2[kChunk], sub[kChunk];
   std::unique_ptr<Result[]> rr{new Result[kChunk]}, rx{new Result[kChunk]};
+  std::unique_ptr<BioScratch> bsc{new BioScratch};  // --bio
 };
 
 MapPipeline::MapPipeline(const MapConfig& c, const Reference& ref, const IndexView& view, const IndexView* view2,
                          FastqInput& reads, FastqInput* mates, MapOutputs& out)
     : c_(c), ref_(ref), view_(view), view2_(view2), reads_(reads), mates_(mates), out_(out),
-      writer_(ref, view, c.out) {}
+      writer_(ref, view, c.out), bio_model_(c.bp) {}
 
 PassCounts MapPipeline::counts() const {
   PassCounts n = first_counts_;
@@ -193,6 +194,28 @@ RepeatOut MapPipeline::tier_r(const Slot& S, size_t i, Workspace& ws, RepeatScra
 void MapPipeline::format(const Slot& S, size_t a0, size_t b0, Records& out, Stats& s, PairScratch& psc) const {
   const std::vector<FastqRecord>& recs = S.recs;
   const std::vector<Result>& res = S.res;
+  if (c_.bio) {
+    for (size_t i = a0; i < b0; i += c_.paired() ? 2 : 1) {
+      if (!c_.paired()) {
+        const int reason = writer_.bio_single(res[i], S.bio[i], recs[i], out);
+        s.count_read(res[i], recs[i].seq.size(), reason);
+        s.count_bio(res[i], S.bio[i], reason);
+        continue;
+      }
+      int reason[2];
+      const bool proper = writer_.bio_pair(&res[i], &S.bio[i], &recs[i], out, reason);
+      ++s.pairs;
+      if (reason[0] == kOk && reason[1] == kOk) {
+        ++s.pairs_cert;
+        s.pairs_proper += proper;
+      }
+      for (int x = 0; x < 2; ++x) {
+        s.count_read(res[i + x], recs[i + x].seq.size(), reason[x]);
+        s.count_bio(res[i + x], S.bio[i + x], reason[x]);
+      }
+    }
+    return;
+  }
   if (!c_.paired()) {
     for (size_t i = a0; i < b0; ++i) {
       int reason;
@@ -343,6 +366,7 @@ void MapPipeline::fused_stage(Slot& S, bool map) {
   S.res.resize(n);
   if (c_.paired()) S.se_res.resize(n);
   if (c_.intervals) S.iv_ptr.assign(n, nullptr);
+  if (c_.bio) S.bio.assign(n, BioOut());
   const size_t nc = (n + kChunk - 1) / kChunk;
   std::vector<Records> chunks(nc);
   const int nt = std::max(1, std::min<int>(c_.threads, static_cast<int>(nc)));
@@ -391,6 +415,11 @@ void MapPipeline::fused_chunk(Slot& S, size_t a0, size_t b0, bool map, ChunkScra
       }
     return taken;
   };
+  if (c_.bio) {  // one pass: the maximum-likelihood placement
+    bio_chunk(S, a0, b0, x);
+    format(S, a0, b0, out, s, x.psc);
+    return;
+  }
   if (map) {
     std::iota(idx, idx + (b0 - a0), a0);
     map_reads(view_, c_.p1, batch, idx, b0 - a0, res.data() + a0, *x.ws);
@@ -464,6 +493,44 @@ void MapPipeline::index2_passes(Slot& S, size_t a0, size_t b0, ChunkScratch& x, 
       ++n.index2_certified;
     }
   n.index2 += m2;
+}
+
+// --bio: every read of [a0, b0) through bio_place. In paired mode, a pair
+// whose mates both have a certified ML placement is then placed jointly
+// when the pair's optimum is certified (bio_pair): each mate is re-aligned
+// at its locus in that pair, and takes the pair's posterior as MAPQ.
+void MapPipeline::bio_chunk(Slot& S, size_t a0, size_t b0, ChunkScratch& x) const {
+  const ReadBatch& b = S.batch;
+  BioScratch& sc = *x.bsc;
+  for (size_t i = a0; i < b0; ++i)
+    bio_place(view_, bio_model_, c_.pb, b.codes.data() + b.offs[i], S.recs[i].qual.data(), b.lens[i], b.hashes[i],
+              *x.ws, sc, S.res[i], S.bio[i]);
+  if (!c_.paired()) return;
+  auto contig_of = [&](int64_t pos) { return ref_.contig_of(pos); };
+  for (size_t i = a0; i + 1 < b0; i += 2) {
+    BioOut* o = &S.bio[i];
+    const int L[2] = {b.lens[i], b.lens[i + 1]};
+    const BioPair bp = bio_pair(c_.bp, o[0], L[0], o[1], L[1], c_.pp.max_dist, contig_of, b.hashes[i]);
+    if (!bp.ok) continue;
+    const int pick[2] = {bp.x, bp.y};
+    Result r[2] = {S.res[i], S.res[i + 1]};
+    bool aligned = true;
+    for (int k = 0; k < 2 && aligned; ++k) {
+      if (pick[k] == o[k].chosen) continue;
+      const size_t j = i + k;
+      bio_read(bio_model_, b.codes.data() + b.offs[j], S.recs[j].qual.data(), L[k], sc.br);
+      aligned = bio_align_locus(view_, bio_model_, o[k].loci[pick[k]], sc, r[k]);
+    }
+    if (!aligned) continue;
+    for (int k = 0; k < 2; ++k) {
+      S.res[i + k] = r[k];
+      o[k].chosen = pick[k];
+      o[k].pair_ok = true;
+      o[k].pair_pen = bp.pen;
+      o[k].ins_pen = bp.ins;
+      o[k].pair_mapq = bp.mapq[k];
+    }
+  }
 }
 
 void MapPipeline::run(const std::function<GpuMapper*()>& wait_for_gpu) {

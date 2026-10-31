@@ -63,6 +63,7 @@ class MapPipeline {
     std::vector<Result> se_res;            // single-end results (paired mode, for MAPQ)
     std::vector<RepeatOut> iv_store;       // tier R outputs (interval mode, serial stages)
     std::vector<const RepeatOut*> iv_ptr;  // per read: its tier R output, or null
+    std::vector<BioOut> bio;               // --bio: per read, its claims
   };
   struct ChunkScratch;
   static constexpr int kSlots = 3;
@@ -80,6 +81,7 @@ class MapPipeline {
   void fused_chunk(Slot& S, size_t a0, size_t b0, bool map, ChunkScratch& x, Records& out, Stats& s,
                    PassCounts& n) const;
   void index2_passes(Slot& S, size_t a0, size_t b0, ChunkScratch& x, PassCounts& n) const;
+  void bio_chunk(Slot& S, size_t a0, size_t b0, ChunkScratch& x) const;
 
   const MapConfig& c_;
   const Reference& ref_;
@@ -89,6 +91,7 @@ class MapPipeline {
   FastqInput* mates_;
   MapOutputs& out_;
   RecordWriter writer_;
+  BioModel bio_model_;  // --bio
   GpuMapper* gm_ = nullptr;
   Slot slots_[kSlots];
   FastqSpans spans_[2];  // the mate files' text of the batch being read (buffers reused)

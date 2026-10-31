@@ -176,6 +176,97 @@ build-*/certa check grch38.cidx all.sam --sample 100000  # or an audit sample
 
 Results: [EXACT_ALIGNMENT_PROPOSAL.md §6.4](../EXACT_ALIGNMENT_PROPOSAL.md).
 
+### Maximum-likelihood placement (`--bio`)
+
+```bash
+build-*/certa map grch38.cidx R1.fastq.gz R2.fastq.gz --bio --bio-insert 400,100 \
+    -o ml.sam -u fallback_R1.fq -U fallback_R2.fq --stats stats.json
+```
+
+The default certificates prove the optimum of an optimization problem
+(fewest edits, BWA-MEM's score), which need not be where the read came from.
+`--bio` proves the optimum of the read's **likelihood** instead, under an
+explicit model of recent Illumina data and of human variation
+([THEORY.md §12](THEORY.md#12-maximum-likelihood-placement---bio)):
+
+- each base call is wrong with the probability its quality states, so two
+  mismatches at Q2 bases outweigh one at a Q40 base;
+- the sample differs from the reference by SNVs (transitions 2.1 times as
+  frequent as transversions) and indels, and indels open far more easily in
+  homopolymers and short tandem repeats (gap opening 46 Phred, down to 22);
+- pairs are placed jointly, with a fragment-length term, so a mate in a
+  repeat follows its unique mate.
+
+For each read it reports the **maximum-likelihood locus over the whole
+reference, both strands** (proven, as the other tiers are: every alignment
+cheaper than the horizon `YH` is aligned exactly), the second locus, the
+ties, and a **posterior MAPQ**. Indels are left-aligned. Reads whose optimum
+cannot be proven (it is not below `YH`) go to the fallback, as in the
+default mode; so do reads with adapters or poly-G tails, since alignment is
+end to end (trim them first). One CPU pass replaces passes 1–3, V and L, so
+`--bio` does not combine with `--gpu`, `--intervals`, `--index2` or
+`--serial-stages`.
+
+| tag | meaning |
+|---|---|
+| `XT:Z:BM` | certified maximum-likelihood placement |
+| `YP` | penalty of the reported alignment: −10 log₁₀ of its likelihood relative to a perfect match, in Phred; the certified least over the reference unless the mate moved the read (`YT`) |
+| `YS` | the best other locus's penalty (exact), or −1: no other locus below `YH` |
+| `YH` | horizon: every alignment at no listed locus costs ≥ `YH` |
+| `YB` | loci tied at the least penalty (MAPQ ≤ 3 when ≥ 2) |
+| `YA` | how far the alignment can shift at the same penalty within its locus (a tandem repeat's period multiples), 0 if it cannot; the record is the leftmost |
+| `YT`, `YI` | placed jointly with the mate: the pair's penalty (both mates and the insert term) and its insert term |
+| MAPQ | the locus's posterior over the loci below `YH` plus one competitor at `YH`, Phred, ≤ 60 |
+| `NM`, `AS`, `XE`, `XR` | as for S0/S1 (`XE`: the certified fewest edits over the reference, when the edit certificate holds) |
+
+| option | default | meaning |
+|---|---|---|
+| `--bio` | off | certified maximum-likelihood placement |
+| `--bio-snv` / `--bio-titv` | 0.001 / 2.1 | SNVs per base; transitions per transversion |
+| `--bio-indel` / `--bio-seq-indel` / `--bio-gap-ext` | 0.0001 / 0.00001 / 0.5 | indels per base (sample, sequencing); probability an indel continues one more base |
+| `--bio-str-min` / `--bio-str-slope` / `--bio-str-cap` | 4 / 3 / 24 | a gap touching a tandem run (period 1–4) of ≥ min bases opens slope Phred cheaper per base, at most cap |
+| `--bio-insert` / `--bio-improper` | 400,100 / 40 | fragment length mean,sd; penalty of a pair that is not proper |
+| `--bio-budget` | 4096 | hits enumerated per strand (more parts: a higher horizon) |
+| `--bio-gap-cap` / `--bio-delta` / `--bio-max-band` | 50 / 60 / 1024 | band reach; clusters bounded δ above the best are not aligned; widest band aligned |
+
+**Simulated reads with known origin** (20 Mbp synthetic genome with
+diverged repeat families, segmental duplications and tandem repeats;
+`tools/simulate.py reads --quality novaseqx`, the bins and 3′ decline of
+GIAB HG002 NovaSeq X; sample SNVs/indels shared by both mates; 8 threads):
+
+| | in SAM | at the truth (±10 bp) | MAPQ ≥ 20: records / misplaced |
+|---|---|---|---|
+| 300,000 single reads, default | 97.79 % | 94.33 % | 258,911 / 21 |
+| 300,000 single reads, `--bio` | 97.83 % | 94.77 % | 263,369 / 27 |
+| 150,000 pairs, default | 99.37 % | 95.40 % | 268,729 / 564 |
+| 150,000 pairs, `--bio` | 97.90 % | 96.30 % | 261,665 / 23 |
+
+- **Pairs:** 24× fewer confidently misplaced reads. The default mode's are
+  mostly mates the pair certificate shifts within tandem repeats (542 of
+  564), at MAPQ 6–24 values that are right only 34–42 % of the time; `--bio`
+  places 95 % of reads jointly.
+- **Wrong loci at MAPQ ≥ 40:** default 17 single reads and 16 mates
+  (segmental-duplication copies certified at radius 0–1 and given MAPQ 60);
+  `--bio` 1 and 0. Every other `--bio` record misplaced at MAPQ ≥ 40 (14
+  single, 12 mates) is at its true locus, shifted by a tandem repeat's period
+  where the sequence is identical, and carries `YA` > 0, which says so.
+- **MAPQ:** `--bio` is conservative below 40 (single reads, MAPQ 20–29: 7
+  misplaced where 34 are expected).
+- **Where the locus changes:** on these Q40-dominated reads the likelihood
+  optimum and the fewest-edits optimum are the same locus for every uniquely
+  placed single read; they differ where qualities are low or indels compete
+  with mismatches (the oracle test's planted families), and for 3.7 % of
+  mates, which the mate moves.
+- **Cost** (8 threads, WSL2 laptop): 300,000 single reads in 22.3 s against
+  the default mode's 3.4 s (NovaSeq 6000 profile: 16.5 s against 5.7 s);
+  150,000 pairs in 19.5 s against 8.8 s. The band DP drops every cell that
+  already costs the horizon, which makes it 3–6 times faster with the same
+  output.
+
+Validation on real recent data at whole-genome scale (the T2T-HG002 Q100
+assembly as the read's own genome, HPRC Release 2, GIAB v5.0q) is planned in
+[bench/TRUTH_DATA.md](bench/TRUTH_DATA.md).
+
 `stats.json` records the certified fraction by tier, why the other reads
 were not certified (radius < 0 = repetitive, not found = more than R edits
 or no locus, …), and a timing breakdown (index load, GPU upload,
@@ -289,6 +380,7 @@ include/certa/pair.h       pair certificate (tier PR)
 include/certa/repeat.h     repeats (tier R)
 include/certa/interval.h   interval output (--intervals)
 include/certa/longread.h   long reads: Lemma L bounds, incl. split (jump) alignments
+include/certa/bio.h        --bio: likelihood model, Lemma B, certified ML placement (Theorem B), pairs
 src/index.*                FASTA loading, sampled q-mer index, save/load
 src/seqio.*                FASTQ/FASTA reading (plain or gzip)
 src/parallel.h             a loop spread over threads (FASTQ reading, encoding)
@@ -305,6 +397,7 @@ src/cli.h, async_writer.h  argument parsing; an output file written by its own t
 tests/test_certa.cpp       brute-force oracle tests of every bound
 tests/verify_lemmas.cpp    exhaustive checks of the finite lemmas
 tests/test_longread.cpp    long-read certificates against a brute-force DP (planted SVs)
+tests/test_bio.cpp         --bio against a whole-reference likelihood oracle; Lemma B against an exact DP
 tests/mutants.tsv          one mutant per bound; tests/run_mutants.sh runs them
 tools/simulate.py          synthetic genome/reads and placement evaluation
 tools/lr_ceiling.cpp       long reads: Lemma L ceiling vs best known alignment; --certify proves OPT (Aim 6)

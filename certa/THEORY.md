@@ -37,6 +37,7 @@ are now fixed and tested:
    9a. [Mutants that survive by design](#9a-mutants-that-survive-by-design)
 10. [Traceability](#10-traceability)
 11. [For a reviewer](#11-for-a-reviewer)
+12. [Maximum-likelihood placement (Lemma B, Theorem B, `--bio`)](#12-maximum-likelihood-placement---bio)
 
 ---
 
@@ -1226,6 +1227,7 @@ positions, more than a mate covers.
 
 | Statement | Code | Oracle tests | Mutants | Exhaustive |
 |---|---|---|---|---|
+| Lemma B, Thm B, Prop. B2 (§12) | bio.h `bio_cover`, `bio_band`, `bio_place`, `bio_pair` | whole-reference likelihood oracle (loci, ties, YA, pairs), read families 0–8, three settings | B1–B12, B14; B13 equivalent | B |
 | Lemma I, V0 | core.h `enumerate_parts`; check.cpp | all; index validation | E3, C4, C8, C9 | — |
 | Thm 1, 1′, 2, 3, 4 | core.h `process_read`, `evaluate_clusters` | edit-distance oracle | E1–E7 | — |
 | Lemma N, Thm A (pass V) | core.h `vparts_neighbours`, `vparts_dp`, `certify_vparts`, `evaluate_clusters` (support bound) | Lemma N directly; DP against brute force; edit-distance oracle at radius 12 | V1–V11 | — |
@@ -1257,3 +1259,213 @@ Points worth checking first:
    band pruning's two path facts and the vector DP row's identity are
    machine-checked in Lean 4 ([`lean/`](lean/README.md)). Theorem L-J's
    pruning (rounds, windows) is not.
+6. **Lemma B's trimming argument** (§12): that A's events, read in order
+   and trimmed, give disjoint DP events no dearer than A.
+
+## 12. Maximum-likelihood placement (`--bio`)
+
+Every certificate above is about an optimization problem (fewest edits, or
+BWA-MEM's score), and §2 of FINDINGS says why that is not the read's origin.
+`--bio` (`include/certa/bio.h`) certifies the optimum of the read's
+*likelihood* instead, under an explicit model of how the read arose. The
+model is an assumption; the optimum under it is proven.
+
+**The model and the penalty.** The read was sequenced from the sample's
+genome, which differs from the reference by SNVs (rate θ = `--bio-snv`,
+transitions `--bio-titv` times as frequent as transversions) and small
+indels (rate `--bio-indel`, plus sequencing indels `--bio-seq-indel`,
+lengths geometric with continuation p = `--bio-gap-ext`). Each base call is
+wrong with the probability e = 10^(−Q/10) its quality Q states (Q clamped to
+2–60), the wrong base uniform. The penalty of an end-to-end alignment A is
+pen(A) = −10 log₁₀ (P(read | A) / P(read | a perfect match)), in integer
+Phred units, as a sum of events:
+- a match: 0. A read N: 0 against anything (it carries no information);
+- read base b on reference base a ≠ b:
+  m(Q, a, b) = round(10 log₁₀ (P(a | a) / P(b | a))) ≥ 1, with
+  P(a | a) = (1 − θ)(1 − e) + θ e/3 and
+  P(b | a) = (1 − θ) e/3 + θ [w(1 − e) + (1 − w) e/3], w = the share of
+  substitutions a → b (transition or transversion);
+- read base b on a reference N: the cheapest mismatch of b, mmin(Q) (as in
+  the edit certificates, N never matches);
+- a gap run of k bases: go(c) + (k − 1) ge, ge = round(−10 log₁₀ p),
+  go(c) = max(ge, go₀ − min(cap, slope (c − c₀ + 1))) for a gap touching a
+  tandem run (period 1–4) of c ≥ c₀ bases, else go₀ =
+  round(−10 log₁₀ (½ (indel + seq_indel)(1 − p))). An insertion touches
+  the run containing the reference base before or after it, a deletion the
+  run containing its first deleted base, so every placement of an indel
+  that shifts within a run costs the same;
+- each inserted base also costs its emission, round(10 log₁₀ 4 P(a | a)).
+
+Defaults (`BioParams`): θ = 10⁻³, ti/tv = 2.1, indel 10⁻⁴, sequencing
+indel 10⁻⁵, p = 0.5, so a Q40 transition costs 31, a transversion 36, a
+Q2 mismatch 2, go₀ = 46, ge = 3, go down to 22 in long tandem runs. An
+alignment starts and ends with an aligned base, and no insertion is next to
+a deletion. The **maximum-likelihood placement** is the least-penalty
+alignment over the whole reference, both strands.
+
+**Touched parts.** Let the read's P parts tile it (as in §1). A part is
+*touched* by A when it does not occur exactly in A: one of its bases is
+mismatched (or on an N) or inserted, or a deletion lies between two of its
+bases. A deletion between two parts touches neither.
+
+**Lemma B (cover).** For a set T of parts, let cover(T) be the least
+total cost of *events* covering T, where an event is
+- a single-part event on part j, costing
+  c₁(j) = min(min over j's bases of mmin, go_min (if j has ≥ 2 bases),
+  go_min + min over j's bases of the emission); or
+- an insertion run from part x to part y > x, covering x … y and costing
+  go_min + (k − 1) ge + the emissions of its k bases, where it inserts the
+  last base of x, every base of the parts between and the first base of y.
+
+Events cover disjoint intervals of parts; parts outside T may be covered
+or not. Then every alignment A that touches every part of T costs
+pen(A) ≥ cover(T). `bio_cover` computes cover(T) by a DP over the parts in
+read order.
+
+*Proof.* Every event of A that touches parts touches a contiguous interval
+of them: a mismatch or a deletion one part; an insertion run the parts its
+bases lie in, all the parts between included. Take the events of A that
+touch parts, ordered by their first touched part, and remove from each
+interval the parts an earlier one covers. Because every earlier interval
+starts no later, what an earlier interval covers of a later one is a
+prefix, so each remainder is an interval or empty. A remainder that is one
+part j was touched by an event costing at least c₁(j): a mismatch at a base
+of j costs ≥ mmin there, a deletion inside j ≥ go_min, an insertion run
+reaching j ≥ go_min plus the emission of a base of j. A remainder x … y with
+y > x is a suffix of an insertion run's interval; that run inserts every base
+of x (x lies inside the original interval, or is its first part, whose last
+base the run inserts), of the parts between and at least the first base of
+y, so its cost is at least the DP event's. The remainders are disjoint, cover
+every part A touches, and cost at most A's events: pen(A) ≥ cover(T). ∎
+- *Verified* (`tests/test_bio.cpp`, `test_lemma_b`) against an exact DP over
+  all transcripts (aligned bases, insertion runs, deletions, against any
+  reference) on 4,000 random reads of 4–29 bases with 2–5 parts, random
+  qualities and gap costs, every required set: 55,156 cases, cover equal to
+  the exact least cost on all of them. So the bound is exact in that model.
+- *Mutants:* B3, B4 killed. B13 (c₁ without its insertion term) is
+  **equivalent**: a part of ≥ 2 bases has the deletion term, and
+  go_min ≤ go_min + an emission, so the insertion term never sets c₁ (CERTA's
+  parts have ≥ q + s − 1 ≥ 8 bases; the random check's ≥ 3).
+
+**Lemma W_B (reach).** go(c) ≥ ge for every c, so an alignment whose gaps
+total G ≥ 1 bases costs at least go_min + (G − 1) ge (one run is the
+cheapest way to reach G). *Mutants:* B2, B14 (bands one diagonal short on
+the left, on the right). Any reach G is sound, since the horizon takes the
+same G (a smaller one only lowers H); a smaller G in the reach alone, as in
+B2 and B14, is not.
+
+**Theorem B (certified maximum-likelihood placement).** On each strand
+let S be the parts that fit the hit budget (`--bio-budget`, all of them in
+unique sequence), every occurrence enumerated (Lemma I), and
+- H_S = min over strands of cover(S);
+- G = the least gap total with go_min + G ge ≥ H_S (at most
+  `--bio-gap-cap`), and H = min(H_S, go_min + G ge);
+- clusters: the candidate diagonals of a strand, joined while within 2G, so
+  the bands [d_min − G, d_max + G] are disjoint; a cluster's bound is
+  b(C) = cover(S \ parts with a candidate in C).
+
+Bands are aligned exactly by the Gotoh DP of the model (`bio_band`), in
+order of increasing bound; the evaluation stops at the first cluster whose
+bound is ≥ min(H, p₁ + δ) (δ = `--bio-delta`, p₁ the best so far), and
+bands wider than `--bio-max-band` are not aligned. Let YH be the least of H,
+the bound that stopped the evaluation and the bounds of the bands not
+aligned for their width. Then, for every reference end position e of
+either strand whose best alignment costs V(e) < YH, the DP computed V(e)
+exactly. Hence if p₁ = the least V found is below YH, it is the global
+optimum, and the loci below YH (below) are all known, with their penalties.
+
+*Proof.* Let A be an alignment with pen(A) < YH ≤ H.
+- A leaves a part of S exact: otherwise it touches all of S and costs
+  ≥ cover(S) ≥ H (Lemma B).
+- A's gaps total ≤ G: otherwise it costs ≥ go_min + G ge ≥ H (Lemma W_B).
+- The exact part's occurrence is enumerated (Lemma I) at A's diagonal there,
+  d_w. Every diagonal of A lies within its gap total of d_w, so within
+  [d_w − G, d_w + G], inside the band of the cluster C holding d_w.
+- Every part with no candidate in C's band is touched by A (an exact part
+  has its candidate at A's diagonal, inside the band, and every candidate
+  in the band belongs to C because clusters are joined within 2G). So
+  pen(A) ≥ b(C), hence b(C) < YH: C was aligned (it precedes the stopping
+  cluster in the order, and it is not too wide, both bounds being ≥ YH).
+- The DP over C's band is exact for alignments inside it, so it saw A.
+So for an end position e with V(e) < YH, an optimal alignment ending at e
+lies in the band of its own cluster, which is the only band holding e's end
+diagonal, and the DP's value there is V(e). ∎
+- *Uniqueness and order.* The result is a function of the read, the index
+  and the parameters: clusters are sorted by (bound, strand, position), ties
+  between loci are broken by the read name's hash.
+- *Mutants:* B1, B2, B5, B6, B14 (bounds); B7–B9 (the DP).
+
+**Loci, second best, ties.** The end positions below YH, cheapest first
+(then strand, then position), each kept unless a kept one lies within L
+on its strand, are the read's *loci*. By Theorem B this list, with every
+penalty, is exactly the one the oracle builds from V over the whole
+reference. So `YB` (loci tied at p₁) and `YS` (the best other locus,
+exact) are exact, and `YS = −1` proves no other locus below `YH`. Within a
+locus, the end positions within L that cost the same as it are exact too;
+`YA` is the span between the first and the last (0 if the alignment cannot
+shift; the period's multiples in a tandem repeat otherwise), and the record
+reports the leftmost. *Mutant:* B12.
+
+**Pruning the band DP (`bio_band`'s threshold).** Every cost is
+non-negative, so a cell's value is at least that of every cell on its best
+path. Cells at or above the threshold H are dropped, and each row is computed
+only over the cells the row before can reach (M from the same diagonal, I from
+the next) and the deletion runs from them while they stay below H. Every cell
+below H is computed exactly, so every end below H, which is all Theorem B
+uses. On 300,000 simulated NovaSeq X reads the SAM output is the same, byte
+for byte, with and without pruning.
+
+**Proposition B2 (pairs).** The pair objective of loci a (mate 1) and b
+(mate 2) is V(a) + V(b) + ins(a, b), with ins the fragment-length penalty
+2.17 z² (z = (fragment − `--bio-insert` mean) / sd) of a proper pair
+(opposite strands, one contig, the reverse mate starting 0 … `--max-dist`
+after the forward one; starts taken as end − L + 1), capped at
+`--bio-improper`, which every other pair costs. Each mate keeps its
+cheapest `max_loci` loci, with ℓ = the least penalty of a locus left out
+(YH if none). A pair using a locus left out of mate 1's list costs
+≥ ℓ₁ + p₁(mate 2) (ins ≥ 0), and the other way round, so the best listed
+pair is the pair optimum when it is below min(ℓ₁ + p₁₂, ℓ₂ + p₁₁). Each mate
+is then re-aligned at its locus in that pair. *Mutants:* B10, B11.
+
+**Posterior MAPQ (a convention, not a bound).** The posterior of a locus is
+its weight 10^(−V/10) over the sum of the weights of the listed loci plus
+one competitor at YH (pairs: over listed pairs, plus one unseen locus at
+each mate's ℓ paired with every listed locus of the other). MAPQ is the
+Phred of one minus it, capped at 60. The loci below YH are exact; the one
+competitor at YH stands for all the rest, which are unknown, and is what
+keeps a read whose horizon is close to its optimum at a low MAPQ.
+
+**Canonical alignments.** The traceback prefers, at equal penalty, an
+aligned base over an insertion over a deletion, so every indel is placed
+leftmost among equal-penalty placements (the VCF convention); the test
+moves every reported gap one base left and checks the penalty rises. This is
+tested, not proven.
+
+**Tests** (`tests/test_bio.cpp`). The oracle is the model's Gotoh DP over the
+whole test reference (151 kb: diverged and exact segment copies, 60
+homopolymers, 40 short tandem repeats, a tandem array, N runs), both
+strands, giving V(e) at every end position. Every certified read, in three
+settings (q = 14, s = 4; the same with reach 6, δ = 12, bands ≤ 40 and 3
+loci kept; q = 12, s = 1), must have: its CIGAR rescore to YP; p₁ equal to
+the global minimum; the loci below YH equal to the oracle's, value for value,
+YA included; the ties and the second best as the oracle's; no gap that moves
+one base left at the same penalty; the same result in reverse order on
+another workspace. Every jointly placed pair must be the oracle's best pair
+of loci. Read families put alignments exactly at each bound: reads sampled
+with NovaSeq-like qualities, sample variants and errors; reads whose base
+qualities decide against fewer edits (a decoy with one Q37 mismatch against
+three Q2 ones at the truth); reads touching every part at a Q2 base,
+inside every q-mer looked up, with decoys just below, at and above cover(S);
+indels in homopolymers and tandem repeats; the segment's copies; deletions
+of exactly the reach in a homopolymer at either end of the read, beyond every
+candidate, with a decoy one point below the horizon; tandem-array reads whose
+band is too wide in the tight setting, with a decoy; pairs whose mate 1 has
+more tied copies than the list keeps, with the partner's copy one Q2 mismatch
+away at the second copy; reads with a decoy costing exactly its cluster's
+bound, which δ leaves unaligned in the tight setting.
+
+**What it does not do.** Reads are aligned end to end: adapters and poly-G
+tails must be trimmed first (a read that keeps them costs too much and goes
+to the fallback). Uncertified reads go to the fallback, as in the default
+mode. The prior over loci is uniform, the reference linear; a read from
+sequence missing from the reference is placed at its best match there.

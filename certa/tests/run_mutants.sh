@@ -2,7 +2,8 @@
 # Mutation tests of every bound (Aim 5): for each line of tests/mutants.tsv,
 # a copy of the tree with one sed-applied mutation, built and run through the
 # oracle test on two seeds: tests/test_certa.cpp, or, for a mutant of
-# include/certa/longread.h, tests/test_longread.cpp; a mutant of any header
+# include/certa/longread.h, tests/test_longread.cpp, or, for a mutant of
+# include/certa/bio.h, tests/test_bio.cpp; a mutant of any other header
 # also faces the exhaustive lemma checks (tests/verify_lemmas.cpp). A mutant expected "killed" must fail a
 # check on some run; one expected "equivalent" (proven not to change any
 # claim, THEORY.md) must pass them all.
@@ -35,6 +36,13 @@ run_one() {
         echo "$id	BUILD_FAILED	$what"; exit
       fi
       runs="lemmas $seeds"
+    elif [[ "$file" == include/certa/bio.h ]]; then
+      # --bio has its own oracle test (and its own check of Lemma B).
+      if ! "$cxx" -O2 -std=c++17 -Iinclude -Isrc tests/test_bio.cpp src/index.cpp src/seqio.cpp -pthread -o t \
+           2> build.log; then
+        echo "$id	BUILD_FAILED	$what"; exit
+      fi
+      runs="$seeds"
     else
       if ! "$cxx" -O2 -std=c++17 -Iinclude -Isrc tests/test_certa.cpp src/check.cpp src/gpu_stub.cpp \
            src/index.cpp src/seqio.cpp src/mapper_cpu.cpp -pthread -o t 2> build.log; then
@@ -56,7 +64,7 @@ run_one() {
       if [[ "$s" == lemmas ]]; then
         r=$(./v 2>&1 | grep -oE '[0-9]+ check\(s\) FAILED|all lemma checks passed' | tail -1)
       else
-        r=$(./t "$s" 2>&1 | grep -oE '[0-9]+ check\(s\) FAILED|all certificate checks passed|all long-read checks passed' | tail -1)
+        r=$(./t "$s" 2>&1 | grep -oE '[0-9]+ check\(s\) FAILED|all certificate checks passed|all long-read checks passed|all bio checks passed' | tail -1)
       fi
       [[ "$r" == *FAILED* ]] && killed=1
       local label="seed $s"

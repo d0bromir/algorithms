@@ -11,7 +11,10 @@ MapConfig MapConfig::from_args(const Args& a) {
     throw std::runtime_error(
         "usage: certa map ref.cidx reads.fq[.gz] [mates.fq[.gz]] [-k 5] [--k1 2] [--budget 16] [--budget2 256] "
         "[--budget3 0] [--support3 2] [--local 0] [--full-cert] [--adaptive-parts 0|1|2] [--vbudget 4096] [--index2 second.cidx] [--mapq-limit 8] [-t N] [--gpu] [--device 0] [-o out.sam] "
-        "[-u uncertified.fq] [-U uncertified_mates.fq] [--fallback-mates pair|single -S single_mates.fq] [--max-dist 850] [--stats s.json] [--batch N] [--io-threads N] [--serial-stages]");
+        "[-u uncertified.fq] [-U uncertified_mates.fq] [--fallback-mates pair|single -S single_mates.fq] [--max-dist 850] [--stats s.json] [--batch N] [--io-threads N] [--serial-stages] "
+        "[--bio [--bio-snv 0.001] [--bio-titv 2.1] [--bio-indel 0.0001] [--bio-seq-indel 0.00001] [--bio-gap-ext 0.5] "
+        "[--bio-str-min 4] [--bio-str-slope 3] [--bio-str-cap 24] [--bio-gap-cap 50] [--bio-delta 60] [--bio-max-band 1024] "
+        "[--bio-budget 4096] [--bio-insert 400,100] [--bio-improper 40]]");
   MapConfig c;
   c.index_path = a.pos[0];
   c.reads_path = a.pos[1];
@@ -154,10 +157,59 @@ MapConfig MapConfig::from_args(const Args& a) {
   // Threads that parse and encode the next batch while the current one maps.
   c.io_threads = a.geti("--io-threads", std::max(1, std::min(16, c.threads / 4)));
   c.batch_size = static_cast<size_t>(a.geti("--batch", c.gpu ? 1000000 : 200000));
+
+  // --bio: one CPU pass per read that certifies its maximum-likelihood
+  // placement (certa/bio.h, THEORY.md section 12) under the model below;
+  // pairs are placed jointly. The other passes are not run.
+  c.bio = a.has("--bio");
+  if (c.bio) {
+    if (c.gpu) throw std::runtime_error("--bio runs on the CPU: drop --gpu");
+    if (c.intervals) throw std::runtime_error("--bio does not combine with --intervals (its bounds are BWA-MEM scores)");
+    if (c.index2()) throw std::runtime_error("--bio does not combine with --index2");
+    if (c.serial_stages) throw std::runtime_error("--bio does not combine with --serial-stages");
+  }
+  BioParams& bp = c.bp;
+  bp.snv = a.getd("--bio-snv", bp.snv);
+  bp.titv = a.getd("--bio-titv", bp.titv);
+  bp.indel = a.getd("--bio-indel", bp.indel);
+  bp.seq_indel = a.getd("--bio-seq-indel", bp.seq_indel);
+  bp.gap_ext = a.getd("--bio-gap-ext", bp.gap_ext);
+  bp.str_min = a.geti("--bio-str-min", bp.str_min);
+  bp.str_slope = a.geti("--bio-str-slope", bp.str_slope);
+  bp.str_cap = a.geti("--bio-str-cap", bp.str_cap);
+  bp.gap_cap = a.geti("--bio-gap-cap", bp.gap_cap);
+  bp.delta = a.geti("--bio-delta", bp.delta);
+  bp.max_band = a.geti("--bio-max-band", bp.max_band);
+  bp.improper = a.geti("--bio-improper", bp.improper);
+  const std::string ins = a.get("--bio-insert", "");
+  if (!ins.empty()) {
+    const size_t comma = ins.find(',');
+    if (comma == std::string::npos) throw std::runtime_error("--bio-insert takes MEAN,SD");
+    bp.insert_mean = std::atof(ins.substr(0, comma).c_str());
+    bp.insert_sd = std::atof(ins.substr(comma + 1).c_str());
+  }
+  if (!(bp.snv > 0 && bp.snv < 0.5) || !(bp.titv > 0) || !(bp.indel > 0 && bp.indel < 0.5) ||
+      !(bp.seq_indel >= 0 && bp.seq_indel < 0.5) || !(bp.gap_ext > 0 && bp.gap_ext < 1))
+    throw std::runtime_error("--bio-snv/--bio-indel must be in (0, 0.5), --bio-seq-indel in [0, 0.5), "
+                             "--bio-gap-ext in (0, 1), --bio-titv > 0");
+  if (bp.str_min < 1 || bp.str_slope < 0 || bp.str_cap < 0 || bp.gap_cap < 0 || bp.gap_cap > 200 || bp.delta < 0 ||
+      bp.max_band < 1 || bp.improper < 0 || !(bp.insert_sd > 0) || !(bp.insert_mean > 0))
+    throw std::runtime_error("bad --bio-* parameters");
+  Params& pb = c.pb;
+  pb = c.p2;
+  pb.k = KMAX;
+  pb.budget = a.geti("--bio-budget", HOST_BUDGET_MAX);
+  if (pb.budget < 1 || pb.budget > HOST_BUDGET_MAX) throw std::runtime_error("--bio-budget must be in [1, 4096]");
+  pb.min_support = 1;
+  pb.s2_limit = 0;
+  pb.mapq_limit = 0;
+  pb.local = pb.local_only = 0;
+  pb.vparts = 0;
   return c;
 }
 
 void MapConfig::fit_index(int s) {
+  if (bio) return;  // pass V is not run
   if (pass_v() && s != 1) {
     std::fprintf(stderr, "[map] pass V needs an index of every position (s = 1); off\n");
     pv.vparts = 0;
@@ -165,6 +217,17 @@ void MapConfig::fit_index(int s) {
 }
 
 std::string MapConfig::command_line() const {
+  if (bio) {
+    char b[512];
+    std::snprintf(b, sizeof b,
+                  "certa map --bio --bio-budget %d --bio-snv %g --bio-titv %g --bio-indel %g --bio-seq-indel %g "
+                  "--bio-gap-ext %g --bio-str-min %d --bio-str-slope %d --bio-str-cap %d --bio-gap-cap %d "
+                  "--bio-delta %d --bio-max-band %d --bio-insert %g,%g --bio-improper %d --max-dist %d",
+                  pb.budget, bp.snv, bp.titv, bp.indel, bp.seq_indel, bp.gap_ext, bp.str_min, bp.str_slope,
+                  bp.str_cap, bp.gap_cap, bp.delta, bp.max_band, bp.insert_mean, bp.insert_sd, bp.improper,
+                  pp.max_dist);
+    return b;
+  }
   // The certification passes beyond the defaults, when on (the default
   // command line is unchanged).
   std::string extra;

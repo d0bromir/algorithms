@@ -79,8 +79,9 @@ constexpr int BIG = 1 << 20;
 // SL: certified local (clipped) alignment; PR: certified proper pair (both host only).
 // Interval output (host only, certa/interval.h): R exact by tier R, IV an
 // interval [lo, hi] with lo < hi, MR a mate placed by the pair window search.
+// BM: certified maximum-likelihood placement (--bio, host only, certa/bio.h).
 enum Tier : uint8_t { kTierS0 = 0, kTierS1 = 1, kTierSR = 2, kTierS2 = 3, kTierSL = 4, kTierPR = 5,
-                      kTierR = 6, kTierIV = 7, kTierMR = 8 };
+                      kTierR = 6, kTierIV = 7, kTierMR = 8, kTierBM = 9 };
 constexpr int S2_MAX = 10;  // largest --s2 edit limit (band must fit BMAX)
 constexpr int S2_TOP = 8;   // S2 evaluates only this many best-supported clusters
 static_assert(MAX_CIGAR >= 2 * S2_MAX + 1, "CIGAR buffer too small for S2");
@@ -98,7 +99,9 @@ enum Reason : uint8_t {
   kNotFound = 3,         // no locus within the certified radius
   kClusterTooWide = 4,   // candidate cluster wider than BAND_E2E (tandem repeat)
   kCrossContig = 5,      // set by the host: alignment spans a contig boundary
-  kNumReasons = 6
+  kBioHorizon = 6,       // --bio: the best penalty found is not below the horizon
+  kBioWide = 7,          // --bio: as kBioHorizon, the horizon set by a band too wide to align
+  kNumReasons = 8
 };
 
 // BAM CIGAR op codes.
