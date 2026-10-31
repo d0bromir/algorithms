@@ -56,6 +56,7 @@ else
   "$cxx" "${flags[@]}" -o "$build/test_longread" "$here/tests/test_longread.cpp" "$build/index.o" "$build/seqio.o" \
     "${libs[@]}" &
   "$cxx" "${flags[@]}" -o "$build/payoff" "$here/tools/payoff.cpp" "$build/index.o" "$build/seqio.o" "${libs[@]}" &
+  "$cxx" "${flags[@]}" -o "$build/test_bio" "$here/tests/test_bio.cpp" "$build/index.o" "$build/seqio.o" "${libs[@]}" &
   if [[ "$cuda" != OFF ]] && command -v nvcc >/dev/null; then
     gencode=()
     for a in ${archs//;/ }; do gencode+=(-gencode "arch=compute_$a,code=sm_$a"); done
@@ -71,4 +72,5 @@ else
   wait
 fi
 "$build/test_certa"
+"$build/test_bio"  # --bio against a whole-reference likelihood oracle
 echo "== built: $build/certa"

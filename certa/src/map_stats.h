@@ -26,12 +26,18 @@ struct Stats {
   uint64_t iv_r = 0, iv_iv = 0, iv_mr = 0, iv_un = 0, iv_unalignable = 0, iv_proper = 0;
   uint64_t iv_width[6] = {};
   uint64_t iv_mapq20 = 0, iv_xq20 = 0;
+  // --bio, per record: certified ML placements (BM), of which elsewhere than
+  // the edit certificate's best locus, placed jointly with the mate, and
+  // moved there by the mate; MAPQ >= 20; reads whose parts were enumerated.
+  uint64_t bm = 0, bm_moved = 0, bm_pair = 0, bm_pair_moved = 0, bm_mapq20 = 0, bio_tried = 0;
 
   // A read of n_bases bases with its final result r, written with
   // final_reason (kOk: certified, or placed by tier S2 when r.certified == 2).
   void count_read(const Result& r, size_t n_bases, int final_reason);
   // An interval-mode record.
   void count_iv(const Placement& p);
+  // A --bio record (after count_read).
+  void count_bio(const Result& r, const BioOut& o, int final_reason);
   void add(const Stats& o);
 };
 

@@ -36,6 +36,14 @@ int cmd_map(const Args& a) {
     std::fprintf(stderr, "[map] pass 3: budget=%d support=%d; pass L: support %d%s\n", c.p3.budget,
                  c.p3.min_support, c.pl.local, c.full_cert ? " (--full-cert)" : "");
   c.fit_index(ix.s);
+  if (c.bio) {
+    const BioModel m(c.bp);
+    std::fprintf(stderr,
+                 "[map] --bio: certified maximum-likelihood placement, one CPU pass (budget %d), replacing the "
+                 "passes above; SNV %g (ti/tv %g), indel %g + sequencing %g, gap open %d (tandem runs: down to %d), "
+                 "extend %d\n",
+                 c.pb.budget, c.bp.snv, c.bp.titv, c.bp.indel, c.bp.seq_indel, m.go(1), m.go_min(), m.ge());
+  }
   if (c.pass_v())
     std::fprintf(stderr, "[map] pass V: adaptive parts %s, budget=%d, radius <= %d\n",
                  c.pv.vparts == 1 ? "(rarest q-mers)" : "(rarest q-mers, then one-edit q-mers)", c.pv.budget, VMAX);

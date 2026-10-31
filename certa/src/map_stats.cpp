@@ -10,7 +10,11 @@ namespace {
 
 const char* const kReasonNames[kNumReasons] = {
     "certified", "bad_length", "radius_negative", "not_found",
-    "cluster_too_wide", "cross_contig"};
+    "cluster_too_wide", "cross_contig", "bio_horizon", "bio_wide"};
+
+// The reasons a run can give: the --bio ones only with --bio, so the default
+// summary and JSON are unchanged.
+int reasons_of(const MapConfig& c) { return c.bio ? kNumReasons : kBioHorizon; }
 
 unsigned long long ull(uint64_t v) { return static_cast<unsigned long long>(v); }
 
@@ -35,6 +39,7 @@ void Stats::count_read(const Result& r, size_t n_bases, int final_reason) {
     case kTierS1: ++s1; break;
     case kTierSR: ++sr; break;
     case kTierSL: ++sl; break;
+    case kTierBM: ++bm; break;
     default: ++pr; break;
   }
   ties += r.n_best > 1;
@@ -57,6 +62,15 @@ void Stats::count_iv(const Placement& p) {
   iv_xq20 += p.xq >= 20;
 }
 
+void Stats::count_bio(const Result& r, const BioOut& o, int final_reason) {
+  bio_tried += o.tried;
+  if (final_reason != kOk || r.tier != kTierBM) return;
+  bm_moved += o.moved;
+  bm_pair += o.pair_ok;
+  bm_pair_moved += o.pair_ok && o.chosen != 0;
+  bm_mapq20 += (o.pair_ok ? o.pair_mapq : o.mapq) >= 20;
+}
+
 void Stats::add(const Stats& o) {
   reads += o.reads; bases += o.bases; certified += o.certified;
   s0 += o.s0; s1 += o.s1; sr += o.sr; sl += o.sl; s2 += o.s2; ties += o.ties;
@@ -69,6 +83,8 @@ void Stats::add(const Stats& o) {
   iv_r += o.iv_r; iv_iv += o.iv_iv; iv_mr += o.iv_mr; iv_un += o.iv_un; iv_unalignable += o.iv_unalignable;
   iv_proper += o.iv_proper; iv_mapq20 += o.iv_mapq20; iv_xq20 += o.iv_xq20;
   for (int i = 0; i < 6; ++i) iv_width[i] += o.iv_width[i];
+  bm += o.bm; bm_moved += o.bm_moved; bm_pair += o.bm_pair; bm_pair_moved += o.bm_pair_moved;
+  bm_mapq20 += o.bm_mapq20; bio_tried += o.bio_tried;
 }
 
 void PassCounts::add(const PassCounts& o) {
@@ -83,8 +99,18 @@ void print_summary(const MapConfig& c, const Stats& s, const PassCounts& n, cons
                "[map] %llu reads: certified %.2f%% (S0 exact %.2f%%, S1 <=R edits %.2f%%, "
                "SR repeat %.2f%%, SL local %.2f%%), ties %.2f%%\n",
                ull(s.reads), pct(s.certified), pct(s.s0), pct(s.s1), pct(s.sr), pct(s.sl), pct(s.ties));
-  for (int i = 1; i < kNumReasons; ++i)
+  for (int i = 1; i < reasons_of(c); ++i)
     std::fprintf(stderr, "[map]   uncertified/%s: %.2f%%\n", kReasonNames[i], pct(s.reason[i]));
+  if (c.bio) {
+    std::fprintf(stderr,
+                 "[map] bio: ML placement certified %.2f%% of reads (elsewhere than the fewest-edits locus "
+                 "%.2f%%; MAPQ >= 20 %.2f%%), proven repeats (SR) %.2f%%; parts enumerated on both strands "
+                 "%.2f%%\n",
+                 pct(s.bm), pct(s.bm_moved), pct(s.bm_mapq20), pct(s.sr), pct(s.bio_tried));
+    if (c.paired())
+      std::fprintf(stderr, "[map] bio pairs: mates placed jointly %.2f%% of reads (moved by the mate %.2f%%)\n",
+                   pct(s.bm_pair), pct(s.bm_pair_moved));
+  }
   std::fprintf(stderr, "[map] placed without certificate (S2, <= %d edits): %.2f%%; to fallback: %.2f%%\n",
                c.p2.s2_limit, pct(s.s2), pct(s.reads - s.certified - s.s2));
   std::fprintf(stderr, "[map] second pass (budget %d, S2 <= %d): %.2f%% of reads; third pass (CPU, budget %d): %.2f%%\n",
@@ -141,7 +167,7 @@ void write_stats_json(const MapConfig& c, const Index& ix, const std::string& de
                ull(s.reads), ull(s.bases), ull(s.certified), ull(s.s0), ull(s.s1), ull(s.sr), ull(s.sl), ull(s.s2),
                c.p2.s2_limit, ull(s.ties));
   std::fprintf(js, "  \"uncertified\": {");
-  for (int i = 1; i < kNumReasons; ++i)
+  for (int i = 1; i < reasons_of(c); ++i)
     std::fprintf(js, "%s\"%s\": %llu", i > 1 ? ", " : "", kReasonNames[i], ull(s.reason[i]));
   // Up to KMAX, or further when pass V certified larger distances or radii.
   int top = KMAX;
@@ -159,7 +185,13 @@ void write_stats_json(const MapConfig& c, const Index& ix, const std::string& de
                  ull(s.iv_proper), ull(s.iv_mapq20), ull(s.iv_xq20));
     for (int i = 0; i < 6; ++i) std::fprintf(js, "%s%llu", i ? ", " : "", ull(s.iv_width[i]));
   }
-  std::fprintf(js, "],\n  \"seconds\": {\"load\": %.3f, \"upload\": %.3f, \"read_encode\": %.3f, "
+  std::fprintf(js, "]");
+  if (c.bio)
+    std::fprintf(js, ",\n  \"bio\": {\"bm\": %llu, \"moved\": %llu, \"pair\": %llu, \"pair_moved\": %llu, "
+                     "\"mapq20\": %llu, \"tried\": %llu, \"budget\": %d, \"snv\": %g, \"titv\": %g, \"indel\": %g}",
+                 ull(s.bm), ull(s.bm_moved), ull(s.bm_pair), ull(s.bm_pair_moved), ull(s.bm_mapq20),
+                 ull(s.bio_tried), c.pb.budget, c.bp.snv, c.bp.titv, c.bp.indel);
+  std::fprintf(js, ",\n  \"seconds\": {\"load\": %.3f, \"upload\": %.3f, \"read_encode\": %.3f, "
                    "\"read_wait\": %.3f, \"map\": %.3f, \"output\": %.3f, \"total\": %.3f}\n}\n",
                t.load, t.upload, t.read_encode, t.read_wait, t.map(), t.output, t.total);
   std::fclose(js);

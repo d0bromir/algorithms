@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <string>
 
+#include "certa/bio.h"
 #include "certa/pair.h"
 #include "certa/repeat.h"
 #include "cli.h"
@@ -19,12 +20,16 @@ namespace certa {
 //   L  CPU, certified local alignment (--local);
 // then, on the CPU, every pass again on a second index (--index2), the pair
 // certificate (paired input) and tier R (--intervals).
+// With --bio a read instead goes through one CPU pass (pb), which certifies
+// its maximum-likelihood placement (certa/bio.h), and pairs are placed
+// jointly from both mates' loci.
 struct MapConfig {
   // Inputs and outputs. Empty: not given (SAM then goes to stdout).
   std::string index_path, reads_path, mates_path, index2_path;  // mates_path empty: single-end
   std::string sam_path, fq_path, fq2_path, single_path, stats_path;
   bool intervals = false;  // --intervals: every read to SAM, no fallback
   bool full_cert = false;  // --full-cert
+  bool bio = false;        // --bio: certified maximum-likelihood placement
   bool gpu = false;
   int device = 0;
   bool serial_stages = false;
@@ -34,6 +39,8 @@ struct MapConfig {
   Params p1, p2, p3, pv, pl;  // passes 1, 2, 3, V and L
   PairParams pp;              // the pair certificate
   RepeatParams rp;            // tier R (interval mode)
+  Params pb;                  // --bio: the one pass
+  BioParams bp;               // --bio: the model
   OutputOptions out;
 
   bool paired() const { return !mates_path.empty(); }

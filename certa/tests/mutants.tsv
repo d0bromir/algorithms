@@ -141,3 +141,17 @@ V8	include/certa/core.h	s/int m = mst\[0\] < mst\[1\] ? mst\[0\] : mst\[1\];/int
 V9	include/certa/core.h	s/if (ws.vf\[st\]\[k\]\[L\] <= budget) m = k;/if (ws.vf[st][k][L] < budget) m = k;/	killed	Thm A, DP: parts that fit the budget exactly left out
 V10	include/certa/core.h	s/if (lb_per \* (lb_parts - popcount16(cl.pmask)) > limit) continue;/if (lb_per * (lb_parts - popcount16(cl.pmask)) >= limit) continue;/	killed	Thm A, support bound: clusters that could hold an alignment at the limit skipped
 V11	include/certa/core.h	s/vparts_verify(ix, p, L, R, m, 2, name_hash, ws, r);/vparts_verify(ix, p, L, R, m, 3, name_hash, ws, r);/	killed	Thm A (A2), support bound: 3 edits per missing one-edit part instead of 2
+B1	include/certa/bio.h	s/  const int H = std::min(Hunw, m.go_min() + G \* m.ge());/  const int H = std::min(Hunw, m.go_min() + G * m.ge()) + 2;/	killed	Thm B: horizon 2 above cover(S) (family 2, at the horizon)
+B2	include/certa/bio.h	s/      sc.cl.push_back({dmin - G, /      sc.cl.push_back({dmin - G + 1, /	killed	Thm B: band reach one diagonal short on the left
+B3	include/certa/bio.h	s/    if (len\[j\] >= 2) c1\[j\] = std::min(c1\[j\], m.go_min());/    (void)0;/	killed	Lemma B: a deletion inside a part not counted as touching it
+B4	include/certa/bio.h	s/      const int k = off\[y\] - last + 1;/      const int k = off[y] - last + 2;/	killed	Lemma B: an insertion across parts charged one base too many
+B5	include/certa/bio.h	s/      yh = std::min(yh, C.bound);/      yh = std::min(yh, C.bound + 2);/	killed	Thm B: a cluster left unaligned bounded 2 too high
+B6	include/certa/bio.h	s/      wide_bound = std::min(wide_bound, C.bound);/      (void)0;/	killed	Thm B: a band too wide to align does not lower the horizon
+B7	include/certa/bio.h	s/m.go(std::max(ctx\[x\], ctx\[x + 1\]))/m.go(ctx[x])/	killed	model: an insertion's tandem context read on its left only (DP and rescore differ)
+B8	include/certa/bio.h	s/      if (Ip\[b\] < v) { v = Ip\[b\]; src = 1; }/      if (Ip[b] <= v) { v = Ip[b]; src = 1; }/	killed	traceback: ties go to the insertion, gaps not left-aligned
+B9	include/certa/bio.h	s/        if (ext <= open \&\& ext < kBioInf) { iv = ext + em; iext = 1; }/        if (ext <= open \&\& ext < kBioInf) { iv = ext; iext = 1; }/	killed	DP: an extended insertion's base not charged its emission
+B10	include/certa/bio.h	s/  o.list_bound = o.loci.size() < sc.loci.size() ? sc.loci\[o.loci.size()\].pen : yh;/  o.list_bound = yh;/	killed	Thm B pairs: loci left out of the list not bounded
+B11	include/certa/bio.h	s/  const int horizon = std::min(o1.list_bound + o2.p1, o2.list_bound + o1.p1);/  const int horizon = std::min(o1.list_bound + o2.p1, o2.list_bound + o1.p1) + 3;/	killed	Thm B pairs: pair horizon overclaimed by 3 (list-bound pairs)
+B12	include/certa/bio.h	s/sc.loci\[n_best\].pen == best) ++n_best;/sc.loci[n_best].pen == best \&\& n_best < 1) ++n_best;/	killed	ties: only one locus counted at the optimum
+B13	include/certa/bio.h	s/    c1\[j\] = std::min(mn, m.go_min() + em);/    c1[j] = mn;/	equivalent	Lemma B: an insertion inside a part not counted (a part of >= 2 bases has the deletion option, go_min <= go_min + emission; THEORY.md section 12)
+B14	include/certa/bio.h	s/      const int64_t width = dmax - dmin + 2 \* G + 1;/      const int64_t width = dmax - dmin + 2 * G;/	killed	Thm B: band reach one diagonal short on the right (the horizon still assumes G)

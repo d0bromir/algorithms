@@ -54,11 +54,14 @@ struct Args {
   int geti(const std::string& k, int d) const {
     return has(k) ? std::atoi(opt.at(k).c_str()) : d;
   }
+  double getd(const std::string& k, double d) const {
+    return has(k) ? std::atof(opt.at(k).c_str()) : d;
+  }
 
   // argv[start..argc). Options take the next argument as their value, except
   // the flags, which take none.
   static Args parse(int argc, char** argv, int start) {
-    static const char* flags[] = {"--gpu", "--unc-tags", "--intervals", "--witness", "--serial-stages", "--full-cert"};
+    static const char* flags[] = {"--gpu", "--unc-tags", "--intervals", "--witness", "--serial-stages", "--full-cert", "--bio"};
     Args a;
     for (int i = start; i < argc; ++i) {
       std::string s = argv[i];

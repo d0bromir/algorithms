@@ -208,6 +208,11 @@ the forward mate's.
   problem, not the read's true origin. A read from a diverged repeat copy
   can align better to another copy. That is unavoidable for any aligner,
   but here it is at least *visible*: XD/XB say how close the alternative is.
+  `--bio` (THEORY.md §12) moves the certificate to the read's likelihood
+  under an explicit model (base qualities, SNV and indel rates, transitions,
+  tandem-repeat indels, fragment length for pairs), so the certified locus is
+  the maximum-likelihood one; its posterior is the MAPQ. The model is still
+  an assumption.
 - **Reported alignment:** the reported CIGAR is the affine-optimal alignment
   *at the certified locus*, with BWA-MEM's default scoring (+1/−4, gap
   −6−1k, clip −5), so downstream callers see the usual representation. The
