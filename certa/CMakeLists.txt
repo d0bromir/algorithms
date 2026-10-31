@@ -77,6 +77,9 @@ target_link_libraries(lr_ceiling PRIVATE certa_core)
 # Part choices taken from the slow mappers, certified on CERTA's uncertified reads.
 add_executable(payoff tools/payoff.cpp)
 target_link_libraries(payoff PRIVATE certa_core)
+# The --bio model's penalty of any aligner's alignments (soundness at scale).
+add_executable(bio_score tools/bio_score.cpp)
+target_link_libraries(bio_score PRIVATE certa_core)
 # The long-read certificates against a brute-force DP (planted SVs).
 add_executable(test_longread tests/test_longread.cpp)
 target_link_libraries(test_longread PRIVATE certa_core)

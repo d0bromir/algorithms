@@ -1,0 +1,33 @@
+[read_sam] 39887166 primary records
+[read_sam] 39887166 primary records
+  mate 1: origin maternal only: 170,794
+  mate 1: origin paternal only: 172,127
+  mate 1: homologous, same GRCh38 locus: 15,637,899
+  mate 1: on chrM / chrEBV in both (excluded): 40,770
+  mate 1: both haplotypes, different GRCh38 loci (unlabelled): 52,279
+  mate 2: origin maternal only: 167,193
+  mate 2: origin paternal only: 169,154
+  mate 2: homologous, same GRCh38 locus: 15,624,823
+  mate 2: on chrM / chrEBV in both (excluded): 40,483
+  mate 2: both haplotypes, different GRCh38 loci (unlabelled): 51,589
+  mate 1: second aligner agrees: 15,980,780
+  mate 1: second aligner disagrees (unlabelled): 40
+  mate 1: second aligner did not place: 0
+  mate 2: second aligner agrees: 15,961,131
+  mate 2: second aligner disagrees (unlabelled): 39
+  mate 2: second aligner did not place: 0
+  truth              31931012 mates (80.053%)
+  no linear truth       10899 mates (0.027%)
+  excluded              81253 mates (0.204%)
+  not labelled        7864002 mates (19.716%)
+  stratum bench            31272338 mates (97.937% of truth)
+  stratum easy             20612201 mates (64.552% of truth)
+  stratum difficult        11304482 mates (35.403% of truth)
+  stratum lowmap_segdup     1558316 mates (4.880% of truth)
+  stratum segdup             857838 mates (2.687% of truth)
+  stratum lowmap            1169028 mates (3.661% of truth)
+  stratum tandem            8287406 mates (25.954% of truth)
+  stratum mhc                 54001 mates (0.169% of truth)
+  stratum cmrg_falsedup        1115 mates (0.003% of truth)
+  stratum par                  1192 mates (0.004% of truth)
+relabelled

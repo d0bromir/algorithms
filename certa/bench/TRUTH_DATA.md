@@ -17,7 +17,7 @@ default mode and the other aligners.
 | **HG002 NovaSeq X 25B** reads (already used here: calibration) | real recent reads, 2/9/24/40 quality bins, 95 % of bases in Q40 | SRA SRR37356339 ([bench/RESULTS.md](RESULTS.md)) |
 | **HG005 NovaSeq 6000** 2×151 PCR-free (already used: held out) | a second sample and instrument | SRA SRR14724528 |
 | **HPRC Data Release 2** (May 2025): phased assemblies of 232 individuals, with Illumina WGS for over 200 | the same personal-genome truth across ancestries | [humanpangenome.org/hprc-data-release-2](https://humanpangenome.org/hprc-data-release-2/), [data.humanpangenome.org](https://data.humanpangenome.org/), BioProject PRJNA730822, `s3://human-pangenomics` |
-| **Platinum Pedigree** (CEPH-1463, 28 members, four generations; Nature Methods 2025): phased assemblies and a Mendelian-consistent truth set (4.7 M SNVs, 768 k indels, 537 k tandem repeats, 24 k SVs over 2.77 Gb of GRCh38) | inheritance-checked truth; five platforms | `s3://platinum-pedigree-data` (us-west-1, CC BY 4.0, [registry](https://registry.opendata.aws/platinum-pedigree/)); the Illumina instrument and year are not stated there and must be checked before use |
+| **Platinum Pedigree** (CEPH-1463, 28 members, four generations; Nature Methods 2025): phased assemblies and a Mendelian-consistent truth set (4.7 M SNVs, 768 k indels, 537 k tandem repeats, 24 k SVs over 2.77 Gb of GRCh38) | inheritance-checked truth; five platforms | `s3://platinum-pedigree-data` (us-west-2, CC BY 4.0, [registry](https://registry.opendata.aws/platinum-pedigree/)); the Illumina instrument and year are not stated there and must be checked before use |
 | **NovaSeq X quality bins** (software v1.2): 2–17, 18–29, ≥ 30, the top bin reported as Q40 | the simulation profile | [Illumina, data quality](https://www.illumina.com/science/genomics-research/articles/data-quality-q-scores.html) |
 
 ## Three tests
@@ -66,6 +66,8 @@ GRCh38, above CERTA's 32-bit positions (a reference must be shorter than
 2^32 bases), so each haplotype gets its own index (about GRCh38's size each)
 and a read is mapped to both: a unique certified placement on one, or the
 same homologous placement on both, fixes its origin. Test A needs no
-download beyond the assembly and GRCh38; test B also the NovaSeq X run
-already on galaxy. Runs on galaxy and a2 follow the host coordination with
-the paper session.
+download beyond the assembly and GRCh38. For test B, galaxy already holds
+a 20 M-pair sample of the NovaSeq X run; the full run needs its mate 1
+again. Runs on galaxy and a2 follow the host coordination with the paper
+session. Files, sizes, truth definitions and the order of runs are in
+[VALIDATION_PLAN.md](VALIDATION_PLAN.md).
