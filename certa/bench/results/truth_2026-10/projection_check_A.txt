@@ -1,0 +1,23 @@
+projection check: 43105 error-free mates with a truth
+  edits  0:    36653 (85.032%)
+  edits  1:     4092 (9.493%)
+  edits  2:     1110 (2.575%)
+  edits  3:      311 (0.721%)
+  edits  4:      241 (0.559%)
+  edits  5:       73 (0.169%)
+  edits  6:      119 (0.276%)
+  edits  7:       45 (0.104%)
+  edits  8:      110 (0.255%)
+  edits  9:       34 (0.079%)
+  edits 10:       47 (0.109%)
+  edits >10:      270 (0.626%)
+  far: pair 306 mate 1: 12 edits at 9:117298693
+  far: pair 416 mate 1: 35 edits at 3:65166533
+  far: pair 2570 mate 1: 14 edits at 2:48059579
+  far: pair 5152 mate 1: 11 edits at 4:174654237
+  far: pair 5276 mate 1: 13 edits at 7:130392263
+  far: pair 6218 mate 1: 12 edits at 4:72021087
+  far: pair 6533 mate 1: 14 edits at 7:55516913
+  far: pair 6771 mate 1: 33 edits at Y:56677748
+  far: pair 8438 mate 1: 22 edits at 9:35061610
+  far: pair 8652 mate 1: 12 edits at 2:185351637

@@ -263,9 +263,24 @@ GIAB HG002 NovaSeq X; sample SNVs/indels shared by both mates; 8 threads):
   already costs the horizon, which makes it 3–6 times faster with the same
   output.
 
-Validation on real recent data at whole-genome scale (the T2T-HG002 Q100
-assembly as the read's own genome, HPRC Release 2, GIAB v5.0q) is planned in
-[bench/TRUTH_DATA.md](bench/TRUTH_DATA.md).
+**On real data** ([bench/VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md)):
+HG002 reads with a known origin. The origins come from simulation from the
+T2T-HG002 Q100 assembly (10 M pairs), or are read off that assembly for
+19.9 M real NovaSeq X pairs; both are projected to GRCh38 through GIAB's
+alignments.
+- **Soundness:** none of the ~283 M alignments other aligners reported scores
+  below `--bio`'s certified optimum.
+- **Confident placements:** they have the fewest avoidable errors of the
+  aligners measured. On real reads at MAPQ ≥ 40, that is 103 against 439–988
+  for CERTA's default mode, minibwa, BWA-MEM2, strobealign and minimap2.
+- **The cost:**
+  - `--bio` leaves more reads to the fallback;
+  - its MAPQ is overconfident between 30 and 49;
+  - it runs 89–96× slower than the default mode on GRCh38;
+  - the model has no complex indels (an insertion next to a deletion).
+
+The resources and the plan are in [bench/TRUTH_DATA.md](bench/TRUTH_DATA.md)
+and [bench/VALIDATION_PLAN.md](bench/VALIDATION_PLAN.md).
 
 `stats.json` records the certified fraction by tier, why the other reads
 were not certified (radius < 0 = repetitive, not found = more than R edits
@@ -402,6 +417,8 @@ tests/mutants.tsv          one mutant per bound; tests/run_mutants.sh runs them
 tools/simulate.py          synthetic genome/reads and placement evaluation
 tools/lr_ceiling.cpp       long reads: Lemma L ceiling vs best known alignment; --certify proves OPT (Aim 6)
 tools/payoff.cpp           part choices taken from the slow mappers, certified on CERTA's uncertified reads
+tools/bio_score.cpp        the --bio model's penalty of any aligner's SAM alignments (soundness at scale)
+bench/truth_*.py, *.sh     truth on GRCh38 for HG002 reads (Q100 haplotypes, GIAB alignments), scoring, reports
 scripts/                   build.sh, demo.sh
 THEORY.md                  the proofs, with code, tests and mutants per statement
 lean/                      machine-checked proofs (Lean 4; lake build): Lemmas L, E, H, S, W, C; Theorem G; band pruning, DP row
