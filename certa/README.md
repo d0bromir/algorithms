@@ -209,17 +209,15 @@ caveats are in [bench/RESULTS.md](bench/RESULTS.md).
 - **Certified fraction:** 95.4 % of all reads in paired mode (HG002), 92.9 %
   for HG001 and HG005 (NovaSeq 6000); 94.4 % single-end.
 - **Speed (20 M reads or pairs, every pipeline on the same 64 cores, one
-  session per host, build 77b1df2):** on CPU alone CERTA is faster than
-  every other aligner timed, single-end and paired, on galaxy (ARM64) and
-  a2 (x86-64). Against minibwa, the fastest of them, on galaxy / a2:
-  single-end 1.88× / 2.02× in interval mode and 1.59× / 1.85× with the
-  minibwa fallback; paired 1.66× / 2.09× in interval mode and 1.21× /
-  1.38× with the fallback. With one A100 (galaxy): 2.32× single-end, 2.22×
-  paired. BWA-MEM2 is 6.0–8.8× slower than CERTA's interval mode on CPU.
-  The current build (b4c7696, same output; galaxy, one session, every
-  aligner re-timed): interval mode 2.01× / 1.80× minibwa single-end /
-  paired on CPU, 2.36× / 2.31× with the A100, in 21–25 GiB instead of
-  29–40 GiB ([final_galaxy_b4c7696.tsv](bench/results/hg002_2026-10/final_galaxy_b4c7696.tsv)).
+  session per host, build b4c7696 / 00789fe):** on CPU alone CERTA is
+  faster than every other aligner timed, single-end and paired, on galaxy
+  (ARM64) and a2 (x86-64). Against minibwa, the fastest of them, on galaxy
+  / a2: single-end 2.01× / 2.02× in interval mode and 1.69× / 1.83× with
+  the minibwa fallback; paired 1.80× / 2.14× in interval mode and 1.28× /
+  1.40× with the fallback. With one A100 (galaxy): 2.36× single-end, 2.31×
+  paired. BWA-MEM2 is 6.2–9.0× slower than CERTA's interval mode on CPU.
+  Peak memory 21–25 GiB. The 77b1df2 session (1.88× / 2.02× and 1.66× /
+  2.09× in interval mode, 29–40 GiB) is kept as `final_*_77b1df2.tsv`.
 - **Independent checker:** `certa check` accepts all 8 M honest records
   (HG002 and HG005) and rejects all 24,306 injected faults.
 - **Maximum certification against the slow, reliable mappers** (2 M HG002

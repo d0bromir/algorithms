@@ -8,13 +8,23 @@
 # too. The first round's logs give the certified shares (certified.txt).
 #   full_cert_bench.sh HOST CERTA_BIN OUT_DIR
 set -u
+if [ $# -ne 3 ]; then
+  echo "usage: full_cert_bench.sh HOST CERTA_BIN OUT_DIR  (HOST: galaxy or a2)" >&2; exit 2
+fi
 host=$1; C=$2; O=$3
 cd ~/certa-bench
-mkdir -p "$O"
 IDX=idx/grch38.s1v3.cidx
 R1=reads/hg002_20M.fq
 if [ "$host" = a2 ]; then R2=/data/certa-bench/reads/hg002_20M_2.fq; PIN="numactl --interleave=all"; GPU=0
 else R2=reads/hg002_20M_2.fq; PIN="taskset -c 0-63"; GPU=1; fi
+# On another host, or without an input, the timings would mean nothing.
+if [ "$(hostname -s)" != "$host" ]; then
+  echo "full_cert_bench.sh: this host is $(hostname -s), not $host" >&2; exit 2
+fi
+for f in "$C" $IDX $R1 $R2; do
+  [ -e "$f" ] || { echo "full_cert_bench.sh: $f not found" >&2; exit 2; }
+done
+mkdir -p "$O"
 TSV=$O/timings.tsv
 [ -f "$TSV" ] || printf "host\tmode\tpipeline\tconfig\trep\twall_s\tuser_s\tsys_s\tmax_rss_kb\n" > "$TSV"
 CFGS=("default" "--full-cert --adaptive-parts 0" "--full-cert")

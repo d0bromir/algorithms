@@ -517,6 +517,21 @@ intervals, CPU and GPU, default and 7,777-read batches).
   *Test:* six random files (LF and CRLF, rare empty lines and stray '\r'
   between records, empty reads, no final newline) in batches of 1 to 9,000
   records on 1, 3 and 8 threads give the written records. *Mutants:* S1, S3, S4.
+- *Exact shortcuts for one-edit reads.* (a) `evaluate_clusters`: when a
+  cluster's Hamming upper bound is 1, the band's edit distance is 0 or 1,
+  and it is 0 only on a diagonal without a mismatch (an alignment with no
+  edit has no gap), so one Hamming check per diagonal of the band gives the
+  banded DP's distance. (b) `align_best` with d1 = 1 and an ungapped
+  alignment with one mismatch: d1 is the band's minimum edit distance, so
+  that alignment scores L - 5, a gapped one at most L - 7, a clipped one at
+  most L - 6 and an ungapped one with more mismatches less; the affine
+  fill's first best end cell is then in row L on that diagonal, its
+  traceback is the ungapped path, and the fill is skipped.
+  *Test:* 6,000 random bands from unique sequence and repeats (reads with
+  no or one substitution, or an N): `band_distance` with limit 1 equals the
+  zero-mismatch check, and `affine_align` returns the first ungapped
+  one-mismatch alignment (CIGAR LM, NM 1, score L - 5). *Mutants:* those of
+  the replaced code (E9-E19, E22, E23) are still killed.
 - *Fused stages.* Without a GPU, each batch runs every pass on one chunk of
   64 reads (32 pairs) after another, the threads taking chunks in turn,
   instead of each pass over the whole batch. A read's passes see only that

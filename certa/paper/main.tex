@@ -613,7 +613,7 @@ faster than minibwa, the fastest of the other aligners, and
 the A100 it takes \FGSGpuIvWall~s (\FGSGpuIvXMini$\times$ minibwa,
 \FGSGpuIvXBwa$\times$ BWA-MEM2). DRAGMAP~1.3.0, Illumina's open-source
 version of the DRAGEN mapper (\url{https://github.com/Illumina/DRAGMAP}),
-was timed later under the same protocol. It takes \KDragASWall~s
+was timed in a separate session under the same protocol. It takes \KDragASWall~s
 single-end and \KDragAPWall~s paired on a2, so CERTA's interval mode is
 \KDragASX$\times$ and \KDragAPX$\times$ faster. Its ARM64 build is slower
 still (\KDragGSWall~s single-end on galaxy).
@@ -638,14 +638,15 @@ paired (Table~\ref{tab:speed}). That is slower than minibwa, but
 Most of the difference from the default is pass~V: without it, full
 certification takes \FCGSNoVCpuWall~s and \FCGPNoVCpuWall~s and certifies
 \FCCertSNoV\% and \FCCertPNoV\%. Peak memory is
-the same as by default: \MemSOld~GiB single-end and \MemPOld~GiB paired
-for the build timed in Table~\ref{tab:speed}. The current build releases
-input pages once they are parsed and holds the index directory in 32
-bits. That brings peak memory to \MemSNew~GiB and \MemPNew~GiB on the
-CPU (\MemSGpuNew~GiB and \MemPGpuNew~GiB with the A100), with identical
-output, and it is up to \MemFasterMax\% faster.
+the same as by default: \FCGSFcCpuRss~GiB single-end and \FCGPFcCpuRss~GiB
+paired on galaxy's CPU (\FCGSFcGpuRss~GiB and \FCGPFcGpuRss~GiB with the
+A100). Two changes that alter no output brought it there: CERTA releases
+input pages once they are parsed and holds the index directory in 32 bits,
+which took peak memory from \MemSOld~GiB to \MemSNew~GiB single-end and
+from \MemPOld~GiB to \MemPNew~GiB paired, and saved up to
+\MemFasterMax\% of the time.
 
-Five changes, none of which changes any output, made the CPU pipelines
+Six changes, none of which changes any output, made the CPU pipelines
 fast. Every pass of a batch runs on one chunk of 64 reads after another,
 the threads taking chunks in turn, so the slow reads of one pass (tier R's
 repeats above all) no longer hold the other cores at its end. The next
@@ -654,11 +655,15 @@ output is written by its own thread. The edit-distance band, the
 score-only band and the traceback fill run on 8- to 16-bit vector lanes
 (exact for every input; supplement). Index lookups, and tier R's reads of
 the reference at each repeat copy, are prefetched, and the search for
-copies of tier R's alignment reuses the read's own lookups. And the fallback
+copies of tier R's alignment reuses the read's own lookups. For a read one
+mismatch from a candidate diagonal, the banded distance and the affine
+traceback fill are skipped, because they could only return the ungapped
+alignment (exact; supplement). And the fallback
 minibwa takes 10-Mbp batches (\texttt{-K 10m}): with its default
 (100~Mbp--1~Gbp), its threads waited on a few slow reads per batch of
 CERTA's hard reads, and the paired pipeline on a2 spent \FAPCpuKdSys~s in
-the kernel instead of \FAPCpuKtSys~s and took \FAPCpuKdWall~s.
+the kernel instead of \FAPCpuKtSys~s and took \FAPCpuKdWall~s instead of
+\FAPCpuKtWall~s.
 Single-end, \texttt{-K} changes nothing in minibwa's output. On pairs it
 changes the per-batch insert-size estimate, and with it \KbatchDiffRecords{}
 of HG005's chromosome-20 records, but no F1 of
