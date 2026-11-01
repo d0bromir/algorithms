@@ -82,6 +82,7 @@ class MapPipeline {
                    PassCounts& n) const;
   void index2_passes(Slot& S, size_t a0, size_t b0, ChunkScratch& x, PassCounts& n) const;
   void bio_chunk(Slot& S, size_t a0, size_t b0, ChunkScratch& x) const;
+  void bio_rescue_pair(Slot& S, size_t i, BioScratch& sc) const;
 
   const MapConfig& c_;
   const Reference& ref_;

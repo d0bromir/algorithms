@@ -36,6 +36,11 @@ run on galaxy (ARM64, 64 of 128 cores for each aligner).
   for 98 % of real reads and 98 % of simulated ones. Their best GRCh38 match
   is not their orthologous locus.
 
+**Since phase 1** ([below](#after-phase-1-the-fallback-and-the-cost)): a
+pair rescue places mates the single-read certificate cannot. It lowers the
+fallback to 3.48 % (A) and 4.11 % (B) of reads with the same avoidable errors,
+and `--bio` now costs 80–87× the default mode.
+
 ## Pilot (2 M HG002 NovaSeq X pairs, trimmed)
 
 | | default | `--bio` |
@@ -194,11 +199,96 @@ candidates per read.
 - **`bio_score`'s first version scored adjacent-gap alignments.** That was
   outside the model; fixed.
 
+## After phase 1: the fallback and the cost
+
+These measurements come from [tools/bio_probe.cpp](../tools/bio_probe.cpp)
+on the first 400,000 mate-1 reads of Test B, and from the same build on
+Tests A and B. The probe runs `bio_place` per read and logs why it certified
+the read or not, and what the read cost.
+
+**Why reads fall back.** 4.35 % of the reads are not certified:
+- **Not placed by the default mode either:** 3.07 % of reads. Under an
+  end-to-end model these are not recoverable.
+- **Placed by the default mode:** 1.28 % of reads, almost all through the
+  pair: pair rescue (PR) 0.82 %, an S1 certificate 0.39 %, proven repeats
+  0.07 %.
+- **All parts already used:** in 69 % of the failures, every one of the 6
+  parts the index allows for a 150 bp read is in S, so a larger budget would
+  not help. The horizon cannot rise much above 111 Phred, because a gap may
+  open for 22 anywhere (the tandem-run discount).
+- **Out of reach of a single read:** where the edit certificate holds, the
+  failing reads' own alignments cost 57–173 under the model (5th–95th
+  percentile, median 111), at or above that horizon.
+
+**Where the time goes** (`perf` on 3,000 of the slowest reads; output-identical
+variants timed with the probe):
+- **Heavy reads:** 87 % of the time goes to the 11 % of reads with ≥ 1 M DP
+  cells, reads in young repeats aligning a median of 1,700 bands each, at
+  about 12 µs per band.
+- **Mostly confident:** 49 % of all the time goes to heavy reads with
+  MAPQ ≥ 30 and p₁ = 0, whose bands are weak copies bounded below p₁ + 60.
+- **Inside a band:** the tandem-run scan of the band's reference took
+  38 %, the DP 35 %. The edit certificate and enumeration took about 8 %.
+  The earlier note that candidate enumeration dominates was wrong.
+- **What did not help:**
+  - pruning the DP at p₁ + δ instead of H: 7 %;
+  - narrowing the bands to the edit alignment's cost + δ: 8 %;
+  - enumerating only the rarest parts needed: 0 %, because heavy reads need
+    every part that fits.
+
+**What changed** (branch `claude/certa-bio-fallback`):
+- **Pair rescue** (THEORY.md Proposition B3, `bio_rescue`). When one mate is
+  certified and the other is not, the other is aligned exactly in the
+  certified mate's proper-pair windows. It is placed there when that pair is
+  proven optimal against every pair not seen: the certified mate at an
+  unlisted locus, the other mate outside the window (improper, +40), its gaps
+  past the reach, or a window not aligned. Such a mate is written as BM with
+  `YR:i:1`. Its YH bounds every alignment of it.
+  - The oracle test checks every rescue in every setting against a
+    whole-reference brute force.
+  - Mutants B15–B17 drop one bound each, and all three are killed.
+- **The tandem-run scan** runs on one fetched window, with precomputed gap
+  opens. The output is identical on the 400,000 reads; the gain is 1.13×.
+
+**Tests A and B again** with that build ([truth_rerun_bio.sh](truth_rerun_bio.sh);
+[report_A_rescue.md](results/truth_2026-10/report_A_rescue.md),
+[report_B_rescue.md](results/truth_2026-10/report_B_rescue.md)), scored
+against the same truth and phase 1's runs of the other aligners:
+
+| | Test A: phase 1 | Test A: rescue | Test B: phase 1 | Test B: rescue |
+|---|---|---|---|---|
+| to the fallback (all reads) | 4.35 % | **3.48 %** | 4.81 % | **4.11 %** |
+| mates with a truth: in SAM | 98.433 % | **99.286 %** | 99.689 % | **99.867 %** |
+| at truth | 96.277 % | **97.118 %** | 99.614 % | **99.790 %** |
+| placed only by the pair (YR:i:1), with a truth | – | 161,266 | – | 56,807 |
+| of them at truth; misplaced at MAPQ ≥ 20 / 40 | – | 97.6 %; 874 / 12 | – | 98.9 %; 187 / 3 |
+| avoidable errors, MAPQ ≥ 20 / 40 / 60 | 3,373 / 472 / 247 | 3,478 / 470 / 242 | 398 / 103 / 31 | 439 / 104 / 31 |
+| wall time (64 cores) | 1,206 s | 1,079 s | 2,115 s | 1,903 s |
+| peak memory | 21.54 GiB | 21.57 GiB | 22.24 GiB | 22.28 GiB |
+
+- **Soundness:** 0 violations in both tests, over 94.6 M (A) and 189.9 M (B)
+  alignments of the five other aligners on certified mates. For a rescued mate the check is
+  against its YH, which bounds every alignment of it.
+- **Rescoring:** `bio_score` reproduces YP on every one of the 19.3 M (A)
+  and 38.2 M (B) `--bio` records, the 173,327 and 283,425 rescued ones
+  included.
+- **Remaining gap to the default mode:** 0.13 % of real mates with a truth
+  are not in the SAM file, against 0.05 % for the default mode.
+- **MAPQ of the anchor:** a certified mate whose partner is rescued takes
+  the pair's posterior, which counts one unseen pair at each bound. That
+  lowers its MAPQ where the partner costs well above its YH. Net of the
+  rescued mates themselves, 7,224 fewer real mates (18,697 simulated) have
+  MAPQ ≥ 40, and slightly fewer of those are misplaced (4,609 against
+  4,621; 21,313 against 21,465).
+- **Cost:** `--bio` is now 80–87× slower than the default mode, against
+  89–96× in phase 1.
+
 ## Next
 
-1. **Fallback.** Lower the share of reads `--bio` sends to the fallback
-   (`bio_horizon`, 4.7 % of reads) and its cost. Candidate enumeration
-   dominates the time.
+1. **Cost.** Bands, not enumeration, dominate. Two options:
+   - a precomputed tandem-run table (about 1.45 GiB more memory) would remove
+     the scan, about 1.4× on heavy reads;
+   - a DP over several bands at once (SIMD) would cut the rest.
 2. **MAPQ.** Replace the one-competitor-at-`YH` convention with a bound
    that does not make horizon-limited reads overconfident.
 3. **Complex indels.** Allow an insertion next to a deletion in the model

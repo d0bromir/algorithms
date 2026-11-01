@@ -46,6 +46,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <unordered_map>
 #include <vector>
 
@@ -72,6 +73,7 @@ struct BioParams {
   int max_loci = 32;        // loci kept per read for pairing
   double insert_mean = 400, insert_sd = 100;  // fragment length (pairs)
   int improper = 40;        // a pair that is not proper, in Phred
+  int rescue_loci = 8;      // a certified mate's loci whose proper windows a pair rescue aligns
 };
 
 // The model's integer costs, from BioParams.
@@ -161,31 +163,56 @@ inline void bio_read(const BioModel& m, const uint8_t* codes, const char* qual, 
   }
 }
 
-// ctx[x - a] for reference positions x in [a, b): the length (capped at
-// kBioCtxCap) of the longest tandem run of period 1-4 containing x, at least
-// 1. A run of period p is a stretch where every base equals the one p before
-// it, plus those p; N ends it. Depends only on the reference within
-// kBioCtxCap + 4 of x.
-inline void bio_str_context(const IndexView& ix, int64_t a, int64_t b, uint8_t* ctx) {
-  for (int64_t x = a; x < b; ++x) ctx[x - a] = 1;
-  const int64_t lo = a - kBioCtxCap - 4, hi = b + kBioCtxCap + 4;
+// A position's tandem run depends on the reference this far on each side.
+constexpr int kBioCtxReach = kBioCtxCap + 4;
+
+// buf[0, n) = the reference from lo (N outside it).
+inline void bio_fetch(const IndexView& ix, int64_t lo, int n, uint8_t* buf) {
+  if (lo >= 0 && static_cast<uint64_t>(lo) + static_cast<uint64_t>(n) <= ix.ref_len) {
+    std::memcpy(buf, ix.ref + lo, static_cast<size_t>(n));
+    return;
+  }
+  for (int x = 0; x < n; ++x) buf[x] = ref_at(ix, lo + x);
+}
+
+// bio_str_context below on bases already fetched: buf holds the reference
+// from a - kBioCtxReach to b + kBioCtxReach (n = b - a).
+inline void bio_str_context_buf(const uint8_t* buf, int n, uint8_t* ctx) {
+  const int E = kBioCtxReach, hi = n + 2 * E;
+  for (int x = 0; x < n; ++x) ctx[x] = 1;
   for (int p = 1; p <= 4; ++p) {
-    int64_t s = -1;  // start of the current stretch of matches
-    for (int64_t x = lo + p; x <= hi; ++x) {
-      const uint8_t c = ref_at(ix, x);
-      const bool match = x < hi && c < 4 && c == ref_at(ix, x - p);
-      if (match) {
+    int s = -1;  // start of the current stretch of matches
+    for (int x = p; x <= hi; ++x) {
+      if (x < hi && buf[x] < 4 && buf[x] == buf[x - p]) {
         if (s < 0) s = x;
         continue;
       }
       if (s >= 0) {  // stretch [s, x) of matches: run [s - p, x)
-        const int64_t r0 = s - p, len = std::min<int64_t>(kBioCtxCap, x - r0);
-        for (int64_t y = std::max(r0, a); y < std::min(x, b); ++y)
-          if (len > ctx[y - a]) ctx[y - a] = static_cast<uint8_t>(len);
+        const int r0 = s - p, len = std::min(kBioCtxCap, x - r0);
+        for (int y = std::max(r0, E), e = std::min(x, E + n); y < e; ++y)
+          if (len > ctx[y - E]) ctx[y - E] = static_cast<uint8_t>(len);
         s = -1;
       }
     }
   }
+}
+
+// ctx[x - a] for reference positions x in [a, b): the length (capped at
+// kBioCtxCap) of the longest tandem run of period 1-4 containing x, at least
+// 1. A run of period p is a stretch where every base equals the one p before
+// it, plus those p; N ends it. Depends only on the reference within
+// kBioCtxReach of x.
+inline void bio_str_context(const IndexView& ix, int64_t a, int64_t b, uint8_t* ctx) {
+  const int n = static_cast<int>(b - a), len = n + 2 * kBioCtxReach;
+  uint8_t local[512];
+  std::vector<uint8_t> big;
+  uint8_t* buf = local;
+  if (len > static_cast<int>(sizeof local)) {
+    big.resize(static_cast<size_t>(len));
+    buf = big.data();
+  }
+  bio_fetch(ix, a - kBioCtxReach, len, buf);
+  bio_str_context_buf(buf, n, ctx);
 }
 
 // A lower bound on the penalty of any alignment of strand st that touches
@@ -261,6 +288,8 @@ struct BioLocus {
 struct BioOut {
   bool ok = false;      // p1 < yh: the reported locus is the certified ML placement
   bool tried = false;   // the parts were enumerated on both strands
+  bool empty = false;   // tried, and no alignment costs less than yh
+  bool rescued = false; // placed by its mate's loci (bio_rescue), not certified alone
   bool wide = false;    // a band too wide to align set the horizon
   bool moved = false;   // unique, and the edit certificate's unique best locus is elsewhere
   int p1 = -1, p2 = -1; // best penalty; second locus's (p1 when tied), -1 if none below yh
@@ -273,12 +302,23 @@ struct BioOut {
   // Pairs: placed jointly when the pair's optimum is certified.
   bool pair_ok = false;
   int pair_pen = -1, ins_pen = -1, pair_mapq = 0;
+  // The work behind it (tools/bio_probe): |S| per strand, the horizon H
+  // before any band lowered it, the band reach G, candidates, clusters,
+  // bands aligned and their DP cells (L x width).
+  int n_s[2] = {0, 0};
+  int horizon = -1, reach = -1;
+  int n_cand = 0, n_clusters = 0, n_bands = 0;
+  int64_t cells = 0;
 };
 
 struct BioScratch {
   BioRead br;
   std::vector<int> rows;               // 6 DP rows
-  std::vector<uint8_t> win, ctx, tb;   // the band's reference, tandem runs, traceback bits
+  // The band's reference (from kBioCtxReach before its first base), tandem
+  // runs, traceback bits; gap opens: a deletion of the base, an insertion
+  // after it.
+  std::vector<uint8_t> win, ctx, tb;
+  std::vector<int> go_d, go_i;
   std::vector<int> endv;               // the last band's end row
   std::vector<BioCluster> cl;
   std::vector<int> order;
@@ -303,10 +343,16 @@ inline void bio_band(const IndexView& ix, const BioModel& m, const BioRead& br, 
                      BioScratch& sc, bool trace, int thr = kBioInf) {
   const int L = br.L;
   const int W = L + B + 1;
-  sc.win.resize(W);
+  sc.win.resize(W + 2 * kBioCtxReach);
   sc.ctx.resize(W);
-  for (int x = 0; x < W; ++x) sc.win[x] = ref_at(ix, lo + x);
-  bio_str_context(ix, lo, lo + W, sc.ctx.data());
+  sc.go_d.resize(W);
+  sc.go_i.resize(W);
+  bio_fetch(ix, lo - kBioCtxReach, W + 2 * kBioCtxReach, sc.win.data());
+  bio_str_context_buf(sc.win.data(), W, sc.ctx.data());
+  for (int x = 0; x < W; ++x) {
+    sc.go_d[x] = m.go(sc.ctx[x]);
+    sc.go_i[x] = m.go(std::max(sc.ctx[x], x + 1 < W ? sc.ctx[x + 1] : uint8_t(0)));
+  }
   sc.rows.assign(6 * (B + 1), kBioInf);
   int* Mp = sc.rows.data();
   int* Ip = Mp + (B + 1);
@@ -316,8 +362,9 @@ inline void bio_band(const IndexView& ix, const BioModel& m, const BioRead& br, 
   int* Dc = Ic + (B + 1);
   for (int b = 0; b < B; ++b) Mp[b] = 0;  // free start
   if (trace) sc.tb.assign(static_cast<size_t>(L + 1) * B, 0);
-  const uint8_t* win = sc.win.data();
-  const uint8_t* ctx = sc.ctx.data();
+  const uint8_t* win = sc.win.data() + kBioCtxReach;
+  const int* go_d = sc.go_d.data();
+  const int* go_i = sc.go_i.data();
   const int ge = m.ge();
   int p0 = 0, p1 = B;  // the live cells of the row before: [p0, p1)
   for (int i = 1; i <= L; ++i) {
@@ -342,7 +389,7 @@ inline void bio_band(const IndexView& ix, const BioModel& m, const BioRead& br, 
       // Read base i - 1 inserted after reference lo + x (cell (i - 1, b + 1)).
       int iv = kBioInf, iext = 0;
       if (b + 1 < B) {
-        const int open = i >= 2 && Mp[b + 1] < kBioInf ? Mp[b + 1] + m.go(std::max(ctx[x], ctx[x + 1])) : kBioInf;
+        const int open = i >= 2 && Mp[b + 1] < kBioInf ? Mp[b + 1] + go_i[x] : kBioInf;
         const int ext = Ip[b + 1] < kBioInf ? Ip[b + 1] + ge : kBioInf;
         if (ext <= open && ext < kBioInf) { iv = ext + em; iext = 1; }
         else if (open < kBioInf) iv = open + em;
@@ -353,9 +400,11 @@ inline void bio_band(const IndexView& ix, const BioModel& m, const BioRead& br, 
     }
     // Reference lo + i - 1 + b deleted after read base i - 1 (cell (i, b - 1)),
     // past the M cells only while a deletion run is still below thr.
-    for (int b = b0 + 1; b < B && (b <= b1 || Dc[b - 1] < kBioInf); ++b) {
+    int e = b0 + 1;  // cells from e on stay kBioInf
+    for (; e < B && (e <= b1 || Dc[e - 1] < kBioInf); ++e) {
+      const int b = e;
       const int x = i - 1 + b;
-      const int open = Mc[b - 1] < kBioInf ? Mc[b - 1] + m.go(ctx[x]) : kBioInf;
+      const int open = Mc[b - 1] < kBioInf ? Mc[b - 1] + go_d[x] : kBioInf;
       const int ext = Dc[b - 1] < kBioInf ? Dc[b - 1] + ge : kBioInf;
       if (ext <= open && ext < kBioInf) {
         Dc[b] = ext;
@@ -367,7 +416,7 @@ inline void bio_band(const IndexView& ix, const BioModel& m, const BioRead& br, 
     }
     p0 = B;
     p1 = 0;
-    for (int b = b0; b < B; ++b)
+    for (int b = b0, end = std::max(e, b1); b < end; ++b)
       if (Mc[b] < kBioInf || Ic[b] < kBioInf || Dc[b] < kBioInf) {
         p0 = std::min(p0, b);
         p1 = b + 1;
@@ -402,7 +451,7 @@ inline bool bio_trace(const BioRead& br, int st, int64_t lo, int B, int b_end, c
     const uint8_t bits = sc.tb[static_cast<size_t>(i) * B + b];
     if (state == 0) {
       if (!emit(kOpM)) return false;
-      if (sub_cost(br.seq[st][i - 1], sc.win[i - 1 + b])) { ++nm; score -= kMismatch; }
+      if (sub_cost(br.seq[st][i - 1], sc.win[kBioCtxReach + i - 1 + b])) { ++nm; score -= kMismatch; }
       else score += kMatch;
       first_b = b;
       state = bits & 3;
@@ -530,6 +579,11 @@ inline bool bio_place(const IndexView& ix, const BioModel& m, const Params& p, c
   int G = 0;
   if (Hunw > m.go_min()) G = std::min(bp.gap_cap, (Hunw - m.go_min() + m.ge() - 1) / m.ge());
   const int H = std::min(Hunw, m.go_min() + G * m.ge());
+  o.n_s[0] = mst[0];
+  o.n_s[1] = mst[1];
+  o.horizon = H;
+  o.reach = G;
+  o.n_cand = ws.ncand[0] + ws.ncand[1];
 
   // Clusters: candidates joined while within 2G, so bands (+- G) are disjoint.
   sc.cl.clear();
@@ -580,6 +634,8 @@ inline bool bio_place(const IndexView& ix, const BioModel& m, const Params& p, c
       continue;
     }
     bio_band(ix, m, br, C.strand, C.lo, C.width, sc, false, H);
+    ++o.n_bands;
+    o.cells += static_cast<int64_t>(L) * C.width;
     for (int b = 0; b < C.width; ++b) {
       const int v = sc.endv[b];
       if (v >= H) continue;
@@ -589,6 +645,7 @@ inline bool bio_place(const IndexView& ix, const BioModel& m, const Params& p, c
   }
   yh = std::min(yh, wide_bound);
   o.yh = yh;
+  o.n_clusters = static_cast<int>(sc.cl.size());
   o.wide = wide_bound <= yh && wide_bound < H;
 
   // Loci: end positions below yh, cheapest first, each at least L from every
@@ -607,7 +664,10 @@ inline bool bio_place(const IndexView& ix, const BioModel& m, const Params& p, c
     const BioCluster& C = sc.cl[e.cl];
     sc.loci.push_back({e.pen, e.strand, e.end, C.lo, C.width, e.b});
   }
-  if (sc.loci.empty()) return fail(o.wide ? kBioWide : kBioHorizon);
+  if (sc.loci.empty()) {
+    o.empty = true;
+    return fail(o.wide ? kBioWide : kBioHorizon);
+  }
 
   const int best = sc.loci[0].pen;
   int n_best = 0;
@@ -727,6 +787,123 @@ inline BioPair bio_pair(const BioParams& bp, const BioOut& o1, int L1, const Bio
   out.n_best = n_best;
   out.mapq[0] = bio_detail::posterior_mapq((total - num1) / num1);
   out.mapq[1] = bio_detail::posterior_mapq((total - num2) / num2);
+  return out;
+}
+
+// Pair rescue (THEORY.md §12): mate k is certified (ok), mate f is not, and
+// every alignment of f costs at least lb_f (its horizon when no end lay below
+// it; 0 when nothing is known, as for a proven repeat). For each listed locus
+// a of k, cheapest first, the end diagonals of f that make a proper pair
+// with a, widened by the gap reach G = gap_cap on each side, are aligned
+// exactly; f ending at e pairs with a at pen_a + V_f(e) + insert. Every
+// other pair costs at least one of
+//   lb_k + lb_f                         k at an unlisted locus (lb_k: its list bound);
+//   pen_a + lb_f + improper             f outside a's proper window;
+//   pen_a + max(lb_f, go_min + G ge)    f inside it, its gaps totalling more than G;
+//   pen_a + lb_f                        a locus whose window was not aligned,
+// so the best pair found is the optimum of the pair objective (k over its
+// loci, f over all its alignments) when it is below all of them. f's end
+// positions are grouped into loci per locus of k (cheapest first, L apart);
+// MAPQ: each mate's posterior over those pairs, with one unseen pair at each
+// bound above. At most rescue_loci windows are aligned.
+struct BioRescue {
+  bool ok = false;
+  int x = -1;      // k's locus (index into its loci)
+  BioLocus f{};    // f's locus, with its band for the traceback
+  int pen = -1, ins = -1, n_best = 0;
+  int mapq[2] = {0, 0};  // k, f
+};
+
+// sc.br holds f's read.
+template <class ContigOf>
+inline BioRescue bio_rescue(const IndexView& ix, const BioModel& m, const BioOut& ok, int Lk, int lb_f, int Lf,
+                            int max_dist, ContigOf contig_of, uint64_t name_hash, BioScratch& sc) {
+  BioRescue out;
+  const BioParams& bp = m.params();
+  const int n = static_cast<int>(ok.loci.size());
+  if (!ok.ok || n == 0) return out;
+  const int G = bp.gap_cap;
+  const int thr = lb_f + bp.improper;  // f costs less than this in any pair below the horizon
+  struct Cand {
+    int cost, a, v, ins;
+    BioLocus f;
+  };
+  std::vector<Cand> cand;
+  std::vector<std::pair<int, int>> bounds;  // (an unseen pair's bound, k's locus or -1)
+  bounds.push_back({ok.list_bound + lb_f, -1});
+  int best = kBioInf;
+  for (int a = 0; a < n; ++a) {
+    const BioLocus& A = ok.loci[a];
+    if (A.pen + lb_f > best || a == bp.rescue_loci) {  // so are the later ones
+      for (int z = a; z < n; ++z) bounds.push_back({ok.loci[z].pen + lb_f, z});
+      break;
+    }
+    bounds.push_back({A.pen + lb_f + bp.improper, a});
+    bounds.push_back({A.pen + std::max(lb_f, m.go_min() + G * m.ge()), a});
+    // f's end diagonals (end - Lf + 1, its start as bio_insert takes it) in a
+    // proper pair with A: after A's start when A is forward, before it when not.
+    const int64_t sa = A.end - Lk + 1;
+    const int64_t d0 = A.strand == 0 ? sa : sa - max_dist;
+    const int64_t lo = d0 - G;
+    const int width = max_dist + 1 + 2 * G;
+    const uint8_t sf = static_cast<uint8_t>(1 - A.strand);
+    bio_band(ix, m, sc.br, sf, lo, width, sc, false, thr);
+    for (int b = G; b <= G + max_dist; ++b) {
+      const int v = sc.endv[b];
+      if (v >= thr) continue;
+      const BioLocus F{v, sf, lo + b + Lf - 1, lo, width, b};
+      const int ins = bio_insert(bp, A, Lk, F, Lf, max_dist, contig_of);
+      cand.push_back({A.pen + v + ins, a, v, ins, F});
+      best = std::min(best, A.pen + v + ins);
+    }
+  }
+  int horizon = kBioInf;
+  for (const auto& h : bounds) horizon = std::min(horizon, h.first);
+  if (cand.empty() || best >= horizon) return out;
+  // f's loci per locus of k: cheapest pair first, each L from every cheaper one.
+  std::sort(cand.begin(), cand.end(), [](const Cand& x, const Cand& y) {
+    if (x.cost != y.cost) return x.cost < y.cost;
+    if (x.a != y.a) return x.a < y.a;
+    return x.f.end < y.f.end;
+  });
+  std::vector<Cand> loci;
+  for (const Cand& c : cand) {
+    bool near = false;
+    for (const Cand& l : loci) near |= l.a == c.a && std::abs(l.f.end - c.f.end) < Lf;
+    if (!near) loci.push_back(c);
+  }
+  int n_best = 0;
+  while (n_best < static_cast<int>(loci.size()) && loci[n_best].cost == best) ++n_best;
+  const Cand& pick = loci[static_cast<size_t>(name_hash % static_cast<uint64_t>(n_best))];
+  using bio_detail::weight;
+  double total = 0, num_k = 0, num_f = 0;
+  for (const Cand& l : loci) {
+    const double w = weight(l.cost - best);
+    total += w;
+    if (l.a == pick.a) num_k += w;
+    if (l.f.strand == pick.f.strand && std::abs(l.f.end - pick.f.end) < Lf) num_f += w;
+  }
+  for (const auto& h : bounds) {
+    const double w = weight(h.first - best);
+    total += w;
+    if (h.second == pick.a) num_k += w;
+  }
+  // Positional ambiguity of f's locus: its window's ends as cheap, within Lf.
+  out.f = pick.f;
+  int64_t a0 = pick.f.end, a1 = pick.f.end;
+  for (const Cand& c : cand)
+    if (c.a == pick.a && c.v == pick.v && std::abs(c.f.end - pick.f.end) < Lf) {
+      a0 = std::min(a0, c.f.end);
+      a1 = std::max(a1, c.f.end);
+    }
+  out.f.amb = static_cast<int>(a1 - a0);
+  out.ok = true;
+  out.x = pick.a;
+  out.pen = best;
+  out.ins = pick.ins;
+  out.n_best = n_best;
+  out.mapq[0] = bio_detail::posterior_mapq((total - num_k) / num_k);
+  out.mapq[1] = bio_detail::posterior_mapq((total - num_f) / num_f);
   return out;
 }
 

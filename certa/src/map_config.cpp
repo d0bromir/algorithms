@@ -14,7 +14,7 @@ MapConfig MapConfig::from_args(const Args& a) {
         "[-u uncertified.fq] [-U uncertified_mates.fq] [--fallback-mates pair|single -S single_mates.fq] [--max-dist 850] [--stats s.json] [--batch N] [--io-threads N] [--serial-stages] "
         "[--bio [--bio-snv 0.001] [--bio-titv 2.1] [--bio-indel 0.0001] [--bio-seq-indel 0.00001] [--bio-gap-ext 0.5] "
         "[--bio-str-min 4] [--bio-str-slope 3] [--bio-str-cap 24] [--bio-gap-cap 50] [--bio-delta 60] [--bio-max-band 1024] "
-        "[--bio-budget 4096] [--bio-insert 400,100] [--bio-improper 40]]");
+        "[--bio-budget 4096] [--bio-insert 400,100] [--bio-improper 40] [--bio-rescue-loci 8]]");
   MapConfig c;
   c.index_path = a.pos[0];
   c.reads_path = a.pos[1];
@@ -181,6 +181,7 @@ MapConfig MapConfig::from_args(const Args& a) {
   bp.delta = a.geti("--bio-delta", bp.delta);
   bp.max_band = a.geti("--bio-max-band", bp.max_band);
   bp.improper = a.geti("--bio-improper", bp.improper);
+  bp.rescue_loci = a.geti("--bio-rescue-loci", bp.rescue_loci);
   const std::string ins = a.get("--bio-insert", "");
   if (!ins.empty()) {
     const size_t comma = ins.find(',');
@@ -193,7 +194,7 @@ MapConfig MapConfig::from_args(const Args& a) {
     throw std::runtime_error("--bio-snv/--bio-indel must be in (0, 0.5), --bio-seq-indel in [0, 0.5), "
                              "--bio-gap-ext in (0, 1), --bio-titv > 0");
   if (bp.str_min < 1 || bp.str_slope < 0 || bp.str_cap < 0 || bp.gap_cap < 0 || bp.gap_cap > 200 || bp.delta < 0 ||
-      bp.max_band < 1 || bp.improper < 0 || !(bp.insert_sd > 0) || !(bp.insert_mean > 0))
+      bp.max_band < 1 || bp.improper < 0 || bp.rescue_loci < 0 || !(bp.insert_sd > 0) || !(bp.insert_mean > 0))
     throw std::runtime_error("bad --bio-* parameters");
   Params& pb = c.pb;
   pb = c.p2;
@@ -222,10 +223,10 @@ std::string MapConfig::command_line() const {
     std::snprintf(b, sizeof b,
                   "certa map --bio --bio-budget %d --bio-snv %g --bio-titv %g --bio-indel %g --bio-seq-indel %g "
                   "--bio-gap-ext %g --bio-str-min %d --bio-str-slope %d --bio-str-cap %d --bio-gap-cap %d "
-                  "--bio-delta %d --bio-max-band %d --bio-insert %g,%g --bio-improper %d --max-dist %d",
+                  "--bio-delta %d --bio-max-band %d --bio-insert %g,%g --bio-improper %d --bio-rescue-loci %d --max-dist %d",
                   pb.budget, bp.snv, bp.titv, bp.indel, bp.seq_indel, bp.gap_ext, bp.str_min, bp.str_slope,
                   bp.str_cap, bp.gap_cap, bp.delta, bp.max_band, bp.insert_mean, bp.insert_sd, bp.improper,
-                  pp.max_dist);
+                  bp.rescue_loci, pp.max_dist);
     return b;
   }
   // The certification passes beyond the defaults, when on (the default

@@ -147,7 +147,7 @@ B3	include/certa/bio.h	s/    if (len\[j\] >= 2) c1\[j\] = std::min(c1\[j\], m.go
 B4	include/certa/bio.h	s/      const int k = off\[y\] - last + 1;/      const int k = off[y] - last + 2;/	killed	Lemma B: an insertion across parts charged one base too many
 B5	include/certa/bio.h	s/      yh = std::min(yh, C.bound);/      yh = std::min(yh, C.bound + 2);/	killed	Thm B: a cluster left unaligned bounded 2 too high
 B6	include/certa/bio.h	s/      wide_bound = std::min(wide_bound, C.bound);/      (void)0;/	killed	Thm B: a band too wide to align does not lower the horizon
-B7	include/certa/bio.h	s/m.go(std::max(ctx\[x\], ctx\[x + 1\]))/m.go(ctx[x])/	killed	model: an insertion's tandem context read on its left only (DP and rescore differ)
+B7	include/certa/bio.h	s/    sc.go_i\[x\] = m.go(std::max(sc.ctx\[x\], x + 1 < W ? sc.ctx\[x + 1\] : uint8_t(0)));/    sc.go_i[x] = m.go(sc.ctx[x]);/	killed	model: an insertion's tandem context read on its left only (DP and rescore differ)
 B8	include/certa/bio.h	s/      if (Ip\[b\] < v) { v = Ip\[b\]; src = 1; }/      if (Ip[b] <= v) { v = Ip[b]; src = 1; }/	killed	traceback: ties go to the insertion, gaps not left-aligned
 B9	include/certa/bio.h	s/        if (ext <= open \&\& ext < kBioInf) { iv = ext + em; iext = 1; }/        if (ext <= open \&\& ext < kBioInf) { iv = ext; iext = 1; }/	killed	DP: an extended insertion's base not charged its emission
 B10	include/certa/bio.h	s/  o.list_bound = o.loci.size() < sc.loci.size() ? sc.loci\[o.loci.size()\].pen : yh;/  o.list_bound = yh;/	killed	Thm B pairs: loci left out of the list not bounded
@@ -155,3 +155,6 @@ B11	include/certa/bio.h	s/  const int horizon = std::min(o1.list_bound + o2.p1, 
 B12	include/certa/bio.h	s/sc.loci\[n_best\].pen == best) ++n_best;/sc.loci[n_best].pen == best \&\& n_best < 1) ++n_best;/	killed	ties: only one locus counted at the optimum
 B13	include/certa/bio.h	s/    c1\[j\] = std::min(mn, m.go_min() + em);/    c1[j] = mn;/	equivalent	Lemma B: an insertion inside a part not counted (a part of >= 2 bases has the deletion option, go_min <= go_min + emission; THEORY.md section 12)
 B14	include/certa/bio.h	s/      const int64_t width = dmax - dmin + 2 \* G + 1;/      const int64_t width = dmax - dmin + 2 * G;/	killed	Thm B: band reach one diagonal short on the right (the horizon still assumes G)
+B15	include/certa/bio.h	s/    bounds.push_back({A.pen + lb_f + bp.improper, a});/    (void)0;/	killed	pair rescue: the mate outside the proper window (improper) not bounded (discordant pairs)
+B16	include/certa/bio.h	s/  bounds.push_back({ok.list_bound + lb_f, -1});/  (void)0;/	killed	pair rescue: the certified mate's unlisted loci not bounded (list-bound pairs, tight)
+B17	include/certa/bio.h	s/      for (int z = a; z < n; ++z) bounds.push_back({ok.loci\[z\].pen + lb_f, z});/      (void)0;/	killed	pair rescue: loci whose windows were not aligned not bounded (list-bound pairs, three windows)

@@ -202,7 +202,10 @@ reference, both strands** (proven, as the other tiers are: every alignment
 cheaper than the horizon `YH` is aligned exactly), the second locus, the
 ties, and a **posterior MAPQ**. Indels are left-aligned. Reads whose optimum
 cannot be proven (it is not below `YH`) go to the fallback, as in the
-default mode; so do reads with adapters or poly-G tails, since alignment is
+default mode, unless their mate is certified: then the mate's proper-pair
+windows are aligned exactly, and the read is placed there when that pair is
+proven optimal (**pair rescue**, `YR:i:1`; THEORY.md Proposition B3). Reads
+with adapters or poly-G tails go to the fallback too, since alignment is
 end to end (trim them first). One CPU pass replaces passes 1–3, V and L, so
 `--bio` does not combine with `--gpu`, `--intervals`, `--index2` or
 `--serial-stages`.
@@ -216,6 +219,7 @@ end to end (trim them first). One CPU pass replaces passes 1–3, V and L, so
 | `YB` | loci tied at the least penalty (MAPQ ≤ 3 when ≥ 2) |
 | `YA` | how far the alignment can shift at the same penalty within its locus (a tandem repeat's period multiples), 0 if it cannot; the record is the leftmost |
 | `YT`, `YI` | placed jointly with the mate: the pair's penalty (both mates and the insert term) and its insert term |
+| `YR:i:1` | placed only by the mate (pair rescue): not certified alone, so `YP` ≥ `YH`, and `YH` bounds every alignment of the read |
 | MAPQ | the locus's posterior over the loci below `YH` plus one competitor at `YH`, Phred, ≤ 60 |
 | `NM`, `AS`, `XE`, `XR` | as for S0/S1 (`XE`: the certified fewest edits over the reference, when the edit certificate holds) |
 
@@ -226,6 +230,7 @@ end to end (trim them first). One CPU pass replaces passes 1–3, V and L, so
 | `--bio-indel` / `--bio-seq-indel` / `--bio-gap-ext` | 0.0001 / 0.00001 / 0.5 | indels per base (sample, sequencing); probability an indel continues one more base |
 | `--bio-str-min` / `--bio-str-slope` / `--bio-str-cap` | 4 / 3 / 24 | a gap touching a tandem run (period 1–4) of ≥ min bases opens slope Phred cheaper per base, at most cap |
 | `--bio-insert` / `--bio-improper` | 400,100 / 40 | fragment length mean,sd; penalty of a pair that is not proper |
+| `--bio-rescue-loci` | 8 | a certified mate's loci whose proper-pair windows the pair rescue aligns (0: no rescue) |
 | `--bio-budget` | 4096 | hits enumerated per strand (more parts: a higher horizon) |
 | `--bio-gap-cap` / `--bio-delta` / `--bio-max-band` | 50 / 60 / 1024 | band reach; clusters bounded δ above the best are not aligned; widest band aligned |
 
@@ -274,9 +279,12 @@ alignments.
   aligners measured. On real reads at MAPQ ≥ 40, that is 103 against 439–988
   for CERTA's default mode, minibwa, BWA-MEM2, strobealign and minimap2.
 - **The cost:**
-  - `--bio` leaves more reads to the fallback;
+  - `--bio` leaves more reads to the fallback: with the pair rescue, 0.13 %
+    of real mates with a known origin are not in the SAM file, against
+    0.05 % for the default mode (98.9 % of the rescued mates are at their
+    origin);
   - its MAPQ is overconfident between 30 and 49;
-  - it runs 89–96× slower than the default mode on GRCh38;
+  - it runs 80–87× slower than the default mode on GRCh38;
   - the model has no complex indels (an insertion next to a deletion).
 
 The resources and the plan are in [bench/TRUTH_DATA.md](bench/TRUTH_DATA.md)
@@ -395,7 +403,7 @@ include/certa/pair.h       pair certificate (tier PR)
 include/certa/repeat.h     repeats (tier R)
 include/certa/interval.h   interval output (--intervals)
 include/certa/longread.h   long reads: Lemma L bounds, incl. split (jump) alignments
-include/certa/bio.h        --bio: likelihood model, Lemma B, certified ML placement (Theorem B), pairs
+include/certa/bio.h        --bio: likelihood model, Lemma B, certified ML placement (Theorem B), pairs, pair rescue
 src/index.*                FASTA loading, sampled q-mer index, save/load
 src/seqio.*                FASTQ/FASTA reading (plain or gzip)
 src/parallel.h             a loop spread over threads (FASTQ reading, encoding)
@@ -418,6 +426,7 @@ tools/simulate.py          synthetic genome/reads and placement evaluation
 tools/lr_ceiling.cpp       long reads: Lemma L ceiling vs best known alignment; --certify proves OPT (Aim 6)
 tools/payoff.cpp           part choices taken from the slow mappers, certified on CERTA's uncertified reads
 tools/bio_score.cpp        the --bio model's penalty of any aligner's SAM alignments (soundness at scale)
+tools/bio_probe.cpp        per read: why --bio certifies or falls back, and the work (parts, horizon, bands, time)
 bench/truth_*.py, *.sh     truth on GRCh38 for HG002 reads (Q100 haplotypes, GIAB alignments), scoring, reports
 scripts/                   build.sh, demo.sh
 THEORY.md                  the proofs, with code, tests and mutants per statement
