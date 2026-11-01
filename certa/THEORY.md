@@ -1415,6 +1415,20 @@ below H is computed exactly, so every end below H, which is all Theorem B
 uses. On 300,000 simulated NovaSeq X reads the SAM output is the same, byte
 for byte, with and without pruning.
 
+**The tandem-run table (`--bio-run-table`, on by default).** Each band needs
+the run length c of every reference base in its window, for go(c). go never
+rises with c, and is constant from c_sat = the least c with
+go(c) = go(`kBioCtxCap`) on (11 with the defaults). So a length clamped at
+c_sat gives every gap the same open cost, for deletions (go(c)) and insertions
+(go(max of two)) alike. `certa map` stores the clamped lengths of the whole
+reference once, four bits a base (half a byte a base, 1.45 GiB for GRCh38),
+and the bands read them instead of scanning. A run length depends only on the
+reference within `kBioCtxCap` + 4 bases, so the reference can be tabulated in
+independent stretches. The test runs every read and every rescue with the
+table, packed in two halves, and requires the same results as with the scan.
+*Mutant:* B18 (lengths clamped one below c_sat). With c_sat > 15 (other
+`--bio-str-*` values) there is no table and each band scans its window.
+
 **Proposition B2 (pairs).** The pair objective of loci a (mate 1) and b
 (mate 2) is V(a) + V(b) + ins(a, b), with ins the fragment-length penalty
 2.17 z² (z = (fragment − `--bio-insert` mean) / sd) of a proper pair

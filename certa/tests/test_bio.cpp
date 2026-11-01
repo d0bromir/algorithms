@@ -779,6 +779,31 @@ int main(int argc, char** argv) {
     }
     CHECK(diff == 0, "%s: %d reads differ in reverse order on another workspace", settings[k].name, diff);
   }
+  // The reference's tandem runs tabulated (bio_pack_contexts, in two halves
+  // packed apart): every read the same as with each band scanning its window.
+  // The oracle checks and the pair rescues below then run with the table.
+  std::vector<std::vector<uint8_t>> run_tables(ns);
+  for (size_t k = 0; k < ns; ++k) {
+    const int64_t n = static_cast<int64_t>(views[k].ref_len), mid = n / 4 * 2;
+    run_tables[k].assign(static_cast<size_t>((n + 1) / 2), 0);
+    bio_pack_contexts(views[k], mid, n, models[k].ctx_sat(), run_tables[k].data());
+    bio_pack_contexts(views[k], 0, mid, models[k].ctx_sat(), run_tables[k].data());
+    models[k].set_ctx_table(run_tables[k].data());
+    Params p;
+    p.k = KMAX;
+    p.budget = HOST_BUDGET_MAX;
+    std::unique_ptr<Workspace> ws(new Workspace);
+    std::unique_ptr<BioScratch> sc(new BioScratch);
+    int diff = 0;
+    for (size_t i = 0; i < nr; ++i) {
+      Placed Q;
+      const TestRead& t = reads[i];
+      Q.ok = bio_place(views[k], models[k], p, t.codes.data(), t.qual.data(), L, 0x9e3779b97f4a7c15ULL * (i + 1), *ws,
+                       *sc, Q.r, Q.o);
+      diff += !same(Q, res[k][i]);
+    }
+    CHECK(diff == 0, "%s: %d reads differ with the tandem runs tabulated", settings[k].name, diff);
+  }
 
   // The oracle, read by read (pairs: both mates at once), and every check.
   std::vector<std::vector<uint8_t>> ctx(1);

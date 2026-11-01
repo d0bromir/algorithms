@@ -47,7 +47,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "certa/core.h"
@@ -110,6 +110,9 @@ class BioModel {
       go_[c] = std::max(ge_, go - disc);
       go_min_ = std::min(go_min_, go_[c]);
     }
+    // go never rises with c, so it stays at go(kBioCtxCap) from ctx_sat_ on.
+    ctx_sat_ = kBioCtxCap;
+    while (ctx_sat_ > 1 && go_[ctx_sat_ - 1] == go_[kBioCtxCap]) --ctx_sat_;
   }
   const BioParams& params() const { return p_; }
   // Read base b (0-3) at quality q on reference base a (0-3), a != b.
@@ -119,13 +122,21 @@ class BioModel {
   int go(int ctx) const { return go_[ctx]; }  // opening a gap that touches a tandem run of ctx bases
   int ge() const { return ge_; }
   int go_min() const { return go_min_; }
+  // The tandem-run length from which a gap opens at go_min: a run length
+  // clamped there costs every gap the same.
+  int ctx_sat() const { return ctx_sat_; }
+  // Optional: the reference's tandem runs, clamped at ctx_sat() (bio_pack_contexts);
+  // bio_band reads them there instead of scanning its window. Null: no table.
+  void set_ctx_table(const uint8_t* t) { tab_ = t; }
+  const uint8_t* ctx_table() const { return tab_; }
 
  private:
   BioParams p_;
   int16_t mis_[64][4][4];
   int16_t mmin_[64], emit_[64];
   int go_[kBioCtxCap + 1];
-  int ge_, go_min_;
+  int ge_, go_min_, ctx_sat_;
+  const uint8_t* tab_ = nullptr;
 };
 
 // The read's costs on both strands (strand 1: the reverse complement, its
@@ -213,6 +224,35 @@ inline void bio_str_context(const IndexView& ix, int64_t a, int64_t b, uint8_t* 
   }
   bio_fetch(ix, a - kBioCtxReach, len, buf);
   bio_str_context_buf(buf, n, ctx);
+}
+
+// The table bio_band can read tandem runs from: position x's run length
+// (bio_str_context), clamped at `clamp` (<= kBioCtxPacked), four bits a base,
+// two to a byte (x even in the low half), (ref_len + 1) / 2 bytes in all.
+// Since a run length depends only on the reference within kBioCtxReach,
+// stretches [a, b) can be packed independently (a even): together they give
+// the same table.
+constexpr int kBioCtxPacked = 15;
+
+inline void bio_pack_contexts(const IndexView& ix, int64_t a, int64_t b, int clamp, uint8_t* tab) {
+  constexpr int64_t kStep = 1 << 16;
+  std::vector<uint8_t> ctx(static_cast<size_t>(kStep));
+  for (int64_t x0 = a; x0 < b; x0 += kStep) {
+    const int64_t x1 = std::min(b, x0 + kStep);
+    bio_str_context(ix, x0, x1, ctx.data());
+    for (int64_t x = x0; x < x1; ++x) {
+      const uint8_t c = static_cast<uint8_t>(std::min<int>(ctx[x - x0], clamp));
+      uint8_t& t = tab[x >> 1];
+      t = (x & 1) ? static_cast<uint8_t>((t & 0x0F) | (c << 4)) : static_cast<uint8_t>((t & 0xF0) | c);
+    }
+  }
+}
+
+// Position x's clamped run length from the table (1 outside the reference,
+// as bio_str_context gives N).
+inline uint8_t bio_ctx_at(const uint8_t* tab, uint64_t ref_len, int64_t x) {
+  if (x < 0 || static_cast<uint64_t>(x) >= ref_len) return 1;
+  return static_cast<uint8_t>((tab[x >> 1] >> ((x & 1) * 4)) & 0x0F);
 }
 
 // A lower bound on the penalty of any alignment of strand st that touches
@@ -311,6 +351,44 @@ struct BioOut {
   int64_t cells = 0;
 };
 
+// bio_cover(need) of one read, strand by strand, by required part set (a
+// mask below 2^P, P <= PMAX): an array, stamped so that a new read clears
+// nothing.
+class BioCoverCache {
+ public:
+  void start(int P) {
+    const size_t n = size_t(1) << P;
+    for (int st = 0; st < 2; ++st)
+      if (val_[st].size() < n) {
+        val_[st].resize(n);
+        stamp_[st].resize(n, 0);
+      }
+    if (++gen_ == 0) {  // wrapped: every stamp is stale again
+      for (auto& s : stamp_) std::fill(s.begin(), s.end(), 0);
+      gen_ = 1;
+    }
+  }
+  template <class F>
+  int get(int st, uint32_t need, F compute) {
+    if (stamp_[st][need] != gen_) {
+      stamp_[st][need] = gen_;
+      val_[st][need] = compute();
+    }
+    return val_[st][need];
+  }
+
+ private:
+  std::vector<int> val_[2];
+  std::vector<uint32_t> stamp_[2];
+  uint32_t gen_ = 0;
+};
+
+// Pair rescue (bio_rescue): a pair found, and an unseen pair's bound.
+struct BioRescueCand {
+  int cost, a, v, ins;
+  BioLocus f;
+};
+
 struct BioScratch {
   BioRead br;
   std::vector<int> rows;               // 6 DP rows
@@ -324,8 +402,20 @@ struct BioScratch {
   std::vector<int> order;
   std::vector<BioEnd> ends;
   std::vector<BioLocus> loci;
-  std::unordered_map<uint32_t, int> cover[2];
+  std::vector<int64_t> taken[2];  // the loci's end positions so far, per strand, sorted
+  BioCoverCache cover;
+  // bio_rescue: pairs found, f's loci, the bounds (k's locus or -1), the
+  // loci's (k's locus, f's end) so far, sorted.
+  std::vector<BioRescueCand> rcand, rloci;
+  std::vector<std::pair<int, int>> rbounds;
+  std::vector<std::pair<int, int64_t>> rtaken;
 };
+
+// Whether a sorted list holds a position within L of `end` (|t - end| < L).
+inline bool bio_near(const std::vector<int64_t>& v, int64_t end, int L) {
+  const auto it = std::lower_bound(v.begin(), v.end(), end - L + 1);
+  return it != v.end() && *it < end + L;
+}
 
 // The read (strand st) on diagonals [lo, lo + B): sc.endv[b] = the least
 // penalty of an end-to-end alignment within the band whose last base lies
@@ -344,15 +434,28 @@ inline void bio_band(const IndexView& ix, const BioModel& m, const BioRead& br, 
   const int L = br.L;
   const int W = L + B + 1;
   sc.win.resize(W + 2 * kBioCtxReach);
-  sc.ctx.resize(W);
   sc.go_d.resize(W);
   sc.go_i.resize(W);
   bio_fetch(ix, lo - kBioCtxReach, W + 2 * kBioCtxReach, sc.win.data());
-  bio_str_context_buf(sc.win.data(), W, sc.ctx.data());
-  for (int x = 0; x < W; ++x) {
-    sc.go_d[x] = m.go(sc.ctx[x]);
-    sc.go_i[x] = m.go(std::max(sc.ctx[x], x + 1 < W ? sc.ctx[x + 1] : uint8_t(0)));
+  // Gap opens per window base, from its tandem run (and the next base's).
+  auto opens = [&](auto run_at) {
+    uint8_t c = run_at(0);
+    for (int x = 0; x < W; ++x) {
+      const uint8_t c1 = x + 1 < W ? run_at(x + 1) : uint8_t(0);
+      sc.go_d[x] = m.go(c);
+      sc.go_i[x] = m.go(std::max(c, c1));
+      c = c1;
+    }
+  };
+  if (const uint8_t* tab = m.ctx_table()) {  // clamped where go no longer falls: the same costs
+    opens([&](int x) { return bio_ctx_at(tab, ix.ref_len, lo + x); });
+  } else {
+    sc.ctx.resize(W);
+    bio_str_context_buf(sc.win.data(), W, sc.ctx.data());
+    opens([&](int x) { return sc.ctx[x]; });
   }
+  // Every row starts at kBioInf: a row's cells are reset where they were set
+  // two rows before, not across the whole band.
   sc.rows.assign(6 * (B + 1), kBioInf);
   int* Mp = sc.rows.data();
   int* Ip = Mp + (B + 1);
@@ -367,13 +470,11 @@ inline void bio_band(const IndexView& ix, const BioModel& m, const BioRead& br, 
   const int* go_i = sc.go_i.data();
   const int ge = m.ge();
   int p0 = 0, p1 = B;  // the live cells of the row before: [p0, p1)
+  int set0 = 0, set1 = B;  // the cells the row before set (the rest are kBioInf)
   for (int i = 1; i <= L; ++i) {
     const int16_t* cr = br.cost[st][i - 1];
     const int em = br.emit[st][i - 1];
     uint8_t* tb = trace ? sc.tb.data() + static_cast<size_t>(i) * B : nullptr;
-    std::fill(Mc, Mc + B + 1, kBioInf);
-    std::fill(Ic, Ic + B + 1, kBioInf);
-    std::fill(Dc, Dc + B + 1, kBioInf);
     if (p0 >= p1) {  // no cell below thr: nor is any end
       std::swap(Mp, Mc);
       break;
@@ -416,7 +517,8 @@ inline void bio_band(const IndexView& ix, const BioModel& m, const BioRead& br, 
     }
     p0 = B;
     p1 = 0;
-    for (int b = b0, end = std::max(e, b1); b < end; ++b)
+    const int end = std::max(e, b1);
+    for (int b = b0; b < end; ++b)
       if (Mc[b] < kBioInf || Ic[b] < kBioInf || Dc[b] < kBioInf) {
         p0 = std::min(p0, b);
         p1 = b + 1;
@@ -424,6 +526,12 @@ inline void bio_band(const IndexView& ix, const BioModel& m, const BioRead& br, 
     std::swap(Mp, Mc);
     std::swap(Ip, Ic);
     std::swap(Dp, Dc);
+    // The next row is written over the row before this one: reset what it set.
+    std::fill(Mc + set0, Mc + set1, kBioInf);
+    std::fill(Ic + set0, Ic + set1, kBioInf);
+    std::fill(Dc + set0, Dc + set1, kBioInf);
+    set0 = b0;
+    set1 = end;
   }
   sc.endv.assign(Mp, Mp + B);
 }
@@ -587,8 +695,7 @@ inline bool bio_place(const IndexView& ix, const BioModel& m, const Params& p, c
 
   // Clusters: candidates joined while within 2G, so bands (+- G) are disjoint.
   sc.cl.clear();
-  sc.cover[0].clear();
-  sc.cover[1].clear();
+  sc.cover.start(P);
   for (int st = 0; st < 2; ++st) {
     const int64_t* c = ws.cand[st];
     const int n = ws.ncand[st];
@@ -601,9 +708,7 @@ inline bool bio_place(const IndexView& ix, const BioModel& m, const Params& p, c
         pm |= static_cast<uint16_t>(1u << part_of(c[j]));
       }
       const uint32_t need = S[st] & ~static_cast<uint32_t>(pm);
-      auto it = sc.cover[st].find(need);
-      const int bound = it != sc.cover[st].end() ? it->second
-                                                 : (sc.cover[st][need] = bio_cover(m, br, st, P, need));
+      const int bound = sc.cover.get(st, need, [&] { return bio_cover(m, br, st, P, need); });
       const int64_t width = dmax - dmin + 2 * G + 1;
       sc.cl.push_back({dmin - G, static_cast<int>(std::min<int64_t>(width, INT32_MAX)), static_cast<uint8_t>(st),
                        pm, bound});
@@ -656,11 +761,13 @@ inline bool bio_place(const IndexView& ix, const BioModel& m, const Params& p, c
     return a.end < b.end;
   });
   sc.loci.clear();
+  sc.taken[0].clear();
+  sc.taken[1].clear();
   for (const BioEnd& e : sc.ends) {
     if (e.pen >= yh) break;
-    bool near = false;
-    for (const BioLocus& l : sc.loci) near |= l.strand == e.strand && std::abs(l.end - e.end) < L;
-    if (near) continue;
+    std::vector<int64_t>& t = sc.taken[e.strand];
+    if (bio_near(t, e.end, L)) continue;
+    t.insert(std::lower_bound(t.begin(), t.end(), e.end), e.end);
     const BioCluster& C = sc.cl[e.cl];
     sc.loci.push_back({e.pen, e.strand, e.end, C.lo, C.width, e.b});
   }
@@ -692,13 +799,18 @@ inline bool bio_place(const IndexView& ix, const BioModel& m, const Params& p, c
             (edit.strand != a.strand || std::abs(edit.ref_pos - a.ref_pos) >= L);
   // Positional ambiguity: the end positions as cheap as a locus, within L of
   // it on its strand (a tandem repeat shifted by its period), all exact.
+  // sc.ends is sorted by (penalty, strand, end): they are one run of it.
   for (BioLocus& l : o.loci) {
+    auto it = std::lower_bound(sc.ends.begin(), sc.ends.end(), l, [&](const BioEnd& e, const BioLocus& k) {
+      if (e.pen != k.pen) return e.pen < k.pen;
+      if (e.strand != k.strand) return e.strand < k.strand;
+      return e.end < k.end - L + 1;
+    });
     int64_t a0 = l.end, a1 = l.end;
-    for (const BioEnd& e : sc.ends)
-      if (e.pen == l.pen && e.strand == l.strand && std::abs(e.end - l.end) < L) {
-        a0 = std::min(a0, e.end);
-        a1 = std::max(a1, e.end);
-      }
+    for (; it != sc.ends.end() && it->pen == l.pen && it->strand == l.strand && it->end < l.end + L; ++it) {
+      a0 = std::min(a0, it->end);
+      a1 = std::max(a1, it->end);
+    }
     l.amb = static_cast<int>(a1 - a0);
   }
 
@@ -824,12 +936,11 @@ inline BioRescue bio_rescue(const IndexView& ix, const BioModel& m, const BioOut
   if (!ok.ok || n == 0) return out;
   const int G = bp.gap_cap;
   const int thr = lb_f + bp.improper;  // f costs less than this in any pair below the horizon
-  struct Cand {
-    int cost, a, v, ins;
-    BioLocus f;
-  };
-  std::vector<Cand> cand;
-  std::vector<std::pair<int, int>> bounds;  // (an unseen pair's bound, k's locus or -1)
+  using Cand = BioRescueCand;
+  std::vector<Cand>& cand = sc.rcand;
+  std::vector<std::pair<int, int>>& bounds = sc.rbounds;  // (an unseen pair's bound, k's locus or -1)
+  cand.clear();
+  bounds.clear();
   bounds.push_back({ok.list_bound + lb_f, -1});
   int best = kBioInf;
   for (int a = 0; a < n; ++a) {
@@ -866,11 +977,16 @@ inline BioRescue bio_rescue(const IndexView& ix, const BioModel& m, const BioOut
     if (x.a != y.a) return x.a < y.a;
     return x.f.end < y.f.end;
   });
-  std::vector<Cand> loci;
+  std::vector<Cand>& loci = sc.rloci;
+  std::vector<std::pair<int, int64_t>>& taken = sc.rtaken;  // (k's locus, f's end), sorted
+  loci.clear();
+  taken.clear();
   for (const Cand& c : cand) {
-    bool near = false;
-    for (const Cand& l : loci) near |= l.a == c.a && std::abs(l.f.end - c.f.end) < Lf;
-    if (!near) loci.push_back(c);
+    const std::pair<int, int64_t> key{c.a, c.f.end};
+    const auto it = std::lower_bound(taken.begin(), taken.end(), std::make_pair(c.a, c.f.end - Lf + 1));
+    if (it != taken.end() && it->first == c.a && it->second < c.f.end + Lf) continue;
+    taken.insert(std::lower_bound(taken.begin(), taken.end(), key), key);
+    loci.push_back(c);
   }
   int n_best = 0;
   while (n_best < static_cast<int>(loci.size()) && loci[n_best].cost == best) ++n_best;

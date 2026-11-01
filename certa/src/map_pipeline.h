@@ -93,6 +93,7 @@ class MapPipeline {
   MapOutputs& out_;
   RecordWriter writer_;
   BioModel bio_model_;  // --bio
+  std::vector<uint8_t> bio_runs_;  // --bio: the reference's tandem runs (bio_pack_contexts), or empty
   GpuMapper* gm_ = nullptr;
   Slot slots_[kSlots];
   FastqSpans spans_[2];  // the mate files' text of the batch being read (buffers reused)

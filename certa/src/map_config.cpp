@@ -14,7 +14,7 @@ MapConfig MapConfig::from_args(const Args& a) {
         "[-u uncertified.fq] [-U uncertified_mates.fq] [--fallback-mates pair|single -S single_mates.fq] [--max-dist 850] [--stats s.json] [--batch N] [--io-threads N] [--serial-stages] "
         "[--bio [--bio-snv 0.001] [--bio-titv 2.1] [--bio-indel 0.0001] [--bio-seq-indel 0.00001] [--bio-gap-ext 0.5] "
         "[--bio-str-min 4] [--bio-str-slope 3] [--bio-str-cap 24] [--bio-gap-cap 50] [--bio-delta 60] [--bio-max-band 1024] "
-        "[--bio-budget 4096] [--bio-insert 400,100] [--bio-improper 40] [--bio-rescue-loci 8]]");
+        "[--bio-budget 4096] [--bio-insert 400,100] [--bio-improper 40] [--bio-rescue-loci 8] [--bio-run-table 1]]");
   MapConfig c;
   c.index_path = a.pos[0];
   c.reads_path = a.pos[1];
@@ -168,6 +168,7 @@ MapConfig MapConfig::from_args(const Args& a) {
     if (c.index2()) throw std::runtime_error("--bio does not combine with --index2");
     if (c.serial_stages) throw std::runtime_error("--bio does not combine with --serial-stages");
   }
+  c.bio_table = a.geti("--bio-run-table", 1) != 0;
   BioParams& bp = c.bp;
   bp.snv = a.getd("--bio-snv", bp.snv);
   bp.titv = a.getd("--bio-titv", bp.titv);

@@ -1,7 +1,8 @@
 // bio_probe: why `certa map --bio` certifies a read or sends it to the
 // fallback, and what it costs. Runs bio_place (certa/bio.h) with certa map's
 // --bio settings on single reads and prints one line per read:
-//   bio_probe INDEX.cidx reads.fq [N [THREADS]] > probe.tsv
+//   bio_probe INDEX.cidx reads.fq [N [THREADS [TABLE]]] > probe.tsv
+// TABLE 1: the tandem runs tabulated once, as certa map does (bio_pack_contexts).
 // Columns: name, L, parts P, the edit certificate (certified, tier, d1, d2,
 // reason) and its alignment's --bio penalty (-1 if none or not end to end),
 // |S| per strand, H, G, the horizon if every part without an N were in S
@@ -66,8 +67,8 @@ long next_count(const Workspace& ws, int st, int P, int m) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc < 3 || argc > 5) {
-    std::fprintf(stderr, "usage: bio_probe INDEX.cidx reads.fq [N [THREADS]] > probe.tsv\n");
+  if (argc < 3 || argc > 6) {
+    std::fprintf(stderr, "usage: bio_probe INDEX.cidx reads.fq [N [THREADS [TABLE]]] > probe.tsv\n");
     return 2;
   }
   const long N = argc > 3 ? std::atol(argv[3]) : -1;
@@ -82,7 +83,20 @@ int main(int argc, char** argv) {
   p.k = KMAX;
   p.budget = HOST_BUDGET_MAX;
   p.min_support = 1;
-  const BioModel model;
+  BioModel model;
+  std::vector<uint8_t> runs;
+  if (argc > 5 && std::atoi(argv[5]) != 0 && model.ctx_sat() <= kBioCtxPacked) {
+    const int64_t n = static_cast<int64_t>(ix.ref_len), span = int64_t(1) << 22;
+    runs.assign(static_cast<size_t>((n + 1) / 2), 0);
+    std::vector<std::thread> th;
+    for (int t = 0; t < T; ++t)
+      th.emplace_back([&, t] {
+        for (int64_t a = t * span; a < n; a += T * span)
+          bio_pack_contexts(ix, a, std::min(n, a + span), model.ctx_sat(), runs.data());
+      });
+    for (auto& x : th) x.join();
+    model.set_ctx_table(runs.data());
+  }
   std::vector<std::string> lines(reads.size());
   auto work = [&](int t) {
     std::unique_ptr<Workspace> ws(new Workspace);

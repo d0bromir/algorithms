@@ -2,11 +2,13 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <future>
 #include <numeric>
 #include <stdexcept>
 
 #include "cli.h"
+#include "parallel.h"
 
 namespace certa {
 
@@ -95,7 +97,29 @@ struct MapPipeline::ChunkScratch {
 MapPipeline::MapPipeline(const MapConfig& c, const Reference& ref, const IndexView& view, const IndexView* view2,
                          FastqInput& reads, FastqInput* mates, MapOutputs& out)
     : c_(c), ref_(ref), view_(view), view2_(view2), reads_(reads), mates_(mates), out_(out),
-      writer_(ref, view, c.out), bio_model_(c.bp) {}
+      writer_(ref, view, c.out), bio_model_(c.bp) {
+  // --bio: every band would scan its window's tandem runs; tabulate them
+  // once instead (the same costs: run lengths are clamped where go no longer
+  // falls). Without the table (or if go keeps falling past what four bits
+  // hold) each band scans its own window.
+  if (!c.bio || !c.bio_table) return;
+  if (bio_model_.ctx_sat() > kBioCtxPacked) {
+    std::fprintf(stderr, "[map] --bio: gap opens fall up to tandem runs of %d bases, more than the run table holds; "
+                         "each band scans its window\n", bio_model_.ctx_sat());
+    return;
+  }
+  const auto t = Clock::now();
+  const int64_t n = static_cast<int64_t>(view.ref_len);
+  bio_runs_.assign(static_cast<size_t>((n + 1) / 2), 0);
+  constexpr int64_t kSpan = int64_t(1) << 22;  // even: no byte is shared between two spans
+  parallel_for(static_cast<size_t>((n + kSpan - 1) / kSpan), c.threads, [&](size_t k) {
+    const int64_t a = static_cast<int64_t>(k) * kSpan;
+    bio_pack_contexts(view, a, std::min(n, a + kSpan), bio_model_.ctx_sat(), bio_runs_.data());
+  });
+  bio_model_.set_ctx_table(bio_runs_.data());
+  std::fprintf(stderr, "[map] --bio: the reference's tandem runs tabulated in %.1f s (%.2f GiB)\n", secs(t),
+               static_cast<double>(bio_runs_.size()) / (1u << 30));
+}
 
 PassCounts MapPipeline::counts() const {
   PassCounts n = first_counts_;

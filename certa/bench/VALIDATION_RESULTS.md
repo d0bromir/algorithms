@@ -38,8 +38,10 @@ run on galaxy (ARM64, 64 of 128 cores for each aligner).
 
 **Since phase 1** ([below](#after-phase-1-the-fallback-and-the-cost)): a
 pair rescue places mates the single-read certificate cannot. It lowers the
-fallback to 3.48 % (A) and 4.11 % (B) of reads with the same avoidable errors,
-and `--bio` now costs 80–87× the default mode.
+fallback to 3.48 % (A) and 4.11 % (B) of reads with the same avoidable errors.
+A table of the reference's tandem runs and leaner data structures make
+`--bio` 1.66–1.78× faster (50–58× the default mode instead of 89–96×), for
+1.45 GiB more memory.
 
 ## Pilot (2 M HG002 NovaSeq X pairs, trimmed)
 
@@ -249,6 +251,21 @@ variants timed with the probe):
   - Mutants B15–B17 drop one bound each, and all three are killed.
 - **The tandem-run scan** runs on one fetched window, with precomputed gap
   opens. The output is identical on the 400,000 reads; the gain is 1.13×.
+- **The tandem-run table** (`--bio-run-table`, on by default; THEORY.md §12).
+  `certa map` tabulates every reference base's run length once: 1.4 s on 64
+  threads, half a byte a base (1.44 GiB for GRCh38). Lengths are clamped
+  where the gap-open cost stops falling (11), so every cost is the same.
+  The bands read the table instead of scanning.
+  - The test runs every read and rescue with the table and requires the
+    scan's results; mutant B18 (clamped one too low) is killed.
+- **Data structures on the hot paths**, all with the same output:
+  - the band DP clears only the cells written two rows before, not three
+    whole rows per row;
+  - the cluster bounds are cached in a flat array by part mask, stamped
+    per read, instead of a hash map;
+  - nearby loci, and the span YA, are found by binary search in sorted
+    lists instead of scans over every end position;
+  - the rescue's buffers are reused.
 
 **Tests A and B again** with that build ([truth_rerun_bio.sh](truth_rerun_bio.sh);
 [report_A_rescue.md](results/truth_2026-10/report_A_rescue.md),
@@ -266,6 +283,22 @@ against the same truth and phase 1's runs of the other aligners:
 | wall time (64 cores) | 1,206 s | 1,079 s | 2,115 s | 1,903 s |
 | peak memory | 21.54 GiB | 21.57 GiB | 22.24 GiB | 22.28 GiB |
 
+With the run table and the data structures (the same records as the rescue
+build, byte for byte, in both tests; [timings.tsv](results/truth_2026-10/timings.tsv)):
+
+| | Test A | Test B |
+|---|---|---|
+| phase 1 | 1,206 s, 21.54 GiB | 2,115 s, 22.24 GiB |
+| rescue, each band scanning its window | 1,079 s, 21.57 GiB | 1,903 s, 22.28 GiB |
+| rescue, run table | 709 s, 23.01 GiB | 1,335 s, 23.73 GiB |
+| rescue, run table and data structures | **677 s**, 23.03 GiB | **1,277 s**, 23.72 GiB |
+| CERTA's default mode | 13.5 s | 22.0 s |
+
+The table gives 1.42–1.52× and the data structures another 3–5 %. The
+probe's time on the 400,000 reads falls from 1,315 s (phase 1) to 788 s.
+Another job ran on cores 64–127 during the two run-table rows, so they may be
+slightly slow.
+
 - **Soundness:** 0 violations in both tests, over 94.6 M (A) and 189.9 M (B)
   alignments of the five other aligners on certified mates. For a rescued mate the check is
   against its YH, which bounds every alignment of it.
@@ -280,15 +313,14 @@ against the same truth and phase 1's runs of the other aligners:
   rescued mates themselves, 7,224 fewer real mates (18,697 simulated) have
   MAPQ ≥ 40, and slightly fewer of those are misplaced (4,609 against
   4,621; 21,313 against 21,465).
-- **Cost:** `--bio` is now 80–87× slower than the default mode, against
+- **Cost:** `--bio` is now 50–58× slower than the default mode, against
   89–96× in phase 1.
 
 ## Next
 
-1. **Cost.** Bands, not enumeration, dominate. Two options:
-   - a precomputed tandem-run table (about 1.45 GiB more memory) would remove
-     the scan, about 1.4× on heavy reads;
-   - a DP over several bands at once (SIMD) would cut the rest.
+1. **Cost.** The band DP over thousands of repeat copies per heavy read now
+   dominates. A DP over several bands at once (SIMD lanes, one band each)
+   would cut it.
 2. **MAPQ.** Replace the one-competitor-at-`YH` convention with a bound
    that does not make horizon-limited reads overconfident.
 3. **Complex indels.** Allow an insertion next to a deletion in the model
