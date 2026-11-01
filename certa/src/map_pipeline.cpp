@@ -2,11 +2,13 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <future>
 #include <numeric>
 #include <stdexcept>
 
 #include "cli.h"
+#include "parallel.h"
 
 namespace certa {
 
@@ -95,7 +97,29 @@ struct MapPipeline::ChunkScratch {
 MapPipeline::MapPipeline(const MapConfig& c, const Reference& ref, const IndexView& view, const IndexView* view2,
                          FastqInput& reads, FastqInput* mates, MapOutputs& out)
     : c_(c), ref_(ref), view_(view), view2_(view2), reads_(reads), mates_(mates), out_(out),
-      writer_(ref, view, c.out), bio_model_(c.bp) {}
+      writer_(ref, view, c.out), bio_model_(c.bp) {
+  // --bio: every band would scan its window's tandem runs; tabulate them
+  // once instead (the same costs: run lengths are clamped where go no longer
+  // falls). Without the table (or if go keeps falling past what four bits
+  // hold) each band scans its own window.
+  if (!c.bio || !c.bio_table) return;
+  if (bio_model_.ctx_sat() > kBioCtxPacked) {
+    std::fprintf(stderr, "[map] --bio: gap opens fall up to tandem runs of %d bases, more than the run table holds; "
+                         "each band scans its window\n", bio_model_.ctx_sat());
+    return;
+  }
+  const auto t = Clock::now();
+  const int64_t n = static_cast<int64_t>(view.ref_len);
+  bio_runs_.assign(static_cast<size_t>((n + 1) / 2), 0);
+  constexpr int64_t kSpan = int64_t(1) << 22;  // even: no byte is shared between two spans
+  parallel_for(static_cast<size_t>((n + kSpan - 1) / kSpan), c.threads, [&](size_t k) {
+    const int64_t a = static_cast<int64_t>(k) * kSpan;
+    bio_pack_contexts(view, a, std::min(n, a + kSpan), bio_model_.ctx_sat(), bio_runs_.data());
+  });
+  bio_model_.set_ctx_table(bio_runs_.data());
+  std::fprintf(stderr, "[map] --bio: the reference's tandem runs tabulated in %.1f s (%.2f GiB)\n", secs(t),
+               static_cast<double>(bio_runs_.size()) / (1u << 30));
+}
 
 PassCounts MapPipeline::counts() const {
   PassCounts n = first_counts_;
@@ -510,6 +534,10 @@ void MapPipeline::bio_chunk(Slot& S, size_t a0, size_t b0, ChunkScratch& x) cons
   for (size_t i = a0; i + 1 < b0; i += 2) {
     BioOut* o = &S.bio[i];
     const int L[2] = {b.lens[i], b.lens[i + 1]};
+    if (o[0].ok != o[1].ok) {
+      bio_rescue_pair(S, i, sc);
+      continue;
+    }
     const BioPair bp = bio_pair(c_.bp, o[0], L[0], o[1], L[1], c_.pp.max_dist, contig_of, b.hashes[i]);
     if (!bp.ok) continue;
     const int pick[2] = {bp.x, bp.y};
@@ -531,6 +559,52 @@ void MapPipeline::bio_chunk(Slot& S, size_t a0, size_t b0, ChunkScratch& x) cons
       o[k].pair_mapq = bp.mapq[k];
     }
   }
+}
+
+// --bio, pairs i and i + 1 where one mate (k) has a certified ML placement
+// and the other (f) does not: f is placed by k's loci when the pair's optimum
+// is certified (bio_rescue). f is aligned at its locus in that pair, k
+// re-aligned if the pair moved it; both take the pair's posterior as MAPQ.
+void MapPipeline::bio_rescue_pair(Slot& S, size_t i, BioScratch& sc) const {
+  const ReadBatch& b = S.batch;
+  BioOut* o = &S.bio[i];
+  const int k = o[0].ok ? 0 : 1, f = 1 - k;
+  const size_t jk = i + k, jf = i + f;
+  if (S.res[jf].reason == kBadLength) return;
+  // Every alignment of f costs at least its horizon if none lay below it.
+  const int lb_f = o[f].empty ? o[f].yh : 0;
+  bio_read(bio_model_, b.codes.data() + b.offs[jf], S.recs[jf].qual.data(), b.lens[jf], sc.br);
+  auto contig_of = [&](int64_t pos) { return ref_.contig_of(pos); };
+  const BioRescue rs = bio_rescue(view_, bio_model_, o[k], b.lens[jk], lb_f, b.lens[jf], c_.pp.max_dist, contig_of,
+                                  b.hashes[i], sc);
+  if (!rs.ok) return;
+  Result r[2] = {S.res[i], S.res[i + 1]};
+  bio_band(view_, bio_model_, sc.br, rs.f.strand, rs.f.lo, rs.f.width, sc, true, lb_f + c_.bp.improper);
+  if (!bio_trace(sc.br, rs.f.strand, rs.f.lo, rs.f.width, rs.f.b, sc, r[f])) return;
+  if (rs.x != o[k].chosen) {
+    bio_read(bio_model_, b.codes.data() + b.offs[jk], S.recs[jk].qual.data(), b.lens[jk], sc.br);
+    if (!bio_align_locus(view_, bio_model_, o[k].loci[rs.x], sc, r[k])) return;
+  }
+  r[f].certified = 1;
+  r[f].tier = kTierBM;
+  r[f].reason = kOk;
+  r[f].d1 = r[f].d2 = -1;
+  r[f].n_best = static_cast<uint16_t>(rs.n_best);
+  S.res[i] = r[0];
+  S.res[i + 1] = r[1];
+  o[k].chosen = rs.x;
+  o[f].loci.assign(1, rs.f);
+  o[f].chosen = 0;
+  o[f].n_best = rs.n_best;
+  o[f].yh = lb_f;
+  o[f].rescued = true;
+  for (int x = 0; x < 2; ++x) {
+    o[x].pair_ok = true;
+    o[x].pair_pen = rs.pen;
+    o[x].ins_pen = rs.ins;
+  }
+  o[k].pair_mapq = rs.mapq[0];
+  o[f].pair_mapq = rs.mapq[1];
 }
 
 void MapPipeline::run(const std::function<GpuMapper*()>& wait_for_gpu) {

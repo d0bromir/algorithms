@@ -349,14 +349,16 @@ bool is_proper(const Result& a, const Result& b, const Reference& ref, int max_d
 // end position, 0 if none: a tandem repeat shifted by its period). Placed
 // jointly with its mate: YT, the pair's penalty (both mates and the insert
 // term), certified least over proper and improper pairs, and YI, its insert
-// term.
+// term. YR:i:1: placed by its mate's loci (pair rescue), not certified alone;
+// YP >= YH then, and YH bounds every alignment of the read.
 std::string bio_tags(const BioOut& o) {
   const BioLocus& l = o.loci[o.chosen];
   const int ys = o.chosen != 0 ? o.loci[0].pen : (o.loci.size() > 1 ? o.loci[1].pen : -1);
   char b[192];
-  const int n = std::snprintf(b, sizeof b, "\tYP:i:%d\tYS:i:%d\tYH:i:%d\tYB:i:%d\tYA:i:%d", l.pen, ys, o.yh, o.n_best,
-                              l.amb);
-  if (o.pair_ok) std::snprintf(b + n, sizeof b - n, "\tYT:i:%d\tYI:i:%d", o.pair_pen, o.ins_pen);
+  int n = std::snprintf(b, sizeof b, "\tYP:i:%d\tYS:i:%d\tYH:i:%d\tYB:i:%d\tYA:i:%d", l.pen, ys, o.yh, o.n_best,
+                        l.amb);
+  if (o.pair_ok) n += std::snprintf(b + n, sizeof b - n, "\tYT:i:%d\tYI:i:%d", o.pair_pen, o.ins_pen);
+  if (o.rescued) std::snprintf(b + n, sizeof b - n, "\tYR:i:1");
   return b;
 }
 

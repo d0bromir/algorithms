@@ -13,6 +13,8 @@
 //                     the same penalty (indels left-aligned);
 //   5. determinism  - the same results in reverse order, on another workspace;
 //   6. pairs        - a jointly placed pair is the oracle's best pair of loci.
+//   7. pair rescue  - a mate placed by its certified mate's loci is the
+//                     oracle's best pair (the mate over every end position).
 // Lemma B (bio_cover) is checked against an exact DP over transcripts on
 // random small reads. Placement against the simulated truth is reported, next
 // to the fewest-edits placement, and must improve on reads where the base
@@ -164,12 +166,17 @@ struct Genome {
   std::vector<int64_t> hp;   // starts of homopolymer runs (concatenated coordinates)
   std::vector<int64_t> str;  // starts of tandem repeats
   int64_t seg[4];            // the segment's copies: three diverged (chr1), one exact (chr2)
-  int64_t free1, free2, free3, free4, free5;  // stretches kept free for planted reads and decoys
+  int64_t free1, free2, free3, free4, free5, free6;  // stretches kept free for planted reads and decoys
   int64_t array;             // the tandem array (25 copies of 37 bases)
 };
 
 Genome make_genome(std::mt19937_64& g) {
   std::vector<uint8_t> c1 = random_seq(g, 70000), c2 = random_seq(g, 80000);
+  {  // chr2 80,000-92,000, from its own generator (the rest stays as it was)
+    std::mt19937_64 g6(0x5eed6);
+    const std::vector<uint8_t> x = random_seq(g6, 12000);
+    c2.insert(c2.end(), x.begin(), x.end());
+  }
   std::vector<int64_t> hp1, str1;
   for (int n = 0; n < 60; ++n) {  // homopolymers of 5-16 bases
     const int64_t at = 2000 + n * 700 + static_cast<int64_t>(g() % 300);
@@ -222,6 +229,7 @@ Genome make_genome(std::mt19937_64& g) {
   G.free3 = o2 + 34000;  // chr2 34,000-50,000: reads at the band's reach
   G.free4 = o2 + 50000;  // chr2 50,000-62,000: their decoys, and the tandem array's
   G.free5 = o2 + 62000;  // chr2 62,000-79,000: pairs at the list bound
+  G.free6 = o2 + 80000;  // chr2 80,000-92,000: discordant pairs
   G.array = o1 + 62000;
   return G;
 }
@@ -233,7 +241,7 @@ struct TestRead {
   std::string qual;
   int64_t truth;    // reference position of the first read base on the forward strand, or -1
   int strand;
-  int family;       // 0 sampled, 1 quality decides, 2 unwitnessed, 3 indel in a run, 4 repeat
+  int family;       // 0 sampled, 1 quality decides, 2 unwitnessed, 3 indel in a run, 4 repeat, ... (fam below)
 };
 
 char qchar(int q) { return static_cast<char>(33 + q); }
@@ -581,6 +589,35 @@ int main(int argc, char** argv) {
       list_pairs.push_back(m2);
     }
   }
+  // Family 11, discordant pairs: mate 1 unique; mate 2 occurs exactly far away
+  // and, with one Q37 transition, in mate 1's proper window at a fragment of
+  // 700 bases (insert term 20). The improper pair (0 + 0 + 40) beats the
+  // proper one (~27 + 20): rescuing mate 2 from mate 1's window must fail on
+  // its improper bound.
+  std::vector<TestRead> disc_pairs;
+  {
+    auto& R = G.ref.seq.owned;
+    for (int n = 0; n < 6; ++n) {
+      const int64_t f = G.free6 + 1600 * n, far = G.free6 + 10000 + 300 * n;
+      const int F = 700;
+      const std::vector<uint8_t> x(R.begin() + far, R.begin() + far + L);
+      std::vector<uint8_t> y = x;
+      y[75] = transition(y[75]);
+      std::copy(y.begin(), y.end(), R.begin() + f + F - L);
+      TestRead m1, m2;
+      m1.codes.assign(R.begin() + f, R.begin() + f + L);
+      m1.qual = std::string(L, qchar(37));
+      m1.strand = 0;
+      m1.truth = f;
+      m2.codes = revcomp(x);
+      m2.qual = std::string(L, qchar(37));
+      m2.strand = 1;
+      m2.truth = far;
+      m1.family = m2.family = 11;
+      disc_pairs.push_back(m1);
+      disc_pairs.push_back(m2);
+    }
+  }
   // Family 9, clusters left unaligned: the read occurs exactly at its locus
   // (Q37) except for one Q12 base in the middle of part 3 (inside every q-mer
   // looked up for it); a planted decoy has a transition there (16, a part's
@@ -623,7 +660,9 @@ int main(int argc, char** argv) {
     tight.max_band = 40;   // and the wide ones too
     tight.max_loci = 3;
     v.push_back({"q14 s4 tight", 14, 4, tight});
-    v.push_back({"q12 s1", 12, 1, BioParams()});
+    BioParams few;
+    few.rescue_loci = 3;  // a rescue sees three of the list-bound pairs' four copies
+    v.push_back({"q12 s1", 12, 1, few});
     return v;
   }();
   std::vector<Index> idx;
@@ -679,7 +718,36 @@ int main(int argc, char** argv) {
     reads.push_back(m1);
     reads.push_back(m2);
   }
+  // Family 10, mates placed only by the pair: mate 1 exact (Q37); mate 2 the
+  // fragment's end with a Q2 transition every 10 bases, so no part of it
+  // occurs exactly at its locus and its cheap Q2 bases keep the horizon below
+  // its penalty: it cannot be certified alone, only by mate 1's loci.
+  for (int n = 0; n < 12; ++n) {
+    const int F = 300 + static_cast<int>(g() % 200);
+    const int64_t f = static_cast<int64_t>(G.ref.offsets[0]) + 500 + static_cast<int64_t>(g() % 60000);
+    const auto& R = G.ref.seq.owned;
+    std::vector<uint8_t> s1(R.begin() + f, R.begin() + f + L), s2(R.begin() + f + F - L, R.begin() + f + F);
+    if (std::count(s1.begin(), s1.end(), 4) || std::count(s2.begin(), s2.end(), 4)) { --n; continue; }
+    std::string q2(L, qchar(37));
+    for (int x = 5; x < L; x += 10) {
+      s2[x] = transition(s2[x]);
+      q2[x] = qchar(2);
+    }
+    TestRead m1, m2;
+    m1.codes = s1;
+    m1.qual = std::string(L, qchar(37));
+    m1.strand = 0;
+    m1.truth = f;
+    m2.codes = revcomp(s2);
+    m2.qual.assign(q2.rbegin(), q2.rend());
+    m2.strand = 1;
+    m2.truth = f + F - L;
+    m1.family = m2.family = 10;
+    reads.push_back(m1);
+    reads.push_back(m2);
+  }
   reads.insert(reads.end(), list_pairs.begin(), list_pairs.end());
+  reads.insert(reads.end(), disc_pairs.begin(), disc_pairs.end());
   const int npairs = static_cast<int>((reads.size() - first_pair) / 2);
   std::fprintf(stderr, "reads: %zu (%d pairs); genome %llu bases\n", reads.size(), npairs,
                static_cast<unsigned long long>(ix.ref_len));
@@ -711,6 +779,31 @@ int main(int argc, char** argv) {
     }
     CHECK(diff == 0, "%s: %d reads differ in reverse order on another workspace", settings[k].name, diff);
   }
+  // The reference's tandem runs tabulated (bio_pack_contexts, in two halves
+  // packed apart): every read the same as with each band scanning its window.
+  // The oracle checks and the pair rescues below then run with the table.
+  std::vector<std::vector<uint8_t>> run_tables(ns);
+  for (size_t k = 0; k < ns; ++k) {
+    const int64_t n = static_cast<int64_t>(views[k].ref_len), mid = n / 4 * 2;
+    run_tables[k].assign(static_cast<size_t>((n + 1) / 2), 0);
+    bio_pack_contexts(views[k], mid, n, models[k].ctx_sat(), run_tables[k].data());
+    bio_pack_contexts(views[k], 0, mid, models[k].ctx_sat(), run_tables[k].data());
+    models[k].set_ctx_table(run_tables[k].data());
+    Params p;
+    p.k = KMAX;
+    p.budget = HOST_BUDGET_MAX;
+    std::unique_ptr<Workspace> ws(new Workspace);
+    std::unique_ptr<BioScratch> sc(new BioScratch);
+    int diff = 0;
+    for (size_t i = 0; i < nr; ++i) {
+      Placed Q;
+      const TestRead& t = reads[i];
+      Q.ok = bio_place(views[k], models[k], p, t.codes.data(), t.qual.data(), L, 0x9e3779b97f4a7c15ULL * (i + 1), *ws,
+                       *sc, Q.r, Q.o);
+      diff += !same(Q, res[k][i]);
+    }
+    CHECK(diff == 0, "%s: %d reads differ with the tandem runs tabulated", settings[k].name, diff);
+  }
 
   // The oracle, read by read (pairs: both mates at once), and every check.
   std::vector<std::vector<uint8_t>> ctx(1);
@@ -718,8 +811,9 @@ int main(int argc, char** argv) {
   bio_str_context(ix, 0, static_cast<int64_t>(ix.ref_len), ctx[0].data());
   std::atomic<int> certified[3] = {{0}, {0}, {0}}, completeness[3] = {{0}, {0}, {0}};
   std::atomic<int> n_pairs_ok{0}, n_moved{0}, n_ties{0}, n_shift_checked{0};
+  std::atomic<int> n_rescue_checked{0}, n_rescued{0}, n_rescued_truth{0};
   // Placement against the truth (default setting): bio, fewest edits.
-  std::atomic<int> at_truth_bio[10] = {}, at_truth_edit[10] = {}, n_fam[10] = {};
+  std::atomic<int> at_truth_bio[12] = {}, at_truth_edit[12] = {}, n_fam[12] = {};
   auto at_truth = [&](const TestRead& t, const Result& r) {
     if (t.truth < 0) return false;
     return r.strand == t.strand && std::llabs(r.ref_pos - t.truth) <= 20;
@@ -837,6 +931,59 @@ int main(int argc, char** argv) {
       CHECK(A.o.loci[bp.x].pen + B.o.loci[bp.y].pen + bp.ins == bp.pen, "%s pair %zu: chosen loci do not add up",
             settings[k].name, i0);
     }
+    // Pair rescue: each certified mate as k, the other as f, with lb_f = 0
+    // (always a bound) and with f's horizon when no end lay below it. A rescue
+    // must be the oracle's best pair: k over its loci, f over every end.
+    std::unique_ptr<BioScratch> sc(new BioScratch);
+    for (size_t k = 0; k < ns; ++k)
+      for (int km = 0; km < 2; ++km) {
+        const Placed &K = res[k][i0 + km], &F = res[k][i0 + 1 - km];
+        if (!K.ok) continue;
+        const TestRead& tf = reads[i0 + 1 - km];
+        const std::vector<int>* Vf = V[1 - km];
+        const int gmin_f = global_min(Vf);
+        const int bp_improper = settings[k].bp.improper;
+        auto contig_of = [&](int64_t pos) { return G.ref.contig_of(pos); };
+        for (int lb_f : {0, F.o.empty ? F.o.yh : -1}) {
+          if (lb_f < 0) continue;
+          CHECK(lb_f <= gmin_f, "%s pair %zu: f's horizon %d above its least penalty %d", settings[k].name, i0,
+                lb_f, gmin_f);
+          bio_read(models[k], tf.codes.data(), tf.qual.data(), L, sc->br);
+          const BioRescue rs =
+              bio_rescue(views[k], models[k], K.o, L, lb_f, L, 850, contig_of, 0x1234567ULL * (i0 + 1), *sc);
+          if (!rs.ok) continue;
+          ++n_rescue_checked;
+          int best = kBioInf;
+          for (const OLocus& a : oracle_loci(V[km], L, rs.pen - gmin_f + 1)) {
+            best = std::min(best, a.pen + gmin_f + bp_improper);  // f anywhere, improper
+            const int sf = 1 - a.strand;
+            const int64_t sa = a.end - L + 1, d0 = a.strand == 0 ? sa : sa - 850;
+            const BioLocus la{a.pen, static_cast<uint8_t>(a.strand), a.end, 0, 0, 0};
+            for (int64_t d = d0; d <= d0 + 850; ++d) {
+              const int64_t e = d + L - 1;
+              if (e < 0 || e >= static_cast<int64_t>(Vf[sf].size()) || Vf[sf][e] >= kBioInf) continue;
+              const BioLocus lf{Vf[sf][e], static_cast<uint8_t>(sf), e, 0, 0, 0};
+              best = std::min(best, a.pen + Vf[sf][e] + bio_insert(settings[k].bp, la, L, lf, L, 850, contig_of));
+            }
+          }
+          CHECK(rs.pen == best, "%s pair %zu (mate %d rescued, lb %d): rescue %d, oracle's best pair %d",
+                settings[k].name, i0, 2 - km, lb_f, rs.pen, best);
+          CHECK(K.o.loci[rs.x].pen + rs.f.pen + rs.ins == rs.pen, "%s pair %zu: rescued pair does not add up",
+                settings[k].name, i0);
+          CHECK(rs.f.pen >= lb_f, "%s pair %zu: rescued mate costs %d below its bound %d", settings[k].name, i0,
+                rs.f.pen, lb_f);
+          // f's alignment at its locus rescores to its penalty.
+          bio_band(views[k], models[k], sc->br, rs.f.strand, rs.f.lo, rs.f.width, *sc, true, lb_f + bp_improper);
+          Result r{};
+          const bool traced = bio_trace(sc->br, rs.f.strand, rs.f.lo, rs.f.width, rs.f.b, *sc, r);
+          CHECK(traced && bio_rescore(views[k], models[k], sc->br, r) == rs.f.pen,
+                "%s pair %zu: rescued alignment does not rescore to %d", settings[k].name, i0, rs.f.pen);
+          if (k == 0 && lb_f > 0 && !F.ok && tf.family == 10) {
+            ++n_rescued;
+            n_rescued_truth += traced && at_truth(tf, r);
+          }
+        }
+      }
   });
 
   for (size_t k = 0; k < ns; ++k)
@@ -845,11 +992,13 @@ int main(int argc, char** argv) {
   std::fprintf(stderr, "default: %d ties, %d placed elsewhere than the fewest edits; %d gap shifts checked; %d pairs "
                        "placed jointly\n",
                n_ties.load(), n_moved.load(), n_shift_checked.load(), n_pairs_ok.load());
-  static const char* const fam[10] = {"sampled",        "qualities decide", "at the horizon",
+  std::fprintf(stderr, "pair rescues checked against the oracle: %d; mates placed only by the pair: %d, at truth %d\n",
+               n_rescue_checked.load(), n_rescued.load(), n_rescued_truth.load());
+  static const char* const fam[12] = {"sampled",        "qualities decide", "at the horizon",
                                       "indel in a run", "repeat copies",    "pair mates",
                                       "band reach",     "wide band",        "list-bound pairs",
-                                      "skipped cluster"};
-  for (int f = 0; f < 10; ++f)
+                                      "skipped cluster", "rescued mates",   "discordant pairs"};
+  for (int f = 0; f < 12; ++f)
     if (n_fam[f])
       std::fprintf(stderr, "  %-16s certified %3d: at truth ML %3d, fewest edits %3d\n", fam[f], n_fam[f].load(),
                    at_truth_bio[f].load(), at_truth_edit[f].load());
@@ -859,6 +1008,9 @@ int main(int argc, char** argv) {
   CHECK(n_ties > 0, "no tie certified: the test does not exercise ties");
   CHECK(n_shift_checked > 20, "too few gaps checked for left-alignment (%d)", n_shift_checked.load());
   CHECK(n_pairs_ok > npairs / 2, "only %d of %d pairs placed jointly", n_pairs_ok.load(), npairs);
+  CHECK(n_rescued >= 6 && n_rescued_truth == n_rescued,
+        "family 10: %d mates placed only by the pair, %d at the truth (expected >= 6, all)", n_rescued.load(),
+        n_rescued_truth.load());
   CHECK(certified[1] > 0 && certified[1] < certified[0], "tight setting: %d certified vs %d (pruning not exercised)",
         certified[1].load(), certified[0].load());
   if (failures) {
