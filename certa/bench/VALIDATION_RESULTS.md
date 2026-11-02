@@ -41,9 +41,10 @@ pair rescue places mates the single-read certificate cannot. It lowers the
 fallback to 3.48 % (A) and 4.11 % (B) of reads with the same avoidable errors.
 A table of the reference's tandem runs and leaner data structures make
 `--bio` 1.66–1.78× faster, for 1.45 GiB more memory. Aligning up to 16
-bands at once in SIMD lanes makes it another 2.35–2.45× faster. The output
-is the same throughout, and `--bio` is now 21–24× slower than the default
-mode instead of 89–96×.
+bands at once in SIMD lanes makes it another 2.35–2.45× faster, and filling
+the lanes 16 bases at a time from the run table another 1.18–1.21×. The
+output is the same throughout, and `--bio` is now 18–20× slower than the
+default mode instead of 89–96×.
 
 ## Pilot (2 M HG002 NovaSeq X pairs, trimmed)
 
@@ -281,6 +282,22 @@ variants timed with the probe):
   - Mutants B19–B23 are all killed. B22, a skipped row reset, survived the
     first version of the test: it changes an end only in a rare geometry.
     That led to the tiny cases.
+- **The lanes filled 16 bases at a time** (`bio_lane_setup`, `bio_opens8`;
+  THEORY.md §12; branch `claude/certa-bio-window`). A `perf` profile of the
+  lanes build put about a quarter of `--bio`'s time in filling the lanes,
+  against 9 % in the DP itself. Each band's window was built base by base
+  and written into the lanes one byte at a time, 16 bytes apart. Now:
+  - the run table's 4-bit runs are unpacked 32 at a time, and each gap open
+    is one 16-entry table lookup (`vqtbl1q_u8` on ARM, `pshufb` on x86);
+  - each band's window is written as a row, and 16 rows at a time are moved
+    into the lanes by a 16 × 16 byte transpose;
+  - the lanes read the reference in place instead of a copy of each window.
+
+  The bytes are the same as before. A new test compares them, and
+  `bio_window`'s gap opens, with costs computed from scratch (67 M bytes per
+  seed). The lanes and the tiny cases are now also checked with the run
+  table. Mutants B24–B29 are all killed, and the test is clean under
+  AddressSanitizer.
 
 **Tests A and B again** with that build ([truth_rerun_bio.sh](truth_rerun_bio.sh);
 [report_A_rescue.md](results/truth_2026-10/report_A_rescue.md),
@@ -307,7 +324,8 @@ build, byte for byte, in both tests; [timings.tsv](results/truth_2026-10/timings
 | rescue, each band scanning its window | 1,079 s, 21.57 GiB | 1,903 s, 22.28 GiB |
 | rescue, run table | 709 s, 23.01 GiB | 1,335 s, 23.73 GiB |
 | rescue, run table and data structures | 677 s, 23.03 GiB | 1,277 s, 23.72 GiB |
-| the same, bands in SIMD lanes | **288 s**, 23.04 GiB | **521 s**, 23.76 GiB |
+| the same, bands in SIMD lanes | 288 s, 23.04 GiB | 521 s, 23.76 GiB |
+| the same, lanes filled 16 bases at a time | **238 s**, 23.03 GiB | **443 s**, 23.73 GiB |
 | CERTA's default mode | 13.5 s | 22.0 s |
 
 The table gives 1.42–1.52× and the data structures another 3–5 %.
@@ -319,23 +337,34 @@ back, with nothing else running. The build before the lanes took 677 s and
 1,277 s again. The SAM output (by md5) and the fallback FASTQ files are
 identical in both tests.
 
+**Filling the lanes 16 bases at a time** gives 1.21× (A) and 1.18× (B).
+It was run back to back with the lanes build, which took 288 s and 521 s
+again. The SAM output and the fallback FASTQ files are again identical in
+both tests.
+
 The probe's time on the 400,000 reads:
 
 | build | all reads | heavy reads (≥ 1 M cells) | edit certificate |
 |---|---|---|---|
 | phase 1 | 1,315 s | 1,147 s | – |
 | run table and data structures | 788 s | 650 s | 108 s |
-| SIMD lanes | **315 s** | **192 s** | 109 s |
+| SIMD lanes | 315 s | 192 s | 109 s |
 | SIMD lanes, `--bio-run-table 0` | 642 s | 499 s | 108 s |
 | SIMD lanes, one band at a time | 773 s | 635 s | 108 s |
+| SIMD lanes filled 16 bases at a time | **264 s** | **145 s** | 109 s |
 
-- **Heavy reads:** they align 1,991 bands each, and a band now costs
-  1.6 µs instead of 7.0 µs.
-- **The edit certificate,** which `--bio` runs first, is now a third of the
+The probe's output is identical in every column but the timings.
+
+- **Heavy reads:** they align 1,991 bands each. Leaving out their edit
+  certificate, a band now costs 1.06 µs: 1.6 µs with the lanes alone, and
+  7.0 µs before them.
+- **The edit certificate,** which `--bio` runs first, is now 41 % of the
   time.
 - **The run table** matters more with the lanes: without it, filling each
   band's window from a scan takes half the time. Test A takes 628 s without
   it, with the same SAM output, against 288 s (21.60 GiB against 23.04 GiB).
+  With the lanes filled 16 bases at a time, which needs the table, it is
+  632 s against 238 s (2.65×), again with the same SAM output.
 
 - **Soundness:** 0 violations in both tests, over 94.6 M (A) and 189.9 M (B)
   alignments of the five other aligners on certified mates. For a rescued mate the check is
@@ -351,15 +380,17 @@ The probe's time on the 400,000 reads:
   rescued mates themselves, 7,224 fewer real mates (18,697 simulated) have
   MAPQ ≥ 40, and slightly fewer of those are misplaced (4,609 against
   4,621; 21,313 against 21,465).
-- **Cost:** `--bio` is now 21–24× slower than the default mode, against
-  89–96× in phase 1 (50–58× before the lanes).
+- **Cost:** `--bio` is now 18–20× slower than the default mode, against
+  89–96× in phase 1 (50–58× before the lanes, 21–24× before filling them 16
+  bases at a time).
 
 ## Next
 
-1. **Cost.** The edit certificate that `--bio` runs first is now a third of
-   its time. The bands' windows are still filled one base at a time and
-   transposed into the lanes; filling them with vector loads from the run
-   table, and sharing them between overlapping bands, would cut that.
+1. **Cost.** The edit certificate that `--bio` runs first is now 41 % of
+   its time; its band DP (`band_distance_vec8`) is also the largest cost of
+   `--full-cert`. About a tenth goes to re-aligning the reported locus with
+   traceback over every cell of its band. Its cost is already known, so
+   pruning at that cost would skip most cells.
 2. **MAPQ.** Replace the one-competitor-at-`YH` convention with a bound
    that does not make horizon-limited reads overconfident.
 3. **Complex indels.** Allow an insertion next to a deletion in the model

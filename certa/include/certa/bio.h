@@ -119,6 +119,11 @@ class BioModel {
     // go never rises with c, so it stays at go(kBioCtxCap) from ctx_sat_ on.
     ctx_sat_ = kBioCtxCap;
     while (ctx_sat_ > 1 && go_[ctx_sat_ - 1] == go_[kBioCtxCap]) --ctx_sat_;
+    lut_ok_ = true;
+    for (int c = 0; c < 16; ++c) {
+      lut_ok_ = lut_ok_ && go_[c] <= 255;
+      go_lut_[c] = static_cast<uint8_t>(std::min(go_[c], 255));
+    }
     max_add_ = std::max(ge_, go_[0]);
     for (int q = 0; q < 64; ++q) {
       max_add_ = std::max<int>(max_add_, emit_[q]);
@@ -141,6 +146,9 @@ class BioModel {
   // bio_band reads them there instead of scanning its window. Null: no table.
   void set_ctx_table(const uint8_t* t) { tab_ = t; }
   const uint8_t* ctx_table() const { return tab_; }
+  // go(c) for c < 16 as bytes (a run the table holds is below 16), or null
+  // if one does not fit a byte: bio_opens8's lookup table.
+  const uint8_t* go_lut() const { return lut_ok_ ? go_lut_ : nullptr; }
   // The largest single cost the DP adds (a base, an emission, a gap open or
   // extension).
   int max_add() const { return max_add_; }
@@ -150,6 +158,8 @@ class BioModel {
   int16_t mis_[64][4][4];
   int16_t mmin_[64], emit_[64];
   int go_[kBioCtxCap + 1];
+  uint8_t go_lut_[16];
+  bool lut_ok_;
   int ge_, go_min_, ctx_sat_, max_add_;
   const uint8_t* tab_ = nullptr;
 };
@@ -260,6 +270,7 @@ inline void bio_str_context(const IndexView& ix, int64_t a, int64_t b, uint8_t* 
 // stretches [a, b) can be packed independently (a even): together they give
 // the same table.
 constexpr int kBioCtxPacked = 15;
+static_assert(kBioCtxPacked < 16 && kBioCtxPacked <= kBioCtxCap, "a packed run must index BioModel::go_lut");
 
 inline void bio_pack_contexts(const IndexView& ix, int64_t a, int64_t b, int clamp, uint8_t* tab) {
   constexpr int64_t kStep = 1 << 16;
@@ -424,6 +435,7 @@ struct BioScratch {
   // after it.
   std::vector<uint8_t> win, ctx, tb;
   std::vector<int> go_d, go_i;
+  std::vector<uint8_t> runs, od, oi;  // bio_opens8: the runs unpacked; bio_window: the opens as bytes
   std::vector<int> endv;               // the last band's end row
   std::vector<BioCluster> cl;
   std::vector<int> order;
@@ -440,7 +452,8 @@ struct BioScratch {
   // and gap opens; per diagonal, the lanes outside their band; 6 DP rows; the
   // bands' ends (lane l's from lend[l * lstride]). ln, lq: the bands aligned
   // ahead (bio_place: their positions in `order`; bio_rescue: k's loci).
-  std::vector<uint8_t> lcode, lgo_d, lgo_i, lmask, lrows;
+  // bio_lane_setup writes each band's window as a row of lstage first.
+  std::vector<uint8_t> lcode, lgo_d, lgo_i, lmask, lrows, lstage;
   std::vector<int> lend;
   int lstride = 0, ln = 0;
   int lq[16];
@@ -452,6 +465,96 @@ inline bool bio_near(const std::vector<int64_t>& v, int64_t end, int L) {
   return it != v.end() && *it < end + L;
 }
 
+namespace bio_detail {
+
+typedef uint8_t u8x16 __attribute__((vector_size(16)));
+typedef uint8_t u8x16u __attribute__((vector_size(16), aligned(1), may_alias));
+typedef uint64_t u64x2 __attribute__((vector_size(16)));
+
+inline u8x16 splat8(int x) {
+  const uint8_t s = static_cast<uint8_t>(x);
+  return u8x16{s, s, s, s, s, s, s, s, s, s, s, s, s, s, s, s};
+}
+inline u8x16 load8(const uint8_t* p) { return *reinterpret_cast<const u8x16u*>(p); }
+inline void store8(uint8_t* p, u8x16 v) { *reinterpret_cast<u8x16u*>(p) = v; }
+inline u8x16 vmin8(u8x16 a, u8x16 b) { return a < b ? a : b; }
+inline u8x16 vmax8(u8x16 a, u8x16 b) { return a > b ? a : b; }
+inline bool any_below(u8x16 v, u8x16 cap) {
+  const u64x2 w = (u64x2)(v < cap);
+  return (w[0] | w[1]) != 0;
+}
+// t[idx[l]] in every lane (idx < 16).
+inline u8x16 lookup8(u8x16 t, u8x16 idx) {
+#if defined(__aarch64__)
+  return (u8x16)vqtbl1q_u8((uint8x16_t)t, (uint8x16_t)idx);
+#elif defined(__SSSE3__)
+  return (u8x16)_mm_shuffle_epi8((__m128i)t, (__m128i)idx);
+#else
+  u8x16 r;
+  for (int l = 0; l < 16; ++l) r[l] = t[idx[l] & 15];
+  return r;
+#endif
+}
+// The bytes of a and b interleaved (a0 b0 a1 b1 ...), from their low halves
+// (zip_lo) or their high halves (zip_hi).
+inline u8x16 zip_lo(u8x16 a, u8x16 b) {
+  return __builtin_shufflevector(a, b, 0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23);
+}
+inline u8x16 zip_hi(u8x16 a, u8x16 b) {
+  return __builtin_shufflevector(a, b, 8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31);
+}
+// A 16 x 16 block of bytes transposed: v[j][l] becomes the old v[l][j]. A
+// round interleaves rows r and r + 8 into rows 2r and 2r + 1, which rotates
+// the 8 bits of an element's (row, column) left by one; four rounds swap
+// row and column.
+inline void transpose16(u8x16* v) {
+  for (int round = 0; round < 4; ++round) {
+    u8x16 t[16];
+    for (int r = 0; r < 8; ++r) {
+      t[2 * r] = zip_lo(v[r], v[r + 8]);
+      t[2 * r + 1] = zip_hi(v[r], v[r + 8]);
+    }
+    for (int r = 0; r < 16; ++r) v[r] = t[r];
+  }
+}
+
+}  // namespace bio_detail
+
+// Whether bio_opens8 can give the gap opens of positions [lo, lo + n): the
+// run table is there, every go(c) it can index fits a byte, and the vectors
+// it loads lie inside the reference and the table.
+inline bool bio_opens8_fit(const IndexView& ix, const BioModel& m, int64_t lo, int n) {
+  return m.ctx_table() && m.go_lut() && lo >= 0 && static_cast<uint64_t>(lo) + static_cast<uint64_t>(n) + 64 <= ix.ref_len;
+}
+
+// The gap opens of positions lo + x, x < n, from the run table, 16 at a time:
+// d[x] = go(run(lo + x)) and in[x] = go(max(run(lo + x), run(lo + x + 1))),
+// the costs bio_window's loop computes. The table's nibbles are unpacked 32
+// at a time into `runs`, and go is one 16-entry table lookup (a run read from
+// the table is at most kBioCtxPacked). Needs bio_opens8_fit(ix, m, lo, n); d
+// and in hold n rounded up to 16 (the bytes past n are left unspecified).
+inline void bio_opens8(const BioModel& m, int64_t lo, int n, std::vector<uint8_t>& runs, uint8_t* d, uint8_t* in) {
+  using namespace bio_detail;
+  // runs[k] = the run at 2 (lo / 2) + k, for k < odd + n + 16: the loads of
+  // run(lo + x + 1) below reach that far.
+  const int odd = static_cast<int>(lo & 1), nr = (odd + n + 16 + 31) / 32 * 32;
+  runs.resize(static_cast<size_t>(nr));
+  const uint8_t* tab = m.ctx_table() + (lo >> 1);
+  const u8x16 low = splat8(0x0F);
+  for (int k = 0; k < nr; k += 32) {
+    const u8x16 v = load8(tab + k / 2), even = v & low, next = v >> 4;  // x even in the low half
+    store8(runs.data() + k, zip_lo(even, next));
+    store8(runs.data() + k + 16, zip_hi(even, next));
+  }
+  const u8x16 lut = load8(m.go_lut());
+  const uint8_t* r = runs.data() + odd;
+  for (int x = 0; x < n; x += 16) {
+    const u8x16 c = load8(r + x), c1 = load8(r + x + 1);
+    store8(d + x, lookup8(lut, c));
+    store8(in + x, lookup8(lut, vmax8(c, c1)));
+  }
+}
+
 // The window of a band from diagonal lo, W = L + B + 1 bases: sc.win = the
 // reference from lo - kBioCtxReach (W + 2 kBioCtxReach bases); sc.go_d[x],
 // sc.go_i[x] = the cost of opening a deletion of reference base lo + x, an
@@ -461,6 +564,18 @@ inline void bio_window(const IndexView& ix, const BioModel& m, int64_t lo, int W
   sc.go_d.resize(W);
   sc.go_i.resize(W);
   bio_fetch(ix, lo - kBioCtxReach, W + 2 * kBioCtxReach, sc.win.data());
+  if (bio_opens8_fit(ix, m, lo, W)) {
+    const size_t Wp = static_cast<size_t>(W + 15) / 16 * 16;
+    sc.od.resize(Wp);
+    sc.oi.resize(Wp);
+    bio_opens8(m, lo, W, sc.runs, sc.od.data(), sc.oi.data());
+    for (int x = 0; x < W; ++x) {
+      sc.go_d[x] = sc.od[x];
+      sc.go_i[x] = sc.oi[x];
+    }
+    sc.go_i[W - 1] = sc.go_d[W - 1];  // the loop below: no base after the window
+    return;
+  }
   // Gap opens per window base, from its tandem run (and the next base's).
   auto opens = [&](auto run_at) {
     uint8_t c = run_at(0);
@@ -578,42 +693,69 @@ inline void bio_band(const IndexView& ix, const BioModel& m, const BioRead& br, 
   sc.endv.assign(Mp, Mp + B);
 }
 
-namespace bio_detail {
-
-typedef uint8_t u8x16 __attribute__((vector_size(16)));
-typedef uint8_t u8x16u __attribute__((vector_size(16), aligned(1), may_alias));
-typedef uint64_t u64x2 __attribute__((vector_size(16)));
-
-inline u8x16 splat8(int x) {
-  const uint8_t s = static_cast<uint8_t>(x);
-  return u8x16{s, s, s, s, s, s, s, s, s, s, s, s, s, s, s, s};
-}
-inline u8x16 load8(const uint8_t* p) { return *reinterpret_cast<const u8x16u*>(p); }
-inline void store8(uint8_t* p, u8x16 v) { *reinterpret_cast<u8x16u*>(p) = v; }
-inline u8x16 vmin8(u8x16 a, u8x16 b) { return a < b ? a : b; }
-inline u8x16 vmax8(u8x16 a, u8x16 b) { return a > b ? a : b; }
-inline bool any_below(u8x16 v, u8x16 cap) {
-  const u64x2 w = (u64x2)(v < cap);
-  return (w[0] | w[1]) != 0;
-}
-// t[idx[l]] in every lane (idx < 16).
-inline u8x16 lookup8(u8x16 t, u8x16 idx) {
-#if defined(__aarch64__)
-  return (u8x16)vqtbl1q_u8((uint8x16_t)t, (uint8x16_t)idx);
-#elif defined(__SSSE3__)
-  return (u8x16)_mm_shuffle_epi8((__m128i)t, (__m128i)idx);
-#else
-  u8x16 r;
-  for (int l = 0; l < 16; ++l) r[l] = t[idx[l] & 15];
-  return r;
-#endif
-}
-
-}  // namespace bio_detail
-
 // Whether bio_bands can align bands pruned at thr: a cell it keeps is at
 // most thr, and that plus any one cost must fit a byte.
 inline bool bio_lanes_fit(const BioModel& m, int thr) { return thr >= 0 && thr + m.max_add() <= 255; }
+
+// bio_bands' inputs for bands l < n (the other lanes lie past every band).
+// Per window position x < L - 1 + Bm (Bm the widest band), 16 bytes, lane l
+// in byte l: sc.lcode, the reference code there (+ 5 on strand 1, for the
+// read's lane table; 4 past band l's window), and sc.lgo_d, sc.lgo_i, its gap
+// opens (bio_window's; 0 past the window). Per diagonal b < Bm, sc.lmask: 0
+// inside band l, thr past it. Each band's window is written as a row of
+// sc.lstage, 16 positions at a time where bio_opens8 applies (else from
+// bio_window), and the rows are transposed into the lanes 16 x 16 bytes at a
+// time.
+inline void bio_lane_setup(const IndexView& ix, const BioModel& m, int L, int n, const uint8_t* st,
+                           const int64_t* lo, const int* B, int thr, BioScratch& sc) {
+  using namespace bio_detail;
+  constexpr int K = 16;
+  int Bm = 0;
+  for (int l = 0; l < n; ++l) Bm = std::max(Bm, B[l]);
+  const int X = L - 1 + Bm, Xp = (X + 15) / 16 * 16;
+  const size_t plane = static_cast<size_t>(K) * Xp;
+  sc.lstage.resize(3 * plane);
+  for (int l = 0; l < K; ++l) {
+    uint8_t* rc = sc.lstage.data() + static_cast<size_t>(l) * Xp;
+    uint8_t* rd = rc + plane;
+    uint8_t* ri = rd + plane;
+    const int e = l < n ? L - 1 + B[l] : 0;  // the window positions band l reads
+    if (e > 0 && bio_opens8_fit(ix, m, lo[l], e)) {
+      bio_opens8(m, lo[l], e, sc.runs, rd, ri);
+      const uint8_t* ref = ix.ref + lo[l];
+      const u8x16 s5 = splat8(5 * st[l]);
+      for (int x = 0; x < e; x += 16) store8(rc + x, load8(ref + x) + s5);
+    } else if (e > 0) {
+      bio_window(ix, m, lo[l], L + B[l] + 1, sc);
+      const uint8_t* w = sc.win.data() + kBioCtxReach;
+      const uint8_t s5 = static_cast<uint8_t>(5 * st[l]);
+      for (int x = 0; x < e; ++x) {
+        rc[x] = static_cast<uint8_t>(w[x] + s5);
+        rd[x] = static_cast<uint8_t>(sc.go_d[x]);
+        ri[x] = static_cast<uint8_t>(sc.go_i[x]);
+      }
+    }
+    std::memset(rc + e, 4, static_cast<size_t>(Xp - e));
+    std::memset(rd + e, 0, static_cast<size_t>(Xp - e));
+    std::memset(ri + e, 0, static_cast<size_t>(Xp - e));
+  }
+  sc.lcode.resize(plane);
+  sc.lgo_d.resize(plane);
+  sc.lgo_i.resize(plane);
+  uint8_t* const out[3] = {sc.lcode.data(), sc.lgo_d.data(), sc.lgo_i.data()};
+  for (int p = 0; p < 3; ++p) {
+    const uint8_t* rows = sc.lstage.data() + static_cast<size_t>(p) * plane;
+    for (int x = 0; x < Xp; x += 16) {
+      u8x16 v[16];
+      for (int l = 0; l < K; ++l) v[l] = load8(rows + static_cast<size_t>(l) * Xp + x);
+      transpose16(v);
+      for (int j = 0; j < 16; ++j) store8(out[p] + static_cast<size_t>(x + j) * K, v[j]);
+    }
+  }
+  sc.lmask.assign(static_cast<size_t>(Bm) * K, static_cast<uint8_t>(thr));
+  for (int l = 0; l < n; ++l)
+    for (int b = 0; b < B[l]; ++b) sc.lmask[static_cast<size_t>(b) * K + l] = 0;
+}
 
 // bio_band without traceback on n <= 16 bands of the read at once, one 8-bit
 // lane each: band l on strand st[l], diagonals [lo[l], lo[l] + B[l]). Its
@@ -636,29 +778,10 @@ inline void bio_bands(const IndexView& ix, const BioModel& m, const BioRead& br,
   const int L = br.L;
   int Bm = 0;
   for (int l = 0; l < n; ++l) Bm = std::max(Bm, B[l]);
-  // Row i reads window positions i - 1 + b: lane l's reference code (+ 5 on
-  // strand 1, for the read's lane table) and gap opens there.
-  const size_t X = static_cast<size_t>(L - 1 + Bm);
   const uint8_t cap8 = static_cast<uint8_t>(thr);
-  sc.lcode.assign(X * K, 4);
-  sc.lgo_d.assign(X * K, 0);
-  sc.lgo_i.assign(X * K, 0);
-  sc.lmask.assign(static_cast<size_t>(Bm) * K, cap8);  // 0 inside lane l's band, thr past it
+  bio_lane_setup(ix, m, L, n, st, lo, B, thr, sc);
   uint8_t emi[K];
-  for (int l = 0; l < K; ++l) emi[l] = 10;
-  for (int l = 0; l < n; ++l) {
-    bio_window(ix, m, lo[l], L + B[l] + 1, sc);
-    const uint8_t* w = sc.win.data() + kBioCtxReach;
-    const uint8_t s5 = static_cast<uint8_t>(5 * st[l]);
-    for (int x = 0, e = L - 1 + B[l]; x < e; ++x) {
-      const size_t o = static_cast<size_t>(x) * K + l;
-      sc.lcode[o] = static_cast<uint8_t>(w[x] + s5);
-      sc.lgo_d[o] = static_cast<uint8_t>(sc.go_d[x]);
-      sc.lgo_i[o] = static_cast<uint8_t>(sc.go_i[x]);
-    }
-    for (int b = 0; b < B[l]; ++b) sc.lmask[static_cast<size_t>(b) * K + l] = 0;
-    emi[l] = static_cast<uint8_t>(10 + st[l]);
-  }
+  for (int l = 0; l < K; ++l) emi[l] = static_cast<uint8_t>(l < n ? 10 + st[l] : 10);
   const size_t R = static_cast<size_t>(Bm + 1) * K;  // a row: Bm + 1 cells (the last stays thr)
   sc.lrows.assign(6 * R, cap8);
   uint8_t* Mp = sc.lrows.data();

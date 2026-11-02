@@ -17,7 +17,9 @@
 //                     oracle's best pair (the mate over every end position).
 //   8. lanes        - bio_bands gives bio_band's ends on every read's bands,
 //                     and both give a plain band DP's on tiny cases; every
-//                     read and rescue is the same one band at a time.
+//                     read and rescue is the same one band at a time; the
+//                     lanes' windows (bio_lane_setup) and bio_window's are
+//                     the costs computed from scratch, byte for byte.
 // Lemma B (bio_cover) is checked against an exact DP over transcripts on
 // random small reads. Placement against the simulated truth is reported, next
 // to the fewest-edits placement, and must improve on reads where the base
@@ -405,7 +407,8 @@ std::vector<int> plain_band(const IndexView& ix, const BioModel& m, const BioRea
 // Tiny bands (reads of 3-20 bases with dense edits, bands of 1-20 diagonals,
 // 1-4 lanes) on a reference made mostly of tandem runs, where gaps are cheap
 // and the live cells' edges move most: bio_band and bio_bands against
-// plain_band, at random thresholds the lanes fit.
+// plain_band, at random thresholds the lanes fit, with the tandem runs
+// scanned and (odd trials) read from the run table.
 void test_tiny_bands(uint64_t seed) {
   std::mt19937_64 g0(seed ^ 0x7a1eULL);
   std::vector<uint8_t> ref(6000);
@@ -419,6 +422,11 @@ void test_tiny_bands(uint64_t seed) {
   ix.ref = ref.data();
   ix.ref_len = ref.size();
   const BioModel m;
+  // Odd trials read the tandem runs from the table (plain_band scans).
+  BioModel mt = m;
+  std::vector<uint8_t> tab((ref.size() + 1) / 2, 0);
+  bio_pack_contexts(ix, 0, static_cast<int64_t>(ref.size()), mt.ctx_sat(), tab.data());
+  mt.set_ctx_table(tab.data());
   const int top = 255 - m.max_add();
   constexpr int kChunks = 400, kTrials = 1000;
   std::atomic<int64_t> ends{0};
@@ -452,10 +460,11 @@ void test_tiny_bands(uint64_t seed) {
         lo[l] = a - B[l] / 2 + static_cast<int64_t>(g() % 7) - 3;
       }
       const int thr = 1 + static_cast<int>(g() % static_cast<uint64_t>(top));
-      bio_bands(ix, m, sc->br, n, st, lo, B, thr, *sc);
+      const BioModel& mm = t % 2 ? mt : m;
+      bio_bands(ix, mm, sc->br, n, st, lo, B, thr, *sc);
       for (int l = 0; l < n; ++l) {
         const std::vector<int> e = plain_band(ix, m, sc->br, st[l], lo[l], B[l], thr);
-        bio_band(ix, m, sc->br, st[l], lo[l], B[l], *sc, false, thr);
+        bio_band(ix, mm, sc->br, st[l], lo[l], B[l], *sc, false, thr);
         const int* le = sc->lend.data() + static_cast<size_t>(l) * sc->lstride;
         for (int b = 0; b < B[l]; ++b) {
           CHECK(sc->endv[b] == e[b], "tiny bands: bio_band end %d of [%lld, +%d) is %d, the plain DP's %d (L %d, thr %d)",
@@ -469,6 +478,102 @@ void test_tiny_bands(uint64_t seed) {
   });
   std::fprintf(stderr, "tiny bands: %d trials, %lld ends of bio_band and bio_bands equal to the plain DP's\n",
                kChunks * kTrials, static_cast<long long>(ends.load()));
+}
+
+// bio_lane_setup and bio_window against the costs computed from scratch
+// (ref_at, and bio_str_context over each window), byte for byte: random
+// groups of 1-16 bands of 1-300 diagonals, odd and even starts, across both
+// ends of a reference dense in tandem runs with N stretches, with the run
+// table (bio_opens8 where it fits) and without.
+void test_lane_setup(uint64_t seed) {
+  std::mt19937_64 g(seed ^ 0x1a9eULL);
+  std::vector<uint8_t> ref(20000);
+  for (auto& c : ref) c = rand_base(g);
+  for (int k = 0; k < 3000; ++k) {  // tandem runs: periods 1-6, up to 40 bases
+    const int p = static_cast<int>(g() % 19950), per = 1 + static_cast<int>(g() % 6);
+    const int len = 4 + static_cast<int>(g() % 37);
+    for (int x = per; x < len; ++x) ref[p + x] = ref[p + x - per];
+  }
+  for (int k = 0; k < 20; ++k) {  // N stretches, two at the ends
+    const int p = k == 0 ? 0 : k == 1 ? 19990 : static_cast<int>(g() % 19990), len = 1 + static_cast<int>(g() % 10);
+    for (int x = 0; x < len; ++x) ref[p + x] = 4;
+  }
+  IndexView ix{};
+  ix.ref = ref.data();
+  ix.ref_len = ref.size();
+  const int64_t N = static_cast<int64_t>(ref.size());
+  const BioModel m0;
+  BioModel mt = m0;
+  std::vector<uint8_t> tab((ref.size() + 1) / 2, 0);
+  bio_pack_contexts(ix, 0, N, mt.ctx_sat(), tab.data());
+  mt.set_ctx_table(tab.data());
+  CHECK(mt.go_lut() != nullptr, "lane setup: the default gap opens do not fit a byte");
+  std::unique_ptr<BioScratch> sc(new BioScratch);
+  int64_t bytes = 0, fast = 0, groups = 0;
+  for (int t = 0; t < 4000; ++t, ++groups) {
+    const BioModel& m = t % 4 == 3 ? m0 : mt;
+    const int L = 1 + static_cast<int>(g() % 250), n = 1 + static_cast<int>(g() % 16);
+    uint8_t st[16];
+    int64_t lo[16];
+    int B[16], Bm = 0;
+    for (int l = 0; l < n; ++l) {
+      const uint64_t wmax = g() % 4 ? 40 : 300;
+      B[l] = 1 + static_cast<int>(g() % wmax);
+      st[l] = static_cast<uint8_t>(g() % 2);
+      const int64_t span = L + B[l];
+      switch (g() % 8) {
+        case 0: lo[l] = -static_cast<int64_t>(g() % 300); break;          // across the start
+        case 1: lo[l] = N - span - 80 + static_cast<int64_t>(g() % 160); break;  // near and across the end
+        default: lo[l] = static_cast<int64_t>(g() % static_cast<uint64_t>(N - span - 70));
+      }
+      Bm = std::max(Bm, B[l]);
+    }
+    const int thr = 1 + static_cast<int>(g() % static_cast<uint64_t>(255 - m.max_add()));
+    bio_lane_setup(ix, m, L, n, st, lo, B, thr, *sc);
+    const int X = L - 1 + Bm;
+    for (int l = 0; l < 16; ++l) {
+      const int e = l < n ? L - 1 + B[l] : 0;
+      std::vector<uint8_t> ctx(static_cast<size_t>(e) + 1);
+      if (e > 0) bio_str_context(ix, lo[l], lo[l] + e + 1, ctx.data());
+      if (l < n) fast += bio_opens8_fit(ix, m, lo[l], e);
+      for (int x = 0; x < X; ++x) {
+        int c = 4, d = 0, in = 0;
+        if (x < e) {
+          c = ref_at(ix, lo[l] + x) + 5 * st[l];
+          d = m.go(ctx[x]);
+          in = m.go(std::max(ctx[x], ctx[x + 1]));
+        }
+        const size_t o = static_cast<size_t>(x) * 16 + l;
+        CHECK(sc->lcode[o] == c && sc->lgo_d[o] == d && sc->lgo_i[o] == in,
+              "lane setup: lane %d of %d (lo %lld, width %d, L %d), position %d: code %d (%d), deletion open %d (%d), "
+              "insertion open %d (%d)", l, n, static_cast<long long>(l < n ? lo[l] : 0), l < n ? B[l] : 0, L, x,
+              sc->lcode[o], c, sc->lgo_d[o], d, sc->lgo_i[o], in);
+      }
+      for (int b = 0; b < Bm; ++b) {
+        const int want = l < n && b < B[l] ? 0 : thr;
+        CHECK(sc->lmask[static_cast<size_t>(b) * 16 + l] == want, "lane setup: lane %d of %d, mask %d is %d, not %d",
+              l, n, b, sc->lmask[static_cast<size_t>(b) * 16 + l], want);
+      }
+      bytes += 3 * X + Bm;
+    }
+    // bio_window for one of the bands (W = L + B + 1, as bio_band asks).
+    const int l = static_cast<int>(g() % static_cast<uint64_t>(n)), W = L + B[l] + 1;
+    bio_window(ix, m, lo[l], W, *sc);
+    std::vector<uint8_t> ctx(static_cast<size_t>(W));
+    bio_str_context(ix, lo[l], lo[l] + W, ctx.data());
+    for (int x = 0; x < W; ++x) {
+      const int d = m.go(ctx[x]), in = m.go(std::max(ctx[x], x + 1 < W ? ctx[x + 1] : uint8_t(0)));
+      CHECK(sc->go_d[x] == d && sc->go_i[x] == in, "window (lo %lld, %d bases), position %d: opens %d %d, not %d %d",
+            static_cast<long long>(lo[l]), W, x, sc->go_d[x], sc->go_i[x], d, in);
+    }
+    for (int x = -kBioCtxReach; x < W + kBioCtxReach; ++x)
+      CHECK(sc->win[x + kBioCtxReach] == ref_at(ix, lo[l] + x), "window (lo %lld, %d bases): base %d is %d, not %d",
+            static_cast<long long>(lo[l]), W, x, sc->win[x + kBioCtxReach], ref_at(ix, lo[l] + x));
+  }
+  CHECK(fast > 10000, "lane setup: only %lld bands set up from the run table", static_cast<long long>(fast));
+  std::fprintf(stderr, "lane setup: %lld groups, %lld bytes equal to the costs from scratch (%lld bands from the "
+               "run table, 16 at a time)\n", static_cast<long long>(groups), static_cast<long long>(bytes),
+               static_cast<long long>(fast));
 }
 
 // ---------------------------------------------------------------------------
@@ -569,6 +674,7 @@ int main(int argc, char** argv) {
     test_lemma_b(gl);
   }
   test_tiny_bands(seed);
+  test_lane_setup(seed);
   Genome G = make_genome(g);
   const BioModel m0;  // the default model: reads are planted against its costs
   const int L = 150;
@@ -948,6 +1054,7 @@ int main(int argc, char** argv) {
   // packed apart): every read the same as with each band scanning its window.
   // The oracle checks and the pair rescues below then run with the table.
   std::vector<std::vector<uint8_t>> run_tables(ns);
+  int64_t n_lane_ends_tab = 0;
   for (size_t k = 0; k < ns; ++k) {
     const int64_t n = static_cast<int64_t>(views[k].ref_len), mid = n / 4 * 2;
     run_tables[k].assign(static_cast<size_t>((n + 1) / 2), 0);
@@ -959,6 +1066,7 @@ int main(int argc, char** argv) {
     p.budget = HOST_BUDGET_MAX;
     std::unique_ptr<Workspace> ws(new Workspace);
     std::unique_ptr<BioScratch> sc(new BioScratch);
+    std::mt19937_64 gl(seed ^ (0x7ab1eULL + k));
     int diff = 0;
     for (size_t i = 0; i < nr; ++i) {
       Placed Q;
@@ -966,6 +1074,8 @@ int main(int argc, char** argv) {
       Q.ok = bio_place(views[k], models[k], p, t.codes.data(), t.qual.data(), L, 0x9e3779b97f4a7c15ULL * (i + 1), *ws,
                        *sc, Q.r, Q.o);
       diff += !same(Q, res[k][i]);
+      // The lanes' windows then come from the table (bio_opens8).
+      if (Q.o.tried) n_lane_ends_tab += check_lanes(views[k], models[k], Q.o.horizon, gl, *sc);
     }
     CHECK(diff == 0, "%s: %d reads differ with the tandem runs tabulated", settings[k].name, diff);
     // And aligning one band at a time instead of in lanes (bio_bands).
@@ -980,8 +1090,11 @@ int main(int argc, char** argv) {
     }
     CHECK(diff == 0, "%s: %d reads differ aligning one band at a time", settings[k].name, diff);
   }
-  std::fprintf(stderr, "lanes: %lld band ends equal to bio_band's\n", static_cast<long long>(n_lane_ends));
+  std::fprintf(stderr, "lanes: %lld band ends equal to bio_band's (%lld with the run table)\n",
+               static_cast<long long>(n_lane_ends), static_cast<long long>(n_lane_ends_tab));
   CHECK(n_lane_ends > 100000, "lanes: only %lld band ends compared", static_cast<long long>(n_lane_ends));
+  CHECK(n_lane_ends_tab > 100000, "lanes: only %lld band ends compared with the run table",
+        static_cast<long long>(n_lane_ends_tab));
 
   // The oracle, read by read (pairs: both mates at once), and every check.
   std::vector<std::vector<uint8_t>> ctx(1);

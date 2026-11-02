@@ -1169,7 +1169,7 @@ guarantees is the interval [XL, XU] at whatever stage it stops.
 ## 9a. Mutants that survive by design
 
 A mutant that changes no claim on any input cannot be killed by a test, so
-it must be argued instead. Nine of the 164 survive.
+it must be argued instead. Nine of the 170 survive.
 - **L6** (span start candidates shifted): Lemma S, §4.
 - **B13** (an insertion inside a part not counted by Lemma B): a part of two
   or more bases can be touched by a deletion for go_min instead, which is
@@ -1456,13 +1456,29 @@ a time.
   15 bands it then stops before. A rescue aligns the windows of tied loci of
   k together: once it reaches one it reaches them all (the best pair so far
   costs ≥ V(a) + λ, as does every pair through a tied locus).
+- **Window setup (`bio_lane_setup`, `bio_opens8`):** a lane reads, at every
+  position of its band's window, the reference base and the costs of opening
+  a deletion of it or an insertion after it. With the run table these come
+  16 positions at a time. The table's 4-bit runs are unpacked 32 at a time,
+  and an open is one lookup in a 16-entry table, since a tabulated run is at
+  most 15; an insertion takes the longer of the two runs beside it. Each
+  band's window is written as a row, and the rows are transposed into the
+  lanes 16 × 16 bytes at a time. The bytes are the ones the base-by-base
+  fill wrote, so the ends do not change. Windows within 64 bases of the
+  reference's ends, and every window when there is no table, are still
+  filled base by base. `bio_window`, which `bio_band` uses, takes its gap
+  opens from the same lookup.
 - **Tests:** the test aligns every read's bands and random ones (some across
   the reference's ends), in random groups of 1–16 lanes, at H and two other
   thresholds, and compares every end with `bio_band`'s. It also runs every
   read and rescue one band at a time, requiring the same results. Then
   400,000 tiny cases (reads of 3–20 bases with dense edits, on a reference
   made mostly of tandem runs) check both `bio_band` and `bio_bands` against
-  a plain band DP over every cell, without pruning.
+  a plain band DP over every cell, without pruning. The lanes and the tiny
+  cases are checked with the run table and without it. The lanes' inputs and
+  `bio_window`'s are also compared byte for byte with costs computed from
+  scratch, on 4,000 groups of 1–16 bands. The groups cover odd and even
+  starts and both ends of a reference dense in tandem runs and N stretches.
 - **Why the tiny cases:** a row reset skipped in either DP changes an end
   only when a deletion cell lies just below the threshold, every cell left
   of it dies in the next row, and an insertion then brings the live cells
@@ -1470,7 +1486,15 @@ a time.
   reads of full length; the tiny cases find it about 190 times per million.
 - **Mutants:** B19–B22 drop the held deletions, open insertions in row 1,
   cut deletion runs at the live cells, and skip the lanes' row reset; B23
-  skips `bio_band`'s. All five are killed.
+  skips `bio_band`'s. B24–B29 break the window setup:
+  - B24 swaps the two runs of a table byte;
+  - B25 reads a window that starts at an odd position one base early;
+  - B26 takes an insertion's tandem context on its left only;
+  - B27 stops the transpose a round short;
+  - B28 drops strand 1's offset of the reference codes;
+  - B29 lets `bio_window`'s last insertion open take the base past the window.
+
+  All eleven are killed.
 
 **Proposition B2 (pairs).** The pair objective of loci a (mate 1) and b
 (mate 2) is V(a) + V(b) + ins(a, b), with ins the fragment-length penalty
