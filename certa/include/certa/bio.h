@@ -53,6 +53,8 @@
 #include <arm_neon.h>
 #elif defined(__SSSE3__)
 #include <tmmintrin.h>
+#elif defined(__SSE2__)
+#include <emmintrin.h>
 #endif
 
 #include "certa/core.h"
@@ -496,12 +498,35 @@ inline u8x16 lookup8(u8x16 t, u8x16 idx) {
 #endif
 }
 // The bytes of a and b interleaved (a0 b0 a1 b1 ...), from their low halves
-// (zip_lo) or their high halves (zip_hi).
+// (zip_lo) or their high halves (zip_hi). Intrinsics rather than
+// __builtin_shufflevector, which GCC has only from version 12.
 inline u8x16 zip_lo(u8x16 a, u8x16 b) {
-  return __builtin_shufflevector(a, b, 0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23);
+#if defined(__aarch64__)
+  return (u8x16)vzip1q_u8((uint8x16_t)a, (uint8x16_t)b);
+#elif defined(__SSE2__)
+  return (u8x16)_mm_unpacklo_epi8((__m128i)a, (__m128i)b);
+#else
+  u8x16 r;
+  for (int l = 0; l < 8; ++l) {
+    r[2 * l] = a[l];
+    r[2 * l + 1] = b[l];
+  }
+  return r;
+#endif
 }
 inline u8x16 zip_hi(u8x16 a, u8x16 b) {
-  return __builtin_shufflevector(a, b, 8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31);
+#if defined(__aarch64__)
+  return (u8x16)vzip2q_u8((uint8x16_t)a, (uint8x16_t)b);
+#elif defined(__SSE2__)
+  return (u8x16)_mm_unpackhi_epi8((__m128i)a, (__m128i)b);
+#else
+  u8x16 r;
+  for (int l = 0; l < 8; ++l) {
+    r[2 * l] = a[l + 8];
+    r[2 * l + 1] = b[l + 8];
+  }
+  return r;
+#endif
 }
 // A 16 x 16 block of bytes transposed: v[j][l] becomes the old v[l][j]. A
 // round interleaves rows r and r + 8 into rows 2r and 2r + 1, which rotates
