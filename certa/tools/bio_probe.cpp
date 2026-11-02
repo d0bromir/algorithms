@@ -1,8 +1,9 @@
 // bio_probe: why `certa map --bio` certifies a read or sends it to the
 // fallback, and what it costs. Runs bio_place (certa/bio.h) with certa map's
 // --bio settings on single reads and prints one line per read:
-//   bio_probe INDEX.cidx reads.fq [N [THREADS [TABLE]]] > probe.tsv
+//   bio_probe INDEX.cidx reads.fq [N [THREADS [TABLE [LANES]]]] > probe.tsv
 // TABLE 1: the tandem runs tabulated once, as certa map does (bio_pack_contexts).
+// LANES: bands aligned at once (BioParams::lanes; default 16, 1: one at a time).
 // Columns: name, L, parts P, the edit certificate (certified, tier, d1, d2,
 // reason) and its alignment's --bio penalty (-1 if none or not end to end),
 // |S| per strand, H, G, the horizon if every part without an N were in S
@@ -67,8 +68,8 @@ long next_count(const Workspace& ws, int st, int P, int m) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc < 3 || argc > 6) {
-    std::fprintf(stderr, "usage: bio_probe INDEX.cidx reads.fq [N [THREADS [TABLE]]] > probe.tsv\n");
+  if (argc < 3 || argc > 7) {
+    std::fprintf(stderr, "usage: bio_probe INDEX.cidx reads.fq [N [THREADS [TABLE [LANES]]]] > probe.tsv\n");
     return 2;
   }
   const long N = argc > 3 ? std::atol(argv[3]) : -1;
@@ -83,7 +84,9 @@ int main(int argc, char** argv) {
   p.k = KMAX;
   p.budget = HOST_BUDGET_MAX;
   p.min_support = 1;
-  BioModel model;
+  BioParams bp;
+  if (argc > 6) bp.lanes = std::max(1, std::atoi(argv[6]));
+  BioModel model(bp);
   std::vector<uint8_t> runs;
   if (argc > 5 && std::atoi(argv[5]) != 0 && model.ctx_sat() <= kBioCtxPacked) {
     const int64_t n = static_cast<int64_t>(ix.ref_len), span = int64_t(1) << 22;

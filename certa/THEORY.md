@@ -1169,8 +1169,11 @@ guarantees is the interval [XL, XU] at whatever stage it stops.
 ## 9a. Mutants that survive by design
 
 A mutant that changes no claim on any input cannot be killed by a test, so
-it must be argued instead. Eight of the 129 survive.
+it must be argued instead. Nine of the 164 survive.
 - **L6** (span start candidates shifted): Lemma S, §4.
+- **B13** (an insertion inside a part not counted by Lemma B): a part of two
+  or more bases can be touched by a deletion for go_min instead, which is
+  never dearer; §12.
 - **A2** (Lemma O's term lowered): §4.
 - **P2, P8, P13** (band pad − 2, narrowed band − 3, `relevant` term dropped)
   and **P4** (window scan without pad): Theorem P is redundant at those
@@ -1428,6 +1431,46 @@ independent stretches. The test runs every read and every rescue with the
 table, packed in two halves, and requires the same results as with the scan.
 *Mutant:* B18 (lengths clamped one below c_sat). With c_sat > 15 (other
 `--bio-str-*` values) there is no table and each band scans its window.
+
+**Bands in SIMD lanes (`bio_bands`).** Up to 16 bands of one read are
+aligned at once, one 8-bit lane each, with the same ends as `bio_band`. Each
+cell holds min(value, H), where H is the band's threshold. Every term of the
+recurrences is non-decreasing in the cells it reads and adds a cost ≥ 0, so
+these capped values satisfy the capped recurrences. A value below H is then
+exact, and a cell at H is one `bio_band` drops. It needs H plus the largest
+single cost (46 with the defaults, a gap opening outside tandem runs) to fit
+in 255. That holds for every `bio_place` band (H ≤ go_min + 50 ge = 172) and
+most rescue windows (threshold λ + improper). Other bands are aligned one at
+a time.
+- **Lanes of different widths:** a lane's cells past its band start at H in
+  row 0 and its deletions are held there. Its M cells (the same diagonal a
+  row up) and I cells (the next diagonal) therefore stay at H, and nothing
+  enters the band from beyond it.
+- **Pruning:** each row is computed over the union of the lanes' live cells,
+  so every cell below H is still computed.
+- **Order:** `bio_place` takes the bands in its usual order, cheapest bound
+  first. When it reaches a band not yet aligned, that band is aligned
+  together with the next ones it may reach: those not too wide whose bound
+  is below its current threshold min(H, p₁ + δ). Only the ends of bands the
+  loop reaches are used, so the output does not change; the cost is at most
+  15 bands it then stops before. A rescue aligns the windows of tied loci of
+  k together: once it reaches one it reaches them all (the best pair so far
+  costs ≥ V(a) + λ, as does every pair through a tied locus).
+- **Tests:** the test aligns every read's bands and random ones (some across
+  the reference's ends), in random groups of 1–16 lanes, at H and two other
+  thresholds, and compares every end with `bio_band`'s. It also runs every
+  read and rescue one band at a time, requiring the same results. Then
+  400,000 tiny cases (reads of 3–20 bases with dense edits, on a reference
+  made mostly of tandem runs) check both `bio_band` and `bio_bands` against
+  a plain band DP over every cell, without pruning.
+- **Why the tiny cases:** a row reset skipped in either DP changes an end
+  only when a deletion cell lies just below the threshold, every cell left
+  of it dies in the next row, and an insertion then brings the live cells
+  back. The reads' own bands never showed that, nor did 40,000 dense-edit
+  reads of full length; the tiny cases find it about 190 times per million.
+- **Mutants:** B19–B22 drop the held deletions, open insertions in row 1,
+  cut deletion runs at the live cells, and skip the lanes' row reset; B23
+  skips `bio_band`'s. All five are killed.
 
 **Proposition B2 (pairs).** The pair objective of loci a (mate 1) and b
 (mate 2) is V(a) + V(b) + ins(a, b), with ins the fragment-length penalty

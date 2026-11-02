@@ -49,6 +49,11 @@
 #include <cstring>
 #include <utility>
 #include <vector>
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#elif defined(__SSSE3__)
+#include <tmmintrin.h>
+#endif
 
 #include "certa/core.h"
 
@@ -74,6 +79,7 @@ struct BioParams {
   double insert_mean = 400, insert_sd = 100;  // fragment length (pairs)
   int improper = 40;        // a pair that is not proper, in Phred
   int rescue_loci = 8;      // a certified mate's loci whose proper windows a pair rescue aligns
+  int lanes = 16;           // bands aligned at once, one SIMD lane each (bio_bands; 1: one at a time)
 };
 
 // The model's integer costs, from BioParams.
@@ -113,6 +119,12 @@ class BioModel {
     // go never rises with c, so it stays at go(kBioCtxCap) from ctx_sat_ on.
     ctx_sat_ = kBioCtxCap;
     while (ctx_sat_ > 1 && go_[ctx_sat_ - 1] == go_[kBioCtxCap]) --ctx_sat_;
+    max_add_ = std::max(ge_, go_[0]);
+    for (int q = 0; q < 64; ++q) {
+      max_add_ = std::max<int>(max_add_, emit_[q]);
+      for (int a = 0; a < 4; ++a)
+        for (int b = 0; b < 4; ++b) max_add_ = std::max<int>(max_add_, mis_[q][a][b]);
+    }
   }
   const BioParams& params() const { return p_; }
   // Read base b (0-3) at quality q on reference base a (0-3), a != b.
@@ -129,25 +141,32 @@ class BioModel {
   // bio_band reads them there instead of scanning its window. Null: no table.
   void set_ctx_table(const uint8_t* t) { tab_ = t; }
   const uint8_t* ctx_table() const { return tab_; }
+  // The largest single cost the DP adds (a base, an emission, a gap open or
+  // extension).
+  int max_add() const { return max_add_; }
 
  private:
   BioParams p_;
   int16_t mis_[64][4][4];
   int16_t mmin_[64], emit_[64];
   int go_[kBioCtxCap + 1];
-  int ge_, go_min_, ctx_sat_;
+  int ge_, go_min_, ctx_sat_, max_add_;
   const uint8_t* tab_ = nullptr;
 };
 
 // The read's costs on both strands (strand 1: the reverse complement, its
 // qualities reversed). cost[st][i][a]: read base i on reference code a
 // (4 = N); emit: as an inserted base; mmin: its cheapest mismatch (0 for N).
+// lane[i]: read base i's costs for bio_bands, both strands in one 16-byte
+// table: [5 st + a] = cost[st][i][a], [10 + st] = emit[st][i] (each at most
+// 255).
 struct BioRead {
   int L = 0;
   uint8_t seq[2][LMAX];
   int16_t cost[2][LMAX][5];
   int16_t emit[2][LMAX];
   int16_t mmin[2][LMAX];
+  uint8_t lane[LMAX][16];
 };
 
 // `qual`: FASTQ qualities (Phred + 33), or null for Q30 everywhere.
@@ -171,6 +190,14 @@ inline void bio_read(const BioModel& m, const uint8_t* codes, const char* qual, 
     const int q = qual ? std::min(63, std::max(0, qual[i] - 33)) : 30;
     fill(0, i, b, q);
     fill(1, L - 1 - i, b < 4 ? static_cast<uint8_t>(3 - b) : uint8_t(4), q);
+  }
+  for (int i = 0; i < L; ++i) {
+    uint8_t* t = br.lane[i];
+    for (int st = 0; st < 2; ++st) {
+      for (int a = 0; a < 5; ++a) t[5 * st + a] = static_cast<uint8_t>(std::min<int>(255, br.cost[st][i][a]));
+      t[10 + st] = static_cast<uint8_t>(std::min<int>(255, br.emit[st][i]));
+    }
+    for (int x = 12; x < 16; ++x) t[x] = 0;
   }
 }
 
@@ -409,6 +436,14 @@ struct BioScratch {
   std::vector<BioRescueCand> rcand, rloci;
   std::vector<std::pair<int, int>> rbounds;
   std::vector<std::pair<int, int64_t>> rtaken;
+  // bio_bands: per window position, 16 bytes (one a lane) of reference codes
+  // and gap opens; per diagonal, the lanes outside their band; 6 DP rows; the
+  // bands' ends (lane l's from lend[l * lstride]). ln, lq: the bands aligned
+  // ahead (bio_place: their positions in `order`; bio_rescue: k's loci).
+  std::vector<uint8_t> lcode, lgo_d, lgo_i, lmask, lrows;
+  std::vector<int> lend;
+  int lstride = 0, ln = 0;
+  int lq[16];
 };
 
 // Whether a sorted list holds a position within L of `end` (|t - end| < L).
@@ -417,22 +452,11 @@ inline bool bio_near(const std::vector<int64_t>& v, int64_t end, int L) {
   return it != v.end() && *it < end + L;
 }
 
-// The read (strand st) on diagonals [lo, lo + B): sc.endv[b] = the least
-// penalty of an end-to-end alignment within the band whose last base lies
-// on diagonal lo + b (kBioInf if none). Cell (i, b) aligns read base i - 1 to
-// reference i - 1 + lo + b; an alignment starts and ends with an aligned
-// base. With `trace`, sc.tb[i * B + b] holds: bits 0-1 the M cell's source
-// (0 M, 1 I, 2 D; ties to the first, which places gaps leftmost), bit 2 the
-// I cell extends, bit 3 the D cell extends (ties extend).
-// A cell whose penalty reaches `thr` is dropped (kept at kBioInf). Costs are
-// non-negative, so every cell on the best path to a cell below thr is below
-// thr too: each row is computed only where the row before it, or a deletion
-// run in it, is still below thr, and stops once no cell is. Values below
-// thr are exact; an end at or above it reads kBioInf.
-inline void bio_band(const IndexView& ix, const BioModel& m, const BioRead& br, int st, int64_t lo, int B,
-                     BioScratch& sc, bool trace, int thr = kBioInf) {
-  const int L = br.L;
-  const int W = L + B + 1;
+// The window of a band from diagonal lo, W = L + B + 1 bases: sc.win = the
+// reference from lo - kBioCtxReach (W + 2 kBioCtxReach bases); sc.go_d[x],
+// sc.go_i[x] = the cost of opening a deletion of reference base lo + x, an
+// insertion after it.
+inline void bio_window(const IndexView& ix, const BioModel& m, int64_t lo, int W, BioScratch& sc) {
   sc.win.resize(W + 2 * kBioCtxReach);
   sc.go_d.resize(W);
   sc.go_i.resize(W);
@@ -454,6 +478,24 @@ inline void bio_band(const IndexView& ix, const BioModel& m, const BioRead& br, 
     bio_str_context_buf(sc.win.data(), W, sc.ctx.data());
     opens([&](int x) { return sc.ctx[x]; });
   }
+}
+
+// The read (strand st) on diagonals [lo, lo + B): sc.endv[b] = the least
+// penalty of an end-to-end alignment within the band whose last base lies
+// on diagonal lo + b (kBioInf if none). Cell (i, b) aligns read base i - 1 to
+// reference i - 1 + lo + b; an alignment starts and ends with an aligned
+// base. With `trace`, sc.tb[i * B + b] holds: bits 0-1 the M cell's source
+// (0 M, 1 I, 2 D; ties to the first, which places gaps leftmost), bit 2 the
+// I cell extends, bit 3 the D cell extends (ties extend).
+// A cell whose penalty reaches `thr` is dropped (kept at kBioInf). Costs are
+// non-negative, so every cell on the best path to a cell below thr is below
+// thr too: each row is computed only where the row before it, or a deletion
+// run in it, is still below thr, and stops once no cell is. Values below
+// thr are exact; an end at or above it reads kBioInf.
+inline void bio_band(const IndexView& ix, const BioModel& m, const BioRead& br, int st, int64_t lo, int B,
+                     BioScratch& sc, bool trace, int thr = kBioInf) {
+  const int L = br.L;
+  bio_window(ix, m, lo, L + B + 1, sc);
   // Every row starts at kBioInf: a row's cells are reset where they were set
   // two rows before, not across the whole band.
   sc.rows.assign(6 * (B + 1), kBioInf);
@@ -534,6 +576,177 @@ inline void bio_band(const IndexView& ix, const BioModel& m, const BioRead& br, 
     set1 = end;
   }
   sc.endv.assign(Mp, Mp + B);
+}
+
+namespace bio_detail {
+
+typedef uint8_t u8x16 __attribute__((vector_size(16)));
+typedef uint8_t u8x16u __attribute__((vector_size(16), aligned(1), may_alias));
+typedef uint64_t u64x2 __attribute__((vector_size(16)));
+
+inline u8x16 splat8(int x) {
+  const uint8_t s = static_cast<uint8_t>(x);
+  return u8x16{s, s, s, s, s, s, s, s, s, s, s, s, s, s, s, s};
+}
+inline u8x16 load8(const uint8_t* p) { return *reinterpret_cast<const u8x16u*>(p); }
+inline void store8(uint8_t* p, u8x16 v) { *reinterpret_cast<u8x16u*>(p) = v; }
+inline u8x16 vmin8(u8x16 a, u8x16 b) { return a < b ? a : b; }
+inline u8x16 vmax8(u8x16 a, u8x16 b) { return a > b ? a : b; }
+inline bool any_below(u8x16 v, u8x16 cap) {
+  const u64x2 w = (u64x2)(v < cap);
+  return (w[0] | w[1]) != 0;
+}
+// t[idx[l]] in every lane (idx < 16).
+inline u8x16 lookup8(u8x16 t, u8x16 idx) {
+#if defined(__aarch64__)
+  return (u8x16)vqtbl1q_u8((uint8x16_t)t, (uint8x16_t)idx);
+#elif defined(__SSSE3__)
+  return (u8x16)_mm_shuffle_epi8((__m128i)t, (__m128i)idx);
+#else
+  u8x16 r;
+  for (int l = 0; l < 16; ++l) r[l] = t[idx[l] & 15];
+  return r;
+#endif
+}
+
+}  // namespace bio_detail
+
+// Whether bio_bands can align bands pruned at thr: a cell it keeps is at
+// most thr, and that plus any one cost must fit a byte.
+inline bool bio_lanes_fit(const BioModel& m, int thr) { return thr >= 0 && thr + m.max_add() <= 255; }
+
+// bio_band without traceback on n <= 16 bands of the read at once, one 8-bit
+// lane each: band l on strand st[l], diagonals [lo[l], lo[l] + B[l]). Its
+// ends are sc.lend[l * sc.lstride + b], the values bio_band leaves in
+// sc.endv. Needs bio_lanes_fit(m, thr).
+// - A cell holds min(penalty, thr): every term of the recurrences is
+//   non-decreasing in the cells it reads and adds a cost >= 0, so the capped
+//   values satisfy the recurrences capped, and a value below thr is exact (a
+//   cell at thr is bio_band's kBioInf).
+// - A lane's cells past its band (b >= B[l]) stay at thr, as bio_band has
+//   none there: row 0 starts them at thr and its D cells are held there, so
+//   M (from the same cells a row up) and I (from the next ones) stay there
+//   too, and nothing enters the band from them.
+// - Each row is computed over the union of the lanes' live cells, as
+//   bio_band computes its own; the bands stop together once no lane has one.
+inline void bio_bands(const IndexView& ix, const BioModel& m, const BioRead& br, int n, const uint8_t* st,
+                      const int64_t* lo, const int* B, int thr, BioScratch& sc) {
+  using namespace bio_detail;
+  constexpr int K = 16;
+  const int L = br.L;
+  int Bm = 0;
+  for (int l = 0; l < n; ++l) Bm = std::max(Bm, B[l]);
+  // Row i reads window positions i - 1 + b: lane l's reference code (+ 5 on
+  // strand 1, for the read's lane table) and gap opens there.
+  const size_t X = static_cast<size_t>(L - 1 + Bm);
+  const uint8_t cap8 = static_cast<uint8_t>(thr);
+  sc.lcode.assign(X * K, 4);
+  sc.lgo_d.assign(X * K, 0);
+  sc.lgo_i.assign(X * K, 0);
+  sc.lmask.assign(static_cast<size_t>(Bm) * K, cap8);  // 0 inside lane l's band, thr past it
+  uint8_t emi[K];
+  for (int l = 0; l < K; ++l) emi[l] = 10;
+  for (int l = 0; l < n; ++l) {
+    bio_window(ix, m, lo[l], L + B[l] + 1, sc);
+    const uint8_t* w = sc.win.data() + kBioCtxReach;
+    const uint8_t s5 = static_cast<uint8_t>(5 * st[l]);
+    for (int x = 0, e = L - 1 + B[l]; x < e; ++x) {
+      const size_t o = static_cast<size_t>(x) * K + l;
+      sc.lcode[o] = static_cast<uint8_t>(w[x] + s5);
+      sc.lgo_d[o] = static_cast<uint8_t>(sc.go_d[x]);
+      sc.lgo_i[o] = static_cast<uint8_t>(sc.go_i[x]);
+    }
+    for (int b = 0; b < B[l]; ++b) sc.lmask[static_cast<size_t>(b) * K + l] = 0;
+    emi[l] = static_cast<uint8_t>(10 + st[l]);
+  }
+  const size_t R = static_cast<size_t>(Bm + 1) * K;  // a row: Bm + 1 cells (the last stays thr)
+  sc.lrows.assign(6 * R, cap8);
+  uint8_t* Mp = sc.lrows.data();
+  uint8_t* Ip = Mp + R;
+  uint8_t* Dp = Ip + R;
+  uint8_t* Mc = Dp + R;
+  uint8_t* Ic = Mc + R;
+  uint8_t* Dc = Ic + R;
+  const uint8_t* mask = sc.lmask.data();
+  std::memcpy(Mp, mask, static_cast<size_t>(Bm) * K);  // free start: 0 in every band
+  const u8x16 cap = splat8(thr), ge = splat8(m.ge()), emix = load8(emi);
+  int p0 = 0, p1 = Bm, set0 = 0, set1 = Bm;
+  bool live = true;
+  for (int i = 1; i <= L; ++i) {
+    if (p0 >= p1) {  // no lane has a cell below thr: nor any end
+      live = false;
+      break;
+    }
+    const u8x16 T = load8(br.lane[i - 1]), em = lookup8(T, emix);
+    const size_t r0 = static_cast<size_t>(i - 1) * K;
+    const uint8_t* code = sc.lcode.data() + r0;
+    const uint8_t* go_d = sc.lgo_d.data() + r0;
+    const uint8_t* go_i = sc.lgo_i.data() + r0;
+    const int b0 = std::max(0, p0 - 1), b1 = p1;
+    u8x16 mprev = cap, dprev = cap;  // this row's M and D at b - 1
+    u8x16 mp = load8(Mp + static_cast<size_t>(b0) * K), ip = load8(Ip + static_cast<size_t>(b0) * K);
+    int b = b0;
+    for (; b < b1; ++b) {
+      const size_t o = static_cast<size_t>(b) * K;
+      const u8x16 mpn = load8(Mp + o + K), ipn = load8(Ip + o + K), msk = load8(mask + o);
+      const u8x16 v = vmin8(vmin8(mp, ip), load8(Dp + o));
+      const u8x16 mc = vmin8(v + lookup8(T, load8(code + o)), cap);
+      // Insertions open after an aligned base: none in row 1.
+      const u8x16 ic = i >= 2 ? vmin8(vmin8(vmin8(mpn + load8(go_i + o), ipn + ge), cap) + em, cap) : cap;
+      const u8x16 dc = vmax8(vmin8(vmin8(mprev + load8(go_d + o), dprev + ge), cap), msk);
+      store8(Mc + o, mc);
+      store8(Ic + o, ic);
+      store8(Dc + o, dc);
+      mprev = mc;
+      dprev = dc;
+      mp = mpn;
+      ip = ipn;
+    }
+    // Past the M cells, while a deletion run is below thr in some lane.
+    for (; b < Bm && (b == b1 || any_below(dprev, cap)); ++b) {
+      const size_t o = static_cast<size_t>(b) * K;
+      const u8x16 dc = vmax8(vmin8(vmin8(mprev + load8(go_d + o), dprev + ge), cap), load8(mask + o));
+      store8(Dc + o, dc);
+      mprev = cap;
+      dprev = dc;
+    }
+    const int end = b;
+    auto alive = [&](int c) {
+      const size_t o = static_cast<size_t>(c) * K;
+      return any_below(vmin8(vmin8(load8(Mc + o), load8(Ic + o)), load8(Dc + o)), cap);
+    };
+    p0 = Bm;
+    p1 = 0;
+    for (int c = b0; c < end; ++c)
+      if (alive(c)) {
+        p0 = c;
+        break;
+      }
+    for (int c = end; c-- > p0;)
+      if (alive(c)) {
+        p1 = c + 1;
+        break;
+      }
+    std::swap(Mp, Mc);
+    std::swap(Ip, Ic);
+    std::swap(Dp, Dc);
+    // The next row is written over the row before this one: reset what it set.
+    const size_t s0 = static_cast<size_t>(set0) * K, s1 = static_cast<size_t>(set1) * K;
+    std::fill(Mc + s0, Mc + s1, cap8);
+    std::fill(Ic + s0, Ic + s1, cap8);
+    std::fill(Dc + s0, Dc + s1, cap8);
+    set0 = b0;
+    set1 = end;
+  }
+  sc.lstride = Bm;
+  sc.lend.resize(static_cast<size_t>(n) * Bm);
+  for (int l = 0; l < n; ++l) {
+    int* e = sc.lend.data() + static_cast<size_t>(l) * Bm;
+    for (int b = 0; b < B[l]; ++b) {
+      const int v = live ? Mp[static_cast<size_t>(b) * K + l] : thr;
+      e[b] = v < thr ? v : kBioInf;
+    }
+  }
 }
 
 // Traceback of the band bio_band(.., trace) last filled, from the alignment
@@ -727,7 +940,42 @@ inline bool bio_place(const IndexView& ix, const BioModel& m, const Params& p, c
   });
   int p1 = kBioInf, yh = H, wide_bound = kBioInf;
   sc.ends.clear();
-  for (int k : sc.order) {
+  // The band the loop reaches is aligned with the next ones it may reach
+  // (bound below the threshold so far, not too wide), up to bp.lanes at once
+  // (bio_bands). The loop takes their ends in order, as if each band were
+  // aligned when reached; the ends of bands it does not reach are unused.
+  const int nl = std::min(16, bp.lanes);
+  const bool lanes = nl > 1 && bio_lanes_fit(m, H);
+  sc.ln = 0;
+  auto ends_of = [&](size_t q, int thr) -> const int* {
+    for (int l = 0; l < sc.ln; ++l)
+      if (sc.lq[l] == static_cast<int>(q)) return sc.lend.data() + static_cast<size_t>(l) * sc.lstride;
+    sc.ln = 0;
+    for (size_t z = q; lanes && z < sc.order.size() && sc.ln < nl; ++z) {
+      const BioCluster& D = sc.cl[sc.order[z]];
+      if (D.bound >= thr) break;
+      if (D.width <= bp.max_band) sc.lq[sc.ln++] = static_cast<int>(z);
+    }
+    if (sc.ln < 2) {
+      sc.ln = 0;
+      const BioCluster& C = sc.cl[sc.order[q]];
+      bio_band(ix, m, br, C.strand, C.lo, C.width, sc, false, H);
+      return sc.endv.data();
+    }
+    uint8_t st[16];
+    int64_t lo[16];
+    int B[16];
+    for (int l = 0; l < sc.ln; ++l) {
+      const BioCluster& D = sc.cl[sc.order[sc.lq[l]]];
+      st[l] = D.strand;
+      lo[l] = D.lo;
+      B[l] = D.width;
+    }
+    bio_bands(ix, m, br, sc.ln, st, lo, B, H, sc);
+    return sc.lend.data();
+  };
+  for (size_t q = 0; q < sc.order.size(); ++q) {
+    const int k = sc.order[q];
     const BioCluster& C = sc.cl[k];
     const int thr = std::min(H, p1 >= kBioInf ? kBioInf : p1 + bp.delta);
     if (C.bound >= thr) {  // so is every later one
@@ -738,11 +986,11 @@ inline bool bio_place(const IndexView& ix, const BioModel& m, const Params& p, c
       wide_bound = std::min(wide_bound, C.bound);
       continue;
     }
-    bio_band(ix, m, br, C.strand, C.lo, C.width, sc, false, H);
+    const int* endv = ends_of(q, thr);
     ++o.n_bands;
     o.cells += static_cast<int64_t>(L) * C.width;
     for (int b = 0; b < C.width; ++b) {
-      const int v = sc.endv[b];
+      const int v = endv[b];
       if (v >= H) continue;
       sc.ends.push_back({v, C.strand, C.lo + b + L - 1, k, b});
       p1 = std::min(p1, v);
@@ -942,6 +1190,46 @@ inline BioRescue bio_rescue(const IndexView& ix, const BioModel& m, const BioOut
   cand.clear();
   bounds.clear();
   bounds.push_back({ok.list_bound + lb_f, -1});
+  // f's end diagonals (end - Lf + 1, its start as bio_insert takes it) in a
+  // proper pair with k's locus z: after its start when it is forward, before
+  // it when not; widened by G.
+  const int width = max_dist + 1 + 2 * G;
+  auto window = [&](int z, int64_t& lo, uint8_t& sf) {
+    const BioLocus& A = ok.loci[z];
+    const int64_t sa = A.end - Lk + 1;
+    const int64_t d0 = A.strand == 0 ? sa : sa - max_dist;
+    lo = d0 - G;
+    sf = static_cast<uint8_t>(1 - A.strand);
+  };
+  // Once the loop reaches a locus it reaches the ones tied with it: the best
+  // pair so far costs at least its pen + lb_f, and so does any pair through a
+  // tied locus. Their windows are aligned together, up to bp.lanes at once
+  // (bio_bands).
+  const int nl = std::min(16, bp.lanes);
+  const bool lanes = nl > 1 && bio_lanes_fit(m, thr);
+  sc.ln = 0;
+  auto ends_of = [&](int a) -> const int* {
+    for (int l = 0; l < sc.ln; ++l)
+      if (sc.lq[l] == a) return sc.lend.data() + static_cast<size_t>(l) * sc.lstride;
+    sc.ln = 0;
+    for (int z = a; lanes && z < std::min(n, bp.rescue_loci) && sc.ln < nl && ok.loci[z].pen == ok.loci[a].pen; ++z)
+      sc.lq[sc.ln++] = z;
+    uint8_t st[16];
+    int64_t lo[16];
+    int B[16];
+    if (sc.ln < 2) {
+      sc.ln = 0;
+      window(a, lo[0], st[0]);
+      bio_band(ix, m, sc.br, st[0], lo[0], width, sc, false, thr);
+      return sc.endv.data();
+    }
+    for (int l = 0; l < sc.ln; ++l) {
+      window(sc.lq[l], lo[l], st[l]);
+      B[l] = width;
+    }
+    bio_bands(ix, m, sc.br, sc.ln, st, lo, B, thr, sc);
+    return sc.lend.data();
+  };
   int best = kBioInf;
   for (int a = 0; a < n; ++a) {
     const BioLocus& A = ok.loci[a];
@@ -951,16 +1239,12 @@ inline BioRescue bio_rescue(const IndexView& ix, const BioModel& m, const BioOut
     }
     bounds.push_back({A.pen + lb_f + bp.improper, a});
     bounds.push_back({A.pen + std::max(lb_f, m.go_min() + G * m.ge()), a});
-    // f's end diagonals (end - Lf + 1, its start as bio_insert takes it) in a
-    // proper pair with A: after A's start when A is forward, before it when not.
-    const int64_t sa = A.end - Lk + 1;
-    const int64_t d0 = A.strand == 0 ? sa : sa - max_dist;
-    const int64_t lo = d0 - G;
-    const int width = max_dist + 1 + 2 * G;
-    const uint8_t sf = static_cast<uint8_t>(1 - A.strand);
-    bio_band(ix, m, sc.br, sf, lo, width, sc, false, thr);
+    int64_t lo;
+    uint8_t sf;
+    window(a, lo, sf);
+    const int* endv = ends_of(a);
     for (int b = G; b <= G + max_dist; ++b) {
-      const int v = sc.endv[b];
+      const int v = endv[b];
       if (v >= thr) continue;
       const BioLocus F{v, sf, lo + b + Lf - 1, lo, width, b};
       const int ins = bio_insert(bp, A, Lk, F, Lf, max_dist, contig_of);

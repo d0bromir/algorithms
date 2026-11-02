@@ -40,8 +40,10 @@ run on galaxy (ARM64, 64 of 128 cores for each aligner).
 pair rescue places mates the single-read certificate cannot. It lowers the
 fallback to 3.48 % (A) and 4.11 % (B) of reads with the same avoidable errors.
 A table of the reference's tandem runs and leaner data structures make
-`--bio` 1.66–1.78× faster (50–58× the default mode instead of 89–96×), for
-1.45 GiB more memory.
+`--bio` 1.66–1.78× faster, for 1.45 GiB more memory. Aligning up to 16
+bands at once in SIMD lanes makes it another 2.35–2.45× faster. The output
+is the same throughout, and `--bio` is now 21–24× slower than the default
+mode instead of 89–96×.
 
 ## Pilot (2 M HG002 NovaSeq X pairs, trimmed)
 
@@ -266,6 +268,19 @@ variants timed with the probe):
   - nearby loci, and the span YA, are found by binary search in sorted
     lists instead of scans over every end position;
   - the rescue's buffers are reused.
+- **Bands in SIMD lanes** (`bio_bands`; THEORY.md §12; branch
+  `claude/certa-bio-simd`). Up to 16 bands of a read are aligned at once,
+  one 8-bit lane each. Each cell holds its value capped at the band's
+  threshold, which keeps every value below the threshold exact. The bands
+  are still taken cheapest bound first; the lanes only align the next ones
+  ahead of time, and the ends of bands the loop does not reach are dropped.
+  - The test compares every end with the one-band DP on every read's bands
+    (3.6 M ends per seed). It runs every read and rescue one band at a time
+    and requires the same results. It checks both DPs against a plain DP
+    without pruning on 400,000 tiny cases.
+  - Mutants B19–B23 are all killed. B22, a skipped row reset, survived the
+    first version of the test: it changes an end only in a rare geometry.
+    That led to the tiny cases.
 
 **Tests A and B again** with that build ([truth_rerun_bio.sh](truth_rerun_bio.sh);
 [report_A_rescue.md](results/truth_2026-10/report_A_rescue.md),
@@ -291,13 +306,36 @@ build, byte for byte, in both tests; [timings.tsv](results/truth_2026-10/timings
 | phase 1 | 1,206 s, 21.54 GiB | 2,115 s, 22.24 GiB |
 | rescue, each band scanning its window | 1,079 s, 21.57 GiB | 1,903 s, 22.28 GiB |
 | rescue, run table | 709 s, 23.01 GiB | 1,335 s, 23.73 GiB |
-| rescue, run table and data structures | **677 s**, 23.03 GiB | **1,277 s**, 23.72 GiB |
+| rescue, run table and data structures | 677 s, 23.03 GiB | 1,277 s, 23.72 GiB |
+| the same, bands in SIMD lanes | **288 s**, 23.04 GiB | **521 s**, 23.76 GiB |
 | CERTA's default mode | 13.5 s | 22.0 s |
 
-The table gives 1.42–1.52× and the data structures another 3–5 %. The
-probe's time on the 400,000 reads falls from 1,315 s (phase 1) to 788 s.
+The table gives 1.42–1.52× and the data structures another 3–5 %.
 Another job ran on cores 64–127 during the two run-table rows, so they may be
 slightly slow.
+
+**The lanes** give 2.35× (A) and 2.45× (B). Both builds were run back to
+back, with nothing else running. The build before the lanes took 677 s and
+1,277 s again. The SAM output (by md5) and the fallback FASTQ files are
+identical in both tests.
+
+The probe's time on the 400,000 reads:
+
+| build | all reads | heavy reads (≥ 1 M cells) | edit certificate |
+|---|---|---|---|
+| phase 1 | 1,315 s | 1,147 s | – |
+| run table and data structures | 788 s | 650 s | 108 s |
+| SIMD lanes | **315 s** | **192 s** | 109 s |
+| SIMD lanes, `--bio-run-table 0` | 642 s | 499 s | 108 s |
+| SIMD lanes, one band at a time | 773 s | 635 s | 108 s |
+
+- **Heavy reads:** they align 1,991 bands each, and a band now costs
+  1.6 µs instead of 7.0 µs.
+- **The edit certificate,** which `--bio` runs first, is now a third of the
+  time.
+- **The run table** matters more with the lanes: without it, filling each
+  band's window from a scan takes half the time. Test A takes 628 s without
+  it, with the same SAM output, against 288 s (21.60 GiB against 23.04 GiB).
 
 - **Soundness:** 0 violations in both tests, over 94.6 M (A) and 189.9 M (B)
   alignments of the five other aligners on certified mates. For a rescued mate the check is
@@ -313,14 +351,15 @@ slightly slow.
   rescued mates themselves, 7,224 fewer real mates (18,697 simulated) have
   MAPQ ≥ 40, and slightly fewer of those are misplaced (4,609 against
   4,621; 21,313 against 21,465).
-- **Cost:** `--bio` is now 50–58× slower than the default mode, against
-  89–96× in phase 1.
+- **Cost:** `--bio` is now 21–24× slower than the default mode, against
+  89–96× in phase 1 (50–58× before the lanes).
 
 ## Next
 
-1. **Cost.** The band DP over thousands of repeat copies per heavy read now
-   dominates. A DP over several bands at once (SIMD lanes, one band each)
-   would cut it.
+1. **Cost.** The edit certificate that `--bio` runs first is now a third of
+   its time. The bands' windows are still filled one base at a time and
+   transposed into the lanes; filling them with vector loads from the run
+   table, and sharing them between overlapping bands, would cut that.
 2. **MAPQ.** Replace the one-competitor-at-`YH` convention with a bound
    that does not make horizon-limited reads overconfident.
 3. **Complex indels.** Allow an insertion next to a deletion in the model
