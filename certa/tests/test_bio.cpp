@@ -15,6 +15,9 @@
 //   6. pairs        - a jointly placed pair is the oracle's best pair of loci.
 //   7. pair rescue  - a mate placed by its certified mate's loci is the
 //                     oracle's best pair (the mate over every end position).
+//   8. lanes        - bio_bands gives bio_band's ends on every read's bands,
+//                     and both give a plain band DP's on tiny cases; every
+//                     read and rescue is the same one band at a time.
 // Lemma B (bio_cover) is checked against an exact DP over transcripts on
 // random small reads. Placement against the simulated truth is reported, next
 // to the fewest-edits placement, and must improve on reads where the base
@@ -367,6 +370,108 @@ void test_lemma_b(std::mt19937_64& g) {
 }
 
 // ---------------------------------------------------------------------------
+// The band DP of bio_band over every cell, no pruning: the least penalty of
+// an alignment ending on each diagonal, kBioInf at or above thr.
+std::vector<int> plain_band(const IndexView& ix, const BioModel& m, const BioRead& br, int st, int64_t lo, int B,
+                            int thr) {
+  const int L = br.L, W = L + B + 1;
+  std::vector<uint8_t> ctx(W);
+  bio_str_context(ix, lo, lo + W, ctx.data());
+  const size_t R = static_cast<size_t>(B);
+  std::vector<int> M((L + 1) * R, kBioInf), I((L + 1) * R, kBioInf), D((L + 1) * R, kBioInf);
+  for (int b = 0; b < B; ++b) M[b] = 0;
+  for (int i = 1; i <= L; ++i)
+    for (int b = 0; b < B; ++b) {
+      const int x = i - 1 + b;
+      const size_t c = i * R + b, u = (i - 1) * R + b;
+      const int pv = std::min({M[u], I[u], D[u]});
+      if (pv < kBioInf) M[c] = pv + br.cost[st][i - 1][ref_at(ix, lo + x)];
+      if (b + 1 < B) {
+        const int op = i >= 2 && M[u + 1] < kBioInf ? M[u + 1] + m.go(std::max(ctx[x], ctx[x + 1])) : kBioInf;
+        const int ex = I[u + 1] < kBioInf ? I[u + 1] + m.ge() : kBioInf;
+        if (std::min(op, ex) < kBioInf) I[c] = std::min(op, ex) + br.emit[st][i - 1];
+      }
+      if (b >= 1) {
+        const int op = M[c - 1] < kBioInf ? M[c - 1] + m.go(ctx[x]) : kBioInf;
+        const int ex = D[c - 1] < kBioInf ? D[c - 1] + m.ge() : kBioInf;
+        D[c] = std::min(op, ex);
+      }
+    }
+  std::vector<int> e(B);
+  for (int b = 0; b < B; ++b) e[b] = M[L * R + b] < thr ? M[L * R + b] : kBioInf;
+  return e;
+}
+
+// Tiny bands (reads of 3-20 bases with dense edits, bands of 1-20 diagonals,
+// 1-4 lanes) on a reference made mostly of tandem runs, where gaps are cheap
+// and the live cells' edges move most: bio_band and bio_bands against
+// plain_band, at random thresholds the lanes fit.
+void test_tiny_bands(uint64_t seed) {
+  std::mt19937_64 g0(seed ^ 0x7a1eULL);
+  std::vector<uint8_t> ref(6000);
+  for (auto& c : ref) c = rand_base(g0);
+  for (int k = 0; k < 1200; ++k) {
+    const int p = static_cast<int>(g0() % 5800), per = 1 + static_cast<int>(g0() % 3);
+    const int len = 6 + static_cast<int>(g0() % 20);
+    for (int x = per; x < len; ++x) ref[p + x] = ref[p + x - per];
+  }
+  IndexView ix{};
+  ix.ref = ref.data();
+  ix.ref_len = ref.size();
+  const BioModel m;
+  const int top = 255 - m.max_add();
+  constexpr int kChunks = 400, kTrials = 1000;
+  std::atomic<int64_t> ends{0};
+  parallel(kChunks, [&](size_t ch) {
+    std::mt19937_64 g(seed * 1000003ULL + ch);
+    std::unique_ptr<BioScratch> sc(new BioScratch);
+    for (int t = 0; t < kTrials; ++t) {
+      const int L = 3 + static_cast<int>(g() % 18);
+      const int64_t a = 200 + static_cast<int64_t>(g() % 5000);
+      const int psub = static_cast<int>(g() % 250), pdel = static_cast<int>(g() % 170),
+                pins = static_cast<int>(g() % 170);  // per mille
+      std::vector<uint8_t> rd;
+      std::string q;
+      for (int64_t j = a; static_cast<int>(rd.size()) < L;) {
+        const int u = static_cast<int>(g() % 1000);
+        if (u < pdel) { j += 1 + static_cast<int64_t>(g() % 4); continue; }
+        if (u < pdel + pins) rd.push_back(rand_base(g));
+        else if (u < pdel + pins + psub) rd.push_back(static_cast<uint8_t>((ref[j++] + 1 + g() % 3) % 4));
+        else rd.push_back(ref[j++]);
+        static const int Q[] = {2, 12, 23, 37, 40};
+        q.push_back(qchar(Q[g() % 5]));
+      }
+      bio_read(m, rd.data(), q.data(), L, sc->br);
+      const int n = 1 + static_cast<int>(g() % 4);
+      uint8_t st[16];
+      int64_t lo[16];
+      int B[16];
+      for (int l = 0; l < n; ++l) {
+        B[l] = 1 + static_cast<int>(g() % 20);
+        st[l] = static_cast<uint8_t>(g() % 8 == 0);
+        lo[l] = a - B[l] / 2 + static_cast<int64_t>(g() % 7) - 3;
+      }
+      const int thr = 1 + static_cast<int>(g() % static_cast<uint64_t>(top));
+      bio_bands(ix, m, sc->br, n, st, lo, B, thr, *sc);
+      for (int l = 0; l < n; ++l) {
+        const std::vector<int> e = plain_band(ix, m, sc->br, st[l], lo[l], B[l], thr);
+        bio_band(ix, m, sc->br, st[l], lo[l], B[l], *sc, false, thr);
+        const int* le = sc->lend.data() + static_cast<size_t>(l) * sc->lstride;
+        for (int b = 0; b < B[l]; ++b) {
+          CHECK(sc->endv[b] == e[b], "tiny bands: bio_band end %d of [%lld, +%d) is %d, the plain DP's %d (L %d, thr %d)",
+                b, static_cast<long long>(lo[l]), B[l], sc->endv[b], e[b], L, thr);
+          CHECK(le[b] == e[b], "tiny bands: lane %d of %d, end %d of [%lld, +%d) is %d, the plain DP's %d (L %d, thr %d)",
+                l, n, b, static_cast<long long>(lo[l]), B[l], le[b], e[b], L, thr);
+        }
+        ends += B[l];
+      }
+    }
+  });
+  std::fprintf(stderr, "tiny bands: %d trials, %lld ends of bio_band and bio_bands equal to the plain DP's\n",
+               kChunks * kTrials, static_cast<long long>(ends.load()));
+}
+
+// ---------------------------------------------------------------------------
 // One placement: what the checks compare across settings and orders.
 struct Placed {
   Result r;
@@ -402,6 +507,57 @@ struct Setting {
   BioParams bp;
 };
 
+// bio_bands against bio_band, end for end, on the read in sc.br: its
+// clusters' bands as bio_place left them in sc.cl, and four random ones (two
+// across the reference's ends), in random groups of 1-16 lanes, strands and
+// widths mixed, pruned at H and at two other thresholds the lanes fit (one
+// the largest). Returns the ends compared.
+int64_t check_lanes(const IndexView& ix, const BioModel& m, int H, std::mt19937_64& g, BioScratch& sc) {
+  const int L = sc.br.L;
+  struct Band {
+    uint8_t st;
+    int64_t lo;
+    int B;
+  };
+  std::vector<Band> bands;
+  for (const BioCluster& C : sc.cl)
+    if (C.width <= 1024) bands.push_back({C.strand, C.lo, C.width});
+  const int64_t N = static_cast<int64_t>(ix.ref_len);
+  for (int x = 0; x < 4; ++x) {
+    int64_t lo = static_cast<int64_t>(g() % static_cast<uint64_t>(N)) - L / 2;
+    if (x == 0) lo = -static_cast<int64_t>(g() % 200);
+    if (x == 1) lo = N - L - static_cast<int64_t>(g() % 200);
+    bands.push_back({static_cast<uint8_t>(g() % 2), lo, 1 + static_cast<int>(g() % 300)});
+  }
+  const int top = 255 - m.max_add();
+  int64_t compared = 0;
+  for (int thr : {H, 1 + static_cast<int>(g() % static_cast<uint64_t>(top)), top}) {
+    if (!bio_lanes_fit(m, thr)) continue;
+    std::shuffle(bands.begin(), bands.end(), g);
+    for (size_t s = 0; s < bands.size();) {
+      const int n = static_cast<int>(std::min<size_t>(1 + g() % 16, bands.size() - s));
+      uint8_t st[16];
+      int64_t lo[16];
+      int B[16];
+      for (int l = 0; l < n; ++l) {
+        st[l] = bands[s + l].st;
+        lo[l] = bands[s + l].lo;
+        B[l] = bands[s + l].B;
+      }
+      bio_bands(ix, m, sc.br, n, st, lo, B, thr, sc);
+      for (int l = 0; l < n; ++l) {
+        bio_band(ix, m, sc.br, st[l], lo[l], B[l], sc, false, thr);
+        const int* e = sc.lend.data() + static_cast<size_t>(l) * sc.lstride;
+        for (int b = 0; b < B[l]; ++b, ++compared)
+          CHECK(e[b] == sc.endv[b], "lanes: lane %d of %d (strand %d, lo %lld, width %d, thr %d): end %d is %d, "
+                "bio_band %d", l, n, st[l], static_cast<long long>(lo[l]), B[l], thr, b, e[b], sc.endv[b]);
+      }
+      s += static_cast<size_t>(n);
+    }
+  }
+  return compared;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -412,6 +568,7 @@ int main(int argc, char** argv) {
     std::mt19937_64 gl(seed ^ 0xb10b10ULL);
     test_lemma_b(gl);
   }
+  test_tiny_bands(seed);
   Genome G = make_genome(g);
   const BioModel m0;  // the default model: reads are planted against its costs
   const int L = 150;
@@ -755,19 +912,27 @@ int main(int argc, char** argv) {
   // Map every read in every setting, forward and in reverse order.
   const size_t nr = reads.size(), ns = settings.size();
   std::vector<std::vector<Placed>> res(ns, std::vector<Placed>(nr));
-  std::vector<BioModel> models;
-  for (const Setting& s : settings) models.push_back(BioModel(s.bp));
+  std::vector<BioModel> models, models1;  // models1: one band at a time (lanes 1)
+  for (const Setting& s : settings) {
+    models.push_back(BioModel(s.bp));
+    BioParams one = s.bp;
+    one.lanes = 1;
+    models1.push_back(BioModel(one));
+  }
+  int64_t n_lane_ends = 0;
   for (size_t k = 0; k < ns; ++k) {
     Params p;
     p.k = KMAX;
     p.budget = HOST_BUDGET_MAX;
     std::unique_ptr<Workspace> ws(new Workspace), ws2(new Workspace);
     std::unique_ptr<BioScratch> sc(new BioScratch), sc2(new BioScratch);
+    std::mt19937_64 gl(seed ^ (0x1a9e5ULL + k));
     for (size_t i = 0; i < nr; ++i) {
       Placed& P = res[k][i];
       const TestRead& t = reads[i];
       P.ok = bio_place(views[k], models[k], p, t.codes.data(), t.qual.data(), L, 0x9e3779b97f4a7c15ULL * (i + 1), *ws,
                        *sc, P.r, P.o);
+      if (P.o.tried) n_lane_ends += check_lanes(views[k], models[k], P.o.horizon, gl, *sc);
     }
     int diff = 0;
     for (size_t i = nr; i-- > 0;) {
@@ -803,7 +968,20 @@ int main(int argc, char** argv) {
       diff += !same(Q, res[k][i]);
     }
     CHECK(diff == 0, "%s: %d reads differ with the tandem runs tabulated", settings[k].name, diff);
+    // And aligning one band at a time instead of in lanes (bio_bands).
+    models1[k].set_ctx_table(run_tables[k].data());
+    diff = 0;
+    for (size_t i = 0; i < nr; ++i) {
+      Placed Q;
+      const TestRead& t = reads[i];
+      Q.ok = bio_place(views[k], models1[k], p, t.codes.data(), t.qual.data(), L, 0x9e3779b97f4a7c15ULL * (i + 1),
+                       *ws, *sc, Q.r, Q.o);
+      diff += !same(Q, res[k][i]) || Q.o.n_bands != res[k][i].o.n_bands || Q.o.cells != res[k][i].o.cells;
+    }
+    CHECK(diff == 0, "%s: %d reads differ aligning one band at a time", settings[k].name, diff);
   }
+  std::fprintf(stderr, "lanes: %lld band ends equal to bio_band's\n", static_cast<long long>(n_lane_ends));
+  CHECK(n_lane_ends > 100000, "lanes: only %lld band ends compared", static_cast<long long>(n_lane_ends));
 
   // The oracle, read by read (pairs: both mates at once), and every check.
   std::vector<std::vector<uint8_t>> ctx(1);
@@ -951,6 +1129,12 @@ int main(int argc, char** argv) {
           bio_read(models[k], tf.codes.data(), tf.qual.data(), L, sc->br);
           const BioRescue rs =
               bio_rescue(views[k], models[k], K.o, L, lb_f, L, 850, contig_of, 0x1234567ULL * (i0 + 1), *sc);
+          const BioRescue r1 =
+              bio_rescue(views[k], models1[k], K.o, L, lb_f, L, 850, contig_of, 0x1234567ULL * (i0 + 1), *sc);
+          CHECK(rs.ok == r1.ok && rs.pen == r1.pen && rs.x == r1.x && rs.f.end == r1.f.end && rs.f.amb == r1.f.amb &&
+                    rs.n_best == r1.n_best && rs.mapq[0] == r1.mapq[0] && rs.mapq[1] == r1.mapq[1],
+                "%s pair %zu (mate %d rescued, lb %d): the rescue differs aligning one window at a time",
+                settings[k].name, i0, 2 - km, lb_f);
           if (!rs.ok) continue;
           ++n_rescue_checked;
           int best = kBioInf;
