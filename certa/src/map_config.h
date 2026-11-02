@@ -30,6 +30,7 @@ struct MapConfig {
   bool intervals = false;  // --intervals: every read to SAM, no fallback
   bool full_cert = false;  // --full-cert
   bool bio = false;        // --bio: certified maximum-likelihood placement
+  bool bio_table = true;   // --bio-run-table: the reference's tandem runs tabulated once (half a byte a base)
   bool gpu = false;
   int device = 0;
   bool serial_stages = false;

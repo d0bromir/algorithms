@@ -82,6 +82,7 @@ class MapPipeline {
                    PassCounts& n) const;
   void index2_passes(Slot& S, size_t a0, size_t b0, ChunkScratch& x, PassCounts& n) const;
   void bio_chunk(Slot& S, size_t a0, size_t b0, ChunkScratch& x) const;
+  void bio_rescue_pair(Slot& S, size_t i, BioScratch& sc) const;
 
   const MapConfig& c_;
   const Reference& ref_;
@@ -92,6 +93,7 @@ class MapPipeline {
   MapOutputs& out_;
   RecordWriter writer_;
   BioModel bio_model_;  // --bio
+  std::vector<uint8_t> bio_runs_;  // --bio: the reference's tandem runs (bio_pack_contexts), or empty
   GpuMapper* gm_ = nullptr;
   Slot slots_[kSlots];
   FastqSpans spans_[2];  // the mate files' text of the batch being read (buffers reused)

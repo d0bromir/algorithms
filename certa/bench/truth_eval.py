@@ -10,7 +10,8 @@ as truth_lift.py / truth_label.py number them) and keeps, per mate: placed,
 at truth (right contig and strand, unclipped leftmost base within 20 bp;
 chrY PAR placements moved to chrX first), MAPQ, CERTA's tier, and for --bio
 records YA and the certified optimum p1 (YP, or YS when the mate was moved
-to another locus: loci[0] is the best one). `report` prints Markdown tables:
+to another locus: loci[0] is the best one; for a mate placed only by the
+pair, YR:i:1, its YH, which bounds every alignment of it). `report` prints Markdown tables:
 placement, misplaced reads by MAPQ, strata, calibration, --bio against the
 default mode, reads with no linear truth, and the soundness check (bio_score
 penalties of other aligners' alignments against --bio's p1).
@@ -28,7 +29,7 @@ WINDOW = 20
 TIERS = ("S0", "S1", "SR", "S2", "SL", "PR", "R", "IV", "MR", "BM")
 TIER = {t: i for i, t in enumerate(TIERS)}
 LEAD_CLIP = re.compile(r"^(\d+)[SH]")
-TAG = re.compile(r"\t(XT:Z|YA:i|YP:i|YS:i):([^\t\n]+)")
+TAG = re.compile(r"\t(XT:Z|YA:i|YP:i|YS:i|YH:i|YR:i):([^\t\n]+)")
 
 
 def read_sam(stream, n, contigs, tags=False):
@@ -37,7 +38,7 @@ def read_sam(stream, n, contigs, tags=False):
                strand=np.zeros((n, 2), np.int8), mapq=np.zeros((n, 2), np.uint8), span=np.zeros((n, 2), np.int32))
     if tags:
         out.update(tier=np.full((n, 2), -1, np.int8), ya=np.full((n, 2), -1, np.int16),
-                   p1=np.full((n, 2), -1, np.int32))
+                   p1=np.full((n, 2), -1, np.int32), rescued=np.zeros((n, 2), bool))
     records = 0
     for line in stream:
         if line[0] == "@":
@@ -68,7 +69,10 @@ def read_sam(stream, n, contigs, tags=False):
             out["tier"][i, m] = TIER.get(tg.get("XT:Z", ""), -1)
             if "YA:i" in tg:
                 out["ya"][i, m] = int(tg["YA:i"])
-            if "YP:i" in tg:
+            if tg.get("YR:i") == "1":  # placed by the pair: every alignment costs >= YH
+                out["rescued"][i, m] = True
+                out["p1"][i, m] = int(tg["YH:i"])
+            elif "YP:i" in tg:
                 yp, ys = int(tg["YP:i"]), int(tg.get("YS:i", "-1"))
                 out["p1"][i, m] = min(yp, ys) if ys >= 0 else yp
     print(f"[read_sam] {records} primary records", file=sys.stderr)
@@ -83,7 +87,8 @@ def cmd_score(a):
     ref.par_to_x(r["rc"], r["left"])
     correct = r["placed"] & (t["cls"] == CLS_TRUTH) & (r["rc"] == t["tc"]) & (r["strand"] == t["ts"])
     correct &= np.abs(r["left"] + 1 - t["tp"]) <= WINDOW
-    np.savez(a.out, placed=r["placed"], correct=correct, mapq=r["mapq"], tier=r["tier"], ya=r["ya"], p1=r["p1"])
+    np.savez(a.out, placed=r["placed"], correct=correct, mapq=r["mapq"], tier=r["tier"], ya=r["ya"], p1=r["p1"],
+             rescued=r["rescued"])
 
 
 def pct(k, n):
@@ -178,6 +183,14 @@ def cmd_report(a):
         for q in (20, 40):
             w = bw & (b["mapq"] >= q)
             print(f"| {a.bio} wrong with MAPQ ≥ {q}: of them YA > 0 (tandem offset) | {int(w.sum()):,}: {int((w & (ya > 0)).sum()):,} |")
+        if "rescued" in b:
+            rs = b["rescued"] & truth
+            rw = rs & ~bo
+            print(f"| placed only by the pair (YR:i:1) | {int(rs.sum()):,} |")
+            print(f"| of them at truth; misplaced with MAPQ ≥ 20 / 40 | {int((rs & bo).sum()):,}; "
+                  f"{int((rw & (b['mapq'] >= 20)).sum()):,} / {int((rw & (b['mapq'] >= 40)).sum()):,} |")
+            print(f"| of them {a.default} at truth / wrong / absent | {int((rs & do).sum()):,} / "
+                  f"{int((rs & dw).sum()):,} / {int((rs & ~d['placed']).sum()):,} |")
 
     nolin = cls == CLS_NOLIN
     print(f"\n**No linear truth** ({int(nolin.sum()):,} mates: origin not 1:1 in GRCh38): placed, and with MAPQ ≥ 20.\n")
@@ -193,7 +206,8 @@ def cmd_report(a):
         cert = (b["tier"] == TIER["BM"]) & (p1 >= 0)
         n = cls.shape[0]
         print(f"\n**Soundness**: other aligners' end-to-end alignments scored under the {a.bio} model "
-              f"against its certified optimum p1 ({int(cert.sum()):,} certified mates). Alignments with an "
+              f"against its certified optimum p1 ({int(cert.sum()):,} certified mates; for a mate placed only by "
+              f"the pair, its YH, which bounds every alignment of it). Alignments with an "
               f"insertion next to a deletion are outside the model (THEORY §12) and counted apart.\n")
         print("| Aligner | scored | on certified mates | cheaper than p1 (violations) | equal to p1 | above p1 "
               "| I next to D (outside the model) |")
@@ -216,6 +230,8 @@ def cmd_report(a):
                 at_truth = np.where(ok, np.minimum(at_truth, pen), at_truth)
 
         wrong = b["placed"] & truth & ~b["correct"] & cert
+        if "rescued" in b:
+            wrong &= ~b["rescued"]  # p1 is only YH there
         print(f"\n**Why {a.bio} misplaces**: for its misplaced, certified mates, the cheapest alignment at the "
               f"truth that another aligner reported, against {a.bio}'s optimum p1 (model penalty, Phred).\n")
         bins = (("no other aligner at the truth", None, None), ("equal to p1 (a tie)", 0, 0), ("1–9 above p1", 1, 9),

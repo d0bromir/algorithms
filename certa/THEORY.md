@@ -1415,6 +1415,20 @@ below H is computed exactly, so every end below H, which is all Theorem B
 uses. On 300,000 simulated NovaSeq X reads the SAM output is the same, byte
 for byte, with and without pruning.
 
+**The tandem-run table (`--bio-run-table`, on by default).** Each band needs
+the run length c of every reference base in its window, for go(c). go never
+rises with c, and is constant from c_sat = the least c with
+go(c) = go(`kBioCtxCap`) on (11 with the defaults). So a length clamped at
+c_sat gives every gap the same open cost, for deletions (go(c)) and insertions
+(go(max of two)) alike. `certa map` stores the clamped lengths of the whole
+reference once, four bits a base (half a byte a base, 1.45 GiB for GRCh38),
+and the bands read them instead of scanning. A run length depends only on the
+reference within `kBioCtxCap` + 4 bases, so the reference can be tabulated in
+independent stretches. The test runs every read and every rescue with the
+table, packed in two halves, and requires the same results as with the scan.
+*Mutant:* B18 (lengths clamped one below c_sat). With c_sat > 15 (other
+`--bio-str-*` values) there is no table and each band scans its window.
+
 **Proposition B2 (pairs).** The pair objective of loci a (mate 1) and b
 (mate 2) is V(a) + V(b) + ins(a, b), with ins the fragment-length penalty
 2.17 z² (z = (fragment − `--bio-insert` mean) / sd) of a proper pair
@@ -1426,6 +1440,37 @@ cheapest `max_loci` loci, with ℓ = the least penalty of a locus left out
 ≥ ℓ₁ + p₁(mate 2) (ins ≥ 0), and the other way round, so the best listed
 pair is the pair optimum when it is below min(ℓ₁ + p₁₂, ℓ₂ + p₁₁). Each mate
 is then re-aligned at its locus in that pair. *Mutants:* B10, B11.
+
+**Proposition B3 (pair rescue).** Let mate k be certified (loci listed below
+its ℓ_k, Theorem B) and mate f not, and let λ be a lower bound on every
+alignment of f: its YH when no end position lay below it (Theorem B: every
+alignment of f then costs ≥ YH), else 0. The objective is Proposition B2's,
+with f over all its end positions rather than its loci. For listed loci a
+of k, cheapest first, `bio_rescue` aligns f exactly (`bio_band`) over the end
+diagonals that make a proper pair with a, widened by G = `--bio-gap-cap`
+diagonals on each side; f ending at e pairs with a at V(a) + V_f(e) + ins.
+It stops before a locus with V(a) + λ above the best pair so far, or after
+`--bio-rescue-loci` windows. Every pair not evaluated costs at least one of:
+- ℓ_k + λ: k at a locus left out of its list;
+- V(a) + λ + improper, for an evaluated a: f outside a's proper window
+  (by definition an improper pair);
+- V(a) + max(λ, go_min + G ge), for an evaluated a: f inside the window
+  whose gaps total more than G, which may leave the band (Lemma W_B);
+- V(a) + λ, for a locus a whose window was not aligned.
+
+So the best pair found is the optimum when it is below all of them, and f
+is placed at its end there (`YR:i:1`; its YP is then ≥ its YH, since it is
+not certified alone). The test (`tests/test_bio.cpp`) runs the rescue for
+every certified mate of every pair in every setting, with λ = 0 and with
+f's YH when no end lay below it, and checks it against the oracle's best
+pair over k's loci and every end of f. Families: mates with a Q2 transition
+every 10 bases, which no part survives (placed only by the pair, all at
+the truth); discordant pairs whose improper pair beats a proper one with a
+near copy (the improper bound must stop the rescue); the list-bound pairs
+with three windows (q = 12, s = 1) and with three loci kept (tight).
+*Mutants:* B15–B17 (each bound dropped). The posterior is Proposition B2's
+convention: over the pairs found (f's ends grouped per locus of k, L apart)
+plus one unseen pair at each bound above.
 
 **Posterior MAPQ (a convention, not a bound).** The posterior of a locus is
 its weight 10^(−V/10) over the sum of the weights of the listed loci plus
@@ -1467,5 +1512,5 @@ bound, which δ leaves unaligned in the tight setting.
 **What it does not do.** Reads are aligned end to end: adapters and poly-G
 tails must be trimmed first (a read that keeps them costs too much and goes
 to the fallback). Uncertified reads go to the fallback, as in the default
-mode. The prior over loci is uniform, the reference linear; a read from
+mode, unless their mate places them (Proposition B3). The prior over loci is uniform, the reference linear; a read from
 sequence missing from the reference is placed at its best match there.

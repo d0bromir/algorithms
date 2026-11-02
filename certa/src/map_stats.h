@@ -28,8 +28,9 @@ struct Stats {
   uint64_t iv_mapq20 = 0, iv_xq20 = 0;
   // --bio, per record: certified ML placements (BM), of which elsewhere than
   // the edit certificate's best locus, placed jointly with the mate, and
-  // moved there by the mate; MAPQ >= 20; reads whose parts were enumerated.
-  uint64_t bm = 0, bm_moved = 0, bm_pair = 0, bm_pair_moved = 0, bm_mapq20 = 0, bio_tried = 0;
+  // moved there by the mate; MAPQ >= 20; reads whose parts were enumerated;
+  // placed only by the mate (pair rescue).
+  uint64_t bm = 0, bm_moved = 0, bm_pair = 0, bm_pair_moved = 0, bm_mapq20 = 0, bio_tried = 0, bm_rescued = 0;
 
   // A read of n_bases bases with its final result r, written with
   // final_reason (kOk: certified, or placed by tier S2 when r.certified == 2).

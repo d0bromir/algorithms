@@ -80,6 +80,9 @@ target_link_libraries(payoff PRIVATE certa_core)
 # The --bio model's penalty of any aligner's alignments (soundness at scale).
 add_executable(bio_score tools/bio_score.cpp)
 target_link_libraries(bio_score PRIVATE certa_core)
+# Why --bio certifies a read or falls back, and what it costs (per read).
+add_executable(bio_probe tools/bio_probe.cpp)
+target_link_libraries(bio_probe PRIVATE certa_core)
 # The long-read certificates against a brute-force DP (planted SVs).
 add_executable(test_longread tests/test_longread.cpp)
 target_link_libraries(test_longread PRIVATE certa_core)
