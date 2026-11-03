@@ -576,6 +576,138 @@ void test_lane_setup(uint64_t seed) {
                static_cast<long long>(fast));
 }
 
+// The traceback at locus l over its whole band, unpruned: what
+// bio_align_locus must return.
+bool full_trace(const IndexView& ix, const BioModel& m, const BioLocus& l, BioScratch& sc, Result& r) {
+  bio_band(ix, m, sc.br, l.strand, l.lo, l.width, sc, true);
+  return bio_trace(sc.br, l.strand, l.lo, l.width, l.b, sc, r);
+}
+
+bool same_trace(bool ta, const Result& a, bool tb, const Result& b) {
+  if (ta != tb) return false;
+  if (!ta) return true;
+  if (a.ref_pos != b.ref_pos || a.strand != b.strand || a.nm != b.nm || a.score != b.score || a.n_cigar != b.n_cigar)
+    return false;
+  for (int x = 0; x < a.n_cigar; ++x)
+    if (a.cigar[x] != b.cigar[x]) return false;
+  return true;
+}
+
+// bio_align_locus against full_trace on ends of random bands: reads of
+// 20-150 bases on a reference dense in tandem runs, with dense edits (gaps
+// of 1-12 bases), or with one clean gap in a long run, the case where the
+// narrowed band is tight: a deletion of k bases at go_min reaches k = g
+// diagonals below the end, an insertion of one Q2 base one above it. With
+// the run table and without. Requires both edges to be reached.
+void test_trace(uint64_t seed) {
+  std::mt19937_64 g0(seed ^ 0x7eacULL);
+  std::vector<uint8_t> ref(20000);
+  for (auto& c : ref) c = rand_base(g0);
+  std::vector<std::pair<int, int>> runs;  // (start, length) of the runs of 14 bases or more
+  for (int k = 0; k < 2500; ++k) {  // tandem runs: periods 1-4, up to 40 bases
+    const int p = static_cast<int>(g0() % 19900), per = 1 + static_cast<int>(g0() % 4);
+    const int len = 4 + static_cast<int>(g0() % 37);
+    for (int x = per; x < len; ++x) ref[p + x] = ref[p + x - per];
+    if (len >= 14 && p > 300 && p < 19500) runs.push_back({p, len});
+  }
+  IndexView ix{};
+  ix.ref = ref.data();
+  ix.ref_len = ref.size();
+  const BioModel m;
+  BioModel mt = m;
+  std::vector<uint8_t> tab((ref.size() + 1) / 2, 0);
+  bio_pack_contexts(ix, 0, static_cast<int64_t>(ref.size()), mt.ctx_sat(), tab.data());
+  mt.set_ctx_table(tab.data());
+  constexpr int kChunks = 200, kTrials = 100;
+  std::atomic<int64_t> traced{0}, tight_lo{0}, tight_hi{0};
+  parallel(kChunks, [&](size_t ch) {
+    std::mt19937_64 g(seed * 7919ULL + ch);
+    std::unique_ptr<BioScratch> sc(new BioScratch);
+    for (int t = 0; t < kTrials; ++t) {
+      const int L = 20 + static_cast<int>(g() % 131), mode = static_cast<int>(g() % 4);
+      std::vector<uint8_t> rd;
+      std::string q;
+      int64_t a;
+      uint8_t st = 0;
+      if (mode < 2) {  // one clean gap inside a long run, the read around it
+        const std::pair<int, int> run = runs[g() % runs.size()];
+        const int at = run.first + 1 + static_cast<int>(g() % static_cast<uint64_t>(run.second - 13));
+        const int k = mode == 0 ? 1 + static_cast<int>(g() % 12) : 1;
+        const int before = 1 + static_cast<int>(g() % static_cast<uint64_t>(L - 2));
+        a = at - before;
+        for (int64_t j = a; static_cast<int>(rd.size()) < L;) {
+          if (j == at && mode == 0) j += k;  // k bases deleted
+          if (j == at && mode == 1 && static_cast<int>(rd.size()) == before) {
+            rd.push_back(ref[j - 1]);  // one base inserted, at Q2
+            q.push_back(qchar(2));
+            continue;
+          }
+          rd.push_back(ref[j++]);
+          q.push_back(qchar(37));
+        }
+      } else {  // dense edits
+        a = 300 + static_cast<int64_t>(g() % 19000);
+        st = static_cast<uint8_t>(g() % 8 == 0);
+        const int psub = static_cast<int>(g() % 60), pgap = static_cast<int>(g() % 40);  // per mille
+        for (int64_t j = a; static_cast<int>(rd.size()) < L;) {
+          static const int Q[] = {2, 12, 23, 37, 40};
+          const int u = static_cast<int>(g() % 1000), n = 1 + static_cast<int>(g() % 12);
+          if (u < pgap / 2) { j += n; continue; }
+          if (u < pgap)
+            for (int y = 0; y < n && static_cast<int>(rd.size()) < L; ++y) {
+              rd.push_back(rand_base(g));
+              q.push_back(qchar(Q[g() % 5]));
+            }
+          if (static_cast<int>(rd.size()) == L) break;
+          rd.push_back(u < pgap + psub ? static_cast<uint8_t>((ref[j] + 1 + g() % 3) % 4) : ref[j]);
+          ++j;
+          q.push_back(qchar(Q[g() % 5]));
+        }
+      }
+      const BioModel& mm = t % 2 ? mt : m;
+      bio_read(mm, rd.data(), q.data(), L, sc->br);
+      const int B = 14 + static_cast<int>(g() % 187);
+      const int64_t lo = a - static_cast<int64_t>(g() % static_cast<uint64_t>(B - 13));
+      bio_band(ix, mm, sc->br, st, lo, B, *sc, false);
+      const std::vector<int> endv = sc->endv;
+      int best = 0;
+      for (int b = 1; b < B; ++b)
+        if (endv[b] < endv[best]) best = b;
+      for (int y = 0; y < 4; ++y) {
+        const int b = y == 0 ? best : static_cast<int>(g() % static_cast<uint64_t>(B));
+        if (endv[b] >= kBioInf) continue;
+        const BioLocus l{endv[b], st, lo + b + L - 1, lo, B, b};
+        Result ra{}, rb{};
+        const bool ta = bio_align_locus(ix, mm, l, *sc, ra);
+        const bool tb = full_trace(ix, mm, l, *sc, rb);
+        ++traced;
+        CHECK(same_trace(ta, ra, tb, rb), "traceback: locus at %lld (band [%lld, +%d), end %d, penalty %d, L %d, "
+              "mode %d) differs from the whole band's", static_cast<long long>(l.end), static_cast<long long>(lo), B,
+              b, l.pen, L, mode);
+        if (!tb) continue;
+        // How far the alignment strays from its end diagonal, below and above.
+        int d = static_cast<int>(rb.ref_pos - lo), dlo = 0, dhi = 0;
+        for (int c = 0; c < rb.n_cigar; ++c) {
+          const int op = static_cast<int>(rb.cigar[c] & 0xF), n = static_cast<int>(rb.cigar[c] >> 4);
+          if (op == kOpI) d -= n;
+          if (op == kOpD) d += n;
+          if (op != kOpM) continue;
+          dlo = std::max(dlo, b - d);
+          dhi = std::max(dhi, d - b);
+        }
+        const int gr = l.pen < mm.go_min() ? 0 : (l.pen - mm.go_min()) / mm.ge() + 1;
+        tight_lo += gr > 0 && dlo == gr;
+        tight_hi += gr > 0 && dhi == gr;
+      }
+    }
+  });
+  CHECK(tight_lo > 1000 && tight_hi > 1000, "traceback: the narrowed band's edges reached %lld times below, %lld "
+        "above", static_cast<long long>(tight_lo.load()), static_cast<long long>(tight_hi.load()));
+  std::fprintf(stderr, "traceback: %lld loci traced as over the whole band (the narrowed band's edge reached "
+               "%lld times below the end, %lld above)\n", static_cast<long long>(traced.load()),
+               static_cast<long long>(tight_lo.load()), static_cast<long long>(tight_hi.load()));
+}
+
 // ---------------------------------------------------------------------------
 // One placement: what the checks compare across settings and orders.
 struct Placed {
@@ -675,6 +807,7 @@ int main(int argc, char** argv) {
   }
   test_tiny_bands(seed);
   test_lane_setup(seed);
+  test_trace(seed);
   Genome G = make_genome(g);
   const BioModel m0;  // the default model: reads are planted against its costs
   const int L = 150;
@@ -1103,6 +1236,7 @@ int main(int argc, char** argv) {
   std::atomic<int> certified[3] = {{0}, {0}, {0}}, completeness[3] = {{0}, {0}, {0}};
   std::atomic<int> n_pairs_ok{0}, n_moved{0}, n_ties{0}, n_shift_checked{0};
   std::atomic<int> n_rescue_checked{0}, n_rescued{0}, n_rescued_truth{0};
+  std::atomic<int64_t> n_traced{0};
   // Placement against the truth (default setting): bio, fewest edits.
   std::atomic<int> at_truth_bio[12] = {}, at_truth_edit[12] = {}, n_fam[12] = {};
   auto at_truth = [&](const TestRead& t, const Result& r) {
@@ -1116,6 +1250,7 @@ int main(int argc, char** argv) {
     const int nm = pair ? 2 : 1;
     std::vector<int> V[2][2];
     BioRead br[2];
+    std::unique_ptr<BioScratch> sc(new BioScratch);
     for (int x = 0; x < nm; ++x) {
       bio_read(m0, reads[i0 + x].codes.data(), reads[i0 + x].qual.data(), L, br[x]);
       oracle(ix, m0, br[x], ctx[0], V[x]);
@@ -1180,6 +1315,16 @@ int main(int argc, char** argv) {
           CHECK(ps > pen, "%s read %zu: gap %d moves left at penalty %d (reported %d)", settings[k].name, i, c, ps,
                 pen);
         }
+        // The traceback at every listed locus is the whole band's.
+        bio_read(models[k], t.codes.data(), t.qual.data(), L, sc->br);
+        for (const BioLocus& l : o.loci) {
+          Result ra = P.r, rb = P.r;
+          const bool ta = bio_align_locus(views[k], models[k], l, *sc, ra);
+          const bool tb = full_trace(views[k], models[k], l, *sc, rb);
+          ++n_traced;
+          CHECK(same_trace(ta, ra, tb, rb), "%s read %zu: the traceback at locus %lld (penalty %d) differs from the "
+                "whole band's", settings[k].name, i, static_cast<long long>(l.end), l.pen);
+        }
       }
       // Truth, default setting.
       if (!pair || true) {
@@ -1225,7 +1370,6 @@ int main(int argc, char** argv) {
     // Pair rescue: each certified mate as k, the other as f, with lb_f = 0
     // (always a bound) and with f's horizon when no end lay below it. A rescue
     // must be the oracle's best pair: k over its loci, f over every end.
-    std::unique_ptr<BioScratch> sc(new BioScratch);
     for (size_t k = 0; k < ns; ++k)
       for (int km = 0; km < 2; ++km) {
         const Placed &K = res[k][i0 + km], &F = res[k][i0 + 1 - km];
@@ -1269,12 +1413,16 @@ int main(int argc, char** argv) {
                 settings[k].name, i0);
           CHECK(rs.f.pen >= lb_f, "%s pair %zu: rescued mate costs %d below its bound %d", settings[k].name, i0,
                 rs.f.pen, lb_f);
-          // f's alignment at its locus rescores to its penalty.
-          bio_band(views[k], models[k], sc->br, rs.f.strand, rs.f.lo, rs.f.width, *sc, true, lb_f + bp_improper);
-          Result r{};
-          const bool traced = bio_trace(sc->br, rs.f.strand, rs.f.lo, rs.f.width, rs.f.b, *sc, r);
+          // f's alignment at its locus rescores to its penalty, and is the
+          // traceback over its whole window.
+          Result r{}, rw{};
+          const bool traced = bio_align_locus(views[k], models[k], rs.f, *sc, r);
           CHECK(traced && bio_rescore(views[k], models[k], sc->br, r) == rs.f.pen,
                 "%s pair %zu: rescued alignment does not rescore to %d", settings[k].name, i0, rs.f.pen);
+          const bool tw = full_trace(views[k], models[k], rs.f, *sc, rw);
+          ++n_traced;
+          CHECK(same_trace(traced, r, tw, rw), "%s pair %zu: the rescued mate's traceback differs from its whole "
+                "window's", settings[k].name, i0);
           if (k == 0 && lb_f > 0 && !F.ok && tf.family == 10) {
             ++n_rescued;
             n_rescued_truth += traced && at_truth(tf, r);
@@ -1291,6 +1439,8 @@ int main(int argc, char** argv) {
                n_ties.load(), n_moved.load(), n_shift_checked.load(), n_pairs_ok.load());
   std::fprintf(stderr, "pair rescues checked against the oracle: %d; mates placed only by the pair: %d, at truth %d\n",
                n_rescue_checked.load(), n_rescued.load(), n_rescued_truth.load());
+  std::fprintf(stderr, "tracebacks: %lld loci and rescued mates traced as over the whole band\n",
+               static_cast<long long>(n_traced.load()));
   static const char* const fam[12] = {"sampled",        "qualities decide", "at the horizon",
                                       "indel in a run", "repeat copies",    "pair mates",
                                       "band reach",     "wide band",        "list-bound pairs",
@@ -1303,6 +1453,7 @@ int main(int argc, char** argv) {
         "qualities-decide reads: ML should place all %d at the truth (%d) and fewest edits none (%d)", n_fam[1].load(),
         at_truth_bio[1].load(), at_truth_edit[1].load());
   CHECK(n_ties > 0, "no tie certified: the test does not exercise ties");
+  CHECK(n_traced > 1000,"only %lld tracebacks compared with the whole band's", static_cast<long long>(n_traced.load()));
   CHECK(n_shift_checked > 20, "too few gaps checked for left-alignment (%d)", n_shift_checked.load());
   CHECK(n_pairs_ok > npairs / 2, "only %d of %d pairs placed jointly", n_pairs_ok.load(), npairs);
   CHECK(n_rescued >= 6 && n_rescued_truth == n_rescued,

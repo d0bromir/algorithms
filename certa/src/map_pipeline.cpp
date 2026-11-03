@@ -579,8 +579,7 @@ void MapPipeline::bio_rescue_pair(Slot& S, size_t i, BioScratch& sc) const {
                                   b.hashes[i], sc);
   if (!rs.ok) return;
   Result r[2] = {S.res[i], S.res[i + 1]};
-  bio_band(view_, bio_model_, sc.br, rs.f.strand, rs.f.lo, rs.f.width, sc, true, lb_f + c_.bp.improper);
-  if (!bio_trace(sc.br, rs.f.strand, rs.f.lo, rs.f.width, rs.f.b, sc, r[f])) return;
+  if (!bio_align_locus(view_, bio_model_, rs.f, sc, r[f])) return;
   if (rs.x != o[k].chosen) {
     bio_read(bio_model_, b.codes.data() + b.offs[jk], S.recs[jk].qual.data(), b.lens[jk], sc.br);
     if (!bio_align_locus(view_, bio_model_, o[k].loci[rs.x], sc, r[k])) return;

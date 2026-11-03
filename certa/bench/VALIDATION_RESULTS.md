@@ -41,10 +41,11 @@ pair rescue places mates the single-read certificate cannot. It lowers the
 fallback to 3.48 % (A) and 4.11 % (B) of reads with the same avoidable errors.
 A table of the reference's tandem runs and leaner data structures make
 `--bio` 1.66–1.78× faster, for 1.45 GiB more memory. Aligning up to 16
-bands at once in SIMD lanes makes it another 2.35–2.45× faster, and filling
-the lanes 16 bases at a time from the run table another 1.18–1.21×. The
-output is the same throughout, and `--bio` is now 18–20× slower than the
-default mode instead of 89–96×.
+bands at once in SIMD lanes makes it another 2.35–2.45× faster, filling
+the lanes 16 bases at a time from the run table another 1.18–1.21×, and
+tracing the reported alignment back over a narrowed band another
+1.13–1.17×. The output is the same throughout, and `--bio` is now 16–17×
+slower than the default mode instead of 89–96×.
 
 ## Pilot (2 M HG002 NovaSeq X pairs, trimmed)
 
@@ -298,6 +299,21 @@ variants timed with the probe):
   seed). The lanes and the tiny cases are now also checked with the run
   table. Mutants B24–B29 are all killed, and the test is clean under
   AddressSanitizer.
+- **The traceback over a narrowed band** (`bio_align_locus`; THEORY.md §12;
+  branch `claude/certa-bio-trace`). The reported locus was re-aligned with
+  traceback over every cell of its cluster's band, with no threshold (about
+  a tenth of the time in the profile). Its penalty V is known by then, so:
+  - the band is narrowed to the diagonals within g of the end, g the most
+    gap bases a penalty of V allows (Lemma W_B), and pruned at V + 1;
+  - a rescued mate's traceback takes the same band in its window, which is
+    otherwise over 1,000 diagonals wide.
+
+  THEORY.md proves that this gives the whole band's traceback, ties
+  included. The test traces 80,000 ends of random bands both ways, with the
+  narrowed band's edges reached about 7,600 times below the end and 2,500
+  above, and every locus and rescued mate of the oracle test. Mutants
+  B30–B33 are all killed, and the test is clean under AddressSanitizer and
+  UndefinedBehaviorSanitizer.
 
 **Tests A and B again** with that build ([truth_rerun_bio.sh](truth_rerun_bio.sh);
 [report_A_rescue.md](results/truth_2026-10/report_A_rescue.md),
@@ -325,7 +341,8 @@ build, byte for byte, in both tests; [timings.tsv](results/truth_2026-10/timings
 | rescue, run table | 709 s, 23.01 GiB | 1,335 s, 23.73 GiB |
 | rescue, run table and data structures | 677 s, 23.03 GiB | 1,277 s, 23.72 GiB |
 | the same, bands in SIMD lanes | 288 s, 23.04 GiB | 521 s, 23.76 GiB |
-| the same, lanes filled 16 bases at a time | **238 s**, 23.03 GiB | **443 s**, 23.73 GiB |
+| the same, lanes filled 16 bases at a time | 238 s, 23.03 GiB | 443 s, 23.73 GiB |
+| the same, traceback over a narrowed band | **211 s**, 23.03 GiB | **379 s**, 23.78 GiB |
 | CERTA's default mode | 13.5 s | 22.0 s |
 
 The table gives 1.42–1.52× and the data structures another 3–5 %.
@@ -342,6 +359,11 @@ It was run back to back with the lanes build, which took 288 s and 521 s
 again. The SAM output and the fallback FASTQ files are again identical in
 both tests.
 
+**The traceback over a narrowed band** gives 1.13× (A) and 1.17× (B). It
+was run back to back with the previous build, which took 239 s and 443 s
+again. The SAM output and the fallback FASTQ files are identical in both
+tests.
+
 The probe's time on the 400,000 reads:
 
 | build | all reads | heavy reads (≥ 1 M cells) | edit certificate |
@@ -351,14 +373,18 @@ The probe's time on the 400,000 reads:
 | SIMD lanes | 315 s | 192 s | 109 s |
 | SIMD lanes, `--bio-run-table 0` | 642 s | 499 s | 108 s |
 | SIMD lanes, one band at a time | 773 s | 635 s | 108 s |
-| SIMD lanes filled 16 bases at a time | **264 s** | **145 s** | 109 s |
+| SIMD lanes filled 16 bases at a time | 264 s | 145 s | 109 s |
+| traceback over a narrowed band | **225 s** | **143 s** | 109 s |
 
 The probe's output is identical in every column but the timings.
 
 - **Heavy reads:** they align 1,991 bands each. Leaving out their edit
-  certificate, a band now costs 1.06 µs: 1.6 µs with the lanes alone, and
-  7.0 µs before them.
-- **The edit certificate,** which `--bio` runs first, is now 41 % of the
+  certificate, a band now costs 1.04 µs: 1.06 µs before the narrowed
+  traceback, 1.6 µs with the lanes alone, and 7.0 µs before them.
+- **The narrowed traceback** saves time on the other reads, which align few
+  bands. Their `--bio` time besides the edit certificate fell from 65 s to
+  28 s.
+- **The edit certificate,** which `--bio` runs first, is now 48 % of the
   time.
 - **The run table** matters more with the lanes: without it, filling each
   band's window from a scan takes half the time. Test A takes 628 s without
@@ -380,17 +406,15 @@ The probe's output is identical in every column but the timings.
   rescued mates themselves, 7,224 fewer real mates (18,697 simulated) have
   MAPQ ≥ 40, and slightly fewer of those are misplaced (4,609 against
   4,621; 21,313 against 21,465).
-- **Cost:** `--bio` is now 18–20× slower than the default mode, against
+- **Cost:** `--bio` is now 16–17× slower than the default mode, against
   89–96× in phase 1 (50–58× before the lanes, 21–24× before filling them 16
-  bases at a time).
+  bases at a time, 18–20× before the narrowed traceback).
 
 ## Next
 
-1. **Cost.** The edit certificate that `--bio` runs first is now 41 % of
+1. **Cost.** The edit certificate that `--bio` runs first is now 48 % of
    its time; its band DP (`band_distance_vec8`) is also the largest cost of
-   `--full-cert`. About a tenth goes to re-aligning the reported locus with
-   traceback over every cell of its band. Its cost is already known, so
-   pruning at that cost would skip most cells.
+   `--full-cert`.
 2. **MAPQ.** Replace the one-competitor-at-`YH` convention with a bound
    that does not make horizon-limited reads overconfident.
 3. **Complex indels.** Allow an insertion next to a deletion in the model
