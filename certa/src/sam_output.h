@@ -16,7 +16,7 @@ struct OutputOptions {
   bool unc_tags = false;      // --unc-tags: uncertified reads carry parts, used and reason in a FASTQ comment
   bool single_mates = false;  // --fallback-mates single: a lone uncertified mate goes to the fallback alone
   bool witness = false;       // --witness: interval records carry what certa check needs (Theorem V)
-  bool mapq_cons = false;     // --iv-mapq cons: in interval mode MAPQ is the certified lower bound XQ
+  IvMapq iv_mapq = IvMapq::kPoint;  // --iv-mapq: what interval mode writes as MAPQ
 };
 
 // The records of some reads, one string per output.

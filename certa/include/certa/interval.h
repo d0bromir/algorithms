@@ -167,6 +167,22 @@ struct Placement {
   Witness pw;  // PR mates: the pair certificate's parts, which prove S2
 };
 
+// What interval mode writes as MAPQ (--iv-mapq).
+enum class IvMapq : uint8_t {
+  kPoint,  // point: the point estimate, BWA-MEM's formula with the best other locus found
+  kCons,   // cons: XQ, its certified lower bound, for every record
+  kCert,   // cert: XQ for tiers R, IV and MR (reads the default certificate left), the point estimate otherwise
+};
+
+// The MAPQ of a record under --iv-mapq m. On real reads the point estimate
+// of tiers IV and MR is far overconfident (bench/VALIDATION_RESULTS.md,
+// "MAPQ of the uncertified mates"); XQ for every record drops reads that
+// carry variants (FINDINGS.md, Aim 3).
+inline int iv_mapq(const Placement& p, IvMapq m) {
+  const bool uncertified = p.r.tier == kTierR || p.r.tier == kTierIV || p.r.tier == kTierMR;
+  return m == IvMapq::kCons || (m == IvMapq::kCert && uncertified) ? p.xq : p.mapq;
+}
+
 // Single-end bounds of a certified result (tiers S0, S1, SR, SL).
 inline void certified_bounds(const Result& r, int L, int* xl, int* xu, int* sub_hi) {
   *xl = r.score;

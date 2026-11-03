@@ -47,6 +47,21 @@ tracing the reported alignment back over a narrowed band another
 1.13–1.17×. The output is the same throughout, and `--bio` is now 16–17×
 slower than the default mode instead of 89–96×.
 
+**Complete pipelines** ([below](#complete-pipelines-against-the-truth)):
+with the fallback reads mapped by minibwa, `--bio` still has the fewest
+avoidable confident errors, but by 1.6–3.0× on real reads instead of 4–10×.
+minibwa gives MAPQ ≥ 40 to the reads CERTA cannot certify and misplaces
+4–8 % of them. On real reads, the default mode plus minibwa is the most
+accurate complete pipeline at MAPQ ≥ 40.
+
+**MAPQ of the uncertified mates** ([below](#mapq-of-the-uncertified-mates)):
+divided by 4, minibwa's MAPQ on those reads comes within 4× of their error
+rates. Each pipeline's confident rows are then those of CERTA alone, and
+on real reads `--bio` again has 5–10× fewer avoidable confident errors than
+the other aligners. Interval mode with `--iv-mapq cert` (XQ for its
+uncertified tiers) matches the corrected default pipeline with no second
+aligner.
+
 ## Pilot (2 M HG002 NovaSeq X pairs, trimmed)
 
 | | default | `--bio` |
@@ -410,16 +425,230 @@ The probe's output is identical in every column but the timings.
   89–96× in phase 1 (50–58× before the lanes, 21–24× before filling them 16
   bases at a time, 18–20× before the narrowed traceback).
 
+## Complete pipelines against the truth
+
+Until now CERTA's records were scored alone. Its fallback reads went to
+`/dev/null` and counted as absent, while every other aligner was scored on
+all its reads. [truth_complete.sh](truth_complete.sh) ran the complete
+pipelines on the same reads with the build of e95e619 (`main` at c2e2cd3,
+2026-11-03; galaxy, cores 0–63). They are scored against the same truth and
+the same phase 1 runs of the other aligners
+([report_A_complete.md](results/truth_2026-10/report_A_complete.md),
+[report_B_complete.md](results/truth_2026-10/report_B_complete.md)):
+- **`certa + minibwa`, `certa --bio + minibwa`:** the default mode or
+  `--bio` writes its uncertified pairs to FASTQ, and minibwa maps them as in
+  the timed pipeline. That means `-K 10m`, with `drop_certified_mates.awk`
+  keeping CERTA's record of a certified mate. That is 536,624 and 447,096
+  pairs in Test A, and 1,200,514 and 1,185,464 in Test B.
+- **`certa` interval mode:** CERTA places every read itself, with no
+  fallback.
+- **Checks:**
+  - Every mate has exactly one primary record, and no mate is in both
+    outputs.
+  - The default mode's records are identical to phase 1's.
+  - `--bio`'s fallback FASTQ files match the narrowed-traceback benchmark's
+    (md5).
+
+Mates with a truth. *Confident:* MAPQ ≥ 40. *Avoidable:* placed elsewhere,
+while another of the nine runs in the report placed them at the truth.
+
+| Test B (real) | at truth % | confident % | misplaced per M, MAPQ ≥ 40 / 60 | avoidable per M, MAPQ ≥ 40 / 60 | easy regions, misplaced at MAPQ ≥ 20 | wall (s) |
+|---|---|---|---|---|---|---|
+| `certa --bio` + minibwa | 99.900 | 95.69 | 219 / 147 | **11.6 / 6.2** | **244** | 379 + 24 |
+| `certa` + minibwa | **99.902** | 99.48 | **187** / 120 | 20.2 / 13.4 | 253 | 21 + 26 |
+| `certa` interval mode | 99.899 | 99.48 | 211 / 149 | 40.4 / 32.0 | 464 | 32 |
+| minibwa | 99.901 | 99.84 | 269 / **107** | 22.5 / 16.1 | 285 | 69 |
+| BWA-MEM2 | 99.900 | **99.86** | 309 / 189 | 35.2 / 26.5 | 368 | 353 |
+| strobealign | 99.901 | 99.69 | 199 / 173 | 18.1 / 16.9 | 280 | 78 |
+| minimap2 | 99.899 | 99.81 | 258 / 188 | 29.0 / 19.9 | 301 | 131 |
+| *`certa --bio` alone* | *99.790* | *95.58* | *151 / 112* | *3.5 / 1.1* | *47* | *379* |
+| *`certa` alone* | *99.861* | *99.44* | *155 / 106* | *15.7 / 10.9* | *145* | *21* |
+
+| Test A (simulated) | at truth % | confident % | misplaced per M, MAPQ ≥ 40 / 60 | avoidable per M, MAPQ ≥ 40 / 60 | easy regions, misplaced at MAPQ ≥ 20 | wall (s) |
+|---|---|---|---|---|---|---|
+| `certa --bio` + minibwa | 97.630 | 83.59 | 1,741 / 1,020 | **69 / 48** | 307 | 210 + 15 |
+| `certa` + minibwa | 97.699 | 94.70 | 1,552 / 915 | 152 / 85 | **297** | 13 + 24 |
+| `certa` interval mode | 97.690 | 94.68 | 1,671 / 1,055 | 234 / 160 | 497 | 20 |
+| minibwa | 97.777 | 96.63 | 2,081 / **421** | 80 / 39 | 345 | 41 |
+| BWA-MEM2 | **97.791** | **96.87** | 2,566 / 981 | 139 / 75 | 440 | 210 |
+| strobealign | 97.727 | 95.90 | **1,504** / 1,182 | 121 / 91 | 348 | 51 |
+| minimap2 | 97.747 | 96.20 | 1,805 / 1,043 | 96 / 59 | 334 | 72 |
+| *`certa --bio` alone* | *97.118* | *83.10* | *1,363 / 837* | *30 / 21* | *55* | *210* |
+| *`certa` alone* | *97.015* | *94.13* | *1,344 / 841* | *127 / 72* | *148* | *13* |
+
+The wall times of the complete pipelines add the two steps run one after
+the other: CERTA, then minibwa on its fallback. The other aligners' times
+come from phase 1's session.
+
+- **Real reads, default mode plus minibwa.** It is the most accurate
+  complete pipeline at MAPQ ≥ 40, with 187 misplaced per million against
+  199–309 for the others. It also places the most mates at the truth,
+  though the spread is only 0.003 points. At MAPQ ≥ 60, minibwa is lower
+  (107 against 120).
+- **`--bio` plus minibwa.** It has the fewest avoidable confident errors on
+  both tests, but its lead shrinks:
+  - real reads, MAPQ ≥ 40: 11.6 per million against 18.1–35.2 (1.6–3.0×),
+    where `--bio` alone had 3.5;
+  - simulated reads: 69 against 80–234 at MAPQ ≥ 40, but at MAPQ ≥ 60
+    minibwa is lower per million (39 against 48);
+  - its edge in easy regions mostly goes: 244 misplaced at MAPQ ≥ 20,
+    against 280–368 for the others and 47 for `--bio` alone.
+- **The fallback's MAPQ is the cause.**
+  - minibwa gives MAPQ ≥ 40 to 35,219 of `--bio`'s fallback mates on real
+    reads and misplaces 5.9 % of them, where MAPQ 40 claims 0.01 %. On
+    simulated reads the rate is 6.6 %. For the default mode's fallback it
+    is 8.1 % (real) and 3.6 % (simulated).
+  - These mates make up 31 % of `--bio` + minibwa's misplacements at
+    MAPQ ≥ 40 on real reads (22 % simulated), and 14–17 % of the default
+    pipeline's.
+  - So a read CERTA cannot certify is one whose heuristic MAPQ cannot be
+    trusted.
+  - Correcting that MAPQ: [below](#mapq-of-the-uncertified-mates).
+- **Interval mode** needs no second aligner. But the reads it places
+  without a certificate carry its confident errors: 40 avoidable per
+  million at MAPQ ≥ 40 on real reads, the most of any run.
+- **Simulated reads:** every CERTA pipeline places fewer mates at the truth
+  than every other aligner (97.63–97.70 % against 97.73–97.79 %).
+  strobealign has the lowest misplacement rate at MAPQ ≥ 40 (1,504 per
+  million, against 1,552 for CERTA + minibwa).
+- **Avoidable counts** depend on which runs are in the report. With these
+  nine, `--bio` alone has 106 at MAPQ ≥ 40 on real reads; with phase 1's
+  six, it had 103.
+
+## MAPQ of the uncertified mates
+
+A MAPQ rule changes MAPQ only, never a placement. So
+[truth_caps.py](truth_caps.py) scores each rule by rewriting the arrays of
+the runs above, with no remapping
+([caps_A.md](results/truth_2026-10/caps_A.md),
+[caps_B.md](results/truth_2026-10/caps_B.md)). For XQ, interval mode was
+also run with `--iv-mapq cons` (same build): the same placements, with
+lower MAPQ for 36.1 M of the 39.9 M real mates.
+
+The rule for interval mode is now built in as `--iv-mapq cert`: XQ for
+tiers R, IV and MR, the point estimate otherwise. Its rows below come from
+its own runs (the build of this change):
+- they match the rewrite of the other two runs exactly, on both tests;
+- the same build writes the same records as e95e619 in the default mode
+  and in interval mode with `--iv-mapq point`, on both tests.
+
+- **minibwa's MAPQ on the fallback mates is inflated at every level**, not
+  only at 40. On real reads its MAPQ 60 is worth Phred 13–15 (the misplaced
+  fraction), 40–59 is worth 5–9, and 20–39 is worth 2–3. On simulated
+  reads: 15–17, 6–13 and 3–9.
+  - Uncorrected, its MAPQ 40–60 band expects at most one misplaced mate
+    per test, where there are 1,011–6,079.
+  - Divided by 4, it is at most 3.6× too confident in any band (0, 1–4,
+    5–9, 10–14, 15–19) on either test. Capped at 39, it only leaves the
+    confident band.
+  - `drop_certified_mates.awk -v div=4` divides it in the pipeline. Scoring
+    its output gives the same arrays as the rewrite, on both tests.
+- **Interval mode's uncertified tiers have the same problem.** On real
+  reads it misplaces 21 % of the IV mates it gives MAPQ ≥ 40 (1,535 of
+  7,337) and 11 % of the MR mates (166 of 1,506).
+  - Their XQ (Proposition Q) is 0 for every IV and MR record.
+  - Tier R aligns uncertified reads exactly. Its XQ is not always 0, and at
+    XQ ≥ 20 it misplaces 0.4 % of real mates (4 of 1,089) and 0.9 % of
+    simulated ones.
+  - `--iv-mapq cons` cannot be used as MAPQ by itself: it gives XQ to the
+    certified tiers too, which leaves 0.56 % (real) and 3.7 % (simulated)
+    of mates at MAPQ ≥ 40.
+
+Mates with a truth; columns as above. *Composed:* `--bio`'s records, plus
+interval mode's for the mates `--bio` leaves to the fallback. The other
+aligners' rows are in the tables above.
+
+| Test B (real) | at truth % | confident % | misplaced / avoidable per M, MAPQ ≥ 40 | ≥ 60 | easy regions, misplaced at MAPQ ≥ 20 | wall (s) |
+|---|---|---|---|---|---|---|
+| `certa` + minibwa | 99.902 | 99.48 | 187 / 20.2 | 120 / 13.4 | 253 | 21 + 26 |
+| `certa` + minibwa, fallback MAPQ / 4 | 99.902 | 99.44 | 155 / 15.7 | 106 / 10.9 | 145 | 21 + 26 |
+| `certa` interval mode | 99.899 | 99.48 | 211 / 40.4 | 149 / 32.0 | 464 | 32 |
+| `certa` interval mode, XQ for IV, MR | 99.899 | 99.45 | 158 / 15.9 | 107 / 11.1 | 151 | 32 |
+| `certa` interval mode, `--iv-mapq cert` | 99.899 | 99.44 | 155 / 15.4 | 106 / 10.8 | 145 | 32 |
+| `certa --bio` + minibwa | 99.900 | 95.69 | 219 / 11.6 | 147 / 6.2 | 244 | 379 + 24 |
+| `certa --bio` + minibwa, fallback MAPQ / 4 | 99.900 | 95.58 | 151 / 3.5 | 112 / 1.1 | 47 | 379 + 24 |
+| `certa --bio` + interval mode, MAPQ / 4 (composed) | 99.897 | 95.58 | 151 / 3.5 | 112 / 1.1 | 47 | – |
+| minibwa | 99.901 | 99.84 | 269 / 22.5 | 107 / 16.1 | 285 | 69 |
+| strobealign | 99.901 | 99.69 | 199 / 18.1 | 173 / 16.9 | 280 | 78 |
+
+| Test A (simulated) | at truth % | confident % | misplaced / avoidable per M, MAPQ ≥ 40 | ≥ 60 | easy regions, misplaced at MAPQ ≥ 20 | wall (s) |
+|---|---|---|---|---|---|---|
+| `certa` + minibwa | 97.699 | 94.70 | 1,552 / 151.8 | 915 / 84.6 | 297 | 13 + 24 |
+| `certa` + minibwa, fallback MAPQ / 4 | 97.699 | 94.13 | 1,344 / 126.5 | 841 / 71.8 | 148 | 13 + 24 |
+| `certa` interval mode | 97.690 | 94.68 | 1,671 / 233.8 | 1,055 / 159.9 | 497 | 20 |
+| `certa` interval mode, XQ for IV, MR | 97.690 | 94.34 | 1,339 / 115.1 | 834 / 65.3 | 153 | 20 |
+| `certa` interval mode, `--iv-mapq cert` | 97.690 | 94.13 | 1,316 / 112.7 | 818 / 63.8 | 148 | 20 |
+| `certa --bio` + minibwa | 97.630 | 83.59 | 1,741 / 69.2 | 1,020 / 48.2 | 307 | 210 + 15 |
+| `certa --bio` + minibwa, fallback MAPQ / 4 | 97.630 | 83.10 | 1,363 / 30.4 | 837 / 21.3 | 55 | 210 + 15 |
+| `certa --bio` + interval mode, MAPQ / 4 (composed) | 97.611 | 83.10 | 1,363 / 30.4 | 837 / 21.3 | 55 | – |
+| minibwa | 97.777 | 96.63 | 2,081 / 80.0 | 421 / 38.5 | 345 | 41 |
+| strobealign | 97.727 | 95.90 | 1,504 / 121.0 | 1,182 / 90.7 | 348 | 51 |
+
+- **The correction works.** With the fallback's MAPQ divided by 4, or
+  capped at 39, each complete pipeline's rows at MAPQ ≥ 40 and ≥ 60 are
+  CERTA alone's, exactly.
+  - Division also brings the easy-region errors at MAPQ ≥ 20 back to
+    CERTA alone's. On real reads that is 253 → 145 for the default mode and
+    244 → 47 for `--bio`.
+  - The cost is fewer confident mates: 0.04 points (default) and 0.11
+    (`--bio`) on real reads, and 0.57 and 0.49 points on simulated ones.
+- **`--bio`'s lead is back.** On real reads at MAPQ ≥ 40, it has 3.5
+  avoidable errors per million confident mates against 18.1–35.2 for the
+  other aligners (5–10×). It has 47 easy-region errors at MAPQ ≥ 20 against
+  280–368. On simulated reads it has 30 against 80–139 at MAPQ ≥ 40, and 21
+  against 39–91 at MAPQ ≥ 60.
+- **The default mode needs no second aligner.**
+  - Interval mode with `--iv-mapq cert` matches the confident rows of the
+    corrected default + minibwa pipeline, or beats them. On real reads at
+    MAPQ ≥ 40 it has 155 misplaced and 15.4 avoidable per million, against
+    155 and 15.7. On simulated reads: 1,316 and 112.7, against 1,344 and
+    126.5.
+  - minibwa places 0.003 points more of the real mates at the truth (about
+    1,000 of 31.9 M) and 0.009 points more of the simulated ones. Once its
+    MAPQ is divided, all of its records are below MAPQ 20.
+  - Interval mode is faster: 32 s against 21 + 26 s on Test B, and 20
+    against 13 + 24 on Test A. It needs one index, not two; minibwa's step
+    peaks at 7.8–8.6 GiB.
+- **Interval mode with `--iv-mapq cert` against the other aligners:**
+  - It has the fewest misplaced mates at MAPQ ≥ 40 on both tests: on real
+    reads 155 per million against 199–309, and on simulated reads 1,316
+    against 1,504–2,566.
+  - It calls fewer mates confident: 99.44 % against 99.69–99.86 % on real
+    reads, and 94.13 % against 95.90–96.87 % on simulated ones.
+  - At MAPQ ≥ 60 it ties minibwa on real reads (106 against 107). On
+    simulated reads, minibwa is far lower (421 against 818).
+  - Its avoidable errors at MAPQ ≥ 40 are the fewest on real reads (15.4
+    against 18.1–35.2), but not on simulated ones (112.7 against 80–139).
+- **`--bio` still needs a second aligner**, since it does not combine with
+  `--intervals`.
+  - The composed rows estimate interval mode as its fallback. They match
+    `--bio` + minibwa at MAPQ ≥ 20 and above, and place 0.003 points fewer
+    mates at the truth on real reads (0.019 on simulated ones).
+  - With XQ instead of the division, the composed run has 154 / 4.1 per
+    million at MAPQ ≥ 40 on real reads, and 97 easy-region errors.
+  - This is an estimate. The records come from a separate run, and nothing
+    was timed. Placing `--bio`'s uncertified reads with interval mode's
+    tiers in the same process would remove minibwa from `--bio` too.
+- **What was fitted.** The division by 4 was fitted on these two HG002
+  tests, the calibration sample; the held-out check is phase 2. XQ is a
+  proven bound, with nothing fitted.
+
 ## Next
 
 1. **Cost.** The edit certificate that `--bio` runs first is now 48 % of
    its time; its band DP (`band_distance_vec8`) is also the largest cost of
    `--full-cert`.
-2. **MAPQ.** Replace the one-competitor-at-`YH` convention with a bound
+2. **MAPQ of uncertified records.**
+   - Test `--iv-mapq cert` in variant calling before making it the
+     default: XQ for every record dropped the reads that carry variants
+     (FINDINGS.md, Aim 3).
+   - Place the reads `--bio` cannot certify with interval mode's tiers in
+     the same process, so that `--bio` needs no second aligner either.
+3. **MAPQ.** Replace the one-competitor-at-`YH` convention with a bound
    that does not make horizon-limited reads overconfident.
-3. **Complex indels.** Allow an insertion next to a deletion in the model
+4. **Complex indels.** Allow an insertion next to a deletion in the model
    (`bio_band`, Lemma B, the oracle test).
-4. **Test B labels.** Label PR-tier mates from the pair certificate, so the
+5. **Test B labels.** Label PR-tier mates from the pair certificate, so the
    real-read truth covers segmental duplications.
-5. **Phase 2.** HG005 (download 1.8 GB), the held-out verdict, with the
-   build frozen after any change from 1–4.
+6. **Phase 2.** HG005 (download 1.8 GB), the held-out verdict, with the
+   build frozen after any change from 1–5.

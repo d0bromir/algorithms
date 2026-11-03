@@ -174,3 +174,6 @@ B30	include/certa/bio.h	s/  const int g = l.pen < m.go_min() ? 0 : (l.pen - m.go
 B31	include/certa/bio.h	s/  bio_band(ix, m, sc.br, l.strand, l.lo + b0, b1 - b0, sc, true, l.pen + 1);/  bio_band(ix, m, sc.br, l.strand, l.lo + b0, b1 - b0, sc, true, l.pen);/	killed	traceback: the locus's own penalty pruned (its last cells dropped)
 B32	include/certa/bio.h	s/  const int b0 = std::max(0, l.b - g), b1/  const int b0 = std::max(0, l.b - g + (g > 0)), b1/	killed	traceback: the band one diagonal short below the end where g > 0 (a deletion of g bases)
 B33	include/certa/bio.h	s/ b1 = std::min(l.width, l.b + g + 1);/ b1 = std::min(l.width, l.b + g + (g == 0));/	killed	traceback: the band one diagonal short above the end where g > 0 (an insertion of one Q2 base)
+M1	include/certa/interval.h	s/uncertified = p.r.tier == kTierR || /uncertified = /	killed	--iv-mapq cert: tier R keeps its point estimate
+M2	include/certa/interval.h	s/(m == IvMapq::kCert && uncertified)/(m == IvMapq::kCert \&\& false)/	killed	--iv-mapq cert: no record gets XQ
+M3	include/certa/interval.h	s/(m == IvMapq::kCert && uncertified)/(m == IvMapq::kCert)/	killed	--iv-mapq cert: XQ for the certified tiers too

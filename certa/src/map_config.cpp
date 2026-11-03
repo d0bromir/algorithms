@@ -101,8 +101,9 @@ MapConfig MapConfig::from_args(const Args& a) {
       rp.lb_chains < 0)
     throw std::runtime_error("bad --iv-* parameters");
   const std::string mapq_mode = a.get("--iv-mapq", "point");
-  if (mapq_mode != "point" && mapq_mode != "cons") throw std::runtime_error("--iv-mapq must be point or cons");
-  c.out.mapq_cons = mapq_mode == "cons";
+  if (mapq_mode != "point" && mapq_mode != "cons" && mapq_mode != "cert")
+    throw std::runtime_error("--iv-mapq must be point, cons or cert");
+  c.out.iv_mapq = mapq_mode == "cons" ? IvMapq::kCons : mapq_mode == "cert" ? IvMapq::kCert : IvMapq::kPoint;
   c.out.witness = a.has("--witness");
   if (c.out.witness && !c.intervals) throw std::runtime_error("--witness needs --intervals");
 

@@ -427,7 +427,7 @@ bool RecordWriter::certified_pair(const Result* r, const Result* se, const Fastq
     if (placed) {
       Placement pl = certified_placement(a, b, se[x], L, mapq, opt_.s2_limit);
       keep_within_contigs(pl, ref_);
-      if (opt_.mapq_cons) pl.mapq = pl.xq;
+      pl.mapq = iv_mapq(pl, opt_.iv_mapq);
       sam_line(a, rec[x], ref_, pl.mapq, mi, out.sam, interval_tags(pl, ref_, opt_).c_str());
       placed[x] = pl;
     } else {
@@ -547,7 +547,7 @@ int RecordWriter::single_interval(const Result& r0, const RepeatOut* iv, const F
   const int L = static_cast<int>(rec.seq.size());
   Placement p = place_single(r, r.certified == 1 ? mapq_of(r, L, opt_.s2_limit) : 0, iv, L);
   keep_within_contigs(p, ref_);
-  if (opt_.mapq_cons) p.mapq = p.xq;
+  p.mapq = iv_mapq(p, opt_.iv_mapq);
   const std::string t = interval_tags(p, ref_, opt_);
   if (p.mapped) sam_line(p.r, rec, ref_, p.mapq, MateInfo(), out.sam, t.c_str());
   else sam_unmapped(rec, ref_, MateInfo(), 0, -1, t.c_str(), out.sam);
@@ -575,8 +575,7 @@ bool RecordWriter::pair_interval(const Result* r0, const Result* se_res, const R
   }
   auto contig_of = [&](int64_t pos) { return ref_.contig_of(pos); };
   const bool proper = place_pair(view_, opt_.max_dist, 12, se, iv, codes, L, sc, contig_of, placed);
-  if (opt_.mapq_cons)
-    for (int x = 0; x < 2; ++x) placed[x].mapq = placed[x].xq;
+  for (int x = 0; x < 2; ++x) placed[x].mapq = iv_mapq(placed[x], opt_.iv_mapq);
   const int c0 = placed[0].mapped ? ref_.contig_of(placed[0].r.ref_pos) : -1;
   const int c1 = placed[1].mapped ? ref_.contig_of(placed[1].r.ref_pos) : -1;
   for (int x = 0; x < 2; ++x) {

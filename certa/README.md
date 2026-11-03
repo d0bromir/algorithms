@@ -136,7 +136,18 @@ Each record carries:
 
 **MAPQ.** By default MAPQ is a point estimate: BWA-MEM's formula, using the
 best other locus found. A pair is trusted no more than its more confident
-mate. `--iv-mapq cons` writes XQ instead.
+mate. `--iv-mapq cons` writes XQ instead; `--iv-mapq cert` writes XQ only
+for tiers R, IV and MR, the reads the default certificate left.
+- The point estimate is overconfident for those tiers: on real HG002 reads,
+  21 % of the IV mates and 11 % of the MR mates at MAPQ ≥ 40 are
+  misplaced, and their XQ is 0.
+- With `--iv-mapq cert`, interval mode is as accurate at MAPQ ≥ 40 as the
+  default mode plus minibwa with its MAPQ corrected, with no second aligner
+  ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#mapq-of-the-uncertified-mates)).
+- XQ for every record (`cons`) leaves few reads confident and drops the
+  reads that carry variants ([FINDINGS.md](FINDINGS.md), Aim 3). `cert`
+  has not been tested in variant calling yet, so `point` stays the
+  default.
 
 **Tier R options:** `--iv-tau 256`, `--iv-margin 20`, `--iv-chains 8`,
 `--iv-fallback 8`.
@@ -279,6 +290,12 @@ alignments.
 - **Confident placements:** they have the fewest avoidable errors of the
   aligners measured. On real reads at MAPQ ≥ 40, that is 103 against 439–988
   for CERTA's default mode, minibwa, BWA-MEM2, strobealign and minimap2.
+  With its fallback reads mapped by minibwa, the complete pipeline still has
+  the fewest, by 1.6–3.0× per million confident mates: minibwa misplaces
+  6–7 % of the fallback mates it gives MAPQ ≥ 40. Divided by 4
+  (`drop_certified_mates.awk -v div=4`), their MAPQ comes within 4× of
+  their error rates, and the lead is 5–10× again
+  ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#mapq-of-the-uncertified-mates)).
 - **The cost:**
   - `--bio` leaves more reads to the fallback: with the pair rescue, 0.13 %
     of real mates with a known origin are not in the SAM file, against
