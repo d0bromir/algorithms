@@ -1001,10 +1001,19 @@ inline int posterior_mapq(double others) {
 }  // namespace bio_detail
 
 // Re-aligns strand `l.strand` of the read in sc.br at locus l (its band and
-// end diagonal) with traceback into r.
+// end diagonal, l.pen the exact penalty there) with traceback into r. An
+// alignment of penalty l.pen has gaps totalling at most g (Lemma W_B), so it
+// stays within g diagonals of its end, and each of its cells is below
+// l.pen + 1: the band narrowed to those diagonals and pruned there gives the
+// whole band's traceback, ties included (THEORY.md §12).
 inline bool bio_align_locus(const IndexView& ix, const BioModel& m, const BioLocus& l, BioScratch& sc, Result& r) {
-  bio_band(ix, m, sc.br, l.strand, l.lo, l.width, sc, true);
-  return bio_trace(sc.br, l.strand, l.lo, l.width, l.b, sc, r);
+  const int g = l.pen < m.go_min() ? 0 : (l.pen - m.go_min()) / m.ge() + 1;
+  const int b0 = std::max(0, l.b - g), b1 = std::min(l.width, l.b + g + 1);
+  bio_band(ix, m, sc.br, l.strand, l.lo + b0, b1 - b0, sc, true, l.pen + 1);
+  // The bits are only followed from a live cell: a penalty the band does
+  // not reproduce is refused rather than traced.
+  if (sc.endv[l.b - b0] != l.pen) return false;
+  return bio_trace(sc.br, l.strand, l.lo + b0, b1 - b0, l.b - b0, sc, r);
 }
 
 // Maps one read with process_read(p) (its edit certificate, or a proven

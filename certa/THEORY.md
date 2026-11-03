@@ -1169,7 +1169,7 @@ guarantees is the interval [XL, XU] at whatever stage it stops.
 ## 9a. Mutants that survive by design
 
 A mutant that changes no claim on any input cannot be killed by a test, so
-it must be argued instead. Nine of the 170 survive.
+it must be argued instead. Nine of the 174 survive.
 - **L6** (span start candidates shifted): Lemma S, §4.
 - **B13** (an insertion inside a part not counted by Lemma B): a part of two
   or more bases can be touched by a deletion for go_min instead, which is
@@ -1417,6 +1417,36 @@ the next) and the deletion runs from them while they stay below H. Every cell
 below H is computed exactly, so every end below H, which is all Theorem B
 uses. On 300,000 simulated NovaSeq X reads the SAM output is the same, byte
 for byte, with and without pruning.
+
+**The traceback's band (`bio_align_locus`).** The reported alignment is
+traced back at its locus ℓ (penalty V, end diagonal b) over a narrower band
+than the cluster's: diagonals b − g … b + g, with g = 0 if V < go_min and
+g = ⌊(V − go_min)/ge⌋ + 1 otherwise, cells at V + 1 or more dropped. A
+rescued mate (Proposition B3) is traced the same way in its window. This
+gives the whole band's traceback, ties included.
+
+*Proof.* An alignment of penalty V has gaps totalling at most g (Lemma W_B,
+since go_min ≥ ge), and each gap base moves its diagonal by one. So every
+optimal alignment ending at ℓ lies within g diagonals of b, and each of its
+cells is ≤ V (costs ≥ 0). Let c be a cell on the whole band's traceback, and
+p a predecessor of c tied for c's minimum. An optimal path to p, the step
+to c and the traceback's rest from c is an optimal alignment ending at ℓ.
+So p's value is the same in the narrowed, pruned band. Every other
+predecessor's value can only rise there (fewer paths), so it stays above the
+minimum. The same predecessors tie at every cell of the traceback and the
+tie rule picks the same one, so the traceback is the same, step by step
+from ℓ. ∎
+- A locus whose penalty the narrowed band does not reproduce (none, by the
+  proof) is refused rather than traced, so a wrong penalty cannot walk the
+  traceback out of its band.
+- *Tests:* 80,000 ends of random bands are traced both ways. The reads have
+  dense edits (gaps of 1–12 bases), or one clean gap in a long run, where the
+  band is tight: a deletion of g bases at go_min reaches g diagonals below
+  the end, an insertion of one Q2 base one above it. Each edge is required to
+  be reached (about 7,600 and 2,500 times). So are every listed locus and
+  every rescued mate of the oracle test.
+- *Mutants:* B30 (g one short), B31 (the locus's own penalty pruned), B32
+  and B33 (the band a diagonal short below or above the end); all killed.
 
 **The tandem-run table (`--bio-run-table`, on by default).** Each band needs
 the run length c of every reference base in its window, for go(c). go never

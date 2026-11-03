@@ -285,8 +285,8 @@ alignments.
     0.05 % for the default mode (98.9 % of the rescued mates are at their
     origin);
   - its MAPQ is overconfident between 30 and 49;
-  - it runs 18–20× slower than the default mode on GRCh38 (up to 16 bands
-    aligned at once in SIMD lanes), and needs about 23.7 GiB with the
+  - it runs 16–17× slower than the default mode on GRCh38 (up to 16 bands
+    aligned at once in SIMD lanes), and needs about 23.8 GiB with the
     tandem-run table (22.3 GiB without);
   - the model has no complex indels (an insertion next to a deletion).
 
