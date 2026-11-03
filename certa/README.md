@@ -231,7 +231,7 @@ end to end (trim them first). One CPU pass replaces passes 1–3, V and L, so
 | `--bio-str-min` / `--bio-str-slope` / `--bio-str-cap` | 4 / 3 / 24 | a gap touching a tandem run (period 1–4) of ≥ min bases opens slope Phred cheaper per base, at most cap |
 | `--bio-insert` / `--bio-improper` | 400,100 / 40 | fragment length mean,sd; penalty of a pair that is not proper |
 | `--bio-rescue-loci` | 8 | a certified mate's loci whose proper-pair windows the pair rescue aligns (0: no rescue) |
-| `--bio-run-table` | 1 | tabulate the reference's tandem runs once (half a byte a base: 1.45 GiB for GRCh38) instead of scanning each band's window; same output, 2.2× faster on HG002 Test A; 0 saves the memory |
+| `--bio-run-table` | 1 | tabulate the reference's tandem runs once (half a byte a base: 1.45 GiB for GRCh38) instead of scanning each band's window; same output, 2.65× faster on HG002 Test A (the SIMD lanes are filled from it 16 bases at a time); 0 saves the memory |
 | `--bio-budget` | 4096 | hits enumerated per strand (more parts: a higher horizon) |
 | `--bio-gap-cap` / `--bio-delta` / `--bio-max-band` | 50 / 60 / 1024 | band reach; clusters bounded δ above the best are not aligned; widest band aligned |
 
@@ -285,8 +285,8 @@ alignments.
     0.05 % for the default mode (98.9 % of the rescued mates are at their
     origin);
   - its MAPQ is overconfident between 30 and 49;
-  - it runs 21–24× slower than the default mode on GRCh38 (up to 16 bands
-    aligned at once in SIMD lanes), and needs about 23.8 GiB with the
+  - it runs 18–20× slower than the default mode on GRCh38 (up to 16 bands
+    aligned at once in SIMD lanes), and needs about 23.7 GiB with the
     tandem-run table (22.3 GiB without);
   - the model has no complex indels (an insertion next to a deletion).
 

@@ -164,3 +164,9 @@ B20	include/certa/bio.h	s/      const u8x16 ic = i >= 2 ? /      const u8x16 ic 
 B21	include/certa/bio.h	s/    for (; b < Bm \&\& (b == b1 || any_below(dprev, cap)); ++b) {/    for (; b < Bm \&\& b == b1; ++b) {/	killed	lanes: deletion runs cut where the row before has no live cell
 B22	include/certa/bio.h	s/    std::fill(Dc + s0, Dc + s1, cap8);/    (void)0;/	killed	lanes: D cells two rows old left in the row written next
 B23	include/certa/bio.h	s/    std::fill(Dc + set0, Dc + set1, kBioInf);/    (void)0;/	killed	DP: D cells two rows old left in the row written next (bio_band; tiny bands against the plain DP)
+B24	include/certa/bio.h	s/    store8(runs.data() + k, zip_lo(even, next));/    store8(runs.data() + k, zip_lo(next, even));/	killed	run table: the two runs of a byte swapped as it is unpacked (bio_opens8)
+B25	include/certa/bio.h	s/  const uint8_t\* r = runs.data() + odd;/  const uint8_t* r = runs.data();/	killed	run table: a window starting at an odd position read one base early (bio_opens8)
+B26	include/certa/bio.h	s/    store8(in + x, lookup8(lut, vmax8(c, c1)));/    store8(in + x, lookup8(lut, c));/	killed	run table: an insertion's tandem context read on its left only (bio_opens8; B7 in the vector path)
+B27	include/certa/bio.h	s/  for (int round = 0; round < 4; ++round) {/  for (int round = 0; round < 3; ++round) {/	killed	lanes: a 16 x 16 transpose one round short (bio_lane_setup)
+B28	include/certa/bio.h	s/      for (int x = 0; x < e; x += 16) store8(rc + x, load8(ref + x) + s5);/      for (int x = 0; x < e; x += 16) store8(rc + x, load8(ref + x));/	killed	lanes: strand 1 read against strand 0's costs where the window comes from the run table
+B29	include/certa/bio.h	s/    sc.go_i\[W - 1\] = sc.go_d\[W - 1\];  \/\/ the loop below: no base after the window/    (void)0;/	killed	window: the last insertion open takes the base past the window (bio_window from the run table)
