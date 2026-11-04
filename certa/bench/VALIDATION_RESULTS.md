@@ -75,6 +75,13 @@ remaining errors are on mates no GRCh38 run places at the truth.
 T2T-CHM13 places 38 % of those real mates there; a pangenome mapper (vg
 giraffe on HPRC v2.1, HG002 left out) is not more accurate than minibwa.
 
+**A MAPQ from T2T-CHM13** ([below](#a-mapq-from-t2t-chm13)): setting MAPQ
+0 where BWA-MEM2 on T2T-CHM13 confidently places the read elsewhere
+removes 42–59 % of every aligner's confident errors on real reads (minibwa
+89 → 52 per million, interval mode 122 → 65), and 17–22 % on simulated
+ones. A second GRCh38 aligner in its place removes 0–3 %. It helps every
+aligner alike, so minibwa stays ahead.
+
 ## Pilot (2 M HG002 NovaSeq X pairs, trimmed)
 
 | | default | `--bio` |
@@ -774,17 +781,80 @@ run places at the truth:
 So on GRCh38 the remaining confident errors are the reference's. Much
 better accuracy needs information GRCh38 lacks:
 for instance, mapping to both GRCh38 and T2T and lowering the MAPQ of a
-read whose confident T2T placement lifts to another locus. That has not
-been tested.
+read whose confident T2T placement lifts to another locus (next section).
+
+## A MAPQ from T2T-CHM13
+
+The rule was fixed before the first evaluation (2026-11-04;
+[truth_t2t.py](truth_t2t.py), [truth_t2t.sh](truth_t2t.sh); reports
+[t2t_A.md](results/truth_2026-10/t2t_A.md),
+[t2t_B.md](results/truth_2026-10/t2t_B.md)):
+- BWA-MEM2 2.2.1 maps the same reads to T2T-CHM13 (hs1), and its records
+  are lifted to GRCh38 as above.
+- When the T2T record has MAPQ ≥ 40 and lifts more than 150 bp from a
+  GRCh38 aligner's placement, or to another contig or strand, that
+  placement's MAPQ becomes 0. No placement changes.
+
+Misplaced per million, at the locus and at the same N as in the section
+above, without → with the rule:
+
+| run | Test B, N = 99.44 % | Test B, N = 95.58 % | Test A, N = 94.13 % | Test A, N = 83.10 % |
+|---|---|---|---|---|
+| `certa` interval mode, `--iv-mapq cert` | 122 → 65 | 77 → 41 | 1,232 → 1,023 | 762 → 615 |
+| `certa` + minibwa | 123 → 65 | 77 → 41 | 1,266 → 1,050 | 785 → 634 |
+| `certa --bio` + minibwa | 332 → 137 | 138 → 72 | 4,245 → 3,536 | 1,309 → 1,056 |
+| minibwa | 89 → **52** | 46 → **27** | 430 → **354** | 262 → **209** |
+| BWA-MEM2 | 114 → 63 | 114 → 63 | 767 → 597 | 767 → 597 |
+| strobealign | 111 → 60 | 111 → 60 | 995 → 812 | 995 → 812 |
+| minimap2 | 130 → 71 | 121 → 64 | 831 → 648 | 831 → 648 |
+
+- **Real reads: about half the confident errors go** (42–59 % at
+  N = 99.44 %), for 0.04–0.06 points of confident mates. On simulated
+  reads it is 17–22 % (N = 94.13 %), for 0.09–0.15 points.
+- **The gain comes from T2T's sequence, not from a second aligner.** With
+  BWA-MEM2 on GRCh38 as the second opinion (`truth_t2t.py eval --second
+  bwa-mem2`), the same rule removes 0–2 % on real reads (minibwa 89 → 89,
+  interval mode 122 → 121) and 0–3 % on simulated ones (1,232 → 1,200).
+- **Most of the mates it sets to 0 were placed right.** Of the confident
+  ones, 14–23 % were misplaced on real reads and 24–34 % on simulated
+  ones. They are few (0.04–0.06 % of real mates), so the cost is small,
+  but the flags are far from precise. How many of the false ones come from
+  the lift, where the chain and the truth's projection (dipcall) align
+  repeats differently, was not separated.
+- **It does not change the order.** With the rule, minibwa (52 per million
+  on real reads) stays ahead of every CERTA pipeline (65), and at `--bio`'s
+  N it has 27 against `--bio`'s 72.
+- **Variants** (the grids in the reports) are mixed:
+  - a T2T threshold of 20 removes a few more errors (minibwa 51 on real
+    reads, 324 on simulated);
+  - counting T2T records that do not lift as disagreeing costs about 0.3
+    points more of confident mates and helps less on real reads;
+  - raising the MAPQ of placements T2T confirms adds errors for every
+    aligner on real reads.
+- **What was fitted:** only the threshold and the window, set beforehand;
+  CHM13 is another individual. The truth is still HG002's, so a held-out
+  sample needs truth labels for HG001 or HG005.
+- **Cost:** BWA-MEM2 on hs1 took 237 s (A) and 411 s (B) on galaxy's 64
+  cores, at 38.2 and 37.4 GiB: more than any GRCh38 aligner here, BWA-MEM2
+  included. CERTA on hs1 would be the fast second opinion; not tested.
+
+So a reference with the copies GRCh38 lacks is worth about a factor of 2
+in confident errors on real reads, for every aligner alike. It is not an
+advantage of CERTA's. Larger gains need flags that are more precise and
+catch more: a certified T2T placement (CERTA on hs1), or more haplotypes
+than CHM13's.
 
 ## Next
 
 1. **Accuracy.** No CERTA configuration is more accurate than minibwa at the
    locus and at matched sensitivity, and on GRCh38 almost no error is left
    to fix by search ([above](#matched-sensitivity-and-the-locus-window)).
-   - Test a MAPQ that uses T2T-CHM13: lower it when a read's confident T2T
-     placement lifts to another GRCh38 locus. Fit on HG002, hold out on
-     HG001 and HG005.
+   A T2T-CHM13 second opinion halves every aligner's confident errors on
+   real reads ([above](#a-mapq-from-t2t-chm13)).
+   - Map to hs1 with CERTA, and set MAPQ 0 where a certified hs1
+     placement lifts elsewhere: faster than BWA-MEM2, and perhaps more
+     precise flags.
+   - Hold the rule out on HG001 or HG005 (truth labels needed).
    - Score accuracy at the locus and at matched sensitivity from now on.
 2. **Cost.** The edit certificate that `--bio` runs first is now 48 % of
    its time; its band DP (`band_distance_vec8`) is also the largest cost of

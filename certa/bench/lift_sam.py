@@ -68,6 +68,26 @@ def lift(index, contig, pos):
     return (q, strand, p if strand == "+" else qsize - 1 - p)
 
 
+def lift_record(index, contig, pos, cigar):
+    """(target, 0-based unclipped leftmost base there, strand flipped, span) of a
+    mapped record at 1-based POS, or None when neither end lifts."""
+    ops = CIGAR.findall(cigar)
+    lead = int(ops[0][0]) if ops and ops[0][1] in "SH" else 0
+    span = sum(int(k) for k, o in ops if o in "MDN=XSH")
+    left = pos - 1 - lead
+    right = left + span - 1
+    a, b = lift(index, contig, left), lift(index, contig, right)
+    if a and a[1] == "+":
+        return a[0], a[2], False, span
+    if b and b[1] == "-":
+        return b[0], b[2], True, span
+    if b and b[1] == "+":
+        return b[0], b[2] - (span - 1), False, span
+    if a and a[1] == "-":
+        return a[0], a[2] - (span - 1), True, span
+    return None
+
+
 def main():
     out = sys.stdout
     if sys.argv[1] == "--names":  # no lift: PanSN names (GRCh38#0#chr1) to Ensembl ones
@@ -89,24 +109,12 @@ def main():
         if flag & 4:
             out.write("\t".join(t[:11]).rstrip("\n") + "\n")
             continue
-        ops = CIGAR.findall(t[5])
-        lead = int(ops[0][0]) if ops and ops[0][1] in "SH" else 0
-        span = sum(int(k) for k, o in ops if o in "MDN=XSH")
-        left = int(t[3]) - 1 - lead
-        right = left + span - 1
-        a, b = lift(index, t[2], left), lift(index, t[2], right)
-        if a and a[1] == "+":
-            q, new, flip = a[0], a[2], False
-        elif b and b[1] == "-":
-            q, new, flip = b[0], b[2], True
-        elif b and b[1] == "+":
-            q, new, flip = b[0], b[2] - (span - 1), False
-        elif a and a[1] == "-":
-            q, new, flip = a[0], a[2] - (span - 1), True
-        else:
+        r = lift_record(index, t[2], int(t[3]), t[5])
+        if r is None:
             unlifted += 1
             out.write(f"{t[0]}\t{(flag | 4) & ~16}\t*\t0\t0\t*\t*\t0\t0\t*\t*\n")
             continue
+        q, new, flip, span = r
         lifted += 1
         out.write(f"{t[0]}\t{flag ^ 16 if flip else flag}\t{q}\t{new + 1}\t{t[4]}\t{span}M\t*\t0\t0\t*\t*\n")
     print(f"[lift_sam] lifted {lifted}, not lifted {unlifted}", file=sys.stderr)

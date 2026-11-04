@@ -297,6 +297,9 @@ alignments.
   counts a read soft-clipped at an insertion as misplaced, and from calling
   fewer mates confident. Nearly all of every aligner's remaining confident
   errors are on mates whose origin GRCh38 lacks (0.05 % of real mates).
+  Setting MAPQ 0 where T2T-CHM13 confidently places the read elsewhere
+  removes about half of them on real reads, for every aligner alike
+  ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#a-mapq-from-t2t-chm13)).
 - **MAPQ of the fallback:** minibwa misplaces 6–7 % of the fallback mates
   it gives MAPQ ≥ 40. Divided by 4 (`drop_certified_mates.awk -v div=4`),
   their MAPQ comes within 4× of their error rates
