@@ -574,6 +574,22 @@ void test_fastq_scan(std::mt19937_64& g) {
   std::fprintf(stderr, "FASTQ batches: %d files, %d batches identical on 1, 3 and 8 threads\n", files, batches);
 }
 
+// --iv-mapq (interval.h iv_mapq): point writes the point estimate, cons
+// writes XQ, and cert writes XQ for tiers R, IV and MR only.
+void test_iv_mapq() {
+  for (int t = kTierS0; t <= kTierBM; ++t) {
+    Placement p;
+    p.r.tier = static_cast<uint8_t>(t);
+    p.mapq = 60;
+    p.xq = 7;
+    const bool uncertified = t == kTierR || t == kTierIV || t == kTierMR;
+    CHECK(iv_mapq(p, IvMapq::kPoint) == 60, "--iv-mapq point, tier %d: MAPQ %d", t, iv_mapq(p, IvMapq::kPoint));
+    CHECK(iv_mapq(p, IvMapq::kCons) == 7, "--iv-mapq cons, tier %d: MAPQ %d", t, iv_mapq(p, IvMapq::kCons));
+    CHECK(iv_mapq(p, IvMapq::kCert) == (uncertified ? 7 : 60), "--iv-mapq cert, tier %d: MAPQ %d", t,
+          iv_mapq(p, IvMapq::kCert));
+  }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -584,6 +600,7 @@ int main(int argc, char** argv) {
     std::mt19937_64 gq(seed ^ 0x5eedf00dULL);  // its own stream: the other tests' data stay as they were
     test_fastq_scan(gq);
   }
+  test_iv_mapq();
   Reference ref = make_reference(g);
   // Adversarial reads for tier SL, planted before the index is built:
   //  (a) the read has a mismatch in most parts at its true locus (so few or

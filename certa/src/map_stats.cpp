@@ -141,7 +141,10 @@ void print_summary(const MapConfig& c, const Stats& s, const PassCounts& n, cons
                  "MAPQ >= 20 %.2f%%, XQ >= 20 %.2f%%%s\n",
                  pct(n.tier_r), c.rp.tau, pct(s.iv_r), pct(s.iv_iv), pct(s.iv_mr), pct(s.iv_un),
                  pct(s.iv_unalignable), pct(wd[0]), pct(wd[1]), pct(wd[2]), pct(wd[3]), pct(wd[4]),
-                 pct(wd[5]), pct(s.iv_mapq20), pct(s.iv_xq20), c.out.mapq_cons ? " (MAPQ = XQ)" : "");
+                 pct(wd[5]), pct(s.iv_mapq20), pct(s.iv_xq20),
+                 c.out.iv_mapq == IvMapq::kCons   ? " (MAPQ = XQ)"
+                 : c.out.iv_mapq == IvMapq::kCert ? " (MAPQ = XQ for tiers R, IV, MR)"
+                                                  : "");
     if (c.paired())
       std::fprintf(stderr, "[map] intervals: proper pairs %.2f%%\n", s.pairs ? 100.0 * s.iv_proper / s.pairs : 0.0);
   }

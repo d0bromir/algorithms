@@ -1169,7 +1169,7 @@ guarantees is the interval [XL, XU] at whatever stage it stops.
 ## 9a. Mutants that survive by design
 
 A mutant that changes no claim on any input cannot be killed by a test, so
-it must be argued instead. Nine of the 174 survive.
+it must be argued instead. Nine of the 177 survive.
 - **L6** (span start candidates shifted): Lemma S, §4.
 - **B13** (an insertion inside a part not counted by Lemma B): a part of two
   or more bases can be touched by a deletion for go_min instead, which is
