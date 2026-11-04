@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Scores aligners' GRCh38 placements against truth (bench/VALIDATION_PLAN.md).
 
-  samtools view ALN.bam | truth_eval.py score truth.npz REF.fai OUT.npz
+  samtools view ALN.bam | truth_eval.py score [--window BP] truth.npz REF.fai OUT.npz
   truth_eval.py report truth.npz NAME=OUT.npz ... [--bio NAME] [--default NAME]
                 [--scores NAME=bio_score.tsv ...] > report.md
 
 `score` reads one aligner's primary records (read names <letter><pair index>,
 as truth_lift.py / truth_label.py number them) and keeps, per mate: placed,
-at truth (right contig and strand, unclipped leftmost base within 20 bp;
-chrY PAR placements moved to chrX first), MAPQ, CERTA's tier, and for --bio
+at truth (right contig and strand, unclipped leftmost base within --window
+bp, 20 by default; chrY PAR placements moved to chrX first. A window of 150
+counts the locus: soft clips at insertions and tandem-repeat shifts fall
+within it, VALIDATION_RESULTS.md "Matched sensitivity"), MAPQ, CERTA's tier, and for --bio
 records YA and the certified optimum p1 (YP, or YS when the mate was moved
 to another locus: loci[0] is the best one; for a mate placed only by the
 pair, YR:i:1, its YH, which bounds every alignment of it). `report` prints Markdown tables:
@@ -86,7 +88,7 @@ def cmd_score(a):
     r = read_sam(sys.stdin, n, ref.index, tags=True)
     ref.par_to_x(r["rc"], r["left"])
     correct = r["placed"] & (t["cls"] == CLS_TRUTH) & (r["rc"] == t["tc"]) & (r["strand"] == t["ts"])
-    correct &= np.abs(r["left"] + 1 - t["tp"]) <= WINDOW
+    correct &= np.abs(r["left"] + 1 - t["tp"]) <= a.window
     np.savez(a.out, placed=r["placed"], correct=correct, mapq=r["mapq"], tier=r["tier"], ya=r["ya"], p1=r["p1"],
              rescued=r["rescued"])
 
@@ -259,6 +261,7 @@ def main():
     s.add_argument("truth")
     s.add_argument("fai")
     s.add_argument("out")
+    s.add_argument("--window", type=int, default=WINDOW)
     r = sub.add_parser("report")
     r.add_argument("truth")
     r.add_argument("runs", nargs="+")

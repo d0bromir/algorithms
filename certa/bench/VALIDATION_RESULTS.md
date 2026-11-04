@@ -17,13 +17,19 @@ run on galaxy (ARM64, 64 of 128 cores for each aligner).
   283 M end-to-end alignments on reads `--bio` certified. None costs less
   under the model than `--bio`'s certified optimum. `bio_score` reproduces
   `YP` on all of `--bio`'s own records.
-- **The confident placements are the most accurate measured.** On real
-  NovaSeq X reads with a known origin, `--bio` has the fewest *avoidable*
-  errors: misplaced mates that another aligner placed at the truth.
-  - At MAPQ ≥ 40: 103 errors, against 439–988 for the others; per million
-    confidently placed mates, 4–9× fewer.
-  - At MAPQ ≥ 60: 31, against 325–725; 9–21× fewer per million.
-  - On simulated reads: 2–4× fewer per million at MAPQ ≥ 40, 1.4–3.7× at MAPQ ≥ 60.
+- **The confident placements are not more accurate than minibwa's**
+  ([below](#matched-sensitivity-and-the-locus-window), 2026-11-04). Phase 1
+  reported 4–21× fewer *avoidable* errors for `--bio` on real reads (1.4–4×
+  simulated): misplaced mates that another aligner placed at the truth.
+  Two choices made that:
+  - a 20 bp window, which counts a read soft-clipped at an insertion as
+    misplaced;
+  - counting each aligner at its own MAPQ ≥ 40, which credits `--bio` for
+    calling about 4 % fewer real mates confident (14 % simulated).
+
+  At the locus and the same number of confident mates, minibwa misplaces
+  3× fewer real mates than `--bio` (46 against 138 per million) and 5×
+  fewer simulated ones (262 against 1,309).
 - **But not a gold standard yet:**
   - It leaves more reads to the fallback: 0.3 % of real mates with a
     truth (default mode 0.05 %), 1.6 % of simulated ones (1.1 %).
@@ -34,7 +40,9 @@ run on galaxy (ARM64, 64 of 128 cores for each aligner).
 - **Most confident errors cannot be fixed on GRCh38.** No aligner placed
   them at the truth. Of `--bio`'s misplaced mates with MAPQ ≥ 40, that holds
   for 98 % of real reads and 98 % of simulated ones. Their best GRCh38 match
-  is not their orthologous locus.
+  is not their orthologous locus. At the locus this bounds every aligner:
+  of minibwa's 89 misplaced per million confident real mates, 0.6 are
+  mates another GRCh38 aligner places at the truth.
 
 **Since phase 1** ([below](#after-phase-1-the-fallback-and-the-cost)): a
 pair rescue places mates the single-read certificate cannot. It lowers the
@@ -48,19 +56,24 @@ tracing the reported alignment back over a narrowed band another
 slower than the default mode instead of 89–96×.
 
 **Complete pipelines** ([below](#complete-pipelines-against-the-truth)):
-with the fallback reads mapped by minibwa, `--bio` still has the fewest
-avoidable confident errors, but by 1.6–3.0× on real reads instead of 4–10×.
-minibwa gives MAPQ ≥ 40 to the reads CERTA cannot certify and misplaces
-4–8 % of them. On real reads, the default mode plus minibwa is the most
-accurate complete pipeline at MAPQ ≥ 40.
+CERTA with its fallback reads mapped by minibwa, and interval mode, which
+places every read itself. minibwa gives MAPQ ≥ 40 to the reads CERTA cannot
+certify and misplaces 4–8 % of them.
 
 **MAPQ of the uncertified mates** ([below](#mapq-of-the-uncertified-mates)):
 divided by 4, minibwa's MAPQ on those reads comes within 4× of their error
-rates. Each pipeline's confident rows are then those of CERTA alone, and
-on real reads `--bio` again has 5–10× fewer avoidable confident errors than
-the other aligners. Interval mode with `--iv-mapq cert` (XQ for its
-uncertified tiers) matches the corrected default pipeline with no second
-aligner.
+rates, and each pipeline's confident rows are then those of CERTA alone.
+Interval mode with `--iv-mapq cert` (XQ for its uncertified tiers) matches
+the corrected default pipeline with no second aligner.
+
+**Matched sensitivity and the locus window**
+([below](#matched-sensitivity-and-the-locus-window)): at the locus and at
+the same number of confident mates, minibwa is the most accurate aligner
+measured on both tests. Interval mode misplaces 1.4× as many confident
+real mates (2.9× simulated), and `--bio` 3.0× (5.0×). Nearly all the
+remaining errors are on mates no GRCh38 run places at the truth.
+T2T-CHM13 places 38 % of those real mates there; a pangenome mapper (vg
+giraffe on HPRC v2.1, HG002 left out) is not more accurate than minibwa.
 
 ## Pilot (2 M HG002 NovaSeq X pairs, trimmed)
 
@@ -109,6 +122,11 @@ share of segmental duplications (2.7 % against 5.5 %), and Test B
 understates the difficult regions.
 
 ## Accuracy
+
+*At truth* in this section and the next ones means within 20 bp of the
+truth, and each aligner is counted at its own MAPQ thresholds. Both
+overstate `--bio`'s lead, which disappears at the locus and at the same
+number of confident mates ([below](#matched-sensitivity-and-the-locus-window)).
 
 **Test B (real reads, 31.9 M mates with a truth)**:
 
@@ -451,6 +469,9 @@ the same phase 1 runs of the other aligners
 
 Mates with a truth. *Confident:* MAPQ ≥ 40. *Avoidable:* placed elsewhere,
 while another of the nine runs in the report placed them at the truth.
+*At truth:* within 20 bp, each run at its own MAPQ; at the locus and at a
+matched number of confident mates the ranking changes
+([below](#matched-sensitivity-and-the-locus-window)).
 
 | Test B (real) | at truth % | confident % | misplaced per M, MAPQ ≥ 40 / 60 | avoidable per M, MAPQ ≥ 40 / 60 | easy regions, misplaced at MAPQ ≥ 20 | wall (s) |
 |---|---|---|---|---|---|---|
@@ -480,14 +501,16 @@ The wall times of the complete pipelines add the two steps run one after
 the other: CERTA, then minibwa on its fallback. The other aligners' times
 come from phase 1's session.
 
-- **Real reads, default mode plus minibwa.** It is the most accurate
-  complete pipeline at MAPQ ≥ 40, with 187 misplaced per million against
-  199–309 for the others. It also places the most mates at the truth,
-  though the spread is only 0.003 points. At MAPQ ≥ 60, minibwa is lower
+- **Real reads, default mode plus minibwa.** At its own MAPQ ≥ 40 it has
+  the fewest misplaced mates per million, 187 against 199–309, but it calls
+  fewer mates confident (99.48 % against 99.69–99.86 %). It places the most
+  mates at the truth, by only 0.003 points. At MAPQ ≥ 60, minibwa is lower
   (107 against 120).
-- **`--bio` plus minibwa.** It has the fewest avoidable confident errors on
-  both tests, but its lead shrinks:
-  - real reads, MAPQ ≥ 40: 11.6 per million against 18.1–35.2 (1.6–3.0×),
+- **`--bio` plus minibwa.** In these tables it has the fewest avoidable
+  confident errors on both tests, though more than `--bio` alone. That is
+  an artifact of the 20 bp window and of calling 4 % fewer mates confident
+  ([below](#matched-sensitivity-and-the-locus-window)):
+  - real reads, MAPQ ≥ 40: 11.6 per million against 18.1–35.2,
     where `--bio` alone had 3.5;
   - simulated reads: 69 against 80–234 at MAPQ ≥ 40, but at MAPQ ≥ 60
     minibwa is lower per million (39 against 48);
@@ -554,7 +577,8 @@ its own runs (the build of this change):
     certified tiers too, which leaves 0.56 % (real) and 3.7 % (simulated)
     of mates at MAPQ ≥ 40.
 
-Mates with a truth; columns as above. *Composed:* `--bio`'s records, plus
+Mates with a truth; columns as above (20 bp, each run at its own MAPQ).
+*Composed:* `--bio`'s records, plus
 interval mode's for the mates `--bio` leaves to the fallback. The other
 aligners' rows are in the tables above.
 
@@ -592,11 +616,13 @@ aligners' rows are in the tables above.
     244 → 47 for `--bio`.
   - The cost is fewer confident mates: 0.04 points (default) and 0.11
     (`--bio`) on real reads, and 0.57 and 0.49 points on simulated ones.
-- **`--bio`'s lead is back.** On real reads at MAPQ ≥ 40, it has 3.5
-  avoidable errors per million confident mates against 18.1–35.2 for the
-  other aligners (5–10×). It has 47 easy-region errors at MAPQ ≥ 20 against
-  280–368. On simulated reads it has 30 against 80–139 at MAPQ ≥ 40, and 21
-  against 39–91 at MAPQ ≥ 60.
+- **`--bio` at its own MAPQ ≥ 40** has 3.5 avoidable errors per million
+  confident mates on real reads, against 18.1–35.2 for the other aligners,
+  and 47 easy-region errors at MAPQ ≥ 20 against 280–368. On simulated
+  reads it has 30 against 80–139 at MAPQ ≥ 40, and 21 against 39–91 at
+  MAPQ ≥ 60. This is not a lead in accuracy: at the locus and at the same
+  number of confident mates, minibwa misplaces fewer
+  ([below](#matched-sensitivity-and-the-locus-window)).
 - **The default mode needs no second aligner.**
   - Interval mode with `--iv-mapq cert` matches the confident rows of the
     corrected default + minibwa pipeline, or beats them. On real reads at
@@ -610,15 +636,18 @@ aligners' rows are in the tables above.
     against 13 + 24 on Test A. It needs one index, not two; minibwa's step
     peaks at 7.8–8.6 GiB.
 - **Interval mode with `--iv-mapq cert` against the other aligners:**
-  - It has the fewest misplaced mates at MAPQ ≥ 40 on both tests: on real
-    reads 155 per million against 199–309, and on simulated reads 1,316
-    against 1,504–2,566.
-  - It calls fewer mates confident: 99.44 % against 99.69–99.86 % on real
-    reads, and 94.13 % against 95.90–96.87 % on simulated ones.
+  - At its own MAPQ ≥ 40 it has fewer misplaced mates per million than
+    the others on both tests: on real reads 155 against 199–309, and on
+    simulated reads 1,316 against 1,504–2,566.
+  - But it calls fewer mates confident: 99.44 % against 99.69–99.86 % on
+    real reads, and 94.13 % against 95.90–96.87 % on simulated ones. At the
+    same number of confident mates it is not ahead
+    ([below](#matched-sensitivity-and-the-locus-window)).
   - At MAPQ ≥ 60 it ties minibwa on real reads (106 against 107). On
     simulated reads, minibwa is far lower (421 against 818).
-  - Its avoidable errors at MAPQ ≥ 40 are the fewest on real reads (15.4
-    against 18.1–35.2), but not on simulated ones (112.7 against 80–139).
+  - In this table its avoidable errors at MAPQ ≥ 40 are the fewest on real
+    reads (15.4 against 18.1–35.2), but not on simulated ones (112.7
+    against 80–139).
 - **`--bio` still needs a second aligner**, since it does not combine with
   `--intervals`.
   - The composed rows estimate interval mode as its fallback. They match
@@ -633,22 +662,144 @@ aligners' rows are in the tables above.
   tests, the calibration sample; the held-out check is phase 2. XQ is a
   proven bound, with nothing fitted.
 
+## Matched sensitivity and the locus window
+
+Two choices in the comparisons above favour CERTA, and `--bio` most
+(2026-11-04):
+- **The 20 bp window.** A mate is at the truth when its unclipped leftmost
+  base is within 20 bp of the truth's. That counts mates placed at their
+  locus but written differently as misplaced. On real reads, each other
+  aligner has 2,022–2,504 confident mates (MAPQ ≥ 40) 21–150 bp from the
+  truth; interval mode has 1,055 and `--bio` 399.
+  - About half of the other aligners' are soft-clipped by 10 bases or more,
+    and their offset is the clip's length (median offset less the clip −1
+    to 6 bases, on both tests). The read starts in sequence GRCh38 lacks:
+    they clip it, where CERTA writes an indel or `--bio` aligns it end to
+    end.
+  - The rest have no long clip or indel; their median offset is 30–33 bp.
+  - *At the locus* below means within 150 bp (`truth_eval.py score
+    --window 150`). On Test B, 1,000 bp gives the same ranking.
+- **Each run at its own MAPQ.** Errors per million confident mates credit a
+  run that calls fewer mates confident: `--bio` calls 95.58 % of real mates
+  confident, the others 99.44–99.86 %. Below, every run is taken at the
+  same N: its N most confident mates with a truth, ties at the boundary
+  MAPQ counted pro rata.
+
+[truth_headroom.sh](truth_headroom.sh) rescored every run of the tables
+above at 150 bp, with no remapping ([truth_headroom.py](truth_headroom.py),
+[truth_nearmiss.py](truth_nearmiss.py); reports
+[headroom_A.md](results/truth_2026-10/headroom_A.md),
+[headroom_B.md](results/truth_2026-10/headroom_B.md)). The minibwa
+pipelines have their fallback MAPQ divided by 4. Misplaced / avoidable per
+million among each run's N most confident mates with a truth; N is the
+share interval mode with `--iv-mapq cert`, or `--bio` + minibwa, calls
+confident:
+
+| Test B (real) | 20 bp, N = 99.44 % | locus, N = 99.44 % | 20 bp, N = 95.58 % | locus, N = 95.58 % |
+|---|---|---|---|---|
+| `certa` interval mode, `--iv-mapq cert` | 155 / 15.4 | 122 / 8.9 | 106 / 10.8 | 77 / 5.5 |
+| `certa` + minibwa | 156 / 15.9 | 123 / 9.5 | 106 / 10.9 | 77 / 5.7 |
+| `certa --bio` + minibwa | 394 / 35.7 | 332 / 24.5 | 151 / 3.5 | 138 / 1.3 |
+| minibwa | 154 / 17.0 | **89 / 0.6** | 107 / 16.1 | **46 / 0.3** |
+| BWA-MEM2 | 189 / 26.5 | 114 / 0.7 | 189 / 26.5 | 114 / 0.7 |
+| strobealign | 173 / 16.9 | 111 / 3.6 | 173 / 16.9 | 111 / 3.6 |
+| minimap2 | 198 / 20.6 | 130 / 4.5 | 188 / 19.9 | 121 / 4.0 |
+
+| Test A (simulated) | 20 bp, N = 94.13 % | locus, N = 94.13 % | 20 bp, N = 83.10 % | locus, N = 83.10 % |
+|---|---|---|---|---|
+| `certa` interval mode, `--iv-mapq cert` | 1,316 / 112.7 | 1,232 / 95.5 | 818 / 63.8 | 762 / 57.4 |
+| `certa` + minibwa | 1,349 / 127.7 | 1,266 / 111.0 | 841 / 71.8 | 785 / 65.6 |
+| `certa --bio` + minibwa | 4,349 / 234.5 | 4,245 / 207.4 | 1,363 / 30.4 | 1,309 / 13.2 |
+| minibwa | 607 / 42.7 | **430 / 3.3** | 421 / 38.5 | **262 / 2.2** |
+| BWA-MEM2 | 981 / 74.8 | 767 / 3.4 | 981 / 74.8 | 767 / 3.4 |
+| strobealign | 1,182 / 90.7 | 995 / 52.5 | 1,182 / 90.7 | 995 / 52.5 |
+| minimap2 | 1,043 / 59.0 | 831 / 13.1 | 1,043 / 59.0 | 831 / 13.1 |
+
+- **minibwa is the most accurate aligner measured**, at both N, on both
+  tests, at the locus.
+  - Real reads: 89 misplaced per million against 122 for interval mode
+    (1.4×) and 111–130 for the others. At `--bio`'s N it has 46 against
+    `--bio`'s 138 (3.0×) and interval mode's 77.
+  - Simulated reads: 430 against 1,232 for interval mode (2.9×), and 262
+    against `--bio`'s 1,309 (5.0×).
+- **CERTA's earlier lead came from the two choices.** At 20 bp, interval
+  mode ties minibwa on real reads (155 against 154). minibwa's avoidable
+  errors fall from 17.0 to 0.6 per million at the locus: they were near
+  misses that CERTA wrote with an indel. `--bio`'s avoidable errors (1.3)
+  are no longer the fewest: minibwa has 0.3.
+- **Nearly every confident error at the locus is caused by the
+  reference.** No GRCh38 run places 16,639 real mates (0.052 %) and
+  296,586 simulated ones (1.58 %) at the truth: their origin is missing
+  from GRCh38 or has diverged there. Of minibwa's 89 misplaced per million
+  on real reads, 0.6 are mates another GRCh38 run places at the truth (the
+  other heuristic aligners 0.7–4.5, CERTA 8.9–9.5). So a better algorithm
+  on GRCh38 cannot be much more accurate than minibwa. What separates the
+  aligners is which of the other mates they call confident, and minibwa's
+  MAPQ ranks more of them low than CERTA's does. CERTA's certificate
+  proves a read unique in GRCh38, not that it came from there.
+- **Interval mode with `--iv-mapq cert` still matches the corrected
+  default pipeline** (122 against 123 per million on real reads, 1,232
+  against 1,266 simulated), with no second aligner.
+
+**Other references** (Test B, at the locus). Of the 16,639 mates no GRCh38
+run places at the truth:
+
+| run | at the truth | at MAPQ ≥ 40 | misplaced at MAPQ ≥ 40 | misplaced / avoidable per M, N = 99.44 % |
+|---|---|---|---|---|
+| BWA-MEM2 on T2T-CHM13, lifted to GRCh38 | 6,372 (38.3 %) | 5,984 | 7,329 | 782 / 578.7 |
+| vg giraffe, HPRC v2.1 graph without HG002 | 4,636 (27.9 %) | 1,420 | 2,529 | 94 / 14.7 |
+
+- **T2T-CHM13 (hs1).** BWA-MEM2 on hs1, lifted through UCSC's
+  `hs1ToHg38` chain by [lift_sam.py](lift_sam.py). It places 38 % of those
+  mates at the truth, nearly all at MAPQ ≥ 40, so these reads do identify
+  their origin given a reference that has it. As a GRCh38 aligner it is
+  not usable: the lift leaves 2.09 M of its 39.8 M mapped records (5.3 %)
+  without a GRCh38 position and misplaces others (698 easy-region errors
+  at MAPQ ≥ 20, against 8–35 for the GRCh38 runs). That limit is the lift's, not T2T's; a truth
+  in hs1 coordinates would measure T2T itself.
+- **A pangenome.** vg giraffe 1.78.0 on `hprc-v2.1-mc-grch38-eval`, the
+  evaluation graph that leaves out HG002, HG005 and NA19240 (d46
+  filtered), projected onto GRCh38 with `--ref-name GRCh38`, without
+  haplotype sampling. The
+  published distance index is format v3, so `vg autoindex -w sr-giraffe`
+  rebuilt it (58 min, 104 GiB peak, on a2). Mapping took 641 s on a2's 64
+  cores (x86-64; not comparable to galaxy's times), at 69.7 GiB peak.
+  - At N = 99.44 % it misplaces 94 per million, against minibwa's 89; at
+    N = 98.65 % (minibwa's share at MAPQ ≥ 60), 73 against 46.
+  - It leaves 20,998 mates with a truth unmapped (0.066 %), of which
+    GRCh38 aligners place at least 19,622 at the truth, and has 169
+    easy-region errors at MAPQ ≥ 20 (GRCh38 runs: 8–35).
+  - It places 28 % of the mates GRCh38 cannot, but most at low MAPQ.
+
+So on GRCh38 the remaining confident errors are the reference's. Much
+better accuracy needs information GRCh38 lacks:
+for instance, mapping to both GRCh38 and T2T and lowering the MAPQ of a
+read whose confident T2T placement lifts to another locus. That has not
+been tested.
+
 ## Next
 
-1. **Cost.** The edit certificate that `--bio` runs first is now 48 % of
+1. **Accuracy.** No CERTA configuration is more accurate than minibwa at the
+   locus and at matched sensitivity, and on GRCh38 almost no error is left
+   to fix by search ([above](#matched-sensitivity-and-the-locus-window)).
+   - Test a MAPQ that uses T2T-CHM13: lower it when a read's confident T2T
+     placement lifts to another GRCh38 locus. Fit on HG002, hold out on
+     HG001 and HG005.
+   - Score accuracy at the locus and at matched sensitivity from now on.
+2. **Cost.** The edit certificate that `--bio` runs first is now 48 % of
    its time; its band DP (`band_distance_vec8`) is also the largest cost of
    `--full-cert`.
-2. **MAPQ of uncertified records.**
+3. **MAPQ of uncertified records.**
    - Test `--iv-mapq cert` in variant calling before making it the
      default: XQ for every record dropped the reads that carry variants
      (FINDINGS.md, Aim 3).
    - Place the reads `--bio` cannot certify with interval mode's tiers in
      the same process, so that `--bio` needs no second aligner either.
-3. **MAPQ.** Replace the one-competitor-at-`YH` convention with a bound
+4. **MAPQ.** Replace the one-competitor-at-`YH` convention with a bound
    that does not make horizon-limited reads overconfident.
-4. **Complex indels.** Allow an insertion next to a deletion in the model
+5. **Complex indels.** Allow an insertion next to a deletion in the model
    (`bio_band`, Lemma B, the oracle test).
-5. **Test B labels.** Label PR-tier mates from the pair certificate, so the
+6. **Test B labels.** Label PR-tier mates from the pair certificate, so the
    real-read truth covers segmental duplications.
-6. **Phase 2.** HG005 (download 1.8 GB), the held-out verdict, with the
-   build frozen after any change from 1–5.
+7. **Phase 2.** HG005 (download 1.8 GB), the held-out verdict, with the
+   build frozen after any change from 1–6.

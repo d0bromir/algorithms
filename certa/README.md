@@ -287,14 +287,19 @@ T2T-HG002 Q100 assembly (10 M pairs), or are read off that assembly for
 alignments.
 - **Soundness:** none of the ~283 M alignments other aligners reported scores
   below `--bio`'s certified optimum.
-- **Confident placements:** they have the fewest avoidable errors of the
-  aligners measured. On real reads at MAPQ ≥ 40, that is 103 against 439–988
-  for CERTA's default mode, minibwa, BWA-MEM2, strobealign and minimap2.
-  With its fallback reads mapped by minibwa, the complete pipeline still has
-  the fewest, by 1.6–3.0× per million confident mates: minibwa misplaces
-  6–7 % of the fallback mates it gives MAPQ ≥ 40. Divided by 4
-  (`drop_certified_mates.awk -v div=4`), their MAPQ comes within 4× of
-  their error rates, and the lead is 5–10× again
+- **Confident placements are not more accurate than minibwa's.** Scored at
+  the locus (within 150 bp) and at the same number of confident mates (the
+  95.6 % of real mates `--bio` calls confident), `--bio` misplaces 138 per
+  million, minibwa 46 and CERTA's default mode 77; on simulated reads,
+  1,309 against 262 and 785
+  ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#matched-sensitivity-and-the-locus-window)).
+  An earlier lead in avoidable errors came from a 20 bp window, which
+  counts a read soft-clipped at an insertion as misplaced, and from calling
+  fewer mates confident. Nearly all of every aligner's remaining confident
+  errors are on mates whose origin GRCh38 lacks (0.05 % of real mates).
+- **MAPQ of the fallback:** minibwa misplaces 6–7 % of the fallback mates
+  it gives MAPQ ≥ 40. Divided by 4 (`drop_certified_mates.awk -v div=4`),
+  their MAPQ comes within 4× of their error rates
   ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#mapq-of-the-uncertified-mates)).
 - **The cost:**
   - `--bio` leaves more reads to the fallback: with the pair rescue, 0.13 %
