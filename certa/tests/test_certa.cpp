@@ -590,6 +590,46 @@ void test_iv_mapq() {
   }
 }
 
+// --mapq cal (interval.h cal_mapq): the cell of each record against a
+// direct reading of the key, over every tier, edit count, second-best
+// distance (within R, beyond it, none), cluster count and MAPQ.
+void test_cal_mapq() {
+  int checked = 0;
+  const int clusters[] = {0, 1, 2, 4, 5, 16, 17, 300};
+  for (int t = kTierS0; t <= kTierBM; ++t)
+    for (int d1 = -1; d1 <= 7; ++d1)
+      for (int s = -1; s <= 20; ++s)
+        for (int within = 0; within < 2; ++within)
+          for (int nc : clusters)
+            for (int m : {0, 17, 39, 40, 41, 60}) {
+              Result r{};
+              r.tier = static_cast<uint8_t>(t);
+              r.d1 = static_cast<int8_t>(d1);
+              r.d2 = static_cast<int8_t>(within ? s : -1);  // second best within R, else the candidate beyond it
+              r.d2x = static_cast<int8_t>(within ? -1 : s);
+              r.n_clusters = static_cast<uint16_t>(nc);
+              const int ti = t == kTierS0 ? 0 : t == kTierS1 ? 1 : t == kTierPR ? 2 : -1;
+              int want;
+              if (m >= 40 && ti >= 0) {
+                const int e = d1 < 0 ? 0 : d1 > 5 ? 5 : d1;
+                const int g = s < 0 ? 11 : s - d1 < 0 ? 0 : s - d1 > 10 ? 10 : s - d1;
+                const int x = nc >= 17 ? 3 : nc >= 5 ? 2 : nc >= 2 ? 1 : 0;
+                want = kCalConf[ti][e][g][x];
+              } else {
+                want = t > kTierMR ? m : kCalLow[t][m > 39 ? 39 : m];
+              }
+              const int got = cal_mapq(r, m);
+              CHECK(got == want, "--mapq cal: tier %d d1 %d second %d (%s) clusters %d MAPQ %d: %d, not %d", t, d1, s,
+                    within ? "within R" : "beyond", nc, m, got, want);
+              ++checked;
+            }
+  // The table itself: the none-within-the-limit cell of a clean unique
+  // read is the most confident of its tier (the gap ordering it was fitted on).
+  CHECK(kCalConf[0][0][11][0] >= kCalConf[0][0][2][0] && kCalConf[1][1][11][0] >= kCalConf[1][1][2][0],
+        "--mapq cal table: a unique read below one with a close second locus");
+  std::fprintf(stderr, "--mapq cal: %d keys checked\n", checked);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -601,6 +641,7 @@ int main(int argc, char** argv) {
     test_fastq_scan(gq);
   }
   test_iv_mapq();
+  test_cal_mapq();
   Reference ref = make_reference(g);
   // Adversarial reads for tier SL, planted before the index is built:
   //  (a) the read has a mismatch in most parts at its true locus (so few or
@@ -1842,7 +1883,7 @@ int main(int argc, char** argv) {
       ip.fallback_samples = 8;
       ip.lb_chains = 8;
       PairScratch psc;
-      int placed = 0, proper_n = 0, rescued = 0, pair_checked = 0;
+      int placed = 0, proper_n = 0, rescued = 0, pair_checked = 0, improper_cert = 0, repaired = 0;
       auto contig_of = [&](int64_t pos) { return ref.contig_of(pos); };
       const check::Checker checker_p(ref, ix1);
       for (int n = 0; n < 60; ++n) {
@@ -1906,9 +1947,52 @@ int main(int argc, char** argv) {
                     rv.ref_pos - fw.ref_pos <= D,
                 "pair %d: claimed proper but not", n);
         }
+        // --iv-pair all: the same mates as if both were certified (tier S1,
+        // MAPQ 60) and not a proper pair. A moved mate becomes MR with XQ 0 and
+        // MAPQ <= 40; the other keeps its locus, tier and at least its MAPQ.
+        const Result& f0 = se[0].r.strand ? se[1].r : se[0].r;
+        const Result& r0s = se[0].r.strand ? se[0].r : se[1].r;
+        if (se[0].mapped && se[1].mapped &&
+            (se[0].r.strand == se[1].r.strand || r0s.ref_pos < f0.ref_pos || r0s.ref_pos - f0.ref_pos > D)) {
+          Placement cs[2], co[2];
+          for (int x = 0; x < 2; ++x) {
+            cs[x] = se[x];
+            cs[x].r.tier = kTierS1;
+            cs[x].r.certified = 1;
+            cs[x].mapq = 60;
+          }
+          const RepeatOut* none[2] = {nullptr, nullptr};
+          ++improper_cert;
+          if (place_pair(view1, D, 12, cs, none, cp, Ls, psc, contig_of, co)) {
+            ++repaired;
+            int moved = 0;
+            for (int x = 0; x < 2; ++x) {
+              CHECK(co[x].mapped, "certified pair %d mate %d: unmapped after re-pairing", n, x);
+              CHECK(rescore_affine(view1, co[x].r, *m[x]) == co[x].r.score, "certified pair %d mate %d: CIGAR", n, x);
+              if (co[x].r.tier == kTierMR) {
+                ++moved;
+                CHECK(co[x].xq == 0 && co[x].mapq <= 40, "certified pair %d mate %d: MR with XQ %d, MAPQ %d", n, x,
+                      co[x].xq, co[x].mapq);
+              } else {
+                CHECK(co[x].r.tier == kTierS1 && same_locus(co[x].r, cs[x].r) && co[x].mapq >= cs[x].mapq,
+                      "certified pair %d mate %d: the anchor changed", n, x);
+              }
+              check::Work w;
+              const check::Verdict v = checker_p.check(claim_of(co[x], *m[x]), &w);
+              CHECK(v == check::kAccepted, "certified pair %d mate %d: checker says %s", n, x, check::kVerdictNames[v]);
+            }
+            CHECK(moved >= 1, "certified pair %d: re-paired without moving a mate", n);
+            const Result& fw = co[0].r.strand ? co[1].r : co[0].r;
+            const Result& rv = co[0].r.strand ? co[0].r : co[1].r;
+            CHECK(co[0].r.strand != co[1].r.strand && rv.ref_pos >= fw.ref_pos && rv.ref_pos - fw.ref_pos <= D,
+                  "certified pair %d: re-paired but not proper", n);
+          }
+        }
       }
       std::fprintf(stderr, "interval pairs: %d records placed (%d by the pair window), %d proper pairs of 60; %d checked\n",
                    placed, rescued, proper_n, pair_checked);
+      std::fprintf(stderr, "improper certified pairs: %d, re-paired %d\n", improper_cert, repaired);
+      CHECK(repaired > 0, "no improper certified pair was re-paired");
     }
 
     // ---- The checker on tier R and pair records (index q = 14, s = 1), and

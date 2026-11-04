@@ -82,6 +82,17 @@ removes 42–59 % of every aligner's confident errors on real reads (minibwa
 ones. A second GRCh38 aligner in its place removes 0–3 %. It helps every
 aligner alike, so minibwa stays ahead.
 
+**Re-paired mates and a fitted MAPQ**
+([below](#re-paired-mates-and-a-fitted-mapq)): two opt-in options of paired
+interval mode. `--iv-pair all` re-pairs certified mates of improper pairs;
+`--mapq cal` writes a MAPQ fitted on HG002 from the gap to the second-best
+locus, the edits and the clusters verified. Held out on HG005
+([below](#held-out-hg005)), they make CERTA the most accurate aligner
+measured at operating points of 98 % of mates and below: 22–33 misplaced per
+million against minibwa's 37 and 108–110 for the others (14–19 against 22
+with the T2T veto on both). At 99.3 % and above minibwa stays ahead (80
+against 86).
+
 ## Pilot (2 M HG002 NovaSeq X pairs, trimmed)
 
 | | default | `--bio` |
@@ -844,17 +855,166 @@ advantage of CERTA's. Larger gains need flags that are more precise and
 catch more: a certified T2T placement (CERTA on hs1), or more haplotypes
 than CHM13's.
 
+## Re-paired mates and a fitted MAPQ
+
+Two changes aimed at what the matched comparison found (2026-11-04;
+[truth_cal.sh](truth_cal.sh), [truth_mapq_fit.py](truth_mapq_fit.py);
+reports [cal_A.md](results/truth_2026-10/cal_A.md),
+[cal_B.md](results/truth_2026-10/cal_B.md)). Both are opt-in options of
+paired interval mode; the default mode is unchanged (same records on
+test A), and so is interval mode without them (same records as
+`--iv-mapq cert` on both tests).
+
+**`--iv-pair all`: certified mates of an improper pair are re-paired.**
+On simulated reads 82 % of interval mode's avoidable confident errors
+(1,360 of 1,651) were mates of pairs that were not proper, both mates
+certified: each sat at its single-end optimum, while the pair pointed at
+the truth. Interval mode already re-paired pairs with an uncertified mate
+the way BWA-MEM does (`place_pair`); `--iv-pair all` sends these pairs
+through it too. A mate's best alignment in the other's proper-pair window
+is taken when the pair beats the two single-end bests minus the unpaired
+penalty; the moved mate becomes MR (XQ 0, and its single-end certificate
+stays in XL/XU). Otherwise the records are the certified ones.
+- Avoidable errors per million at interval mode's N fall from 8.7 to 4.3
+  on real reads and from 93 to 34 on simulated ones. The mates at the
+  locus rise from 99.908 % to 99.911 % (real) and from 97.728 % to 97.788 %
+  (simulated).
+- The test re-pairs 14–20 improper certified pairs per seed and checks that
+  every re-paired pair is proper, every moved mate is MR with XQ 0, the
+  anchor keeps its locus, tier and MAPQ, and every claim passes the checker.
+
+**`--mapq cal`: MAPQ fitted at the locus.** BWA-MEM's formula, which
+interval mode uses, reaches 60 once the second locus is about three
+mismatches away. On real reads the error rate keeps falling with the gap
+over its whole range. For S0 mates at MAPQ ≥ 40 it is:
+
+| gap to the second-best locus (edits) | 2 | 3 | 4 | 5 | 6 | 8 | 10 | none within 10 |
+|---|---|---|---|---|---|---|---|---|
+| misplaced per million | 10,244 | 5,413 | 3,654 | 2,322 | 1,474 | 587 | 423 | 25 |
+
+A nearby paralog in GRCh38 marks the reads whose own copy may be missing
+from it. The edits of the best alignment and the clusters verified add to
+that: among S1 mates with no second locus within 10 edits, 47 per million
+are misplaced with one edit and one cluster, against 1,242 with two edits
+and two to four clusters. `--mapq cal` writes as MAPQ the Phred of the
+misplaced share of such records on HG002 (`cal_mapq`,
+[mapq_table.h](../include/certa/mapq_table.h)):
+- records with MAPQ ≥ 40 in tiers S0, S1 and PR, by tier, edits (0–5), the
+  gap to the second-best locus (0–10 edits, or none; `--mapq cal` sets
+  `--mapq-limit 10`) and clusters verified (1, 2–4, 5–16, 17 or more);
+- every other record by tier and MAPQ;
+- cells with fewer than 1,000 mates take their parent's value.
+
+The table was fitted on tests A and B pooled (HG002, the calibration
+sample). CERTA's output equals the fit's replay on every mate of both
+tests, and the placements are those of `--iv-pair all`. Its values are
+Phred-scaled error rates, so they are lower than the formula's: 74.5 % of
+real mates get MAPQ ≥ 40 (most S1 reads get 39), against 99.4 % before.
+
+Misplaced per million at matched sensitivity, at the locus; *veto*: the
+T2T rule of the previous section, with BWA-MEM2's or CERTA's placements on
+hs1:
+
+| run | B, N = 99.44 % | B, N = 95.58 % | A, N = 94.13 % | A, N = 83.10 % |
+|---|---|---|---|---|
+| `certa` interval mode, `--iv-mapq cert` | 122 | 77 | 1,232 | 762 |
+| the same, `--iv-pair all --mapq cal` | 100 | **34** | 1,063 | 267 |
+| the same, with BWA-MEM2's T2T veto | 58 | **21** | 894 | 224 |
+| the same, with CERTA's T2T veto | 70 | 23 | 966 | 239 |
+| minibwa | 89 | 46 | 430 | 262 |
+| minibwa, with BWA-MEM2's T2T veto | **52** | 27 | **354** | **209** |
+| BWA-MEM2 / strobealign / minimap2 | 114 / 111 / 130 | 114 / 111 / 121 | 767 / 995 / 831 | 767 / 995 / 831 |
+
+- **Real reads:** with both changes and BWA-MEM2's T2T veto, CERTA has
+  fewer confident errors than every aligner as shipped at both N (58 against
+  89–130; 21 against 46–121). minibwa with the same veto is ahead at the
+  looser N (52 against 58) and behind at the stricter one (27 against 21).
+- **Simulated reads:** at the stricter N, CERTA with the veto is ahead of
+  every aligner as shipped (224 against 262–995) but behind minibwa with
+  the veto (209). At the looser N it is behind minibwa as shipped (894
+  against 430). The simulated truth keeps the segmental duplications that
+  test B's labels under-sample (5.5 % against 2.7 % of mates).
+- **CERTA on hs1 as the second opinion** (interval mode, `--iv-pair all`)
+  takes 29 s for test B against BWA-MEM2's 411 s, and keeps 70–80 % of its
+  gain. Its flags are not more precise: 13–22 % of the confident mates it
+  sets to 0 on real reads were misplaced, against 14–23 % for BWA-MEM2's
+  (for the fitted MAPQ, whose confident mates are fewer, 6 % and 5 %).
+  Counting only certified hs1 placements changes nothing, since with
+  `--iv-mapq cert` every hs1 record at MAPQ ≥ 40 is S0, S1 or PR.
+- **What was fitted:** the table, on HG002 (both tests). HG005 is the
+  held-out check ([below](#held-out-hg005)).
+
+## Held out: HG005
+
+The configurations above were fixed on HG002 and then run once on HG005
+(2026-11-04; [truth_hg005.sh](truth_hg005.sh); reports
+[t2t_H.md](results/truth_2026-11_hg005/t2t_H.md),
+[curve_H.md](results/truth_2026-11_hg005/curve_H.md),
+[labels_H.txt](results/truth_2026-11_hg005/labels_H.txt)). The build is
+this section's commit
+([frozen_source.sha](results/truth_2026-11_hg005/frozen_source.sha)).
+- **Truth:**
+  - HG005's HPRC release 2 haplotypes (trio-phased hifiasm,
+    chromosome-level), aligned to GRCh38 with dipcall's minimap2 settings;
+  - the first 20 M NovaSeq 6000 pairs (2×151) of SRR14724528, trimmed as
+    test B's;
+  - labels made as test B's: certified unique on one haplotype, with
+    minibwa's check (52 disagreements).
+
+  30,127,192 mates (75.4 %) have a truth, in the same strata as test B
+  (2.7 % in segmental duplications, 34.9 % in difficult regions).
+
+Misplaced per million at the locus among each run's N most confident
+mates with a truth (N = 99.29 % is interval mode's confident share):
+
+| run | 99.75 % | 99.29 % | 98 % | 95 % |
+|---|---|---|---|---|
+| `certa` interval mode, `--iv-mapq cert` | 363 | 111 | 65 | 65 |
+| the same, `--iv-pair all --mapq cal` | 319 | 86 | **33** | **22** |
+| minibwa | 208 | **80** | 37 | 37 |
+| BWA-MEM2 | **202** | 108 | 108 | 108 |
+| strobealign | 323 | 108 | 108 | 108 |
+| minimap2 | 252 | 152 | 110 | 110 |
+| *with BWA-MEM2's T2T veto:* `--iv-pair all --mapq cal` | 185 | 50 | **19** | **14** |
+| *with the veto:* minibwa | 167 | **48** | 22 | 22 |
+| *with the veto:* BWA-MEM2 | **160** | 60 | 60 | 60 |
+
+- **The HG002 result holds.** The two changes cut interval mode's
+  confident errors by 23 % at N = 99.29 % (111 → 86; on test B 122 → 100
+  at 99.44 %) and by 66 % at 95 % (65 → 22).
+- **At 98 % and below, CERTA is the most accurate aligner measured:** 22–33
+  per million against minibwa's 37 and 108–110 for the others, so 1.1–1.7×
+  fewer than minibwa and 3–5× fewer than the rest. With the T2T veto on
+  both, it is 14–19 against minibwa's 22.
+- **At the loosest operating points minibwa is ahead:** 80 against 86 at
+  99.29 %, and 208 against 319 at 99.75 %. CERTA places 99.904 % of the
+  mates at the locus, minibwa 99.906 %.
+- **Why the curves flatten:** minibwa, BWA-MEM2 and strobealign give MAPQ 60
+  to more than 98 % of the mates, so below that their rate is the MAPQ-60
+  group's; the fitted MAPQ keeps ranking.
+- **The T2T veto** removes 41–51 % of every aligner's confident errors at
+  N = 99.29 %, as on HG002. CERTA on hs1 as the second opinion again keeps
+  70–80 % of BWA-MEM2's gain (`--mapq cal`: 86 → 59, against 50). A second
+  GRCh38 aligner in its place removes 0–7 %.
+
+So the lead is real but confined to the stricter operating points, and it
+is 1.1–1.7× over the best other aligner, not a large factor everywhere.
+
 ## Next
 
-1. **Accuracy.** No CERTA configuration is more accurate than minibwa at the
-   locus and at matched sensitivity, and on GRCh38 almost no error is left
-   to fix by search ([above](#matched-sensitivity-and-the-locus-window)).
-   A T2T-CHM13 second opinion halves every aligner's confident errors on
-   real reads ([above](#a-mapq-from-t2t-chm13)).
-   - Map to hs1 with CERTA, and set MAPQ 0 where a certified hs1
-     placement lifts elsewhere: faster than BWA-MEM2, and perhaps more
-     precise flags.
-   - Hold the rule out on HG001 or HG005 (truth labels needed).
+1. **Accuracy.** With `--iv-pair all --mapq cal`, CERTA is the most
+   accurate aligner measured at operating points of 98 % of mates and
+   below, held out on HG005, but not at 99.3 % and above
+   ([above](#held-out-hg005)). On GRCh38 almost no error is left to fix by
+   search; a T2T-CHM13 second opinion halves every aligner's confident
+   errors on real reads.
+   - One pass instead of two: CHM13 copies of GRCh38's collapsed
+     duplications as decoy contigs of the GRCh38 index (FixItFelix's
+     design; [the research report](../reports/Biologically%20correct%20read%20placement%20ideas.md)).
+   - The loosest operating points and the simulated test, where minibwa
+     stays ahead: compare the mates each ranks last.
+   - Test both options in variant calling (item 3) before making them the
+     default.
    - Score accuracy at the locus and at matched sensitivity from now on.
 2. **Cost.** The edit certificate that `--bio` runs first is now 48 % of
    its time; its band DP (`band_distance_vec8`) is also the largest cost of
@@ -871,5 +1031,6 @@ than CHM13's.
    (`bio_band`, Lemma B, the oracle test).
 6. **Test B labels.** Label PR-tier mates from the pair certificate, so the
    real-read truth covers segmental duplications.
-7. **Phase 2.** HG005 (download 1.8 GB), the held-out verdict, with the
-   build frozen after any change from 1–6.
+7. **Phase 2 for `--bio`.** HG005's truth is built and interval mode is
+   scored on it ([above](#held-out-hg005)); `--bio` has not been run on it.
+   Run it once, with the build frozen after any change from 1–6.

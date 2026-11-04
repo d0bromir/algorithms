@@ -284,7 +284,7 @@ int main(int argc, char** argv) {
                    "            [--budget3 0|4096] [--support3 2] [--local 0|2] [--full-cert] [--adaptive-parts 0|1|2]\n"
                    "            [--index2 second.cidx] [-t N] [--gpu] [--device 0]\n"
                    "            [-o out.sam] [-u uncertified.fq] [--stats s.json] [--batch N] [--io-threads N]\n"
-                   "            [--intervals [--witness] [--iv-mapq point|cons|cert]]\n"
+                   "            [--intervals [--witness] [--iv-mapq point|cons|cert] [--iv-pair uncert|all] [--mapq point|cal] [--feature-tags]]\n"
                    "  certa repeat ref.cidx reads.fq [--tau 16] [--tsv out.tsv]\n"
                    "  certa check-index ref.cidx ref.fa       (once per reference build)\n"
                    "  certa check ref.cidx aln.sam|- [--sample N] [--failures f.txt]\n"

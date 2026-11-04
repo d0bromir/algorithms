@@ -1,0 +1,33 @@
+HG005 truth labels (bench/truth_hg005.sh; truth_label.py --margin 2, minibwa check), 19,984,082 pairs
+[read_sam] 39968164 primary records
+[read_sam] 39968164 primary records
+  mate 1: origin maternal only: 173,182
+  mate 1: origin paternal only: 159,485
+  mate 1: homologous, same GRCh38 locus: 14,906,519
+  mate 1: on chrM / chrEBV in both (excluded): 0
+  mate 1: both haplotypes, different GRCh38 loci (unlabelled): 54,539
+  mate 2: origin maternal only: 164,400
+  mate 2: origin paternal only: 152,016
+  mate 2: homologous, same GRCh38 locus: 14,580,418
+  mate 2: on chrM / chrEBV in both (excluded): 0
+  mate 2: both haplotypes, different GRCh38 loci (unlabelled): 52,484
+  mate 1: second aligner agrees: 15,239,154
+  mate 1: second aligner disagrees (unlabelled): 32
+  mate 1: second aligner did not place: 0
+  mate 2: second aligner agrees: 14,896,814
+  mate 2: second aligner disagrees (unlabelled): 20
+  mate 2: second aligner did not place: 0
+  truth              30127192 mates (75.378%)
+  no linear truth        8776 mates (0.022%)
+  excluded                  0 mates (0.000%)
+  not labelled        9832196 mates (24.600%)
+  stratum bench            28035676 mates (93.058% of truth)
+  stratum easy             19575635 mates (64.977% of truth)
+  stratum difficult        10510710 mates (34.888% of truth)
+  stratum lowmap_segdup     1496120 mates (4.966% of truth)
+  stratum segdup             815143 mates (2.706% of truth)
+  stratum lowmap            1135643 mates (3.769% of truth)
+  stratum tandem            7626213 mates (25.313% of truth)
+  stratum mhc                 55975 mates (0.186% of truth)
+  stratum cmrg_falsedup        1252 mates (0.004% of truth)
+  stratum par                 25039 mates (0.083% of truth)

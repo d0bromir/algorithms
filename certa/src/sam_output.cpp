@@ -250,6 +250,10 @@ std::string interval_tags(const Placement& p, const Reference& ref, const Output
   if (p.xl != kNoSub) tag("\tXL:i:", p.xl);
   tag("\tXU:i:", p.xu);
   tag("\tXQ:i:", p.xq);
+  if (opt.feature_tags) {  // the inputs of cal_mapq not in other tags
+    tag("\tXO:i:", p.r.d2x);
+    tag("\tXN:i:", p.r.n_clusters);
+  }
   if (opt.witness) {
     if (p.xq > 0 && (p.r.tier != kTierPR || p.pr_xh)) tag("\tXH:i:", p.sub_hi);
     auto probes = [&](const Witness& w) {
@@ -428,6 +432,7 @@ bool RecordWriter::certified_pair(const Result* r, const Result* se, const Fastq
       Placement pl = certified_placement(a, b, se[x], L, mapq, opt_.s2_limit);
       keep_within_contigs(pl, ref_);
       pl.mapq = iv_mapq(pl, opt_.iv_mapq);
+      if (opt_.mapq_cal) pl.mapq = cal_mapq(pl.r, pl.mapq);
       sam_line(a, rec[x], ref_, pl.mapq, mi, out.sam, interval_tags(pl, ref_, opt_).c_str());
       placed[x] = pl;
     } else {
@@ -559,23 +564,44 @@ bool RecordWriter::pair_interval(const Result* r0, const Result* se_res, const R
                                  const uint8_t* const* codes, const FastqRecord* rec, PairScratch& sc, Records& out,
                                  int* reason, Placement* placed) const {
   const Result r[2] = {mate_as_reported(r0[0], ref_), mate_as_reported(r0[1], ref_)};
-  if (r[0].certified == 1 && r[1].certified == 1) {
-    reason[0] = reason[1] = kOk;
-    return certified_pair(r, se_res, rec, out, placed);
-  }
-  // A mate without a certificate: both placed from their single-end
-  // placements and tier R outputs, with mate rescue in the pair window.
+  auto contig_of = [&](int64_t pos) { return ref_.contig_of(pos); };
   Placement se[2];
   int L[2];
-  for (int x = 0; x < 2; ++x) {
-    reason[x] = interval_reason(r[x]);
-    L[x] = static_cast<int>(rec[x].seq.size());
-    se[x] = place_single(r[x], r[x].certified == 1 ? mapq_of(r[x], L[x], opt_.s2_limit) : 0, iv[x], L[x]);
-    keep_within_contigs(se[x], ref_);
+  bool proper;
+  if (r[0].certified == 1 && r[1].certified == 1) {
+    reason[0] = reason[1] = kOk;
+    if (!opt_.iv_pair_all || is_proper(r[0], r[1], ref_, opt_.max_dist))
+      return certified_pair(r, se_res, rec, out, placed);
+    // --iv-pair all: both mates certified, but not as a proper pair. Each
+    // mate's best alignment in the other's proper-pair window, as for a
+    // mate without a certificate (BWA-MEM's rule): the pair is taken if it
+    // beats the two single-end bests minus the unpaired penalty, and the
+    // moved mate becomes MR. Otherwise the certified records are written.
+    const RepeatOut* none[2] = {nullptr, nullptr};
+    for (int x = 0; x < 2; ++x) {
+      L[x] = static_cast<int>(rec[x].seq.size());
+      const int mapq = mapq_pair(r[x], r[1 - x], se_res[x], L[x], opt_.s2_limit);
+      se[x] = certified_placement(r[x], r[1 - x], se_res[x], L[x], mapq, opt_.s2_limit);
+      keep_within_contigs(se[x], ref_);
+    }
+    if (!place_pair(view_, opt_.max_dist, 12, se, none, codes, L, sc, contig_of, placed))
+      return certified_pair(r, se_res, rec, out, placed);
+    proper = true;
+  } else {
+    // A mate without a certificate: both placed from their single-end
+    // placements and tier R outputs, with mate rescue in the pair window.
+    for (int x = 0; x < 2; ++x) {
+      reason[x] = interval_reason(r[x]);
+      L[x] = static_cast<int>(rec[x].seq.size());
+      se[x] = place_single(r[x], r[x].certified == 1 ? mapq_of(r[x], L[x], opt_.s2_limit) : 0, iv[x], L[x]);
+      keep_within_contigs(se[x], ref_);
+    }
+    proper = place_pair(view_, opt_.max_dist, 12, se, iv, codes, L, sc, contig_of, placed);
   }
-  auto contig_of = [&](int64_t pos) { return ref_.contig_of(pos); };
-  const bool proper = place_pair(view_, opt_.max_dist, 12, se, iv, codes, L, sc, contig_of, placed);
-  for (int x = 0; x < 2; ++x) placed[x].mapq = iv_mapq(placed[x], opt_.iv_mapq);
+  for (int x = 0; x < 2; ++x) {
+    placed[x].mapq = iv_mapq(placed[x], opt_.iv_mapq);
+    if (opt_.mapq_cal && placed[x].mapped) placed[x].mapq = cal_mapq(placed[x].r, placed[x].mapq);
+  }
   const int c0 = placed[0].mapped ? ref_.contig_of(placed[0].r.ref_pos) : -1;
   const int c1 = placed[1].mapped ? ref_.contig_of(placed[1].r.ref_pos) : -1;
   for (int x = 0; x < 2; ++x) {

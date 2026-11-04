@@ -41,6 +41,7 @@
 #include <cstdint>
 
 #include "certa/core.h"
+#include "certa/mapq_table.h"
 #include "certa/pair.h"
 #include "certa/repeat.h"
 
@@ -181,6 +182,28 @@ enum class IvMapq : uint8_t {
 inline int iv_mapq(const Placement& p, IvMapq m) {
   const bool uncertified = p.r.tier == kTierR || p.r.tier == kTierIV || p.r.tier == kTierMR;
   return m == IvMapq::kCons || (m == IvMapq::kCert && uncertified) ? p.xq : p.mapq;
+}
+
+// --mapq cal (paired interval mode): MAPQ as the Phred of the share of such
+// records placed away from their origin on HG002, fitted at the locus
+// (certa/mapq_table.h, bench/truth_mapq_fit.py). The formula saturates where
+// no second locus is close, while on real reads the error rate falls with the
+// gap to the second-best locus over its whole range: a nearby paralog in the
+// reference marks reads whose own copy may be missing from it. A record with
+// MAPQ m >= 40 in tier S0, S1 or PR is looked up by its edits, that gap
+// (within --mapq-limit) and the clusters verified; any other by tier and m.
+// The placement and XQ (a bound of BWA-MEM's formula) are unchanged.
+inline int cal_mapq(const Result& r, int m) {
+  const int ti = r.tier == kTierS0 ? 0 : r.tier == kTierS1 ? 1 : r.tier == kTierPR ? 2 : -1;
+  if (m >= 40 && ti >= 0) {
+    const int second = r.d2 >= 0 ? r.d2 : r.d2x;
+    const int d1 = r.d1 < 0 ? 0 : (r.d1 > 5 ? 5 : r.d1);
+    const int gap = second >= 0 ? std::min(std::max(second - r.d1, 0), 10) : 11;
+    const int x = r.n_clusters < 2 ? 0 : r.n_clusters < 5 ? 1 : r.n_clusters < 17 ? 2 : 3;
+    return kCalConf[ti][d1][gap][x];
+  }
+  if (r.tier > kTierMR) return m;
+  return kCalLow[r.tier][m < 39 ? m : 39];
 }
 
 // Single-end bounds of a certified result (tiers S0, S1, SR, SL).

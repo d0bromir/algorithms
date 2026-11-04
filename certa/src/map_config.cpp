@@ -30,9 +30,14 @@ MapConfig MapConfig::from_args(const Args& a) {
   p.budget = a.geti("--budget", a.geti("--cap", 16));  // --cap: the v0.1 name
   if (p.k < 0 || p.k > KMAX) throw std::runtime_error("-k must be in [0, 5]");
   if (p.budget < 1 || p.budget > GPU_BUDGET_MAX) throw std::runtime_error("--budget must be in [1, 256]");
+  // --mapq cal (paired interval mode): the fitted MAPQ (certa/interval.h
+  // cal_mapq), whose table was fitted with --mapq-limit 10.
+  const std::string mapq_model = a.get("--mapq", "point");
+  if (mapq_model != "point" && mapq_model != "cal") throw std::runtime_error("--mapq must be point or cal");
+  c.out.mapq_cal = mapq_model == "cal";
   // MAPQ only: the second-best estimate beyond the certified radius, up to
   // this many edits (0 = off).
-  p.mapq_limit = a.geti("--mapq-limit", 8);
+  p.mapq_limit = a.geti("--mapq-limit", c.out.mapq_cal ? 10 : 8);
   // S2 is off by default: on synthetic truth most S2 placements with MAPQ >= 20
   // were wrong, and on HG002 S2 reads were enriched at false-positive calls.
   p.s2_limit = a.geti("--s2", 0);
@@ -104,8 +109,14 @@ MapConfig MapConfig::from_args(const Args& a) {
   if (mapq_mode != "point" && mapq_mode != "cons" && mapq_mode != "cert")
     throw std::runtime_error("--iv-mapq must be point, cons or cert");
   c.out.iv_mapq = mapq_mode == "cons" ? IvMapq::kCons : mapq_mode == "cert" ? IvMapq::kCert : IvMapq::kPoint;
+  const std::string pair_mode = a.get("--iv-pair", "uncert");
+  if (pair_mode != "uncert" && pair_mode != "all") throw std::runtime_error("--iv-pair must be uncert or all");
+  c.out.iv_pair_all = pair_mode == "all";
   c.out.witness = a.has("--witness");
   if (c.out.witness && !c.intervals) throw std::runtime_error("--witness needs --intervals");
+  c.out.feature_tags = a.has("--feature-tags");
+  if ((c.out.mapq_cal || c.out.feature_tags || c.out.iv_pair_all) && !c.intervals)
+    throw std::runtime_error("--mapq cal, --feature-tags and --iv-pair all need --intervals");
 
   // --index2: a second index of the same reference (e.g. q = 15: more, shorter
   // parts) on which the reads still uncertified after every pass get every

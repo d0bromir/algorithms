@@ -149,6 +149,21 @@ for tiers R, IV and MR, the reads the default certificate left.
   has not been tested in variant calling yet, so `point` stays the
   default.
 
+**Pairs and the fitted MAPQ** (paired interval mode, opt-in;
+[VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#re-paired-mates-and-a-fitted-mapq)):
+- `--iv-pair all`: two certified mates that do not form a proper pair are
+  re-paired as an uncertified mate is: a mate's best alignment in the
+  other's proper-pair window is taken when the pair beats the two
+  single-end bests minus the unpaired penalty, and becomes MR.
+- `--mapq cal`: MAPQ is the Phred of the misplaced share of similar records
+  on HG002 (`include/certa/mapq_table.h`, fitted by
+  `bench/truth_mapq_fit.py`): by tier, edits, the gap to the second-best
+  locus within 10 edits and the clusters verified. It ranks reads near a
+  paralog lower, where the formula gives 60. The values are error rates,
+  so fewer reads reach MAPQ 40 (74 % of real HG002 mates).
+- `--feature-tags` adds `XO` (the best other candidate's distance) and `XN`
+  (clusters verified), the fit's inputs not in other tags.
+
 **Tier R options:** `--iv-tau 256`, `--iv-margin 20`, `--iv-chains 8`,
 `--iv-fallback 8`.
 
@@ -300,6 +315,12 @@ alignments.
   Setting MAPQ 0 where T2T-CHM13 confidently places the read elsewhere
   removes about half of them on real reads, for every aligner alike
   ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#a-mapq-from-t2t-chm13)).
+- **Interval mode with `--iv-pair all --mapq cal`** (below, fitted on
+  HG002) is the most accurate aligner measured when 98 % of mates or fewer
+  are called confident, held out on HG005: 22–33 misplaced per million
+  against minibwa's 37 and 108–110 for BWA-MEM2, strobealign and minimap2.
+  At 99.3 % and above minibwa stays ahead (80 against 86)
+  ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#held-out-hg005)).
 - **MAPQ of the fallback:** minibwa misplaces 6–7 % of the fallback mates
   it gives MAPQ ≥ 40. Divided by 4 (`drop_certified_mates.awk -v div=4`),
   their MAPQ comes within 4× of their error rates

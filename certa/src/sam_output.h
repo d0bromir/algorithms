@@ -17,6 +17,9 @@ struct OutputOptions {
   bool single_mates = false;  // --fallback-mates single: a lone uncertified mate goes to the fallback alone
   bool witness = false;       // --witness: interval records carry what certa check needs (Theorem V)
   IvMapq iv_mapq = IvMapq::kPoint;  // --iv-mapq: what interval mode writes as MAPQ
+  bool iv_pair_all = false;   // --iv-pair all: an improper certified pair also gets the pair window
+  bool mapq_cal = false;      // --mapq cal: paired interval records get the fitted MAPQ (cal_mapq)
+  bool feature_tags = false;  // --feature-tags: interval records carry XO and XN (bench/truth_mapq_fit.py)
 };
 
 // The records of some reads, one string per output.

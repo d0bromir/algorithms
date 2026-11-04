@@ -177,3 +177,7 @@ B33	include/certa/bio.h	s/ b1 = std::min(l.width, l.b + g + 1);/ b1 = std::min(l
 M1	include/certa/interval.h	s/uncertified = p.r.tier == kTierR || /uncertified = /	killed	--iv-mapq cert: tier R keeps its point estimate
 M2	include/certa/interval.h	s/(m == IvMapq::kCert && uncertified)/(m == IvMapq::kCert \&\& false)/	killed	--iv-mapq cert: no record gets XQ
 M3	include/certa/interval.h	s/(m == IvMapq::kCert && uncertified)/(m == IvMapq::kCert)/	killed	--iv-mapq cert: XQ for the certified tiers too
+M4	include/certa/interval.h	s/if (m >= 40 && ti >= 0)/if (m > 40 \&\& ti >= 0)/	killed	--mapq cal: a record at MAPQ 40 is looked up as a low one
+M5	include/certa/interval.h	s/const int second = r.d2 >= 0 ? r.d2 : r.d2x;/const int second = r.d2x;/	killed	--mapq cal: the second best within R is ignored
+M6	include/certa/interval.h	s/r.n_clusters < 5 ? 1/r.n_clusters < 4 ? 1/	killed	--mapq cal: four clusters fall in the 5-16 bucket
+M7	include/certa/interval.h	s/std::min(std::max(second - r.d1, 0), 10) : 11;/std::min(std::max(second - r.d1, 0), 10) : 10;/	killed	--mapq cal: no second locus is read as a gap of 10
