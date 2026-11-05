@@ -1002,6 +1002,20 @@ mapq_se(score, sub, L) is non-increasing in sub and non-decreasing in score.
 **What is not a certificate.** The pair placement of interval mode (MR
 records) chooses among proven alignments. Its MAPQ and placement are
 heuristic, and its records say so (XT:Z:MR, XQ 0).
+- *The local mate rescue* (`--iv-rescue local`) adds one more alignment to
+  choose from: when the window searches (Lemma WS) find no proper pair, a
+  mate without a certificate is aligned in its partner's proper-pair window
+  by the full DP of the window (`window_local`, no band), if the partner's
+  MAPQ by `--iv-mapq cert`'s rule is at least 40.
+  - That alignment is the window's best under the objective of Theorem L, so
+    its score is a lower bound of OPT: it may raise XL, never above OPT.
+  - XU and the witness stay the single-end ones, which hold whatever the
+    pair placement chooses.
+  - The DP runs only when the window search's threshold lies above the score
+    the pair needs: above that threshold, Lemma WS has already proven there
+    is nothing in the window.
+  - Certified mates are never moved by it, and it never replaces a pair
+    found end to end.
 
 ## 8. The checker (Theorem V)
 

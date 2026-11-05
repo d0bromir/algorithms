@@ -42,6 +42,13 @@ third machine relays the records as CRAM.
      --drop`), cross-validated on HG002; [vc_model.sh](vc_model.sh) (a2)
      builds CERTA with such a model and calls the subset.
    - [vc_opts.sh](vc_opts.sh) `GENOME TAG OPTIONS...`: the subset mapped
-     with other options (e.g. `--max-dist 1200`), called;
-     [lost_reads.py](lost_reads.py) counts the reads minibwa places with
-     MAPQ ≥ 20 that CERTA puts elsewhere or leaves unmapped.
+     with other options (e.g. `--max-dist 1200`), by `$CERTA` if set,
+     called; [lost_reads.py](lost_reads.py) counts the reads minibwa
+     places with MAPQ ≥ 20 that CERTA puts elsewhere or leaves unmapped,
+     and why those with a nearby mate were not rescued.
+   - [mate_rescue.sh](mate_rescue.sh) `BUILD_DIR`: `--iv-rescue local`
+     against the same build without it, on both subsets
+     ([VALIDATION_RESULTS.md](../VALIDATION_RESULTS.md#a-local-mate-rescue)).
+     [swap_lost.py](swap_lost.py) gives the reads CERTA loses minibwa's
+     records (with `--mapq`, also minibwa's MAPQ where CERTA places a read
+     at its locus): how much of the gap to minibwa they explain.

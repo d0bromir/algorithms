@@ -202,3 +202,16 @@ K4	include/certa/core.h	s/    while (a < r \&\& ref_key_low(ix, ix.pos\[a\], rb)
 K5	src/index.cpp	s/k8.owned\[i\] = static_cast<uint8_t>(low(i) >> (shift - 8));/k8.owned[i] = static_cast<uint8_t>(low(i) >> (shift - 7));/	killed	v4 save: the stored byte is not the high 8 bits
 K6	src/index.cpp	s/  ix.ref_key_bits = v4 ? shift - key_bits : 0;/  ix.ref_key_bits = v4 ? shift - key_bits - 1 : 0;/	killed	v4 load: one key bit neither stored nor read
 K7	src/check.cpp	s/        if (k8 \&\& ix.keys8\[e\] != /        if (false \&\& ix.keys8[e] != /	killed	index validation: a stored byte that disagrees with the reference accepted
+W1	include/certa/interval.h	s/if (thr_se\[y\] > need_l \&\& rescue_mate_local(/if (false \&\& rescue_mate_local(/	killed	--iv-rescue local: never runs
+W2	include/certa/interval.h	s/iv_mapq(se\[x\], IvMapq::kCert) < local_q || !y_open/false || !y_open/	killed	--iv-rescue local: a partner at any MAPQ vouches for its window
+W3	include/certa/interval.h	s/iv_mapq(se\[x\], IvMapq::kCert) < local_q || !y_open) continue;/iv_mapq(se[x], IvMapq::kCert) < local_q) continue;/	killed	--iv-rescue local: a certified mate moved
+W4	include/certa/interval.h	s/const int need_l = std::max(need, kMinScore - 1);/const int need_l = need;/	killed	--iv-rescue local: a mate placed below kMinScore
+W5	include/certa/interval.h	s/int64_t hi = smax + L + std::max(0, L \* kMatch - need - 7);/int64_t hi = smax + L + std::max(0, L * kMatch - need - 77);/	killed	--iv-rescue local: the window ends before a long deletion's alignment does
+W6	include/certa/pair.h	s/const int open = hl - kGapOpen - kGapExt, ext = f - kGapExt;/const int open = hl - kGapOpen - kGapExt, ext = f;/	killed	window_fill_scalar: deletions extend for free
+W7	include/certa/pair.h	s/const v8 open = hu - splat(kGapOpen + kGapExt), ext = eu - splat(kGapExt);/const v8 open = hu - splat(kGapExt), ext = eu - splat(kGapExt);/	killed	window_fill_vec16: insertions open for free
+W8	include/certa/pair.h	s/excl - cv - splat(kGapOpen + kGapExt - 1)/excl - cv - splat(kGapOpen + kGapExt - 2)/	killed	window_fill_vec16: deletions cost one less
+W9	include/certa/pair.h	s/const v8 start = splat(i == 1 ? 0 : -kClip);/const v8 start = splat(0);/	killed	window_fill_vec16: a clipped read start costs nothing
+W10	include/certa/pair.h	s/h - splat(clip_end) : vneg/h : vneg/	killed	window_fill_vec16: a clipped read end costs nothing
+W11	include/certa/pair.h	s/(cv <= vcmax)/(cv <= vcmax + splat(1))/	killed	window_fill_vec16: an alignment starts one past the window
+W12	include/certa/interval.h	s/if (nc == 0 \&\& local_q >= 0) {/if (local_q >= 0) {/	killed	--iv-rescue local: competes with a pair found end to end
+W13	include/certa/interval.h	s/iv_mapq(se\[x\], IvMapq::kCert) < local_q/se[x].mapq < local_q/	killed	--iv-rescue local: a partner without a certificate vouches by its point MAPQ

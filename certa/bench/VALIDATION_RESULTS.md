@@ -1349,7 +1349,10 @@ DeepVariant, trained on BWA-MEM, reads that pattern as a mapping artifact.
     with 11–21 mismatches, and reads with long deletions
     (46M16D2M1I86M16S, 110M25D3M3D38M).
   - A local alignment in the mate's window, with clipping and long gaps
-    allowed, as in BWA-MEM's mate rescue, could place them.
+    allowed, as in BWA-MEM's mate rescue, could place them. On HG002 it
+    places most of them, and closes about a third of the SNV gap and half
+    of the indel gap; the rest is the MAPQ of reads placed where minibwa
+    places them ([below](#a-local-mate-rescue)).
 
 ## Smaller indexes
 
@@ -1451,6 +1454,131 @@ Against the truth it is neutral:
 
 So the fix is one of consistency: a pair flagged proper is now one.
 
+## A local mate rescue
+
+`--iv-rescue local` (opt-in; 2026-11-05) places the reads of
+[Where the default MAPQ loses](#variant-calling) with a local alignment
+in the confident mate's window, as BWA-MEM's mate rescue does
+([interval.h](../include/certa/interval.h) `rescue_mate_local`,
+[pair.h](../include/certa/pair.h) `window_local`):
+- **When:** the window searches find no proper pair, and a mate without a
+  certificate (unmapped, tier R or IV) has a partner whose single-end
+  placement has MAPQ ≥ 40 by `--iv-mapq cert`'s rule (its XQ if it has no
+  certificate). The read's score must be at least 30 (BWA-MEM's -T) and
+  beat what the pair needs (its single-end score − 17).
+- **How:** the full DP of the proper-pair window (850 bp of starts, within
+  the partner's contig), with CERTA's objective (BWA-MEM's scores, 5 per
+  clipped end) and no band, so with clips at either end and gaps of any
+  length. It is exhaustive in the window. Its fill runs 8 cells at a time
+  in 16-bit lanes and equals the scalar fill cell for cell (tested). The
+  rescued mate is written as MR (XQ 0, [XL, XU] the single-end one); its
+  MAPQ is the pair's, at most 40.
+- **What it never does:** move a certified mate, or replace a pair found
+  end to end. The window search proves there is nothing above its
+  threshold, so the DP runs only below it.
+
+**Two rules that did not hold.** The first version ran the local alignment
+whenever a window search failed, next to any partner with a point MAPQ
+≥ 20.
+- It placed more reads (lost reads 96,538 against the final 127,511) and
+  gave about the same calls (1,872 SNV and 1,892 indel errors against
+  1,880 and 1,906).
+- But it raised confident errors at matched N on test B (`point`: 179.7 →
+  180.5 per million at 99.75 %). Two causes:
+  - **Competing with end-to-end pairs:** its pair could outbid one found
+    end to end that had moved a certified mate. That mate then stayed at
+    its single-end locus with MAPQ 60, wrong in about 14 of 36 cases on
+    test A.
+  - **The partner's point MAPQ:** a partner with a point MAPQ below 60 was
+    usually misplaced, and its mate followed it. With the first rule fixed
+    (no competing), 29 % (test A) and 44 % (test B) of the rescued mates
+    with a truth were still misplaced. With the partner's MAPQ by
+    `--iv-mapq cert`'s rule ≥ 40, 7 % and 20 % are.
+- Gating on that MAPQ instead (20, 40 or 60, replayed on the placements)
+  gives no rise at any N; 40 is the confidence threshold of the tables
+  above.
+
+**Placement against the truth** (HG002 tests A and B on galaxy, 64
+threads; [truth_rescue.sh](truth_rescue.sh),
+[truth_rescue.py](truth_rescue.py)). Misplaced mates per million among each
+run's N most confident, at truth_pair.sh's shares:
+
+| test, MAPQ | `--iv-rescue` | N₁ | N₂ | N₃ | mates moved with a truth: wrong → right, right → wrong | CPU | memory |
+|---|---|---|---|---|---|---|---|
+| A, `point` | e2e (default) | 1,320.8 | 796.0 | | | 1,171 s | 24.82 GiB |
+| A, `point` | local | **1,318.1** | **793.7** | | 806, 12 | 1,177 s | 24.89 GiB |
+| A, `cert` | e2e | 1,151.0 | 702.9 | | | 1,169 s | 24.82 GiB |
+| A, `cert` | local | 1,151.0 | 702.9 | | 806, 12 | 1,174 s | 24.89 GiB |
+| B, `point` | e2e | 179.7 | 143.0 | 88.3 | | 1,882 s | 24.74 GiB |
+| B, `point` | local | **179.6** | **142.9** | **88.0** | 114, 3 | 1,952 s | 24.75 GiB |
+| B, `cert` | e2e | 219.3 | 117.6 | 73.9 | | 1,879 s | 24.72 GiB |
+| B, `cert` | local | 219.3 | 117.6 | 73.9 | 114, 3 | 1,951 s | 24.77 GiB |
+
+N₁, N₂, N₃: 94.13 % and 83.10 % of the 18.82 M mates with a truth (test
+A); 99.75 %, 99.44 % and 95.58 % of the 31.93 M (test B).
+- **No rise:** with `point` the errors fall at every N; with `cert` the
+  rescued mates have MAPQ 0, so nothing changes.
+- **The moved mates:** test A moves 871 mates with a truth. 806 go to their
+  locus and 12 leave it; 94 of them were unmapped.
+
+**Variant calling** (the subsets of
+[Variant calling](#variant-calling), DeepVariant 1.10.0 and hap.py on a2;
+mapping cost of the subset, 64 threads;
+[vc/mate_rescue.sh](vc/mate_rescue.sh)). Errors are FN + FP:
+
+| HG002 (9.95 M pairs) | v5.0q SNV | v5.0q indel | CMRG SNV | CMRG indel | reads lost to minibwa | CPU | memory |
+|---|---|---|---|---|---|---|---|
+| PR #19's frozen build, default MAPQ | 1,956 | 2,060 | 861 | 302 | 179,002 | 1,430 s | 24.82 GiB |
+| this build, `--iv-rescue e2e` (default) | 1,949 | 2,063 | 858 | 305 | 179,002 | 1,440 s | 24.85 GiB |
+| `--iv-rescue local` | **1,880** | **1,906** | 866 | 308 | 127,511 | 1,516 s | 24.97 GiB |
+| *its first version (above)* | *1,872* | *1,892* | *863* | *304* | *96,538* | *1,605 s* | *24.97 GiB* |
+| *diagnostic: the lost reads given minibwa's records* | *1,849* | *1,889* | *854* | *305* | *0* | | |
+| *diagnostic: also minibwa's MAPQ where CERTA places a read at its locus* | *1,769* | *1,785* | *810* | *281* | *0* | | |
+| minibwa (the 30× run) | 1,745 | 1,775 | 800 | 278 | | 75,512 s (30×) | 9.5 GiB |
+
+| HG005 (v4.2.1) | SNV | indel | reads lost to minibwa | CPU | memory |
+|---|---|---|---|---|---|
+| PR #19's frozen build, default MAPQ | 633 | 85 | | 1,354 s | 24.93 GiB |
+| this build, `--iv-rescue e2e` (default) | 633 | 85 | 156,602 | 1,361 s | 24.92 GiB |
+| `--iv-rescue local` | 633 | 81 | 107,266 | 1,426 s | 25.02 GiB |
+| *its first version* | *628* | *81* | *79,960* | *1,520 s* | *24.97 GiB* |
+| minibwa (the 30× run) | 543 | 63 | | 75,787 s (30×) | 9.0 GiB |
+
+- **The gain:** on HG002 v5.0q, 69 fewer SNV and 157 fewer indel errors.
+  That is a third of the SNV gap to minibwa and over half of the indel
+  gap. CMRG does not change (866 and 308 against 858 and 305). On HG005,
+  4 fewer indel errors and the same SNV errors (the first version: 5 and
+  4 fewer).
+- **The cost:** 5 % more CPU on both subsets, and 0.1 GiB more memory.
+- **Not at minibwa's level:** CERTA still makes 135 more SNV and 131 more
+  indel errors on HG002, and 90 and 18 more on HG005. The two diagnostic
+  rows show where they come from.
+- **The ceiling of a mate rescue:** give every read CERTA still loses
+  minibwa's record ([vc/swap_lost.py](vc/swap_lost.py)) and CERTA makes
+  1,849 SNV and 1,889 indel errors.
+  - The lost reads are worth about 100 SNV and 174 indel errors. The
+    local rescue gets 69 and 157 of those.
+  - The rest of the gap to minibwa (104 SNV, 114 indel errors) is in the
+    MAPQ of reads CERTA places where minibwa does. Give the 1.57 M of them
+    whose MAPQ differs minibwa's MAPQ as well (`swap_lost.py --mapq`),
+    and CERTA makes 1,769 SNV and 1,785 indel errors: 24 and 10 more than
+    minibwa (CMRG: 810 and 281 against 800 and 278).
+  - So the remaining gap is not placement. It is the default MAPQ of reads
+    placed where minibwa places them: BWA-MEM's formula with CERTA's
+    second-best locus, lower on the reads that show the sample's variants
+    ([above](#variant-calling)).
+- **The reads still lost:** 127,511 on HG002. Of those with a mate that
+  CERTA places within 2 kb with MAPQ ≥ 20 (by `lost_reads.py`'s count),
+  half are recovered (101,669 → 50,910; the first version: → 20,779).
+  Of the 50,910 left:
+  - 14,552 score below 30 under CERTA's scoring: short chimeric pieces
+    such as 31M120S, which BWA-MEM's AS counts without the clip penalty;
+  - 4,378 have mates starting more than 850 bp apart;
+  - the other 31,980 are left by the rules above: a partner below the MAPQ
+    gate, a pair found end to end elsewhere, or a window alignment that
+    does not beat the single-end one by the unpaired penalty (not counted
+    apart).
+
 ## Next
 
 1. **Accuracy.** With `--iv-pair all --mapq pair`, CERTA is the most
@@ -1461,8 +1589,12 @@ So the fix is one of consistency: a pair flagged proper is now one.
      ([above](#variant-calling)): they are lower on reads that show the
      sample's variants. Refit them without the inputs that count a read's
      own edits (XE, NM, soft clips, XQ), and score both the ranking and
-     DeepVariant's calls. Close the remaining 12–16 % gap of the default
-     MAPQ, which is in difficult regions and mostly indels.
+     DeepVariant's calls.
+   - With `--iv-rescue local`, the default MAPQ is 135 SNV and 131 indel
+     errors behind minibwa on HG002. Nearly all of that is the MAPQ of
+     reads CERTA places where minibwa does: with minibwa's MAPQ there, 24
+     and 10 ([above](#a-local-mate-rescue)). Find which of the 1.57 M
+     records whose MAPQ differs from minibwa's cost the calls, and why.
    - A second held-out genome (HG001 or another HPRC sample; a download).
    - The truth labels of tests B and H are certified unique on one
      haplotype, which under-samples segmental duplications (item 6); a

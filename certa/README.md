@@ -169,6 +169,19 @@ for tiers R, IV and MR, the reads the default certificate left.
   re-paired as an uncertified mate is: a mate's best alignment in the
   other's proper-pair window is taken when the pair beats the two
   single-end bests minus the unpaired penalty, and becomes MR.
+- `--iv-rescue local`: mate rescue by local alignment, as BWA-MEM's. The
+  window search above finds a mate end to end, above about L − 54 and with
+  gaps up to its band. When it finds no proper pair, a mate without a
+  certificate is aligned in the proper-pair window of a confident partner
+  (MAPQ ≥ 40 by `--iv-mapq cert`'s rule) by a full DP of the window, so with
+  clips and gaps of any length, and becomes MR. This places chimeric reads
+  (51M100S), divergent ones (11–21 mismatches) and long deletions that
+  CERTA otherwise leaves unmapped or elsewhere. Certified mates are never
+  moved, and a pair found end to end is never replaced. On HG002 it removes
+  69 of DeepVariant's SNV errors and 157 indel errors (a third and a half
+  of the gap to minibwa), for 5 % more CPU, with no rise in confident
+  errors at matched N
+  ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#a-local-mate-rescue)).
 - `--mapq cal`: MAPQ is the Phred of the misplaced share of similar records
   on HG002 (`include/certa/mapq_table.h`, fitted by
   `bench/truth_mapq_fit.py`): by tier, edits, the gap to the second-best

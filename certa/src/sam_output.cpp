@@ -595,6 +595,7 @@ bool RecordWriter::pair_interval(const Result* r0, const Result* se_res, const R
                                  int* reason, Placement* placed, const T2tLift* t2t) const {
   const Result r[2] = {mate_as_reported(r0[0], ref_), mate_as_reported(r0[1], ref_)};
   auto contig_of = [&](int64_t pos) { return ref_.contig_of(pos); };
+  const int rescue_q = opt_.iv_rescue_local ? kRescueLocalMapq : -1;  // --iv-rescue local
   Placement se[2];
   int L[2];
   bool proper;
@@ -614,7 +615,7 @@ bool RecordWriter::pair_interval(const Result* r0, const Result* se_res, const R
       se[x] = certified_placement(r[x], r[1 - x], se_res[x], L[x], mapq, opt_.s2_limit);
       keep_within_contigs(se[x], ref_);
     }
-    if (!place_pair(view_, opt_.max_dist, 12, se, none, codes, L, sc, contig_of, placed))
+    if (!place_pair(view_, opt_.max_dist, 12, se, none, codes, L, sc, contig_of, placed, rescue_q))
       return certified_pair(r, se_res, rec, out, placed, t2t);
     proper = true;
   } else {
@@ -626,7 +627,7 @@ bool RecordWriter::pair_interval(const Result* r0, const Result* se_res, const R
       se[x] = place_single(r[x], r[x].certified == 1 ? mapq_of(r[x], L[x], opt_.s2_limit) : 0, iv[x], L[x]);
       keep_within_contigs(se[x], ref_);
     }
-    proper = place_pair(view_, opt_.max_dist, 12, se, iv, codes, L, sc, contig_of, placed);
+    proper = place_pair(view_, opt_.max_dist, 12, se, iv, codes, L, sc, contig_of, placed, rescue_q);
   }
   for (int x = 0; x < 2; ++x) {
     placed[x].mapq = iv_mapq(placed[x], opt_.iv_mapq);

@@ -1,12 +1,28 @@
 #!/usr/bin/env python3
 """lost_reads.py MINIBWA.sam CERTA.sam: reads (primary records) that minibwa
 places with MAPQ >= 20 and CERTA places more than 1 kb away, on another
-contig, or not at all; by minibwa's NM, with CERTA's tier and clipping."""
+contig, or not at all; by minibwa's NM, with CERTA's tier and clipping.
+Those whose mate CERTA places nearby (rescuable) are also counted by what
+minibwa's alignment of them is: mates starting further apart than CERTA's
+proper-pair window (850 bp), or a score below 30 under CERTA's scoring
+(BWA-MEM's, with 5 per clipped end), the floor of every record."""
 import re
 import sys
 from collections import Counter
 
 CLIP = re.compile(r"(\d+)S")
+OPS = re.compile(r"(\d+)([MIDNSHP=X])")
+
+
+def certa_score(cigar, nm):
+    """The score of an alignment under CERTA's objective: +1 / -4, a gap of k
+    6 + k, 5 per clipped end (mismatches: NM minus the gap bases)."""
+    ops = OPS.findall(cigar)
+    aligned = sum(int(n) for n, o in ops if o in "M=X")
+    gaps = [int(n) for n, o in ops if o in "ID"]
+    mism = max(nm - sum(gaps), 0)
+    ends = (ops[0][1] in "SH") + (len(ops) > 1 and ops[-1][1] in "SH")
+    return aligned - 5 * mism - sum(6 + g for g in gaps) - 5 * ends
 
 
 def records(path):
@@ -21,14 +37,15 @@ def records(path):
         nm = re.search(r"NM:i:(\d+)", tags)
         xt = re.search(r"XT:Z:(\w+)", tags)
         yield (f[0], (flag >> 6) & 3), (flag, f[2], int(f[3]), int(f[4]), f[5],
-                                        int(nm.group(1)) if nm else -1, xt.group(1) if xt else "-", abs(int(f[8])))
+                                        int(nm.group(1)) if nm else -1, xt.group(1) if xt else "-", abs(int(f[8])),
+                                        int(f[7]))
 
 
 mb = {k: v for k, v in records(sys.argv[1]) if not v[0] & 4 and v[3] >= 20}
 by_nm, lost_nm, how, why = Counter(), Counter(), Counter(), Counter()
 seen = 0
 cer = dict(records(sys.argv[2]))
-rescue = Counter()
+rescue, rescuable = Counter(), Counter()
 examples = []
 for k, c in cer.items():
     m = mb.get(k)
@@ -42,6 +59,13 @@ for k, c in cer.items():
         o = cer.get((k[0], 3 - k[1]))
         near = o is not None and not o[0] & 4 and o[3] >= 20 and o[1] == m[1] and abs(o[2] - m[2]) <= 2000
         rescue["mate placed by CERTA with MAPQ >= 20 within 2 kb" if near else "no such mate"] += 1
+        if near:
+            if abs(m[8] - m[2]) > 850:
+                rescuable["mates' starts more than 850 bp apart (beyond the proper-pair window)"] += 1
+            elif certa_score(m[4], m[5]) < 30:
+                rescuable["below 30 under CERTA's scoring (clips cost 5 per end)"] += 1
+            else:
+                rescuable["others"] += 1
         if near and len(examples) < 40 and hash(k[0]) % 50 == 0:
             examples.append((k, m, c, o))
         mclip = sum(int(x) for x in CLIP.findall(m[4]))
@@ -66,6 +90,9 @@ for k, v in why.most_common():
     print(f"  {v:,} {k}")
 print("rescue by the mate's window:")
 for k, v in rescue.most_common():
+    print(f"  {v:,} {k}")
+print("those with such a mate, by minibwa's alignment of them:")
+for k, v in rescuable.most_common():
     print(f"  {v:,} {k}")
 print("examples (rescuable): minibwa's record | CERTA's | CERTA's mate")
 for k, m, c, o in examples:

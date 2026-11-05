@@ -110,6 +110,12 @@ struct PairScratch {
   std::unique_ptr<Workspace> ws{new Workspace};  // DP rows and traceback
   std::vector<std::pair<uint32_t, int>> keys;    // part key -> part
   std::vector<std::pair<int64_t, int>> hits;     // (diagonal, part)
+  // window_local: the window's reference (padded with N), the DP rows
+  // (H and E of the previous and current row; 32-bit for the scalar fill,
+  // 16-bit for the vector one) and the traceback, a byte per cell.
+  std::vector<uint8_t> lref, ltb;
+  std::vector<int> lh[2], le[2];
+  std::vector<int16_t> lh16[2], le16[2];
 };
 
 // Best alignment of `rd` whose first aligned base lies in [smin, smax], found
@@ -235,6 +241,257 @@ inline int window_search(const IndexView& ix, const uint8_t* rd, int L, int64_t 
     }
   }
   return best > t ? best : kNoSub;
+}
+
+// The DP fill of window_local (below), row by row (read base i = 1..L),
+// column by column (window base c = 0..W-1, reference smin + c, in
+// sc.lref): cell (i, c) aligns read base i - 1 to window base c. The
+// recurrences are affine_fill's, in reference instead of diagonal
+// coordinates (a match from (i - 1, c - 1), an insertion from (i - 1, c), a
+// deletion from (i, c - 1)); an alignment starts with a match in a column
+// <= cmax. Writes affine_fill's traceback bits to sc.ltb[i * Wp + c] and
+// returns the best end score (below -2^19: none), with its cell, the first
+// in row-major order.
+inline int window_fill_scalar(const uint8_t* rd, int L, int W, int Wp, int cmax, PairScratch& sc, int* pbi,
+                              int* pbc) {
+  const int NEG = -(1 << 20);
+  for (int x = 0; x < 2; ++x) {
+    sc.lh[x].assign(W, NEG);
+    sc.le[x].assign(W, NEG);
+  }
+  int* hp = sc.lh[0].data();
+  int* hc = sc.lh[1].data();
+  int* ep = sc.le[0].data();
+  int* ec = sc.le[1].data();
+  const uint8_t* ref = sc.lref.data();
+  int best = NEG, best_i = 0, best_c = 0;
+  for (int i = 1; i <= L; ++i) {
+    const uint8_t r = rd[i - 1];
+    const int start = i == 1 ? 0 : -kClip;
+    const int clip_end = i < L ? kClip : 0;
+    uint8_t* tb = sc.ltb.data() + (size_t)i * Wp;
+    int f = NEG, hl = NEG;  // F and H at (i, c - 1)
+    for (int c = 0; c < W; ++c) {
+      uint8_t bits = 0;
+      int diag = c > 0 ? hp[c - 1] : NEG;
+      if (c <= cmax && start >= diag) { diag = start; bits |= 4; }
+      const int m = diag + (sub_cost(r, ref[c]) ? -kMismatch : kMatch);
+      int e = NEG;
+      if (i > 1) {  // no alignment starts with a gap
+        const int open = hp[c] - kGapOpen - kGapExt, ext = ep[c] - kGapExt;
+        e = open >= ext ? open : ext;
+        if (ext > open) bits |= 8;
+      }
+      int fo = NEG;
+      if (c > 0) {
+        const int open = hl - kGapOpen - kGapExt, ext = f - kGapExt;
+        fo = open >= ext ? open : ext;
+        if (ext > open) bits |= 16;
+      }
+      f = fo;
+      int h = m;
+      if (e > h) { h = e; bits = (uint8_t)((bits & ~3) | 1); }
+      if (f > h) { h = f; bits = (uint8_t)((bits & ~3) | 2); }
+      hc[c] = h;
+      ec[c] = e;
+      hl = h;
+      tb[c] = bits;
+      // An alignment may end after a match/mismatch.
+      const int end = (bits & 3) == 0 ? h - clip_end : NEG;
+      if (end > best) { best = end; best_i = i; best_c = c; }
+    }
+    std::swap(hp, hc);
+    std::swap(ep, ec);
+  }
+  *pbi = best_i;
+  *pbc = best_c;
+  return best;
+}
+
+#ifdef CERTA_AFFINE_VEC
+// The same fill, 8 cells at a time with 16-bit lanes, and the same values
+// relative to "minus infinity" (NEG -16000 here), as affine_fill_vec16: the
+// deletion state from an exclusive prefix maximum of h0[c] + c along the row,
+// the best end cell lane by lane, in order. Every compared value (h0[c] + c
+// included) is either real, in [-9 LMAX - W - 16, LMAX + W], or NEG plus an
+// offset in [-9 LMAX - W - 16, LMAX + W]: with W <= kWinVecMax the two
+// ranges stay apart and no lane wraps, so every comparison, traceback bit
+// and best cell is the scalar fill's (tested). Bits past column W - 1 are
+// not the scalar fill's (it writes none there); nothing reads them.
+constexpr int kWinVecMax = 4096;
+inline int window_fill_vec16(const uint8_t* rd, int L, int W, int Wp, int cmax, PairScratch& sc, int* pbi,
+                             int* pbc) {
+  static_assert(kMatch == 1 && kGapExt == 1, "window_fill_vec16 assumes +1 matches and gap extension 1");
+  static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, "window_fill_vec16 packs the low byte of each lane");
+  static_assert(-16000 - 9 * LMAX - kWinVecMax - 16 > INT16_MIN &&
+                    -16000 + LMAX + kWinVecMax < -9 * LMAX - kWinVecMax - 16,
+                "16-bit window fill");
+  typedef int16_t v8 __attribute__((vector_size(16)));
+  typedef uint8_t u8x16 __attribute__((vector_size(16)));
+  typedef uint64_t u64x2 __attribute__((vector_size(16)));
+  typedef int16_t v8u __attribute__((vector_size(16), aligned(2), may_alias));
+  typedef uint8_t u8x8u __attribute__((vector_size(8), aligned(1), may_alias));
+  typedef uint64_t u64u __attribute__((aligned(1), may_alias));
+  constexpr int V = 8, P = 8;  // lanes; each row's leading pad (column -1 holds NEG)
+  const int NEG = -16000;
+  auto vmax = [](v8 a, v8 b) { return a > b ? a : b; };
+  auto splat = [](int x) {
+    const int16_t s = (int16_t)x;
+    return v8{s, s, s, s, s, s, s, s};
+  };
+  const v8 vneg = splat(NEG), lane = {0, 1, 2, 3, 4, 5, 6, 7};
+  const v8 ninf = splat(INT16_MIN), vcmax = splat(cmax), vW = splat(W);
+  for (int x = 0; x < 2; ++x) {
+    sc.lh16[x].assign((size_t)P + Wp + V, (int16_t)NEG);
+    sc.le16[x].assign((size_t)P + Wp + V, (int16_t)NEG);
+  }
+  int16_t* hp = sc.lh16[0].data() + P;
+  int16_t* hc = sc.lh16[1].data() + P;
+  int16_t* ep = sc.le16[0].data() + P;
+  int16_t* ec = sc.le16[1].data() + P;
+  const uint8_t* ref = sc.lref.data();
+  int best = NEG, best_i = 0, best_c = 0;
+  for (int i = 1; i <= L; ++i) {
+    const v8 r = splat(rd[i - 1]);
+    const v8 start = splat(i == 1 ? 0 : -kClip);
+    const int clip_end = i < L ? kClip : 0;
+    uint8_t* tb = sc.ltb.data() + (size_t)i * Wp;
+    v8 carry = splat(NEG + 6);      // running max of h0[c'] + c'
+    v8 fprev = vneg, hprev = vneg;  // the previous vector's F and H (lane 7 used)
+    for (int c = 0; c < Wp; c += V) {
+      const v8 cv = lane + splat(c);
+      const v8 hd = *(const v8u*)(hp + c - 1);  // H(i - 1, c - 1)
+      const v8 hu = *(const v8u*)(hp + c), eu = *(const v8u*)(ep + c);
+      const v8 st = (start >= hd) & (cv <= vcmax);
+      const v8 diag = st ? start : hd;
+      const v8 t = __builtin_convertvector(*(const u8x8u*)(ref + c), v8);
+      const v8 mis = (t != r) | (r >= splat(4));
+      const v8 m = diag + (mis ? splat(-kMismatch) : splat(kMatch));
+      v8 e = vneg, ebit = splat(0);
+      if (i > 1) {
+        const v8 open = hu - splat(kGapOpen + kGapExt), ext = eu - splat(kGapExt);
+        e = open >= ext ? open : ext;
+        ebit = (ext > open) & splat(8);
+      }
+      const v8 esel = e > m;
+      const v8 h0 = esel ? e : m;
+      v8 src = esel & splat(1);
+      // F from the exclusive prefix maximum of h0[c] + c.
+      const v8 g = h0 + cv;
+      v8 inc = vmax(g, __builtin_shufflevector(g, ninf, 8, 0, 1, 2, 3, 4, 5, 6));
+      inc = vmax(inc, __builtin_shufflevector(inc, ninf, 8, 9, 0, 1, 2, 3, 4, 5));
+      inc = vmax(inc, __builtin_shufflevector(inc, ninf, 8, 9, 10, 11, 0, 1, 2, 3));
+      inc = vmax(inc, carry);
+      const v8 excl = __builtin_shufflevector(carry, inc, 7, 8, 9, 10, 11, 12, 13, 14);
+      carry = __builtin_shufflevector(inc, inc, 7, 7, 7, 7, 7, 7, 7, 7);
+      const v8 f = cv > splat(0) ? excl - cv - splat(kGapOpen + kGapExt - 1) : vneg;
+      const v8 fsel = f > h0;
+      const v8 h = fsel ? f : h0;
+      src = fsel ? splat(2) : src;
+      const v8 fm1 = __builtin_shufflevector(fprev, f, 7, 8, 9, 10, 11, 12, 13, 14);
+      const v8 hm1 = __builtin_shufflevector(hprev, h, 7, 8, 9, 10, 11, 12, 13, 14);
+      const v8 fbit = (fm1 + splat(kGapOpen + kGapExt - 1) > hm1) & (cv > splat(0)) & splat(16);
+      fprev = f;
+      hprev = h;
+      *(v8u*)(hc + c) = h;
+      *(v8u*)(ec + c) = e;
+      const v8 bits = (st & splat(4)) | ebit | fbit | src;
+      const u8x16 bytes = (u8x16)bits;
+      const u8x16 b8 = __builtin_shufflevector(bytes, bytes, 0, 2, 4, 6, 8, 10, 12, 14, 0, 0, 0, 0, 0, 0, 0, 0);
+      *(u64u*)(tb + c) = ((u64x2)b8)[0];
+      // An alignment may end after a match/mismatch, in the window.
+      const v8 end = (src == splat(0)) & (cv < vW) ? h - splat(clip_end) : vneg;
+      const u64x2 over = (u64x2)(end > splat(best));
+      if (over[0] | over[1])
+        for (int l = 0; l < V; ++l)
+          if (end[l] > best) { best = end[l]; best_i = i; best_c = c + l; }
+    }
+    std::swap(hp, hc);
+    std::swap(ep, ec);
+  }
+  *pbi = best_i;
+  *pbc = best_c;
+  return best < NEG / 2 ? best - NEG - (1 << 20) : best;
+}
+#endif
+
+// The best alignment of `rd` (length L) in ref[smin, hi) whose first aligned
+// base lies in [smin, smax]: the objective of affine_align (Theorem L's local
+// score: +1 / -4, a gap of k 6 + k, 5 per clipped read end) with no band, so
+// clips at either end and gaps of any length. Exhaustive: the full DP of the
+// window (window_fill_*), ties to the first best end by read base, then
+// reference position. This is BWA-MEM's mate rescue (mem_matesw, a
+// Smith-Waterman alignment in the mate's window) under CERTA's scoring.
+// Returns true and the alignment (ref_pos, CIGAR, nm, score) if it scores
+// above `need`; false otherwise, or if the CIGAR does not fit.
+inline bool window_local(const IndexView& ix, const uint8_t* rd, int L, int64_t smin, int64_t smax, int64_t hi,
+                         int need, PairScratch& sc, Result& out, bool scalar = false) {
+  if (smin < 0) smin = 0;
+  if (hi > (int64_t)ix.ref_len) hi = (int64_t)ix.ref_len;
+  if (smax > hi - 1) smax = hi - 1;
+  if (L < 1 || L > LMAX || smin > smax) return false;
+  const int W = (int)(hi - smin);  // no alignment starts before smin: no column there
+  const int Wp = (W + 7) / 8 * 8;
+  sc.lref.assign((size_t)Wp + 8, 4);
+  std::copy(ix.ref + smin, ix.ref + hi, sc.lref.begin());
+  sc.ltb.resize((size_t)(L + 1) * Wp);
+  int best_i = 0, best_c = 0, best;
+#ifdef CERTA_AFFINE_VEC
+  if (!scalar && W <= kWinVecMax)
+    best = window_fill_vec16(rd, L, W, Wp, (int)(smax - smin), sc, &best_i, &best_c);
+  else
+#endif
+    best = window_fill_scalar(rd, L, W, Wp, (int)(smax - smin), sc, &best_i, &best_c);
+  (void)scalar;
+  if (best < -(1 << 19) || best <= need) return false;
+  uint32_t rev[MAX_CIGAR];
+  int nrev = 0, nm = 0, i = best_i, state = 0;  // 0 H, 1 insertion, 2 deletion
+  int c = best_c;
+  uint32_t run_op = 99, run_len = 0;
+  auto emit = [&](uint32_t op) -> bool {
+    if (op == run_op) { ++run_len; return true; }
+    if (run_len) {
+      if (nrev == MAX_CIGAR) return false;
+      rev[nrev++] = (run_len << 4) | run_op;
+    }
+    run_op = op;
+    run_len = 1;
+    return true;
+  };
+  for (;;) {
+    if (i < 1 || c < 0) return false;  // unreachable: every path begins at a start
+    const uint8_t bits = sc.ltb[(size_t)i * Wp + c];
+    if (state == 0) state = bits & 3;
+    if (state == 0) {
+      if (!emit(kOpM)) return false;
+      nm += sub_cost(rd[i - 1], sc.lref[c]);
+      if (bits & 4) break;  // (i, c) is the first aligned pair
+      --i;
+      --c;
+    } else if (state == 1) {
+      if (!emit(kOpI)) return false;
+      ++nm;
+      state = (bits & 8) ? 1 : 0;
+      --i;
+    } else {
+      if (!emit(kOpD)) return false;
+      ++nm;
+      state = (bits & 16) ? 2 : 0;
+      --c;
+    }
+  }
+  if (nrev == MAX_CIGAR) return false;
+  rev[nrev++] = (run_len << 4) | run_op;
+  const int lead = i - 1, trail = L - best_i;
+  if (nrev + (lead > 0) + (trail > 0) > MAX_CIGAR) return false;
+  out.n_cigar = 0;
+  if (lead > 0) out.cigar[out.n_cigar++] = ((uint32_t)lead << 4) | kOpS;
+  for (int x = nrev - 1; x >= 0; --x) out.cigar[out.n_cigar++] = rev[x];
+  if (trail > 0) out.cigar[out.n_cigar++] = ((uint32_t)trail << 4) | kOpS;
+  out.ref_pos = smin + c;
+  out.nm = (uint8_t)std::min(nm, 255);
+  out.score = (int16_t)best;
+  return true;
 }
 
 // One mate: its enumerated parts, chains and bounds.
