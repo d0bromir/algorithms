@@ -23,6 +23,7 @@
 // validation must reject corrupted indexes and FASTAs.
 #include <algorithm>
 #include <climits>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -40,10 +41,13 @@
 
 #include "index.h"
 #include "certa/interval.h"
+#include "certa/pair_model.h"
+#include "chain.h"
 #include "check.h"
 #include "certa/pair.h"
 #include "certa/repeat.h"
 #include "mapper.h"
+#include "sam_output.h"
 
 using namespace certa;
 
@@ -630,6 +634,199 @@ void test_cal_mapq() {
   std::fprintf(stderr, "--mapq cal: %d keys checked\n", checked);
 }
 
+// A mapped placement for the pair model's tests.
+Placement model_placement(int tier, int mapq, int d1, int d2, int d2x, int clusters, int n_best, int xq, int nm,
+                          int clip, int score, int sub_score = kNoSub) {
+  Placement p;
+  p.mapped = true;
+  p.mapq = mapq;
+  p.xq = xq;
+  Result& r = p.r;
+  r.tier = static_cast<uint8_t>(tier);
+  r.d1 = static_cast<int8_t>(d1);
+  r.d2 = static_cast<int8_t>(d2);
+  r.d2x = static_cast<int8_t>(d2x);
+  r.n_clusters = static_cast<uint16_t>(clusters);
+  r.n_best = static_cast<uint16_t>(n_best);
+  r.nm = static_cast<uint8_t>(nm);
+  r.score = static_cast<int16_t>(score);
+  r.sub_score = static_cast<int16_t>(sub_score);
+  r.n_cigar = 0;
+  if (clip) r.cigar[r.n_cigar++] = static_cast<uint32_t>(clip) << 4 | kOpS;
+  r.cigar[r.n_cigar++] = static_cast<uint32_t>(150 - clip) << 4 | kOpM;
+  return p;
+}
+
+// --mapq pair (pair_model.h): the inputs of both mates against
+// bench/truth_mapq_pair.py's definitions, worked by hand; the tree walk and
+// the MAPQ thresholds on a hand-made model; the T2T inputs and classes.
+void test_pair_model() {
+  auto same = [](const int* f, std::initializer_list<int> want) {
+    int k = 0;
+    for (int w : want)
+      if (f[k++] != w) return false;
+    return true;
+  };
+  // a: S1, 2 edits, second best 5 edits beyond R, 6 clusters, 5 bases clipped.
+  // b: PR, AS 150, XS 240 (the bound on every other proper pair).
+  const Placement a = model_placement(kTierS1, 37, 2, -1, 5, 6, 1, 20, 3, 5, 120);
+  const Placement b = model_placement(kTierPR, 60, 0, -1, -1, 0, 1, 55, 0, 0, 150, 240);
+  int f[kT2tFeatures];
+  pair_model_features(a, b, true, 350, f);
+  CHECK(same(f, {2, 37, 3, 3, 2, 1, 20, 3, 1, 0, 2, 3, 6, 60, 11, 1, 55, 0, 0, 31}), "pair model inputs of mate a");
+  pair_model_features(b, a, true, 350, f);
+  CHECK(same(f, {6, 60, 11, 1, 0, 1, 55, 0, 0, 31, 2, 3, 2, 37, 3, 3, 20, 3, 1, 0}), "pair model inputs of mate b");
+  // The other mate unmapped: pp says so, its inputs are those of no record.
+  Placement u;
+  pair_model_features(a, u, false, 0, f);
+  CHECK(same(f, {2, 37, 3, 3, 2, 1, 20, 3, 1, 0, 1, 0, 0, 0, 11, 0, 0, 0, 0, 0}), "pair model inputs, mate unmapped");
+  // A PR mate without a bound (kNoSub) or with a margin past 40.
+  pair_model_features(model_placement(kTierPR, 60, 0, -1, -1, 1, 1, 55, 0, 0, 150), a, false, 0, f);
+  CHECK(f[9] == 0 && f[4] == 1, "PR mate without XS: margin %d, clusters %d", f[9], f[4]);
+  pair_model_features(model_placement(kTierPR, 60, 0, -1, -1, 65535, 9, 70, 30, 100, 150, 100), a, false, 0, f);
+  CHECK(f[9] == 41 && f[4] == 15 && f[5] == 3 && f[6] == 60 && f[7] == 15 && f[8] == 15,
+        "PR mate, clamped inputs: margin %d xn %d xb %d xq %d nm %d clip %d", f[9], f[4], f[5], f[6], f[7], f[8]);
+  // |TLEN| classes: 1, 200, 300, 400, 500, 700, 1000.
+  const int64_t tl[] = {0, 1, 199, 200, 350, 699, 700, 999, 1000, 5000};
+  const int tc[] = {0, 1, 1, 2, 3, 5, 6, 6, 7, 7};
+  for (int k = 0; k < 10; ++k) {
+    pair_model_features(a, b, true, tl[k], f);
+    CHECK(f[11] == tc[k], "|TLEN| %lld: class %d, not %d", static_cast<long long>(tl[k]), f[11], tc[k]);
+  }
+  // The second best within R takes precedence over the one beyond it; the
+  // gap is clamped to 0..10.
+  pair_model_features(model_placement(kTierS1, 30, 3, 4, 9, 1, 1, 0, 3, 0, 130), b, true, 0, f);
+  CHECK(f[2] == 1, "gap with XD 4, XO 9, XE 3: %d", f[2]);
+  pair_model_features(model_placement(kTierS0, 60, 0, -1, 12, 1, 1, 60, 0, 0, 150), b, true, 0, f);
+  CHECK(f[2] == 10 && f[3] == 1, "gap with XO 12, XE 0: %d (xe %d)", f[2], f[3]);
+
+  // The T2T inputs: class, gap there, XE minus XE there, MAPQ there / 5, tier.
+  T2tView ta, tb;
+  t2t_model_features(a, ta, tb, f);
+  CHECK(same(f, {0, 12, 9, 0, 0, 0, 12}), "T2T inputs, unmapped there");
+  ta.cls = 1, ta.tier = kTierS1, ta.mapq = 47, ta.xe = 1, ta.xd = -1, ta.xo = 4;
+  tb.cls = 2, tb.xe = 0, tb.xd = 0, tb.xo = -1;
+  t2t_model_features(a, ta, tb, f);
+  CHECK(same(f, {1, 3, 4, 9, 2, 2, 0}), "T2T inputs, lifted here");
+  ta.xe = 9;
+  ta.mapq = 200;
+  t2t_model_features(a, ta, tb, f);
+  CHECK(f[2] == 0 && f[3] == 12, "T2T inputs, XE far below there: dx %d, mq %d", f[2], f[3]);
+
+  // The classes of a lift, on a reference of two contigs.
+  Reference two;
+  two.names = {"1", "2"};
+  two.offsets = {0, 10000};
+  two.lengths = {10000, 10000};
+  Placement p = model_placement(kTierS0, 60, 0, -1, -1, 1, 1, 60, 0, 10, 140);
+  p.r.ref_pos = 10500;  // unclipped leftmost 10490
+  p.r.strand = 1;
+  T2tLift l;
+  CHECK(t2t_view(l, p, two).cls == 0, "lift: unmapped there");
+  l.state = 3;
+  l.mapq = 33;
+  CHECK(t2t_view(l, p, two).cls == 3 && t2t_view(l, p, two).mapq == 33, "lift: not lifted");
+  l.state = 1, l.contig = 1, l.strand = 1, l.left = 10490 + 150;
+  CHECK(t2t_view(l, p, two).cls == 1, "lift: 150 bp away is here");
+  l.left = 10490 - 151;
+  CHECK(t2t_view(l, p, two).cls == 2, "lift: 151 bp away is elsewhere");
+  l.left = 10490, l.strand = 0;
+  CHECK(t2t_view(l, p, two).cls == 2, "lift: the other strand is elsewhere");
+  l.strand = 1, l.contig = 0;
+  CHECK(t2t_view(l, p, two).cls == 2, "lift: another contig is elsewhere");
+  Placement unmapped;
+  l.contig = 1;
+  CHECK(t2t_view(l, unmapped, two).cls == 0, "lift of an unmapped record");
+
+  // A hand-made model: tree 0 splits on MAPQ (> 39), tree 1 on the tier
+  // (> 5) one level down; every other node goes left.
+  int8_t feat[2][15], thr[2][15];
+  double leaf[2][16];
+  for (int t = 0; t < 2; ++t)
+    for (int k = 0; k < 15; ++k) feat[t][k] = -1, thr[t][k] = 0;
+  for (int t = 0; t < 2; ++t)
+    for (int k = 0; k < 16; ++k) leaf[t][k] = 100 * t + k;
+  feat[0][0] = 1, thr[0][0] = 39;
+  feat[1][1] = 0, thr[1][1] = 5;
+  int x[kT2tFeatures] = {};
+  x[0] = 6, x[1] = 40;  // tree 0: right at the root, then left (node 8); tree 1: left, right (node 4)
+  CHECK(tree_score(x, 0.5, feat, thr, leaf) == 0.5 + 8 + 104, "tree walk: %g", tree_score(x, 0.5, feat, thr, leaf));
+  x[0] = 5, x[1] = 39;
+  CHECK(tree_score(x, 0.5, feat, thr, leaf) == 0.5 + 0 + 100, "tree walk at the thresholds: %g",
+        tree_score(x, 0.5, feat, thr, leaf));
+  // MAPQ thresholds: decreasing; a score at a threshold takes it.
+  for (int k = 1; k < 60; ++k) CHECK(kModelQ[k] < kModelQ[k - 1] && kT2tModelQ[k] < kT2tModelQ[k - 1], "kModelQ order");
+  CHECK(score_mapq(100, kModelQ) == 0 && score_mapq(-100, kModelQ) == 60 && score_mapq(kModelQ[29], kModelQ) == 30 &&
+            score_mapq(std::nextafter(kModelQ[29], 1e9), kModelQ) == 29,
+        "MAPQ from the score");
+  // -10 log10 p rounded: a score at log odds of p = 10^-3.04 is MAPQ 30.
+  const double p3 = std::pow(10.0, -3.04);
+  CHECK(score_mapq(std::log(p3 / (1 - p3)), kModelQ) == 30, "MAPQ 30 at p = 10^-3.04");
+
+  // pair_model_mapq: an unmapped mate keeps its MAPQ; the result is
+  // deterministic and within 0..60 for both models.
+  Placement two_pl[2] = {a, u};
+  two_pl[1].mapq = 7;
+  pair_model_mapq(two_pl, false, 0, nullptr);
+  CHECK(two_pl[1].mapq == 7 && two_pl[0].mapq >= 0 && two_pl[0].mapq <= 60, "pair_model_mapq, one mate unmapped");
+  Placement q1[2] = {a, b}, q2[2] = {a, b};
+  T2tView tv[2] = {ta, tb};
+  pair_model_mapq(q1, true, 350, tv);
+  pair_model_mapq(q2, true, 350, tv);
+  CHECK(q1[0].mapq == q2[0].mapq && q1[1].mapq == q2[1].mapq && q1[0].mapq <= 60 && q1[1].mapq <= 60,
+        "pair_model_mapq with T2T views");
+  CHECK(same_alignment(q1[0].r, a.r) && q1[0].xq == a.xq, "pair_model_mapq changed more than MAPQ");
+  std::fprintf(stderr, "--mapq pair: inputs, T2T classes, tree walk and MAPQ thresholds checked\n");
+}
+
+// The chain lift (src/chain.cpp, bench/lift_sam.py's rule) on a small chain
+// file: a block, a gap, a reversed chain and a contig not in the reference.
+void test_chain() {
+  CHECK(ensembl_name("chr1") == "1" && ensembl_name("chrM") == "MT" && ensembl_name("chrX") == "X" &&
+            ensembl_name("chrUn_KI270302v1") == "KI270302.1" && ensembl_name("chr1_KI270706v1_random") == "KI270706.1" &&
+            ensembl_name("chr10_KN196480v1_fix") == "10_KN196480v1_fix" && ensembl_name("HLA-A") == "HLA-A",
+        "ensembl_name");
+  const std::string path = "test_certa." + std::to_string(getpid()) + ".tmp.chain";
+  {
+    std::ofstream o(path);
+    o << "chain 1000 chr1 1000 + 100 400 chr2 900 + 50 350 1\n100\t10\t20\n190\n\n"
+         "chain 1000 chr1 1000 + 500 600 chrUn_KI270302v1 500 - 0 100 2\n100\n\n"
+         "chain 10 chr1 1000 + 700 800 chrZ 1000 + 0 100 3\n100\n";
+  }
+  Reference ref;
+  ref.names = {"2", "KI270302.1"};
+  ref.offsets = {0, 900};
+  ref.lengths = {900, 500};
+  const Chain c = Chain::load(path, ref);
+  std::remove(path.c_str());
+  CHECK(c.blocks() == 4, "chain blocks: %zu", c.blocks());
+  int ct;
+  int64_t pos;
+  bool rev;
+  struct Want { int64_t p; bool ok; int c; int64_t out; bool rev; };
+  const Want w[] = {{100, true, 0, 50, false}, {150, true, 0, 100, false}, {199, true, 0, 149, false},
+                    {200, false, 0, 0, false}, {205, false, 0, 0, false}, {210, true, 0, 170, false},
+                    {399, true, 0, 359, false}, {400, false, 0, 0, false}, {99, false, 0, 0, false},
+                    {500, true, 1, 499, true},  {599, true, 1, 400, true},  {750, true, -1, 50, false}};
+  for (const Want& x : w) {
+    const bool ok = c.lift("chr1", x.p, &ct, &pos, &rev);
+    CHECK(ok == x.ok && (!ok || (ct == x.c && pos == x.out && rev == x.rev)), "lift chr1:%lld: %d %d %lld %d",
+          static_cast<long long>(x.p), ok, ct, static_cast<long long>(pos), rev);
+  }
+  CHECK(!c.lift("chr9", 150, &ct, &pos, &rev), "lift on a contig without chains");
+  bool flip;
+  CHECK(c.lift_record("chr1", 100, 50, &ct, &pos, &flip) && ct == 0 && pos == 50 && !flip, "record at a block start");
+  CHECK(c.lift_record("chr1", 195, 20, &ct, &pos, &flip) && ct == 0 && pos == 145 && !flip,
+        "record into a gap: its first base");
+  CHECK(c.lift_record("chr1", 203, 20, &ct, &pos, &flip) && ct == 0 && pos == 163 && !flip,
+        "record from a gap: its last base, offset by the span");
+  CHECK(c.lift_record("chr1", 500, 50, &ct, &pos, &flip) && ct == 1 && pos == 450 && flip,
+        "record on a reversed chain: %d %lld %d", ct, static_cast<long long>(pos), flip);
+  CHECK(!c.lift_record("chr1", 700, 10, &ct, &pos, &flip), "record lifted to a contig not in the reference");
+  CHECK(!c.lift_record("chr1", 401, 20, &ct, &pos, &flip), "record between chains");
+  std::fprintf(stderr, "chain lift: %zu blocks, positions and records checked\n", c.blocks());
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -642,6 +839,8 @@ int main(int argc, char** argv) {
   }
   test_iv_mapq();
   test_cal_mapq();
+  test_pair_model();
+  test_chain();
   Reference ref = make_reference(g);
   // Adversarial reads for tier SL, planted before the index is built:
   //  (a) the read has a mismatch in most parts at its true locus (so few or

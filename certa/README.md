@@ -161,8 +161,28 @@ for tiers R, IV and MR, the reads the default certificate left.
   locus within 10 edits and the clusters verified. It ranks reads near a
   paralog lower, where the formula gives 60. The values are error rates,
   so fewer reads reach MAPQ 40 (74 % of real HG002 mates).
+- `--mapq pair`: MAPQ from boosted trees over both mates' records
+  (`include/certa/pair_model.h`, trees in `include/certa/mapq_model.h`,
+  fitted at the locus on HG002 by `bench/truth_mapq_pair.py`). Besides a
+  record's own tier, edits, gap and clusters, the trees read the other
+  mate's tier, MAPQ and gap, a PR mate's pair margin and the insert size:
+  whether a mate in a repeat has a unique partner decides most of the
+  ranking among the less confident mates
+  ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#a-mapq-from-both-mates)).
+- `--t2t T2T.cidx --t2t-chain T2TToRef.over.chain.gz`: every pair is also
+  mapped, the same way, on an index of T2T-CHM13 in the same pass, and each
+  mate's T2T placement is lifted to the reference through the chain (UCSC
+  `hs1ToHg38.over.chain.gz`). With `--mapq pair` the trees also read it
+  (`include/certa/mapq_model_t2t.h`): whether it lifts to the record's
+  locus, elsewhere or not at all, and its gap and MAPQ there. A mate from a
+  copy GRCh38 lacks tends to align elsewhere on T2T-CHM13. The records,
+  their placements and certificates are the reference's; only MAPQ
+  changes. It needs both indexes in memory (46 GiB for GRCh38 and hs1) and
+  about doubles the mapping time.
 - `--feature-tags` adds `XO` (the best other candidate's distance) and `XN`
-  (clusters verified), the fit's inputs not in other tags.
+  (clusters verified), the fits' inputs not in other tags; with `--t2t`
+  also `XC:Z:class,tier,MAPQ,XE,XD,XO`, the mate's T2T placement as the
+  trees read it.
 
 **Tier R options:** `--iv-tau 256`, `--iv-margin 20`, `--iv-chains 8`,
 `--iv-fallback 8`.
@@ -315,12 +335,15 @@ alignments.
   Setting MAPQ 0 where T2T-CHM13 confidently places the read elsewhere
   removes about half of them on real reads, for every aligner alike
   ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#a-mapq-from-t2t-chm13)).
-- **Interval mode with `--iv-pair all --mapq cal`** (below, fitted on
-  HG002) is the most accurate aligner measured when 98 % of mates or fewer
-  are called confident, held out on HG005: 22–33 misplaced per million
-  against minibwa's 37 and 108–110 for BWA-MEM2, strobealign and minimap2.
-  At 99.3 % and above minibwa stays ahead (80 against 86)
-  ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#held-out-hg005)).
+- **Interval mode with `--iv-pair all --mapq pair`** (below, fitted on
+  HG002) is the most accurate aligner measured at every operating point,
+  held out on HG005. Of the 99.75, 99.29, 98 and 95 % most confident mates,
+  it misplaces 186, 60, 20 and 9 per million, against minibwa's 208, 80,
+  37 and 37 and BWA-MEM2's 202, 108, 108 and 108. With `--t2t` (T2T-CHM13
+  in the same pass) it is 93, 25, 7 and 3: 2–12× fewer than minibwa, and
+  ahead of minibwa with a T2T second opinion from BWA-MEM2 (167, 48, 22,
+  22). `--mapq cal` leads only at 98 % and below (22–33)
+  ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#a-mapq-from-both-mates)).
 - **MAPQ of the fallback:** minibwa misplaces 6–7 % of the fallback mates
   it gives MAPQ ≥ 40. Divided by 4 (`drop_certified_mates.awk -v div=4`),
   their MAPQ comes within 4× of their error rates

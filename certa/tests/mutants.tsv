@@ -181,3 +181,16 @@ M4	include/certa/interval.h	s/if (m >= 40 && ti >= 0)/if (m > 40 \&\& ti >= 0)/	
 M5	include/certa/interval.h	s/const int second = r.d2 >= 0 ? r.d2 : r.d2x;/const int second = r.d2x;/	killed	--mapq cal: the second best within R is ignored
 M6	include/certa/interval.h	s/r.n_clusters < 5 ? 1/r.n_clusters < 4 ? 1/	killed	--mapq cal: four clusters fall in the 5-16 bucket
 M7	include/certa/interval.h	s/std::min(std::max(second - r.d1, 0), 10) : 11;/std::min(std::max(second - r.d1, 0), 10) : 10;/	killed	--mapq cal: no second locus is read as a gap of 10
+
+Q1	include/certa/pair_model.h	s/static const int64_t kTlen\[\] = {1, 200, 300, 400, 500, 700, 1000};/static const int64_t kTlen[] = {1, 200, 300, 400, 500, 700, 1001};/	killed	--mapq pair: |TLEN| 1000 in the class below
+Q2	include/certa/pair_model.h	s/return clampi(a.r.score + b.r.score - a.r.sub_score, 0, 40) + 1;/return clampi(a.r.score + b.r.score - a.r.sub_score, 0, 40);/	killed	--mapq pair: a PR margin of 0 reads as no margin
+Q3	include/certa/pair_model.h	s/const int pk\[\] = {0, 1, 2, 3, 6, 7, 8};/const int pk[] = {0, 1, 2, 3, 5, 7, 8};/	killed	--mapq pair: the other mate's XB in place of its XQ
+Q4	include/certa/pair_model.h	s/f\[10\] = (proper ? 2 : 0) + (b.mapped ? 0 : 1);/f[10] = (proper ? 2 : 0);/	killed	--mapq pair: an unmapped mate not flagged
+Q5	include/certa/pair_model.h	s/node = node \* 2 + (j >= 0 \&\& x\[j\] > thr\[t\]\[k\] ? 1 : 0);/node = node * 2 + (j >= 0 \&\& x[j] >= thr[t][k] ? 1 : 0);/	killed	--mapq pair: a value at a split goes right
+Q6	include/certa/pair_model.h	s/for (int k = 0; k < 60; ++k) m += s <= q\[k\];/for (int k = 0; k < 60; ++k) m += s < q[k];/	killed	--mapq pair: a score at a threshold gets the MAPQ below
+Q7	include/certa/pair_model.h	s/f\[2\] = second >= 0 ? clampi(second - r.d1, 0, 10) : 11;/f[2] = second >= 0 ? clampi(second - r.d1, 0, 10) : 10;/	killed	--mapq pair: no second locus reads as a gap of 10
+Q8	include/certa/pair_model.h	s/clampi(a.r.d1 - ta.xe, -3, 5) + 3 : 9;/clampi(ta.xe - a.r.d1, -3, 5) + 3 : 9;/	killed	--mapq pair --t2t: XE there minus XE here
+N1	src/chain.cpp	s/  if (pos >= b.end) return false;/  if (pos > b.end) return false;/	killed	chain lift: a block's end lifts
+N2	src/chain.cpp	s/  if (a \&\& !ra) {/  if (a) {/	killed	chain lift: a reversed first base taken as the leftmost
+N3	src/chain.cpp	s/  \*out = b.reversed ? b.qsize - 1 - p : p;/  *out = b.reversed ? b.qsize - p : p;/	killed	chain lift: reversed positions off by one
+N4	src/chain.cpp	s/std::llabs(l.left - left) <= 150;/std::llabs(l.left - left) < 150;/	killed	--t2t: a lift 150 bp away is elsewhere

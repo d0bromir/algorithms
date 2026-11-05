@@ -64,6 +64,25 @@ int cmd_map(const Args& a) {
                  c.index2_path.c_str(), ix2.q, ix2.s, static_cast<unsigned long long>(ix2.pos.size()), secs(t));
   }
 
+  // --t2t: T2T-CHM13's own reference and index, and the chain to this one.
+  Reference ref_t;
+  Index ix_t;
+  std::unique_ptr<IndexView> view_t;
+  std::unique_ptr<Chain> chain;
+  std::unique_ptr<T2tRef> t2t;
+  if (c.t2t()) {
+    auto t = Clock::now();
+    load_index(c.t2t_path, ref_t, ix_t);
+    if (ix_t.s != ix.s && c.pass_v())
+      throw std::runtime_error("--t2t " + c.t2t_path + ": pass V needs the same sampling step as the main index");
+    view_t.reset(new IndexView(ix_t.view(ref_t)));
+    chain.reset(new Chain(Chain::load(c.t2t_chain_path, ref)));
+    t2t.reset(new T2tRef{ref_t, *view_t, *chain});
+    std::fprintf(stderr, "[map] T2T index %s: q=%d s=%d, %llu entries; chain %s: %zu blocks; loaded in %.1f s\n",
+                 c.t2t_path.c_str(), ix_t.q, ix_t.s, static_cast<unsigned long long>(ix_t.pos.size()),
+                 c.t2t_chain_path.c_str(), chain->blocks(), secs(t));
+  }
+
   // Open input and outputs first, so a failure cannot leave the upload
   // thread running.
   FastqInput reads(c.reads_path);
@@ -102,7 +121,7 @@ int cmd_map(const Args& a) {
     return gm.get();
   };
 
-  MapPipeline pipeline(c, ref, view, view2.get(), reads, mates.get(), out);
+  MapPipeline pipeline(c, ref, view, view2.get(), reads, mates.get(), out, t2t.get());
   pipeline.run(wait_for_gpu);
   if (!out.finish()) throw std::runtime_error("writing an output failed");
 

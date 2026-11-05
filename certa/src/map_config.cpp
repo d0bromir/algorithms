@@ -31,13 +31,16 @@ MapConfig MapConfig::from_args(const Args& a) {
   if (p.k < 0 || p.k > KMAX) throw std::runtime_error("-k must be in [0, 5]");
   if (p.budget < 1 || p.budget > GPU_BUDGET_MAX) throw std::runtime_error("--budget must be in [1, 256]");
   // --mapq cal (paired interval mode): the fitted MAPQ (certa/interval.h
-  // cal_mapq), whose table was fitted with --mapq-limit 10.
+  // cal_mapq); --mapq pair: the pair model's (certa/pair_model.h). Both were
+  // fitted with --mapq-limit 10.
   const std::string mapq_model = a.get("--mapq", "point");
-  if (mapq_model != "point" && mapq_model != "cal") throw std::runtime_error("--mapq must be point or cal");
+  if (mapq_model != "point" && mapq_model != "cal" && mapq_model != "pair")
+    throw std::runtime_error("--mapq must be point, cal or pair");
   c.out.mapq_cal = mapq_model == "cal";
+  c.out.mapq_pair = mapq_model == "pair";
   // MAPQ only: the second-best estimate beyond the certified radius, up to
   // this many edits (0 = off).
-  p.mapq_limit = a.geti("--mapq-limit", c.out.mapq_cal ? 10 : 8);
+  p.mapq_limit = a.geti("--mapq-limit", c.out.mapq_cal || c.out.mapq_pair ? 10 : 8);
   // S2 is off by default: on synthetic truth most S2 placements with MAPQ >= 20
   // were wrong, and on HG002 S2 reads were enriched at false-positive calls.
   p.s2_limit = a.geti("--s2", 0);
@@ -115,8 +118,19 @@ MapConfig MapConfig::from_args(const Args& a) {
   c.out.witness = a.has("--witness");
   if (c.out.witness && !c.intervals) throw std::runtime_error("--witness needs --intervals");
   c.out.feature_tags = a.has("--feature-tags");
-  if ((c.out.mapq_cal || c.out.feature_tags || c.out.iv_pair_all) && !c.intervals)
-    throw std::runtime_error("--mapq cal, --feature-tags and --iv-pair all need --intervals");
+  if ((c.out.mapq_cal || c.out.mapq_pair || c.out.feature_tags || c.out.iv_pair_all) && !c.intervals)
+    throw std::runtime_error("--mapq cal, --mapq pair, --feature-tags and --iv-pair all need --intervals");
+  if (c.out.mapq_pair && !c.paired()) throw std::runtime_error("--mapq pair needs paired input");
+  // --t2t: every read is also mapped, the same way, on an index of
+  // T2T-CHM13, whose placement --t2t-chain lifts to the reference; the pair
+  // model then reads it (mapq_model_t2t.h). The records are the reference's.
+  c.t2t_path = a.get("--t2t", "");
+  c.t2t_chain_path = a.get("--t2t-chain", "");
+  if (c.t2t() != !c.t2t_chain_path.empty()) throw std::runtime_error("--t2t and --t2t-chain go together");
+  if (c.t2t() && (!c.intervals || !c.paired()))
+    throw std::runtime_error("--t2t needs --intervals and paired input");
+  if (c.t2t() && !c.out.mapq_pair && !c.out.feature_tags)
+    throw std::runtime_error("--t2t is read by --mapq pair (or written by --feature-tags): give one");
 
   // --index2: a second index of the same reference (e.g. q = 15: more, shorter
   // parts) on which the reads still uncertified after every pass get every
@@ -127,6 +141,8 @@ MapConfig MapConfig::from_args(const Args& a) {
     throw std::runtime_error("--witness with --index2: the witnesses would refer to two indexes");
   if (c.index2() && c.serial_stages)
     throw std::runtime_error("--index2 needs the fused stages (no --serial-stages)");
+  if (c.t2t() && c.serial_stages) throw std::runtime_error("--t2t needs the fused stages (no --serial-stages)");
+  if (c.t2t() && c.index2()) throw std::runtime_error("--t2t does not combine with --index2");
 
   // Pass V (CPU; --full-cert unless --witness): parts chosen per read on the
   // main index, the rarest disjoint q-mers (1), then also q-mers searched with
@@ -249,6 +265,7 @@ std::string MapConfig::command_line() const {
   if (pass_l()) extra += " --local " + std::to_string(pl.local);
   if (pass_v()) extra += " --adaptive-parts " + std::to_string(pv.vparts) + " --vbudget " + std::to_string(pv.budget);
   if (index2()) extra += " --index2 " + index2_path;
+  if (t2t()) extra += " --t2t " + t2t_path + " --t2t-chain " + t2t_chain_path;
   return "certa map -k " + std::to_string(p2.k) + " --k1 " + std::to_string(p1.k) + " --budget " +
          std::to_string(p1.budget) + " --budget2 " + std::to_string(p2.budget) + " --s2 " +
          std::to_string(p2.s2_limit) + (gpu ? " --gpu" : "") + extra;

@@ -4,6 +4,8 @@
 
 #include "certa/bio.h"
 #include "certa/interval.h"
+#include "certa/pair_model.h"
+#include "chain.h"
 #include "index.h"
 #include "seqio.h"
 
@@ -19,7 +21,8 @@ struct OutputOptions {
   IvMapq iv_mapq = IvMapq::kPoint;  // --iv-mapq: what interval mode writes as MAPQ
   bool iv_pair_all = false;   // --iv-pair all: an improper certified pair also gets the pair window
   bool mapq_cal = false;      // --mapq cal: paired interval records get the fitted MAPQ (cal_mapq)
-  bool feature_tags = false;  // --feature-tags: interval records carry XO and XN (bench/truth_mapq_fit.py)
+  bool mapq_pair = false;     // --mapq pair: paired interval records get the pair model's MAPQ (pair_model.h)
+  bool feature_tags = false;  // --feature-tags: interval records carry XO and XN (and XC with --t2t)
 };
 
 // The records of some reads, one string per output.
@@ -58,10 +61,11 @@ class RecordWriter {
 
   // Interval mode, a pair: both records (mates without a certificate placed
   // by tier R and the pair window, certa/interval.h), their placements to
-  // placed[0..1] and final reasons to reason[0..1]. Returns whether the pair
-  // is proper.
+  // placed[0..1] and final reasons to reason[0..1]. t2t: both mates' T2T
+  // placements (--t2t), or null. Returns whether the pair is proper.
   bool pair_interval(const Result* r, const Result* se, const RepeatOut* const* iv, const uint8_t* const* codes,
-                     const FastqRecord* rec, PairScratch& sc, Records& out, int* reason, Placement* placed) const;
+                     const FastqRecord* rec, PairScratch& sc, Records& out, int* reason, Placement* placed,
+                     const T2tLift* t2t = nullptr) const;
 
   // --bio, single-end: a SAM line for a certified maximum-likelihood
   // placement (tier BM, with the Y tags) or a proven repeat (SR), else the
@@ -74,8 +78,8 @@ class RecordWriter {
   bool bio_pair(const Result* r, const BioOut* o, const FastqRecord* rec, Records& out, int* reason) const;
 
  private:
-  bool certified_pair(const Result* r, const Result* se, const FastqRecord* rec, Records& out,
-                      Placement* placed) const;
+  bool certified_pair(const Result* r, const Result* se, const FastqRecord* rec, Records& out, Placement* placed,
+                      const T2tLift* t2t = nullptr) const;
 
   const Reference& ref_;
   const IndexView& view_;

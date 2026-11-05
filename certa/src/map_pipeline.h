@@ -8,6 +8,7 @@
 
 #include "async_writer.h"
 #include "certa/pair.h"
+#include "chain.h"
 #include "certa/repeat.h"
 #include "map_config.h"
 #include "map_stats.h"
@@ -29,6 +30,14 @@ struct MapOutputs {
   bool finish();
 };
 
+// --t2t: T2T-CHM13's reference and index, and the chain that lifts its
+// positions to the reference.
+struct T2tRef {
+  const Reference& ref;
+  const IndexView& view;
+  const Chain& chain;
+};
+
 // Batches in flight: a reader thread parses and encodes the next batch while
 // the current one maps. The first stage (passes 1 and 2) maps a batch over
 // its whole length, on the GPU when there is one; the second (the CPU
@@ -40,9 +49,9 @@ struct MapOutputs {
 class MapPipeline {
  public:
   // `view2`: the second index (--index2), or null; `mates`: null for
-  // single-end input.
+  // single-end input; `t2t`: T2T-CHM13 (--t2t), or null.
   MapPipeline(const MapConfig& c, const Reference& ref, const IndexView& view, const IndexView* view2,
-              FastqInput& reads, FastqInput* mates, MapOutputs& out);
+              FastqInput& reads, FastqInput* mates, MapOutputs& out, const T2tRef* t2t = nullptr);
 
   // Maps and writes every batch. wait_for_gpu() is called once the first
   // batch is read (so reading overlaps the GPU upload) and returns the GPU
@@ -73,7 +82,9 @@ class MapPipeline {
   size_t rerun(Slot& S, const std::vector<size_t>& redo, const Params& p, bool on_gpu, bool only_certified = false);
   void pair_certificate(Slot& S, size_t pair, Workspace& w1, Workspace& w2, PairScratch& sc) const;
   RepeatOut tier_r(const Slot& S, size_t i, Workspace& ws, RepeatScratch& sc) const;
-  void format(const Slot& S, size_t a0, size_t b0, Records& out, Stats& s, PairScratch& psc) const;
+  // lifts: --t2t, the T2T placements of reads [a0, b0), or null.
+  void format(const Slot& S, size_t a0, size_t b0, Records& out, Stats& s, PairScratch& psc,
+              const T2tLift* lifts = nullptr) const;
   void write(std::vector<Records>& chunks);
   void first_stage(Slot& S);
   void cpu_stage(Slot& S);
@@ -81,6 +92,7 @@ class MapPipeline {
   void fused_chunk(Slot& S, size_t a0, size_t b0, bool map, ChunkScratch& x, Records& out, Stats& s,
                    PassCounts& n) const;
   void index2_passes(Slot& S, size_t a0, size_t b0, ChunkScratch& x, PassCounts& n) const;
+  void t2t_chunk(const Slot& S, size_t a0, size_t b0, ChunkScratch& x) const;
   void bio_chunk(Slot& S, size_t a0, size_t b0, ChunkScratch& x) const;
   void bio_rescue_pair(Slot& S, size_t i, BioScratch& sc) const;
 
@@ -92,6 +104,8 @@ class MapPipeline {
   FastqInput* mates_;
   MapOutputs& out_;
   RecordWriter writer_;
+  const T2tRef* t2t_;
+  std::unique_ptr<RecordWriter> writer_t2t_;  // --t2t: places pairs on T2T-CHM13 (its records are not written)
   BioModel bio_model_;  // --bio
   std::vector<uint8_t> bio_runs_;  // --bio: the reference's tandem runs (bio_pack_contexts), or empty
   GpuMapper* gm_ = nullptr;

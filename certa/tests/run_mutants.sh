@@ -45,7 +45,7 @@ run_one() {
       runs="$seeds"
     else
       if ! "$cxx" -O2 -std=c++17 -Iinclude -Isrc tests/test_certa.cpp src/check.cpp src/gpu_stub.cpp \
-           src/index.cpp src/seqio.cpp src/mapper_cpu.cpp -pthread -o t 2> build.log; then
+           src/index.cpp src/seqio.cpp src/mapper_cpu.cpp src/chain.cpp -pthread -o t 2> build.log; then
         echo "$id	BUILD_FAILED	$what"; exit
       fi
       runs="$seeds"
