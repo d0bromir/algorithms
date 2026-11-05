@@ -135,6 +135,13 @@ struct IndexView {
   const uint32_t* dir;    // bucket directory, size 2^dir_bits + 1 (n < 2^32)
   uint64_t n;
   int q, s, dir_bits;
+  // v4 files store fewer key bits: the high 8 of the 2q - dir_bits bits below
+  // the bucket (keys8), or none (keys8 null). The ref_key_bits bits below
+  // those are read from the reference at the entry's position, which holds
+  // that very q-mer, so every range is the same as with full keys. 0: the
+  // keys arrays above hold everything.
+  const uint8_t* keys8;
+  int ref_key_bits;
 };
 
 struct Params {
@@ -268,10 +275,70 @@ CERTA_HD inline bool kmer_key(const uint8_t* s, int q, uint64_t* key) {
   return true;
 }
 
+// The low `bits` bits of the key of the q-mer at reference position p: its
+// last (bits + 1) / 2 bases. Indexed q-mers hold no N, so every code is 0..3.
+CERTA_HD inline uint32_t ref_key_low(const IndexView& ix, uint64_t p, int bits) {
+  const int nb = (bits + 1) / 2;
+  const uint8_t* s = ix.ref + p + ix.q - nb;
+  uint32_t v = 0;
+  for (int i = 0; i < nb; ++i) v = (v << 2) | s[i];
+  return v & ((1u << bits) - 1);
+}
+
+// lookup_bucket for v4 files: the stored high byte narrows the bucket to the
+// entries sharing it (keys8), then the reference gives the remaining low bits,
+// ordered within that run as the full keys are.
+CERTA_HD inline void lookup_bucket_ref(const IndexView& ix, uint64_t key, uint64_t l, uint64_t r, uint64_t* lo,
+                                       uint64_t* hi) {
+  const int shift = 2 * ix.q - ix.dir_bits;
+  const int rb = ix.ref_key_bits;
+  const uint32_t rem = (uint32_t)(key & ((1ull << shift) - 1));
+  if (ix.keys8) {
+    const uint8_t k = (uint8_t)(rem >> rb);
+    uint64_t a = l, e = r;
+    while (a < e) {
+      const uint64_t m = a + (e - a) / 2;
+      if (ix.keys8[m] < k) a = m + 1; else e = m;
+    }
+    l = a;
+    e = r;
+    while (a < e) {
+      const uint64_t m = a + (e - a) / 2;
+      if (ix.keys8[m] <= k) a = m + 1; else e = m;
+    }
+    r = a;
+  }
+  const uint32_t low = rem & ((1u << rb) - 1);
+  if (r - l <= 4) {  // mostly 0 or 1 entries: one reference read each
+    uint64_t a = l;
+    while (a < r && ref_key_low(ix, ix.pos[a], rb) < low) ++a;
+    *lo = a;
+    while (a < r && ref_key_low(ix, ix.pos[a], rb) == low) ++a;
+    *hi = a;
+    return;
+  }
+  const uint64_t r0 = r;
+  while (l < r) {
+    const uint64_t m = l + (r - l) / 2;
+    if (ref_key_low(ix, ix.pos[m], rb) < low) l = m + 1; else r = m;
+  }
+  *lo = l;
+  r = r0;
+  while (l < r) {
+    const uint64_t m = l + (r - l) / 2;
+    if (ref_key_low(ix, ix.pos[m], rb) <= low) l = m + 1; else r = m;
+  }
+  *hi = l;
+}
+
 // Half-open range [*lo, *hi) of the entries whose key equals `key` within
 // its bucket [l, r) = [dir[b], dir[b + 1]), b = key >> (2q - dir_bits).
 CERTA_HD inline void lookup_bucket(const IndexView& ix, uint64_t key, uint64_t l, uint64_t r, uint64_t* lo,
                                    uint64_t* hi) {
+  if (ix.ref_key_bits) {
+    lookup_bucket_ref(ix, key, l, r, lo, hi);
+    return;
+  }
   const int shift = 2 * ix.q - ix.dir_bits;
   const uint64_t r0 = r;
   if (ix.keys16) {  // within a bucket, keys are ordered by their low bits
@@ -314,6 +381,20 @@ CERTA_HD inline void lookup_bucket(const IndexView& ix, uint64_t key, uint64_t l
   }
   *hi = l;
 }
+
+#ifndef __CUDA_ARCH__
+// Prefetches the start of bucket entry l for lookup_bucket: its stored keys,
+// or, when a v4 file stores fewer key bits, its position too (the reference
+// read there depends on it).
+inline void prefetch_bucket(const IndexView& ix, uint64_t l) {
+  if (ix.keys16) __builtin_prefetch(ix.keys16 + l);
+  else if (ix.keys) __builtin_prefetch(ix.keys + l);
+  if (ix.ref_key_bits) {
+    if (ix.keys8) __builtin_prefetch(ix.keys8 + l);
+    __builtin_prefetch(ix.pos + l);
+  }
+}
+#endif
 
 // Half-open range [*lo, *hi) of index entries whose key equals `key`.
 CERTA_HD inline void lookup(const IndexView& ix, uint64_t key, uint64_t* lo,
@@ -1862,8 +1943,7 @@ inline void lookup_many(const IndexView& ix, const uint64_t* keys, int n, uint64
   for (int i = 0; i < n; ++i) __builtin_prefetch(ix.dir + (keys[i] >> shift));
   for (int i = 0; i < n; ++i) {
     const uint64_t l = ix.dir[keys[i] >> shift];
-    if (ix.keys16) __builtin_prefetch(ix.keys16 + l);
-    else __builtin_prefetch(ix.keys + l);
+    prefetch_bucket(ix, l);
   }
   for (int i = 0; i < n; ++i) lookup(ix, keys[i], lo + i, hi + i);
 }

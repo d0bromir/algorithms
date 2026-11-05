@@ -41,15 +41,25 @@ struct Index {
   int q = 22, s = 8, dir_bits = 0;
   Array<uint64_t> keys;    // full keys (built in memory, or v2 files)
   Array<uint16_t> keys16;  // low 16 bits (v3 files, when 2q - dir_bits <= 16)
+  // v4 files: the high 8 of those bits (keys8), or no key bits at all; the
+  // other ref_key_bits are read from the reference (IndexView). 0: not v4.
+  Array<uint8_t> keys8;
+  int ref_key_bits = 0;
   Array<uint32_t> pos;
   Array<uint32_t> dir;     // in memory as 32 bits (files store 64)
   std::shared_ptr<void> mapping;  // keeps a memory-mapped index file alive
 
   static Index build(const Reference& ref, int q, int s, int threads);
   IndexView view(const Reference& ref) const;
+  // Key bits stored per entry: 64, 16, 8 or 0.
+  int key_bits() const;
 };
 
-void save_index(const std::string& path, const Reference& ref, const Index& ix);
+// key_bits: what the file stores per entry. -1: as before (16 when the
+// bucket leaves at most 16 key bits, else 64); 8 or 0: a v4 file (16 or fewer
+// bits left; 8 needs more than 8), whose other key bits are read from the
+// reference. Any index (built, or loaded in any version) can be saved so.
+void save_index(const std::string& path, const Reference& ref, const Index& ix, int key_bits = -1);
 // Memory-maps the index file; `ref` and `ix` point into the mapping, which
 // stays alive while `ix` does. Repeated runs reuse the OS page cache.
 void load_index(const std::string& path, Reference& ref, Index& ix);

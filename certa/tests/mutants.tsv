@@ -194,3 +194,11 @@ N1	src/chain.cpp	s/  if (pos >= b.end) return false;/  if (pos > b.end) return f
 N2	src/chain.cpp	s/  if (a \&\& !ra) {/  if (a) {/	killed	chain lift: a reversed first base taken as the leftmost
 N3	src/chain.cpp	s/  \*out = b.reversed ? b.qsize - 1 - p : p;/  *out = b.reversed ? b.qsize - p : p;/	killed	chain lift: reversed positions off by one
 N4	src/chain.cpp	s/std::llabs(l.left - left) <= 150;/std::llabs(l.left - left) < 150;/	killed	--t2t: a lift 150 bp away is elsewhere
+P18	include/certa/interval.h	s/    at_se\[x\] = se\[x\].mapped \&\& same_alignment(p, se\[x\].r);/    at_se[x] = se[x].mapped \&\& same_locus(p, se[x].r) \&\& se[x].r.score >= p.score;/	killed	place_pair: an overlapping single-end record kept, an improper pair flagged proper (the tandem shift test)
+K1	include/certa/core.h	s/  const int nb = (bits + 1) \/ 2;/  const int nb = bits \/ 2;/	killed	v4 lookup: half a base dropped when an odd number of key bits comes from the reference
+K2	include/certa/core.h	s/  const uint8_t\* s = ix.ref + p + ix.q - nb;/  const uint8_t* s = ix.ref + p + ix.q - nb - 1;/	killed	v4 lookup: the key bits read one base too early
+K3	include/certa/core.h	s/      if (ix.keys8\[m\] < k) a = m + 1; else e = m;/      if (ix.keys8[m] <= k) a = m + 1; else e = m;/	killed	v4 lookup: the stored byte's run starts after it (every 8-bit lookup empty)
+K4	include/certa/core.h	s/    while (a < r \&\& ref_key_low(ix, ix.pos\[a\], rb) == low) ++a;/    while (a + 1 < r \&\& ref_key_low(ix, ix.pos[a], rb) == low) ++a;/	killed	v4 lookup: the linear scan misses the run's last entry
+K5	src/index.cpp	s/k8.owned\[i\] = static_cast<uint8_t>(low(i) >> (shift - 8));/k8.owned[i] = static_cast<uint8_t>(low(i) >> (shift - 7));/	killed	v4 save: the stored byte is not the high 8 bits
+K6	src/index.cpp	s/  ix.ref_key_bits = v4 ? shift - key_bits : 0;/  ix.ref_key_bits = v4 ? shift - key_bits - 1 : 0;/	killed	v4 load: one key bit neither stored nor read
+K7	src/check.cpp	s/        if (k8 \&\& ix.keys8\[e\] != /        if (false \&\& ix.keys8[e] != /	killed	index validation: a stored byte that disagrees with the reference accepted

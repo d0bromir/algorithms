@@ -195,8 +195,7 @@ inline void lookup_batch(const IndexView& ix, const uint64_t* key, const uint8_t
       uint64_t& l = bl[g & 1][i - g * G];
       l = ix.dir[b];
       br[g & 1][i - g * G] = ix.dir[b + 1];
-      if (ix.keys16) __builtin_prefetch(ix.keys16 + l);
-      else __builtin_prefetch(ix.keys + l);
+      prefetch_bucket(ix, l);
     }
   };
   dir_prefetch(0);

@@ -827,6 +827,69 @@ void test_chain() {
   std::fprintf(stderr, "chain lift: %zu blocks, positions and records checked\n", c.blocks());
 }
 
+// An index saved as v4 with 8 key bits per entry and with none, and loaded
+// back memory-mapped (the keyless one narrowed from the loaded 8-bit one).
+struct V4Copies {
+  Reference r8, r0;
+  Index i8, i0;
+};
+void v4_copies(const Reference& ref, const Index& ix, V4Copies& c) {
+  const std::string tmp = "test_certa." + std::to_string(getpid()) + ".v4.tmp.cidx";
+  save_index(tmp, ref, ix, 8);
+  load_index(tmp, c.r8, c.i8);
+  std::remove(tmp.c_str());
+  save_index(tmp, c.r8, c.i8, 0);
+  load_index(tmp, c.r0, c.i0);
+  std::remove(tmp.c_str());
+  const int shift = 2 * ix.q - ix.dir_bits;
+  const IndexView v8 = c.i8.view(c.r8), v0 = c.i0.view(c.r0);
+  CHECK(c.i8.key_bits() == 8 && v8.keys8 && v8.ref_key_bits == shift - 8 && !v8.keys16 && !v8.keys,
+        "v4 8-bit index: %d key bits, %d from the reference", c.i8.key_bits(), v8.ref_key_bits);
+  CHECK(c.i0.key_bits() == 0 && !v0.keys8 && v0.ref_key_bits == shift && !v0.keys16 && !v0.keys,
+        "v4 keyless index: %d key bits, %d from the reference", c.i0.key_bits(), v0.ref_key_bits);
+}
+
+// Every lookup range of a v4 copy equals the full-key index's: for every
+// 3rd entry's key, the same key with its last base changed (mostly absent,
+// in a populated bucket), with a base changed just below the stored byte,
+// and random keys. Returns the keys tried.
+uint64_t check_v4_ranges(const Reference& ref, const Index& ix, const V4Copies& c, uint64_t seed) {
+  const IndexView full = ix.view(ref), v8 = c.i8.view(c.r8), v0 = c.i0.view(c.r0);
+  const int shift = 2 * ix.q - ix.dir_bits;
+  const uint64_t all = (uint64_t(1) << (2 * ix.q)) - 1;
+  std::mt19937_64 kg(seed);
+  uint64_t tried = 0, diff = 0, nonempty = 0, present = 0;
+  auto same = [&](uint64_t key) {
+    uint64_t l[3], h[3];
+    lookup(full, key, &l[0], &h[0]);
+    lookup(v8, key, &l[1], &h[1]);
+    lookup(v0, key, &l[2], &h[2]);
+    ++tried;
+    nonempty += h[0] > l[0];
+    for (int k = 1; k < 3; ++k)
+      if (l[k] != l[0] || h[k] != h[0]) {
+        if (++diff <= 3)
+          CHECK(false, "v4 range of key %llx: [%llu, %llu) with %s, [%llu, %llu) with full keys",
+                static_cast<unsigned long long>(key), static_cast<unsigned long long>(l[k]),
+                static_cast<unsigned long long>(h[k]), k == 1 ? "8 bits" : "no bits",
+                static_cast<unsigned long long>(l[0]), static_cast<unsigned long long>(h[0]));
+      }
+  };
+  for (uint64_t e = 0; e < ix.keys.size(); e += 3) {
+    const uint64_t key = ix.keys[e];
+    same(key);
+    ++present;
+    same(key ^ (1 + kg() % 3));                                 // the last base
+    if (shift >= 10) same(key ^ (uint64_t(1 + kg() % 3) << (shift - 10)));  // a base below the stored byte
+  }
+  for (int i = 0; i < 100000; ++i) same(kg() & all);
+  CHECK(diff == 0, "%llu of %llu v4 lookups differ from full keys", static_cast<unsigned long long>(diff),
+        static_cast<unsigned long long>(tried));
+  CHECK(nonempty >= present, "v4 range test: %llu keys found, %llu entries' own keys tried",
+        static_cast<unsigned long long>(nonempty), static_cast<unsigned long long>(present));
+  return tried;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1089,6 +1152,17 @@ int main(int argc, char** argv) {
   std::remove(tmp.c_str());  // the mapping stays valid until ix_m is gone
   const IndexView view_m = ix_m.view(ref_m);
   CHECK(view_m.keys16 != nullptr, "saved index should use 16-bit keys (q=14)");
+  // v4 files: 8 key bits per entry or none, the rest read from the
+  // reference. The same ranges, so the same results (mapped below, as
+  // view_m).
+  const int kshift = 2 * ix.q - ix.dir_bits;
+  CHECK(kshift > 8 && kshift <= 16, "test index: 2q - dir_bits = %d, not in (8, 16]", kshift);
+  V4Copies c4;
+  v4_copies(ref, ix, c4);
+  const IndexView view_m8 = c4.i8.view(c4.r8), view_m0 = c4.i0.view(c4.r0);
+  const uint64_t v4_tried = check_v4_ranges(ref, ix, c4, seed + 41);
+  std::fprintf(stderr, "v4 index (q=14 s=4, %d key bits below the bucket): %llu lookups equal with 8 and 0 bits\n",
+               kshift, static_cast<unsigned long long>(v4_tried));
   // The file stores the directory as 64 bits, memory holds it as 32.
   CHECK(ix_m.dir.size() == ix.dir.size() &&
             std::equal(ix.dir.data(), ix.dir.data() + ix.dir.size(), ix_m.dir.data()),
@@ -1327,6 +1401,13 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < reads.size(); ++i)
       CHECK(std::memcmp(&res[i], &resm[i], sizeof(Result)) == 0,
             "read %zu differs between in-memory and memory-mapped (16-bit key) index", i);
+    for (const IndexView* v4 : {&view_m8, &view_m0}) {
+      std::vector<Result> res4;
+      map_cpu(*v4, p, batch, res4, 4);
+      for (size_t i = 0; i < reads.size(); ++i)
+        CHECK(std::memcmp(&res[i], &res4[i], sizeof(Result)) == 0, "read %zu differs with the v4 index (%d key bits)",
+              i, v4->keys8 ? 8 : 0);
+    }
     Params prev = p;
     prev.reverse_order = 1;
     map_cpu(view, prev, batch, resrev, 4);
@@ -1998,6 +2079,33 @@ int main(int argc, char** argv) {
   {
     Index ix1 = Index::build(ref, 14, 1, 4);  // tier R needs s = 1
     const IndexView view1 = ix1.view(ref);
+    // The same index as v4 files (8 key bits, none): equal ranges, and tier R
+    // gives the same output with them (below).
+    V4Copies c41;
+    v4_copies(ref, ix1, c41);
+    const uint64_t v4_tried1 = check_v4_ranges(ref, ix1, c41, seed + 43);
+    std::fprintf(stderr, "v4 index (q=14 s=1, %d key bits below the bucket): %llu lookups equal with 8 and 0 bits\n",
+                 2 * ix1.q - ix1.dir_bits, static_cast<unsigned long long>(v4_tried1));
+    {
+      // An odd number of key bits below the bucket (one directory bit less,
+      // adjacent buckets merged): the reference supplies half a base more.
+      Index ixo;
+      ixo.q = ix1.q;
+      ixo.s = ix1.s;
+      ixo.dir_bits = ix1.dir_bits - 1;
+      ixo.keys.owned.assign(ix1.keys.data(), ix1.keys.data() + ix1.keys.size());
+      ixo.pos.owned.assign(ix1.pos.data(), ix1.pos.data() + ix1.pos.size());
+      ixo.dir.owned.resize((size_t(1) << ixo.dir_bits) + 1);
+      for (size_t b = 0; b < ixo.dir.owned.size(); ++b) ixo.dir.owned[b] = ix1.dir[2 * b];
+      V4Copies co;
+      v4_copies(ref, ixo, co);
+      const uint64_t t = check_v4_ranges(ref, ixo, co, seed + 47);
+      std::fprintf(stderr, "v4 index (q=14 s=1, %d key bits below the bucket): %llu lookups equal with 8 and 0 bits\n",
+                   2 * ixo.q - ixo.dir_bits, static_cast<unsigned long long>(t));
+    }
+    const IndexView view1_v4[2] = {c41.i8.view(c41.r8), c41.i0.view(c41.r0)};
+    RepeatScratch sc_v4[2];
+    int v4_tier_r = 0;
     const auto& R = ref.seq.owned;
     auto rcs = [](std::vector<uint8_t> v) {
       std::reverse(v.begin(), v.end());
@@ -2028,6 +2136,16 @@ int main(int argc, char** argv) {
         const auto& rd = reads[i].seq;
         const int L = static_cast<int>(rd.size());
         const RepeatOut o = repeat_tier(view1, cfgs[c], rd.data(), L, *ws, sc);
+        for (int k = 0; k < 2; ++k) {
+          const RepeatOut o4 = repeat_tier(view1_v4[k], cfgs[c], rd.data(), L, *ws, sc_v4[k]);
+          ++v4_tier_r;
+          CHECK(o4.claim == o.claim && o4.exact == o.exact && o4.lo == o.lo && o4.hi == o.hi &&
+                    o4.copies == o.copies && o4.copy_pos[0] == o.copy_pos[0] && o4.copy_pos[1] == o.copy_pos[1] &&
+                    o4.nparts == o.nparts && o4.nabsent == o.nabsent && o4.nocc == o.nocc && o4.sub_lo == o.sub_lo &&
+                    o4.sub_hi == o.sub_hi && o4.has_aln == o.has_aln &&
+                    (!o.has_aln || std::memcmp(&o4.aln, &o.aln, sizeof o.aln) == 0),
+                "tier R cfg %d read %zu: output differs with the v4 index (%d key bits)", c, i, k ? 0 : 8);
+        }
         if (!o.claim || o.lo == kNoSub) continue;
         if (local_truth[i] == INT32_MIN) local_truth[i] = oracle_local(R, rd.data(), L);
         ++checked;
@@ -2070,6 +2188,7 @@ int main(int argc, char** argv) {
     }
     std::fprintf(stderr, "tier R intervals checked against the local oracle: %d; SUB intervals: %d\n", checked,
                  sub_r_checked);
+    std::fprintf(stderr, "tier R with the v4 index (8 and 0 key bits): %d outputs equal\n", v4_tier_r);
 
     // ---- Interval-mode placement of pairs (certa/interval.h): every record
     // rescores to its AS, [XL, XU] contains the mate's optimum, a proper pair
@@ -2188,6 +2307,44 @@ int main(int argc, char** argv) {
           }
         }
       }
+      {
+        // A mate just beyond its partner's window, inside the tandem array
+        // (30 copies of a 37-base unit at chr1:75000): its best alignments in
+        // the window are its copies one and two units earlier, which overlap
+        // its single-end alignment. The pair written must be the proper pair
+        // found, with that mate moved (MR), not its single-end record kept
+        // and flagged proper.
+        const int64_t arr = static_cast<int64_t>(ref.offsets[0]) + 75000;
+        const int64_t s1 = arr + 2 * 37 + 5, a0 = s1 - D - 20;
+        CHECK(std::equal(R.begin() + s1 - 37, R.begin() + s1 - 37 + Lp, R.begin() + s1) &&
+                  std::equal(R.begin() + s1 - 74, R.begin() + s1 - 74 + Lp, R.begin() + s1) &&
+                  !std::equal(R.begin() + s1 - 111, R.begin() + s1 - 111 + Lp, R.begin() + s1),
+              "tandem shift test: the array is not where expected");
+        std::vector<uint8_t> a(R.begin() + a0, R.begin() + a0 + Lp);
+        std::vector<uint8_t> b = rcs(std::vector<uint8_t>(R.begin() + s1, R.begin() + s1 + Lp));
+        Placement cs[2], co[2];
+        for (int x = 0; x < 2; ++x) {
+          cs[x] = model_placement(kTierS1, 60, 0, 3, 3, 1, 1, 40, 0, 0, Lp * kMatch);
+          cs[x].r.certified = 1;
+          cs[x].r.strand = static_cast<uint8_t>(x);
+          cs[x].r.ref_pos = x ? s1 : a0;
+          cs[x].xl = cs[x].xu = Lp * kMatch;
+        }
+        CHECK(rescore_affine(view1, cs[0].r, a) == cs[0].r.score && rescore_affine(view1, cs[1].r, b) == cs[1].r.score,
+              "tandem shift test: single-end alignments do not score %d", Lp * kMatch);
+        const RepeatOut* none[2] = {nullptr, nullptr};
+        const uint8_t* cp[2] = {a.data(), b.data()};
+        const int Ls[2] = {Lp, Lp};
+        const bool pr = place_pair(view1, D, 12, cs, none, cp, Ls, psc, contig_of, co);
+        CHECK(pr, "tandem shift test: no proper pair found");
+        if (pr) {
+          const int64_t gap = co[1].r.ref_pos - co[0].r.ref_pos;
+          CHECK(co[0].r.ref_pos == a0 && co[0].r.tier == kTierS1 && co[1].r.tier == kTierMR && co[1].xq == 0 &&
+                    gap >= 0 && gap <= D && same_locus(co[1].r, cs[1].r) && co[1].r.ref_pos != s1,
+                "tandem shift test: mate 2 at %lld (tier %d), %lld after mate 1; expected a moved copy within %d",
+                static_cast<long long>(co[1].r.ref_pos - arr), co[1].r.tier, static_cast<long long>(gap), D);
+        }
+      }
       std::fprintf(stderr, "interval pairs: %d records placed (%d by the pair window), %d proper pairs of 60; %d checked\n",
                    placed, rescued, proper_n, pair_checked);
       std::fprintf(stderr, "improper certified pairs: %d, re-paired %d\n", improper_cert, repaired);
@@ -2274,6 +2431,17 @@ int main(int argc, char** argv) {
       CHECK(check::validate_index(ref, ix, fa, 4, &why), "index q14 s4 invalid: %s", why.c_str());
       CHECK(check::validate_index(ref, ix1, fa, 4, &why), "index q14 s1 invalid: %s", why.c_str());
       CHECK(check::validate_index(ref_m, ix_m, fa, 4, &why), "memory-mapped index invalid: %s", why.c_str());
+      CHECK(check::validate_index(c4.r8, c4.i8, fa, 4, &why), "v4 index (8 key bits) invalid: %s", why.c_str());
+      CHECK(check::validate_index(c4.r0, c4.i0, fa, 4, &why), "v4 index (no key bits) invalid: %s", why.c_str());
+      {
+        // A stored byte that disagrees with the reference is rejected.
+        Index bad = c4.i8;
+        bad.keys8.owned.assign(c4.i8.keys8.data(), c4.i8.keys8.data() + c4.i8.keys8.size());
+        bad.keys8.ptr = nullptr;
+        bad.keys8.owned[bad.keys8.owned.size() / 2] ^= 1;
+        std::string w;
+        CHECK(!check::validate_index(c4.r8, bad, "", 4, &w), "v4 index with a wrong key byte accepted");
+      }
       auto corrupt = [&](const char* what, const std::function<void(Index&)>& f) {
         Index bad = ix;
         f(bad);
@@ -2295,7 +2463,7 @@ int main(int argc, char** argv) {
         CHECK(!check::validate_index(r2, ix, fa, 4, &w), "a reference differing from the FASTA accepted");
       }
       std::remove(fa.c_str());
-      std::fprintf(stderr, "checker: index validation (3 valid, 5 corruptions rejected) done\n");
+      std::fprintf(stderr, "checker: index validation (5 valid, 6 corruptions rejected) done\n");
     }
   }
 

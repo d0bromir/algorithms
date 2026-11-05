@@ -159,6 +159,7 @@ class Checker {
   int q_, s_, dir_bits_;
   const uint64_t* keys_;
   const uint16_t* keys16_;
+  int ref_key_bits_;  // v4 index: keys are read from the reference (whole, here)
   const uint32_t* pos_;
   const uint32_t* dir_;
 };

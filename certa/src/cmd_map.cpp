@@ -28,8 +28,9 @@ int cmd_map(const Args& a) {
   Index ix;
   load_index(c.index_path, ref, ix);
   const double t_load = secs(t_all);
-  std::fprintf(stderr, "[map] index %s: q=%d s=%d, %llu entries, loaded in %.1f s\n", c.index_path.c_str(), ix.q,
-               ix.s, static_cast<unsigned long long>(ix.pos.size()), t_load);
+  std::fprintf(stderr, "[map] index %s: q=%d s=%d, %llu entries, %d key bits each, loaded in %.1f s\n",
+               c.index_path.c_str(), ix.q, ix.s, static_cast<unsigned long long>(ix.pos.size()), ix.key_bits(),
+               t_load);
   std::fprintf(stderr, "[map] pass 1: k=%d budget=%d; pass 2: k=%d budget=%d S2<=%d; parts are >= %d bases\n",
                c.p1.k, c.p1.budget, c.p2.k, c.p2.budget, c.p2.s2_limit, min_read_length(ix.q, ix.s));
   if (c.pass3() || c.pass_l())

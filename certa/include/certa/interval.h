@@ -415,11 +415,15 @@ inline bool place_pair(const IndexView& ix, int max_dist, int wq, const Placemen
   // the other pairs of a duplicated region are mostly unseen. The pair is
   // therefore trusted no more than its more confident mate: a unique mate
   // vouches for its partner's window, two repeat mates vouch for nothing.
+  // A mate stays at its single-end placement only when the pair uses that very
+  // alignment: one that merely overlaps it (a window alignment shifted by an
+  // indel or a clip) is written instead, as moved, or the pair written would
+  // not be the proper pair found.
   bool at_se[2];
   int q_se[2];
   for (int x = 0; x < 2; ++x) {
     const Result& p = cand[b].a[x];
-    at_se[x] = se[x].mapped && same_locus(p, se[x].r) && se[x].r.score >= p.score;
+    at_se[x] = se[x].mapped && same_alignment(p, se[x].r);
     q_se[x] = at_se[x] ? se[x].mapq : 0;
   }
   const int q_pe = std::min(mapq_margin(cand[b].score - subo), std::max(q_se[0], q_se[1]));

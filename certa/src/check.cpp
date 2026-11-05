@@ -158,6 +158,7 @@ Checker::Checker(const Reference& ref, const Index& ix)
       dir_bits_(ix.dir_bits),
       keys_(ix.keys16.size() ? nullptr : ix.keys.data()),
       keys16_(ix.keys16.size() ? ix.keys16.data() : nullptr),
+      ref_key_bits_(ix.ref_key_bits),
       pos_(ix.pos.data()),
       dir_(ix.dir.data()) {
   for (size_t c = 0; c < ref.names.size(); ++c) contig_[ref.names[c]] = static_cast<int>(c);
@@ -174,6 +175,28 @@ int Checker::contig_of(int64_t pos) const {
 void Checker::range(uint64_t key, uint64_t* lo, uint64_t* hi) const {
   const int shift = 2 * q_ - dir_bits_;
   const uint64_t b = key >> shift, a = dir_[b], e = dir_[b + 1];
+  if (ref_key_bits_) {
+    // v4: the whole key of each entry from the reference at its position
+    // (independent of the mapper's stored-bits search).
+    auto key_of = [&](uint64_t i) {
+      uint64_t v = 0;
+      for (int k = 0; k < q_; ++k) v = (v << 2) | ref_[pos_[i] + k];
+      return v;
+    };
+    uint64_t l = a, r = e;
+    while (l < r) {
+      const uint64_t m = l + (r - l) / 2;
+      if (key_of(m) < key) l = m + 1; else r = m;
+    }
+    *lo = l;
+    r = e;
+    while (l < r) {
+      const uint64_t m = l + (r - l) / 2;
+      if (key_of(m) <= key) l = m + 1; else r = m;
+    }
+    *hi = l;
+    return;
+  }
   if (keys16_) {
     const uint16_t k = static_cast<uint16_t>(key & ((uint64_t(1) << shift) - 1));
     *lo = static_cast<uint64_t>(std::lower_bound(keys16_ + a, keys16_ + e, k) - keys16_);
@@ -677,9 +700,13 @@ bool validate_index(const Reference& ref, const Index& ix, const std::string& fa
   if (q < 1 || q > 32 || s < 1) return fail("bad q or s");
   const uint64_t n = ix.pos.size();
   const bool k16 = ix.keys16.size() > 0;
-  if ((k16 ? ix.keys16.size() : ix.keys.size()) != n) return fail("key and position arrays differ in length");
+  const int rkb = ix.ref_key_bits;  // v4: keys (or their low rkb bits) from the reference
+  const bool k8 = rkb && ix.keys8.size() > 0;
+  if (rkb ? k8 && ix.keys8.size() != n : (k16 ? ix.keys16.size() : ix.keys.size()) != n)
+    return fail("key and position arrays differ in length");
   const int shift = 2 * q - ix.dir_bits;
   if (ix.dir_bits < 0 || shift < 0 || (k16 && shift > 16)) return fail("bad directory width");
+  if (rkb && (shift > 16 || rkb != shift - (k8 ? 8 : 0))) return fail("bad key width");
   const uint64_t nb = uint64_t(1) << ix.dir_bits;
   if (ix.dir.size() != nb + 1 || ix.dir[0] != 0 || ix.dir[nb] != n) return fail("directory does not span the entries");
   for (uint64_t b = 0; b < nb; ++b)
@@ -710,14 +737,19 @@ bool validate_index(const Reference& ref, const Index& ix, const std::string& fa
     for (uint64_t b = nb * t / threads; b < nb * (t + 1) / threads && !bad; ++b) {
       uint64_t prev = 0;
       for (uint64_t e = ix.dir[b]; e < ix.dir[b + 1]; ++e) {
-        const uint64_t key = k16 ? ((b << shift) | ix.keys16[e]) : ix.keys[e];
-        if ((key >> shift) != b) return flag("key outside its bucket");
-        if (e > ix.dir[b] && key < prev) return flag("keys not sorted within a bucket");
-        prev = key;
         const uint64_t p = ix.pos[e];
         uint64_t rk;
         if (p % s) return flag("position not a multiple of s");
-        if (!key_at(p, &rk) || rk != key) return flag("entry does not match the reference");
+        if (rkb && !key_at(p, &rk)) return flag("entry does not match the reference");
+        // v4: the key is the reference's; the stored byte must be its high 8
+        // bits below the bucket.
+        const uint64_t key = rkb ? rk : k16 ? ((b << shift) | ix.keys16[e]) : ix.keys[e];
+        if (k8 && ix.keys8[e] != static_cast<uint8_t>((key & ((uint64_t(1) << shift) - 1)) >> rkb))
+          return flag("stored key bits do not match the reference");
+        if ((key >> shift) != b) return flag("key outside its bucket");
+        if (e > ix.dir[b] && key < prev) return flag("keys not sorted within a bucket");
+        prev = key;
+        if (!rkb && (!key_at(p, &rk) || rk != key)) return flag("entry does not match the reference");
         const uint64_t bit = uint64_t(1) << ((p / s) & 63);
         if (__atomic_fetch_or(&seen[p / s / 64], bit, __ATOMIC_RELAXED) & bit)
           return flag("a position is listed twice");

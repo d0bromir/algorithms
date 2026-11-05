@@ -225,11 +225,13 @@ def to_mapq(score, T):
     return (score[:, None] <= T[None, :]).sum(axis=1)
 
 
-def training_set(paths, half, t2t):
+def training_set(paths, half, t2t, drop=()):
     Xs, ys = [], []
     for p in paths:
         z = np.load(p)
         F = features(z, t2t)
+        for k in drop:  # held at 0: one bin, so no split on it
+            F[..., (NAMES + T2T).index(k)] = 0
         n = F.shape[0]
         sel = z["placed"] & z["truth"]
         if half is not None:
@@ -303,8 +305,10 @@ def at_n(mq, bad, n):
 
 
 def cmd_fit(a):
-    X, y, w, base = training_set(a.npz, 0 if a.cv else None, a.t2t)
-    print(f"[fit] {len(y):,} rows, {int(y.sum()):,} misplaced", file=sys.stderr)
+    drop = [k for k in a.drop.split(",") if k]
+    X, y, w, base = training_set(a.npz, 0 if a.cv else None, a.t2t, drop)
+    print(f"[fit] {len(y):,} rows, {int(y.sum()):,} misplaced; not split on: {', '.join(drop) or 'none'}",
+          file=sys.stderr)
     m = fit(X, y, w, base, a.depth, a.rounds)
     write_header(m, a.npz, a.t2t)
 
@@ -382,6 +386,8 @@ def main():
     p.add_argument("--t2t", action="store_true")
     p.add_argument("--depth", type=int, default=DEPTH)
     p.add_argument("--rounds", type=int, default=ROUNDS)
+    p.add_argument("--drop", default="", help="inputs the trees may not split on (comma-separated names, e.g. "
+                   "xe,nm,clip,xq,p_xe,p_nm,p_clip,p_xq: the counts of the read's own edits)")
     p.add_argument("npz", nargs="+")
     p = sp.add_parser("eval")
     p.add_argument("--half", action="store_true")
