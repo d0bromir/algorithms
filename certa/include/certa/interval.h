@@ -24,8 +24,11 @@
 // from what the tiers found: each mate's single-end alignment (and its proven
 // copy, Theorem R), and the best alignment of one mate in the proper-pair
 // window of the other's (the window search of Theorem P, exhaustive in the
-// window). The best pair is taken if it beats the sum of the mates' best
-// single-end scores minus BWA-MEM's unpaired penalty; MAPQ as in mem_sam_pe,
+// window above about L - 54; with --iv-rescue local, below that too when no
+// pair was found: a full local alignment of the window, as BWA-MEM's mate
+// rescue, for a mate without a certificate next to a confident partner). The best
+// pair is taken if it beats the sum of the mates' best single-end scores
+// minus BWA-MEM's unpaired penalty; MAPQ as in mem_sam_pe,
 // except that the pair is trusted no more than its more confident mate (on
 // simulated pairs this cut the misplaced records with MAPQ >= 20 from 6,203
 // to 539 of 1.91 M). This placement is a choice among proven alignments, not
@@ -315,30 +318,42 @@ inline Result copy_placement(const RepeatOut& iv) {
   return c;
 }
 
-// The best alignment of a mate (codes forward, length L) that makes a proper
-// pair with alignment x of the other mate: opposite strand, the reverse
-// one starting 0..max_dist after the forward one. Exhaustive in that window
-// above max(need, the window threshold); false if nothing scores above it.
-inline bool rescue_mate(const IndexView& ix, int max_dist, int wq, const Result& x, const uint8_t* codes, int L,
-                        int need, PairScratch& sc, Result& out) {
-  if (L > LMAX) return false;
+// The proper-pair window of alignment x for the other mate (codes forward,
+// length L <= LMAX): the mate on the opposite strand (returned; rd receives
+// the mate as it aligns there), the reverse one starting 0..max_dist after
+// the forward one, so its first aligned base lies in [*smin, *smax].
+inline int mate_window(const Result& x, int max_dist, const uint8_t* codes, int L, uint8_t* rd, int64_t* smin,
+                       int64_t* smax) {
   const int st = 1 - x.strand;
-  uint8_t rd[LMAX];
   for (int i = 0; i < L; ++i) {
     const uint8_t c = codes[st ? L - 1 - i : i];
     rd[i] = st ? (c < 4 ? (uint8_t)(3 - c) : (uint8_t)4) : c;
   }
-  int64_t smin, smax;
   if (x.strand == 0) {
-    smin = x.ref_pos;
-    smax = x.ref_pos + max_dist;
+    *smin = x.ref_pos;
+    *smax = x.ref_pos + max_dist;
   } else {
-    smin = x.ref_pos - max_dist;
-    smax = x.ref_pos;
+    *smin = x.ref_pos - max_dist;
+    *smax = x.ref_pos;
   }
+  return st;
+}
+
+// The best alignment of a mate (codes forward, length L) that makes a proper
+// pair with alignment x of the other mate. Exhaustive in that window above
+// max(need, the window threshold), which goes to *thr when thr is given;
+// false if nothing scores above it.
+inline bool rescue_mate(const IndexView& ix, int max_dist, int wq, const Result& x, const uint8_t* codes, int L,
+                        int need, PairScratch& sc, Result& out, int* thr = nullptr) {
+  if (thr) *thr = L * kMatch;
+  if (L > LMAX) return false;
+  uint8_t rd[LMAX];
+  int64_t smin, smax;
+  const int st = mate_window(x, max_dist, codes, L, rd, &smin, &smax);
   Band b;
-  int thr;
-  const int v = window_search(ix, rd, L, smin, smax, wq, need, sc, &b, &thr);
+  int t;
+  const int v = window_search(ix, rd, L, smin, smax, wq, need, sc, &b, &t);
+  if (thr) *thr = t;
   if (v == kNoSub) return false;
   Result a;
   if (!affine_align(ix, rd, L, b.lo, b.B, *sc.ws, a, false, smin, smax) || a.score != v) return false;
@@ -346,14 +361,70 @@ inline bool rescue_mate(const IndexView& ix, int max_dist, int wq, const Result&
   return true;
 }
 
+// --iv-rescue local: a mate's partner vouches for its window when its
+// single-end placement has at least this MAPQ by --iv-mapq cert's rule (XQ
+// for tiers R and IV, the point estimate for certified tiers), whatever
+// MAPQ is written. On HG002 tests A and B, a partner with a point estimate
+// >= 20 was misplaced, and took the rescued mate with it, for 29-44 % of
+// the rescued mates with a truth; with this rule, for 7-20 %
+// (bench/VALIDATION_RESULTS.md, "A local mate rescue").
+constexpr int kRescueLocalMapq = 40;
+
+// Mate rescue by local alignment (--iv-rescue local; BWA-MEM's mem_matesw):
+// the best alignment of the mate in the proper-pair window of x, within x's
+// contig (contig_of), with clips and gaps of any length (window_local,
+// exhaustive in the window). True if it scores above need.
+template <class ContigOf>
+inline bool rescue_mate_local(const IndexView& ix, int max_dist, const Result& x, const uint8_t* codes, int L,
+                              int need, PairScratch& sc, ContigOf contig_of, Result& out) {
+  if (L > LMAX) return false;
+  const int c = contig_of(x.ref_pos);
+  if (c < 0) return false;
+  uint8_t rd[LMAX];
+  int64_t smin, smax;
+  const int st = mate_window(x, max_dist, codes, L, rd, &smin, &smax);
+  // An alignment scoring above need has deletions totalling <= L - need - 7
+  // (a gap of k costs 6 + k), so it ends before hi.
+  int64_t hi = smax + L + std::max(0, L * kMatch - need - 7);
+  // Within x's contig: [smin, hi) holds x.ref_pos, and contig_of is c on one
+  // interval, so the window's ends in it are found by bisection.
+  int64_t a = std::max<int64_t>(smin, 0), b = x.ref_pos;
+  while (a < b) {
+    const int64_t m = a + (b - a) / 2;
+    if (contig_of(m) == c) b = m;
+    else a = m + 1;
+  }
+  smin = a;
+  a = x.ref_pos;
+  b = std::min<int64_t>(hi, (int64_t)ix.ref_len) - 1;
+  while (a < b) {
+    const int64_t m = b - (b - a) / 2;
+    if (contig_of(m) == c) a = m;
+    else b = m - 1;
+  }
+  hi = a + 1;
+  Result w;
+  if (!window_local(ix, rd, L, smin, smax, hi, need, sc, w)) return false;
+  out = alignment_only(w, st, kTierMR);
+  return true;
+}
+
 // Places a pair in which at least one mate is not certified. se[x]: the
 // single-end placements; iv[x]: tier R's output for mate x, or null.
 // contig_of(pos) gives a reference position's contig. Returns true for a
 // proper pair (out = the pair), false otherwise (out = se).
+// local_q >= 0 (--iv-rescue local): when the window searches found no proper
+// pair at all, a mate without a certificate (unmapped, tier R or IV) is
+// aligned locally (rescue_mate_local) in the window of its partner's
+// single-end placement, if that has MAPQ >= local_q by --iv-mapq cert's
+// rule, as BWA-MEM rescues mates. It never competes with a pair found end
+// to end (which may have moved a certified mate), and never moves a
+// certified mate itself. The window search is exhaustive above its
+// threshold thr, so it runs only when thr > the score the pair needs.
 template <class ContigOf>
 inline bool place_pair(const IndexView& ix, int max_dist, int wq, const Placement* se, const RepeatOut* const* iv,
                        const uint8_t* const* codes, const int* L, PairScratch& sc, ContigOf contig_of,
-                       Placement* out) {
+                       Placement* out, int local_q = -1) {
   out[0] = se[0];
   out[1] = se[1];
   struct Cand { Result a[2]; int score; };
@@ -374,6 +445,7 @@ inline bool place_pair(const IndexView& ix, int max_dist, int wq, const Placemen
     ++nc;
   };
   if (se[0].mapped && se[1].mapped) add(se[0].r, se[1].r);
+  int thr_se[2] = {0, 0};  // the window search's threshold for mate y around se[1 - y]
   for (int x = 0; x < 2; ++x) {
     const int y = 1 - x;
     Result anc[2];
@@ -385,13 +457,33 @@ inline bool place_pair(const IndexView& ix, int max_dist, int wq, const Placemen
     for (int k = 0; k < na; ++k) {
       const int need = se[y].mapped ? se[y].r.score - kPenUnpaired : kMinScore;
       Result w;
-      if (rescue_mate(ix, max_dist, wq, anc[k], codes[y], L[y], need, sc, w)) {
+      int thr;
+      if (rescue_mate(ix, max_dist, wq, anc[k], codes[y], L[y], need, sc, w, &thr)) {
         if (x == 0) add(anc[k], w);
         else add(w, anc[k]);
       }
+      if (k == 0) thr_se[y] = thr;
       if (k > 0 && se[y].mapped) {
         if (x == 0) add(anc[k], se[y].r);
         else add(se[y].r, anc[k]);
+      }
+    }
+  }
+  if (nc == 0 && local_q >= 0) {
+    for (int x = 0; x < 2; ++x) {
+      const int y = 1 - x;
+      // Mate y has no certificate (unmapped, or placed by tier R); its
+      // partner's single-end placement vouches for its window.
+      const bool y_open = !se[y].mapped || se[y].r.tier == kTierR || se[y].r.tier == kTierIV;
+      if (!se[x].mapped || iv_mapq(se[x], IvMapq::kCert) < local_q || !y_open) continue;
+      // Scores >= kMinScore (BWA-MEM -T) and above what the pair needs; above
+      // thr_se[y] the window search has proven there is nothing.
+      const int need = se[y].mapped ? se[y].r.score - kPenUnpaired : kMinScore;
+      const int need_l = std::max(need, kMinScore - 1);
+      Result w;
+      if (thr_se[y] > need_l && rescue_mate_local(ix, max_dist, se[x].r, codes[y], L[y], need_l, sc, contig_of, w)) {
+        if (x == 0) add(se[x].r, w);
+        else add(w, se[x].r);
       }
     }
   }

@@ -20,6 +20,7 @@ struct OutputOptions {
   bool witness = false;       // --witness: interval records carry what certa check needs (Theorem V)
   IvMapq iv_mapq = IvMapq::kPoint;  // --iv-mapq: what interval mode writes as MAPQ
   bool iv_pair_all = false;   // --iv-pair all: an improper certified pair also gets the pair window
+  bool iv_rescue_local = false;  // --iv-rescue local: a mate the window search misses is aligned locally there
   bool mapq_cal = false;      // --mapq cal: paired interval records get the fitted MAPQ (cal_mapq)
   bool mapq_pair = false;     // --mapq pair: paired interval records get the pair model's MAPQ (pair_model.h)
   bool feature_tags = false;  // --feature-tags: interval records carry XO and XN (and XC with --t2t)

@@ -115,11 +115,19 @@ MapConfig MapConfig::from_args(const Args& a) {
   const std::string pair_mode = a.get("--iv-pair", "uncert");
   if (pair_mode != "uncert" && pair_mode != "all") throw std::runtime_error("--iv-pair must be uncert or all");
   c.out.iv_pair_all = pair_mode == "all";
+  // --iv-rescue local: when the pair window searches find no pair, a mate
+  // without a certificate is aligned locally (clips, gaps of any length) in
+  // the window of a confident partner (certa/interval.h, place_pair).
+  const std::string rescue_mode = a.get("--iv-rescue", "e2e");
+  if (rescue_mode != "e2e" && rescue_mode != "local") throw std::runtime_error("--iv-rescue must be e2e or local");
+  c.out.iv_rescue_local = rescue_mode == "local";
   c.out.witness = a.has("--witness");
   if (c.out.witness && !c.intervals) throw std::runtime_error("--witness needs --intervals");
   c.out.feature_tags = a.has("--feature-tags");
-  if ((c.out.mapq_cal || c.out.mapq_pair || c.out.feature_tags || c.out.iv_pair_all) && !c.intervals)
-    throw std::runtime_error("--mapq cal, --mapq pair, --feature-tags and --iv-pair all need --intervals");
+  if ((c.out.mapq_cal || c.out.mapq_pair || c.out.feature_tags || c.out.iv_pair_all || c.out.iv_rescue_local) &&
+      !c.intervals)
+    throw std::runtime_error(
+        "--mapq cal, --mapq pair, --feature-tags, --iv-pair all and --iv-rescue local need --intervals");
   if (c.out.mapq_pair && !c.paired()) throw std::runtime_error("--mapq pair needs paired input");
   // --t2t: every read is also mapped, the same way, on an index of
   // T2T-CHM13, whose placement --t2t-chain lifts to the reference; the pair

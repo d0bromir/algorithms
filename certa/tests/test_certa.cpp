@@ -1574,6 +1574,80 @@ int main(int argc, char** argv) {
                  bands, bad ? "no" : "yes");
   }
 #endif
+  // ---- window_local (--iv-rescue local) on random windows (up to
+  // kWinVecMax wide), start ranges and reads: unrelated ones, and reads from
+  // the window with edits, a long deletion or insertion, a random end
+  // (chimeric) and Ns. Its score is the oracle's best local score in the
+  // window when every start is allowed, its CIGAR rescores to it, and the
+  // 16-bit fill equals the scalar one cell for cell (every traceback byte in
+  // the window and the best end cell), so the alignment is the same either way.
+  {
+    PairScratch s1, s2;
+    std::mt19937_64 gw(seed * 7 + 5);
+    int wins = 0, bad = 0, off_oracle = 0, bad_cigar = 0;
+    const auto& R0 = ref.seq.owned;
+    for (int it = 0; it < 300; ++it) {
+      const int W = 1 + static_cast<int>(gw() % (it % 10 == 0 ? 4096 : 1400));
+      const int64_t lo = static_cast<int64_t>(gw() % (R0.size() - W - 1));
+      const int cmax = it % 2 ? W - 1 : static_cast<int>(gw() % W);
+      std::vector<uint8_t> rd;
+      if (it % 3 == 0) {
+        rd = reads[gw() % reads.size()].seq;
+      } else {
+        const int64_t a = lo + static_cast<int64_t>(gw() % std::max(1, W / 2));
+        rd.assign(R0.begin() + a, R0.begin() + std::min<int64_t>(a + 260, static_cast<int64_t>(R0.size())));
+        mutate(gw, rd, static_cast<int>(gw() % 11));  // with the gap and clips, the CIGAR fits MAX_CIGAR
+        if (rd.size() > 200 && gw() % 2) {  // a long deletion (bases dropped from the read) or insertion
+          const size_t at = 40 + gw() % 100, n = 10 + gw() % 60;
+          if (gw() % 2) rd.erase(rd.begin() + at, rd.begin() + at + n);
+          else {
+            const std::vector<uint8_t> ins = random_seq(gw, n);
+            rd.insert(rd.begin() + at, ins.begin(), ins.end());
+          }
+        }
+        rd.resize(std::min<size_t>(rd.size(), 30 + gw() % 240));
+        if (gw() % 4 == 0) {  // a random end
+          const size_t k = gw() % rd.size();
+          const bool head = gw() % 2;
+          for (size_t x = head ? 0 : k; x < (head ? k : rd.size()); ++x) rd[x] = rand_base(gw);
+        }
+      }
+      if (rd.empty()) continue;
+      if (gw() % 8 == 0) rd[gw() % rd.size()] = 4;  // an N in the read
+      const int L = static_cast<int>(rd.size());
+      ++wins;
+      Result a1{}, a2{};
+      const bool f1 = window_local(view, rd.data(), L, lo, lo + cmax, lo + W, -(1 << 18), s1, a1);
+      const bool f2 = window_local(view, rd.data(), L, lo, lo + cmax, lo + W, -(1 << 18), s2, a2, true);
+      bool same = f1 == f2 && (!f1 || (a1.ref_pos == a2.ref_pos && a1.score == a2.score && a1.nm == a2.nm &&
+                                       a1.n_cigar == a2.n_cigar &&
+                                       std::equal(a1.cigar, a1.cigar + a1.n_cigar, a2.cigar)));
+#ifdef CERTA_AFFINE_VEC
+      {
+        const int Wp = (W + 7) / 8 * 8;
+        int i1 = -1, c1 = -1, i2 = -2, c2 = -2;
+        const int v1 = window_fill_vec16(rd.data(), L, W, Wp, cmax, s1, &i1, &c1);
+        const int v2 = window_fill_scalar(rd.data(), L, W, Wp, cmax, s2, &i2, &c2);
+        same = same && v1 == v2 && i1 == i2 && c1 == c2;
+        for (int i = 1; same && i <= L; ++i)
+          same = std::memcmp(s1.ltb.data() + static_cast<size_t>(i) * Wp, s2.ltb.data() + static_cast<size_t>(i) * Wp,
+                             W) == 0;
+      }
+#endif
+      bad += !same;
+      if (f2) {
+        bad_cigar += a2.ref_pos < lo || a2.ref_pos > lo + cmax || rescore_affine(view, a2, rd) != a2.score;
+        if (cmax == W - 1) off_oracle += a2.score != local_one(R0, rd.data(), L, lo, lo + W);
+      } else {
+        off_oracle += cmax == W - 1;  // a window always holds an alignment
+      }
+    }
+    CHECK(bad == 0, "window_local: the 16-bit and scalar fills differ on %d of %d windows", bad, wins);
+    CHECK(bad_cigar == 0, "window_local: %d alignments start outside the range or rescore otherwise", bad_cigar);
+    CHECK(off_oracle == 0, "window_local: %d windows' best differs from the oracle's", off_oracle);
+    std::fprintf(stderr, "window_local on %d random windows: the oracle's best, 16-bit fill = scalar: %s\n", wins,
+                 bad || bad_cigar || off_oracle ? "no" : "yes");
+  }
   // ---- The two shortcuts for bands with a one-mismatch ungapped alignment.
   // evaluate_clusters, Hamming bound 1: the band's distance is 0 exactly when
   // a diagonal has no mismatch, else 1. align_best, d1 = 1: affine_align
@@ -2201,7 +2275,7 @@ int main(int argc, char** argv) {
       ip.fallback_samples = 8;
       ip.lb_chains = 8;
       PairScratch psc;
-      int placed = 0, proper_n = 0, rescued = 0, pair_checked = 0, improper_cert = 0, repaired = 0;
+      int placed = 0, proper_n = 0, rescued = 0, pair_checked = 0, improper_cert = 0, repaired = 0, local_paired = 0;
       auto contig_of = [&](int64_t pos) { return ref.contig_of(pos); };
       const check::Checker checker_p(ref, ix1);
       for (int n = 0; n < 60; ++n) {
@@ -2264,6 +2338,37 @@ int main(int argc, char** argv) {
           CHECK(out[0].mapped && out[1].mapped && out[0].r.strand != out[1].r.strand && rv.ref_pos >= fw.ref_pos &&
                     rv.ref_pos - fw.ref_pos <= D,
                 "pair %d: claimed proper but not", n);
+        }
+        // --iv-rescue local adds a pair only where the window searches found
+        // none: a pair found end to end is written the same way. A pair it
+        // finds keeps one mate's single-end record and moves the other, which
+        // had no certificate (MR, XQ 0); the checker accepts both records.
+        {
+          Placement lo[2];
+          const bool lp = place_pair(view1, D, 12, se, ivp, cp, Ls, psc, contig_of, lo, kRescueLocalMapq);
+          bool same = lp == proper;
+          for (int x = 0; x < 2 && same; ++x)
+            same = lo[x].mapped == out[x].mapped && lo[x].mapq == out[x].mapq && lo[x].xl == out[x].xl &&
+                   (!lo[x].mapped || (same_alignment(lo[x].r, out[x].r) && lo[x].r.tier == out[x].r.tier));
+          if (proper || !lp) {
+            CHECK(same, "pair %d: the local rescue changed a pair found end to end, or made none", n);
+          } else {
+            ++local_paired;
+            int kept = 0;
+            for (int x = 0; x < 2; ++x) {
+              const bool k = se[x].mapped && same_alignment(lo[x].r, se[x].r);
+              kept += k;
+              CHECK(k || (lo[x].r.tier == kTierMR && lo[x].xq == 0 &&
+                          (!se[x].mapped || se[x].r.tier == kTierR || se[x].r.tier == kTierIV) &&
+                          rescore_affine(view1, lo[x].r, *m[x]) == lo[x].r.score),
+                    "pair %d mate %d: placed by the local rescue as tier %d, XQ %d", n, x, lo[x].r.tier, lo[x].xq);
+              check::Work w;
+              const check::Verdict v = checker_p.check(claim_of(lo[x], *m[x]), &w);
+              CHECK(v == check::kAccepted, "pair %d mate %d (local rescue): checker says %s", n, x,
+                    check::kVerdictNames[v]);
+            }
+            CHECK(kept == 1, "pair %d: the local rescue kept %d single-end records", n, kept);
+          }
         }
         // --iv-pair all: the same mates as if both were certified (tier S1,
         // MAPQ 60) and not a proper pair. A moved mate becomes MR with XQ 0 and
@@ -2345,9 +2450,231 @@ int main(int argc, char** argv) {
                 static_cast<long long>(co[1].r.ref_pos - arr), co[1].r.tier, static_cast<long long>(gap), D);
         }
       }
+      {
+        // --iv-rescue local (rescue_mate_local, window_local): mates the
+        // window search cannot find, in the window of a partner placed
+        // exactly with MAPQ 60, in unique sequence (chr1 46500-49800, free):
+        //  kind 0, chimeric: 55 bases from the window and 95 random ones,
+        //    after them or (orient 1) before them (55M95S or 95S55M, 50;
+        //    minibwa's 51M100S, 110S41M);
+        //  kind 1, divergent: 16 mismatches, one every 9 bases (150M, 70);
+        //  kind 2, long gaps: a 60-base deletion and a 2-base insertion
+        //    (70M60D35M2I43M, 74), starting 5 bases from the window's far
+        //    end, so the alignment ends 202 bases past it.
+        // All score below the window search's threshold L - 54 = 96 (kind 2
+        // also has a gap wider than its band). The anchor is the forward
+        // mate (orient 0) or the reverse one (orient 1). With the local
+        // rescue, the mate is placed (MR, XQ 0, MAPQ 40) at the window's
+        // best alignment (the oracle's), the anchor is kept, and the checker
+        // accepts the record. It is not placed without the local rescue,
+        // next to a partner below kRescueLocalMapq (a certified one with
+        // MAPQ 39, or one without a certificate with MAPQ 60 but XQ 39), or
+        // below kMinScore (a 30-base piece, 25, against an IV record
+        // scoring 35), and a certified mate is never moved.
+        std::mt19937_64 gl(seed ^ 0x10ca1ULL);  // its own stream: the data of the tests after this stay as they were
+        auto flip = [&](uint8_t c) { return static_cast<uint8_t>((c + 1 + gl() % 3) % 4); };
+        int rescued_local = 0;
+        for (int kind = 0; kind < 4; ++kind)
+          for (int orient = 0; orient < 2; ++orient) {
+            const int64_t sf = static_cast<int64_t>(ref.offsets[0]) + 46500 + 800 * kind + 300 * orient;
+            // The forward mate starts at sf, the reverse one at sr; the
+            // rescued mate (y) is built from the reference at sy.
+            const int64_t sr = kind == 2 ? sf + (orient == 0 ? D - 5 : 5) : sf + 300;
+            const int y = orient == 0 ? 1 : 0, xa = 1 - y;
+            const int64_t sy = y == 1 ? sr : sf, sa = y == 1 ? sf : sr;
+            auto from = [&](int64_t a, int64_t b) { return std::vector<uint8_t>(R.begin() + a, R.begin() + b); };
+            std::vector<uint8_t> gy;  // mate y as it aligns (forward reference orientation)
+            int planted_score;
+            if (kind == 0 || kind == 3) {  // kind 3: the 30-base piece of the floor check
+              const int keep = kind == 0 ? 55 : 30;
+              gy = from(sy, sy + keep);
+              std::vector<uint8_t> rest = random_seq(gl, Lp - keep);
+              if (kind == 0 && orient == 1) {  // 95S55M: the clip before the piece
+                rest.back() = flip(R[sy - 1]);
+                gy.insert(gy.begin(), rest.begin(), rest.end());
+              } else {
+                rest[0] = flip(R[sy + keep]);
+                gy.insert(gy.end(), rest.begin(), rest.end());
+              }
+              planted_score = keep - kClip;
+            } else if (kind == 1) {
+              gy = from(sy, sy + Lp);
+              for (int k = 0; k < 16; ++k) gy[5 + 9 * k] = flip(gy[5 + 9 * k]);
+              planted_score = Lp - 16 * (kMatch + kMismatch);
+            } else {
+              gy = from(sy, sy + 70);
+              const std::vector<uint8_t> mid = from(sy + 130, sy + 165), ins = random_seq(gl, 2),
+                                         tail = from(sy + 165, sy + 208);
+              gy.insert(gy.end(), mid.begin(), mid.end());
+              gy.insert(gy.end(), ins.begin(), ins.end());
+              gy.insert(gy.end(), tail.begin(), tail.end());
+              planted_score = (Lp - 2) - (kGapOpen + 60 * kGapExt) - (kGapOpen + 2 * kGapExt);
+            }
+            CHECK(static_cast<int>(gy.size()) == Lp, "local rescue kind %d: read length %zu", kind, gy.size());
+            std::vector<uint8_t> m[2];
+            m[y] = y == 1 ? rcs(gy) : gy;  // as sequenced
+            m[xa] = xa == 1 ? rcs(from(sa, sa + Lp)) : from(sa, sa + Lp);
+            const uint8_t* cp[2] = {m[0].data(), m[1].data()};
+            const int Ls[2] = {Lp, Lp};
+            const RepeatOut* none[2] = {nullptr, nullptr};
+            Placement cs[2], co[2];
+            cs[xa] = model_placement(kTierS1, 60, 0, 3, 3, 1, 1, 40, 0, 0, Lp * kMatch);
+            cs[xa].r.certified = 1;
+            cs[xa].r.strand = static_cast<uint8_t>(xa);
+            cs[xa].r.ref_pos = sa;
+            cs[xa].xl = cs[xa].xu = Lp * kMatch;
+            CHECK(rescore_affine(view1, cs[xa].r, m[xa]) == Lp * kMatch, "local rescue kind %d: anchor scores %d", kind,
+                  rescore_affine(view1, cs[xa].r, m[xa]));
+            cs[y].xu = Lp * kMatch;  // unmapped, no interval claim (place_single)
+            if (kind == 3) {         // an IV record elsewhere (chr2) scoring 35: the pair needs > 18
+              cs[y] = model_placement(kTierIV, 0, 0, -1, -1, 1, 1, 0, 0, 0, 35);
+              cs[y].r.strand = static_cast<uint8_t>(y);
+              cs[y].r.ref_pos = static_cast<int64_t>(ref.offsets[1]) + 30000;
+              cs[y].xl = 35;
+              cs[y].xu = Lp * kMatch;
+            }
+            const bool off = place_pair(view1, D, 12, cs, none, cp, Ls, psc, contig_of, co);
+            CHECK(!off && co[y].mapped == cs[y].mapped && (!co[y].mapped || co[y].r.tier == kTierIV),
+                  "local rescue kind %d orient %d: placed by the window search alone (tier %d)", kind, orient,
+                  co[y].r.tier);
+            const bool on = place_pair(view1, D, 12, cs, none, cp, Ls, psc, contig_of, co, kRescueLocalMapq);
+            if (kind == 3) {
+              CHECK(!on && co[y].r.tier == kTierIV && co[y].r.ref_pos == cs[y].r.ref_pos,
+                    "local rescue orient %d: a piece scoring %d below kMinScore was placed (tier %d)", orient,
+                    planted_score, co[y].r.tier);
+              continue;
+            }
+            CHECK(on, "local rescue kind %d orient %d: no proper pair", kind, orient);
+            if (!on) continue;
+            ++rescued_local;
+            const Placement& o = co[y];
+            // The window's best: starts in [smin, smax], as the read aligns there.
+            const int64_t smin = y == 1 ? sa : sa - D, smax = y == 1 ? sa + D : sa;
+            const int best = local_one(R, gy.data(), Lp, smin, smax + 2 * Lp);
+            CHECK(o.mapped && o.r.tier == kTierMR && o.xq == 0 && o.mapq == 40 && o.r.strand == y &&
+                      o.r.ref_pos == sy && o.r.score == best && best >= planted_score,
+                  "local rescue kind %d orient %d: tier %d XQ %d MAPQ %d strand %d at %+lld, AS %d; expected MR, 0, "
+                  "40, %d at 0, the window's best %d (planted %d)",
+                  kind, orient, o.r.tier, o.xq, o.mapq, o.r.strand, static_cast<long long>(o.r.ref_pos - sy),
+                  o.r.score, y, best, planted_score);
+            CHECK(rescore_affine(view1, o.r, m[y]) == o.r.score,
+                  "local rescue kind %d orient %d: CIGAR scores %d, AS %d", kind, orient,
+                  rescore_affine(view1, o.r, m[y]), o.r.score);
+            CHECK(o.xl == o.r.score && o.xu == Lp * kMatch, "local rescue kind %d orient %d: [XL, XU] = [%d, %d]", kind,
+                  orient, o.xl, o.xu);
+            CHECK(co[xa].r.tier == kTierS1 && co[xa].r.ref_pos == sa && co[xa].mapq == 60,
+                  "local rescue kind %d orient %d: the anchor changed", kind, orient);
+            check::Work w;
+            const check::Verdict v = checker_p.check(claim_of(o, m[y]), &w);
+            CHECK(v == check::kAccepted, "local rescue kind %d orient %d: checker says %s", kind, orient,
+                  check::kVerdictNames[v]);
+            // A partner below kRescueLocalMapq vouches for nothing; without
+            // a certificate, its XQ counts, not its MAPQ.
+            Placement weak[2] = {cs[0], cs[1]}, wo[2];
+            weak[xa].mapq = kRescueLocalMapq - 1;
+            CHECK(!place_pair(view1, D, 12, weak, none, cp, Ls, psc, contig_of, wo, kRescueLocalMapq) && !wo[y].mapped,
+                  "local rescue kind %d orient %d: placed next to a partner with MAPQ %d", kind, orient,
+                  weak[xa].mapq);
+            for (int xq = kRescueLocalMapq - 1; xq <= kRescueLocalMapq; ++xq) {
+              Placement iv_anchor[2] = {cs[0], cs[1]}, io[2];
+              iv_anchor[xa].r.tier = kTierIV;
+              iv_anchor[xa].r.certified = 0;
+              iv_anchor[xa].mapq = 60;
+              iv_anchor[xa].xq = xq;
+              const bool ip = place_pair(view1, D, 12, iv_anchor, none, cp, Ls, psc, contig_of, io, kRescueLocalMapq);
+              CHECK(ip == (xq >= kRescueLocalMapq) && io[y].mapped == ip,
+                    "local rescue kind %d orient %d: an IV partner with MAPQ 60 and XQ %d %s", kind, orient, xq,
+                    ip ? "vouched for its window" : "did not vouch for its window");
+            }
+            // A certified mate (here SL, elsewhere, scoring 60) stays.
+            if (kind == 1) {
+              Placement cert[2] = {cs[0], cs[1]}, ce[2];
+              cert[y] = model_placement(kTierSL, 30, 0, -1, -1, 1, 1, 0, 0, 0, 60);
+              cert[y].r.certified = 1;
+              cert[y].r.strand = static_cast<uint8_t>(y);
+              cert[y].r.ref_pos = static_cast<int64_t>(ref.offsets[1]) + 30000;
+              cert[y].xl = 60;
+              cert[y].xu = Lp * kMatch;
+              CHECK(!place_pair(view1, D, 12, cert, none, cp, Ls, psc, contig_of, ce, kRescueLocalMapq) &&
+                        ce[y].r.tier == kTierSL && ce[y].r.ref_pos == cert[y].r.ref_pos,
+                    "local rescue orient %d: a certified mate was moved (tier %d)", orient, ce[y].r.tier);
+            }
+          }
+        std::fprintf(stderr, "local mate rescue: %d of 6 mates placed\n", rescued_local);
+        // The local rescue never competes with a pair found end to end. In
+        // the 40-copy element (copies at chr1 60200 + 350 r, 300 bases, then
+        // a unique 50-base spacer), mate 1 is the element's first 150 bases,
+        // placed (as if confidently) at copy p; mate 2 is the 100 bases after
+        // copy p's element start + 300, then copy q's spacer, and its IV
+        // record is that spacer (100S50M, 45). The window search places mate
+        // 1 at copy q next to mate 2 (195, above 150 + 45 - 17), so mate 1
+        // moves. A local alignment of mate 2 in copy p's window (100M50S, 95)
+        // would make a better pair (245, above 150 + 95 - 17), but there is
+        // already one. Copies p and q (not the mutated ones, r % 7 == 3) are
+        // chosen so that mate 2's alignment at copy p does not extend into
+        // copy q's spacer: it scores at most 96, which the window search
+        // does not find (the reference, and so this, depends on the seed).
+        {
+          const int64_t e0 = static_cast<int64_t>(ref.offsets[0]) + 60200;
+          int64_t P = -1, Q = -1;
+          int pbest = 0;
+          std::vector<uint8_t> gb;
+          for (int p = 4; p < 9 && P < 0; ++p)
+            for (int q = 20; q < 30 && P < 0; ++q) {
+              const int64_t cpp = e0 + 350 * p, cpq = e0 + 350 * q;
+              if (p % 7 == 3 || q % 7 == 3 || !std::equal(R.begin() + cpp, R.begin() + cpp + Lp, R.begin() + cpq) ||
+                  R[cpq + 300] == R[cpp + 400])
+                continue;
+              std::vector<uint8_t> g(R.begin() + cpp + 300, R.begin() + cpp + 400);
+              g.insert(g.end(), R.begin() + cpq + 300, R.begin() + cpq + 350);
+              const int o = local_one(R, g.data(), Lp, cpp, cpp + D + 2 * Lp);  // the window's best
+              if (o >= 95 && o <= 96) {
+                P = cpp;
+                Q = cpq;
+                pbest = o;
+                gb = g;
+              }
+            }
+          CHECK(P >= 0, "competition test: no pair of element copies fits");
+          if (P < 0) P = e0 + 5 * 350, Q = e0 + 20 * 350, gb.assign(Lp, 0);
+          std::vector<uint8_t> a(R.begin() + P, R.begin() + P + Lp);
+          const std::vector<uint8_t> b = rcs(gb);
+          Placement cs[2], co[2], cl[2];
+          cs[0] = model_placement(kTierS1, 60, 0, 3, 3, 1, 1, 40, 0, 0, Lp * kMatch);
+          cs[0].r.certified = 1;
+          cs[0].r.ref_pos = P;
+          cs[0].xl = cs[0].xu = Lp * kMatch;
+          cs[1] = model_placement(kTierIV, 0, 0, -1, -1, 1, 1, 0, 0, 100, 45);
+          cs[1].r.strand = 1;
+          cs[1].r.ref_pos = Q + 300;
+          cs[1].xl = 45;
+          cs[1].xu = Lp * kMatch;
+          CHECK(rescore_affine(view1, cs[1].r, b) == 45, "competition test: mate 2's record scores %d",
+                rescore_affine(view1, cs[1].r, b));
+          const RepeatOut* none[2] = {nullptr, nullptr};
+          const uint8_t* cp[2] = {a.data(), b.data()};
+          const int Ls[2] = {Lp, Lp};
+          Result w;
+          const bool lw = rescue_mate_local(view1, D, cs[0].r, b.data(), Lp, kMinScore - 1, psc, contig_of, w);
+          CHECK(lw && w.score == pbest && w.ref_pos == P + 300,
+                "competition test: the local alignment at copy p scores %d at %+lld, the window's best %d",
+                lw ? w.score : -1, lw ? static_cast<long long>(w.ref_pos - P) : -1LL, pbest);
+          const bool off = place_pair(view1, D, 12, cs, none, cp, Ls, psc, contig_of, co);
+          const bool on = place_pair(view1, D, 12, cs, none, cp, Ls, psc, contig_of, cl, kRescueLocalMapq);
+          CHECK(off && co[0].r.tier == kTierMR && co[0].r.ref_pos == Q && co[1].r.tier == kTierIV,
+                "competition test: the window search did not move mate 1 to copy q");
+          bool same = on == off;
+          for (int x = 0; x < 2 && same; ++x)
+            same = cl[x].mapped == co[x].mapped && cl[x].mapq == co[x].mapq && same_alignment(cl[x].r, co[x].r) &&
+                   cl[x].r.tier == co[x].r.tier;
+          CHECK(same, "competition test: the local rescue replaced a pair found end to end (mate 1 at %+lld)",
+                static_cast<long long>(cl[0].r.ref_pos - Q));
+        }
+      }
       std::fprintf(stderr, "interval pairs: %d records placed (%d by the pair window), %d proper pairs of 60; %d checked\n",
                    placed, rescued, proper_n, pair_checked);
-      std::fprintf(stderr, "improper certified pairs: %d, re-paired %d\n", improper_cert, repaired);
+      std::fprintf(stderr, "improper certified pairs: %d, re-paired %d; pairs only the local rescue makes: %d\n",
+                   improper_cert, repaired, local_paired);
       CHECK(repaired > 0, "no improper certified pair was re-paired");
     }
 
