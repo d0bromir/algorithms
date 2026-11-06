@@ -2604,20 +2604,40 @@ int main(int argc, char** argv) {
         // The local rescue never competes with a pair found end to end. In
         // the 40-copy element (copies at chr1 60200 + 350 r, 300 bases, then
         // a unique 50-base spacer), mate 1 is the element's first 150 bases,
-        // placed (as if confidently) at copy 5; mate 2 is the 100 bases after
-        // copy 5's element start + 300, then copy 20's spacer, and its IV
+        // placed (as if confidently) at copy p; mate 2 is the 100 bases after
+        // copy p's element start + 300, then copy q's spacer, and its IV
         // record is that spacer (100S50M, 45). The window search places mate
-        // 1 at copy 20 next to mate 2 (195, above 150 + 45 - 17), so mate 1
-        // moves. A local alignment of mate 2 in copy 5's window (100M50S, 95)
+        // 1 at copy q next to mate 2 (195, above 150 + 45 - 17), so mate 1
+        // moves. A local alignment of mate 2 in copy p's window (100M50S, 95)
         // would make a better pair (245, above 150 + 95 - 17), but there is
-        // already one.
+        // already one. Copies p and q (not the mutated ones, r % 7 == 3) are
+        // chosen so that mate 2's alignment at copy p does not extend into
+        // copy q's spacer: it scores at most 96, which the window search
+        // does not find (the reference, and so this, depends on the seed).
         {
           const int64_t e0 = static_cast<int64_t>(ref.offsets[0]) + 60200;
-          const int64_t P = e0 + 5 * 350, Q = e0 + 20 * 350;
-          CHECK(std::equal(R.begin() + P, R.begin() + P + Lp, R.begin() + Q), "competition test: copies 5 and 20 differ");
+          int64_t P = -1, Q = -1;
+          int pbest = 0;
+          std::vector<uint8_t> gb;
+          for (int p = 4; p < 9 && P < 0; ++p)
+            for (int q = 20; q < 30 && P < 0; ++q) {
+              const int64_t cpp = e0 + 350 * p, cpq = e0 + 350 * q;
+              if (p % 7 == 3 || q % 7 == 3 || !std::equal(R.begin() + cpp, R.begin() + cpp + Lp, R.begin() + cpq) ||
+                  R[cpq + 300] == R[cpp + 400])
+                continue;
+              std::vector<uint8_t> g(R.begin() + cpp + 300, R.begin() + cpp + 400);
+              g.insert(g.end(), R.begin() + cpq + 300, R.begin() + cpq + 350);
+              const int o = local_one(R, g.data(), Lp, cpp, cpp + D + 2 * Lp);  // the window's best
+              if (o >= 95 && o <= 96) {
+                P = cpp;
+                Q = cpq;
+                pbest = o;
+                gb = g;
+              }
+            }
+          CHECK(P >= 0, "competition test: no pair of element copies fits");
+          if (P < 0) P = e0 + 5 * 350, Q = e0 + 20 * 350, gb.assign(Lp, 0);
           std::vector<uint8_t> a(R.begin() + P, R.begin() + P + Lp);
-          std::vector<uint8_t> gb(R.begin() + P + 300, R.begin() + P + 400);
-          gb.insert(gb.end(), R.begin() + Q + 300, R.begin() + Q + 350);
           const std::vector<uint8_t> b = rcs(gb);
           Placement cs[2], co[2], cl[2];
           cs[0] = model_placement(kTierS1, 60, 0, 3, 3, 1, 1, 40, 0, 0, Lp * kMatch);
@@ -2636,12 +2656,13 @@ int main(int argc, char** argv) {
           const int Ls[2] = {Lp, Lp};
           Result w;
           const bool lw = rescue_mate_local(view1, D, cs[0].r, b.data(), Lp, kMinScore - 1, psc, contig_of, w);
-          CHECK(lw && w.score == 95 && w.ref_pos == P + 300, "competition test: no local alignment 95 at copy 5 (%d)",
-                lw ? w.score : -1);
+          CHECK(lw && w.score == pbest && w.ref_pos == P + 300,
+                "competition test: the local alignment at copy p scores %d at %+lld, the window's best %d",
+                lw ? w.score : -1, lw ? static_cast<long long>(w.ref_pos - P) : -1LL, pbest);
           const bool off = place_pair(view1, D, 12, cs, none, cp, Ls, psc, contig_of, co);
           const bool on = place_pair(view1, D, 12, cs, none, cp, Ls, psc, contig_of, cl, kRescueLocalMapq);
           CHECK(off && co[0].r.tier == kTierMR && co[0].r.ref_pos == Q && co[1].r.tier == kTierIV,
-                "competition test: the window search did not move mate 1 to copy 20");
+                "competition test: the window search did not move mate 1 to copy q");
           bool same = on == off;
           for (int x = 0; x < 2 && same; ++x)
             same = cl[x].mapped == co[x].mapped && cl[x].mapq == co[x].mapq && same_alignment(cl[x].r, co[x].r) &&
