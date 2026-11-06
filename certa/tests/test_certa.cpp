@@ -23,6 +23,7 @@
 // validation must reject corrupted indexes and FASTAs.
 #include <algorithm>
 #include <climits>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -40,10 +41,13 @@
 
 #include "index.h"
 #include "certa/interval.h"
+#include "certa/pair_model.h"
+#include "chain.h"
 #include "check.h"
 #include "certa/pair.h"
 #include "certa/repeat.h"
 #include "mapper.h"
+#include "sam_output.h"
 
 using namespace certa;
 
@@ -590,6 +594,302 @@ void test_iv_mapq() {
   }
 }
 
+// --mapq cal (interval.h cal_mapq): the cell of each record against a
+// direct reading of the key, over every tier, edit count, second-best
+// distance (within R, beyond it, none), cluster count and MAPQ.
+void test_cal_mapq() {
+  int checked = 0;
+  const int clusters[] = {0, 1, 2, 4, 5, 16, 17, 300};
+  for (int t = kTierS0; t <= kTierBM; ++t)
+    for (int d1 = -1; d1 <= 7; ++d1)
+      for (int s = -1; s <= 20; ++s)
+        for (int within = 0; within < 2; ++within)
+          for (int nc : clusters)
+            for (int m : {0, 17, 39, 40, 41, 60}) {
+              Result r{};
+              r.tier = static_cast<uint8_t>(t);
+              r.d1 = static_cast<int8_t>(d1);
+              r.d2 = static_cast<int8_t>(within ? s : -1);  // second best within R, else the candidate beyond it
+              r.d2x = static_cast<int8_t>(within ? -1 : s);
+              r.n_clusters = static_cast<uint16_t>(nc);
+              const int ti = t == kTierS0 ? 0 : t == kTierS1 ? 1 : t == kTierPR ? 2 : -1;
+              int want;
+              if (m >= 40 && ti >= 0) {
+                const int e = d1 < 0 ? 0 : d1 > 5 ? 5 : d1;
+                const int g = s < 0 ? 11 : s - d1 < 0 ? 0 : s - d1 > 10 ? 10 : s - d1;
+                const int x = nc >= 17 ? 3 : nc >= 5 ? 2 : nc >= 2 ? 1 : 0;
+                want = kCalConf[ti][e][g][x];
+              } else {
+                want = t > kTierMR ? m : kCalLow[t][m > 39 ? 39 : m];
+              }
+              const int got = cal_mapq(r, m);
+              CHECK(got == want, "--mapq cal: tier %d d1 %d second %d (%s) clusters %d MAPQ %d: %d, not %d", t, d1, s,
+                    within ? "within R" : "beyond", nc, m, got, want);
+              ++checked;
+            }
+  // The table itself: the none-within-the-limit cell of a clean unique
+  // read is the most confident of its tier (the gap ordering it was fitted on).
+  CHECK(kCalConf[0][0][11][0] >= kCalConf[0][0][2][0] && kCalConf[1][1][11][0] >= kCalConf[1][1][2][0],
+        "--mapq cal table: a unique read below one with a close second locus");
+  std::fprintf(stderr, "--mapq cal: %d keys checked\n", checked);
+}
+
+// A mapped placement for the pair model's tests.
+Placement model_placement(int tier, int mapq, int d1, int d2, int d2x, int clusters, int n_best, int xq, int nm,
+                          int clip, int score, int sub_score = kNoSub) {
+  Placement p;
+  p.mapped = true;
+  p.mapq = mapq;
+  p.xq = xq;
+  Result& r = p.r;
+  r.tier = static_cast<uint8_t>(tier);
+  r.d1 = static_cast<int8_t>(d1);
+  r.d2 = static_cast<int8_t>(d2);
+  r.d2x = static_cast<int8_t>(d2x);
+  r.n_clusters = static_cast<uint16_t>(clusters);
+  r.n_best = static_cast<uint16_t>(n_best);
+  r.nm = static_cast<uint8_t>(nm);
+  r.score = static_cast<int16_t>(score);
+  r.sub_score = static_cast<int16_t>(sub_score);
+  r.n_cigar = 0;
+  if (clip) r.cigar[r.n_cigar++] = static_cast<uint32_t>(clip) << 4 | kOpS;
+  r.cigar[r.n_cigar++] = static_cast<uint32_t>(150 - clip) << 4 | kOpM;
+  return p;
+}
+
+// --mapq pair (pair_model.h): the inputs of both mates against
+// bench/truth_mapq_pair.py's definitions, worked by hand; the tree walk and
+// the MAPQ thresholds on a hand-made model; the T2T inputs and classes.
+void test_pair_model() {
+  auto same = [](const int* f, std::initializer_list<int> want) {
+    int k = 0;
+    for (int w : want)
+      if (f[k++] != w) return false;
+    return true;
+  };
+  // a: S1, 2 edits, second best 5 edits beyond R, 6 clusters, 5 bases clipped.
+  // b: PR, AS 150, XS 240 (the bound on every other proper pair).
+  const Placement a = model_placement(kTierS1, 37, 2, -1, 5, 6, 1, 20, 3, 5, 120);
+  const Placement b = model_placement(kTierPR, 60, 0, -1, -1, 0, 1, 55, 0, 0, 150, 240);
+  int f[kT2tFeatures];
+  pair_model_features(a, b, true, 350, f);
+  CHECK(same(f, {2, 37, 3, 3, 2, 1, 20, 3, 1, 0, 2, 3, 6, 60, 11, 1, 55, 0, 0, 31}), "pair model inputs of mate a");
+  pair_model_features(b, a, true, 350, f);
+  CHECK(same(f, {6, 60, 11, 1, 0, 1, 55, 0, 0, 31, 2, 3, 2, 37, 3, 3, 20, 3, 1, 0}), "pair model inputs of mate b");
+  // The other mate unmapped: pp says so, its inputs are those of no record.
+  Placement u;
+  pair_model_features(a, u, false, 0, f);
+  CHECK(same(f, {2, 37, 3, 3, 2, 1, 20, 3, 1, 0, 1, 0, 0, 0, 11, 0, 0, 0, 0, 0}), "pair model inputs, mate unmapped");
+  // A PR mate without a bound (kNoSub) or with a margin past 40.
+  pair_model_features(model_placement(kTierPR, 60, 0, -1, -1, 1, 1, 55, 0, 0, 150), a, false, 0, f);
+  CHECK(f[9] == 0 && f[4] == 1, "PR mate without XS: margin %d, clusters %d", f[9], f[4]);
+  pair_model_features(model_placement(kTierPR, 60, 0, -1, -1, 65535, 9, 70, 30, 100, 150, 100), a, false, 0, f);
+  CHECK(f[9] == 41 && f[4] == 15 && f[5] == 3 && f[6] == 60 && f[7] == 15 && f[8] == 15,
+        "PR mate, clamped inputs: margin %d xn %d xb %d xq %d nm %d clip %d", f[9], f[4], f[5], f[6], f[7], f[8]);
+  // |TLEN| classes: 1, 200, 300, 400, 500, 700, 1000.
+  const int64_t tl[] = {0, 1, 199, 200, 350, 699, 700, 999, 1000, 5000};
+  const int tc[] = {0, 1, 1, 2, 3, 5, 6, 6, 7, 7};
+  for (int k = 0; k < 10; ++k) {
+    pair_model_features(a, b, true, tl[k], f);
+    CHECK(f[11] == tc[k], "|TLEN| %lld: class %d, not %d", static_cast<long long>(tl[k]), f[11], tc[k]);
+  }
+  // The second best within R takes precedence over the one beyond it; the
+  // gap is clamped to 0..10.
+  pair_model_features(model_placement(kTierS1, 30, 3, 4, 9, 1, 1, 0, 3, 0, 130), b, true, 0, f);
+  CHECK(f[2] == 1, "gap with XD 4, XO 9, XE 3: %d", f[2]);
+  pair_model_features(model_placement(kTierS0, 60, 0, -1, 12, 1, 1, 60, 0, 0, 150), b, true, 0, f);
+  CHECK(f[2] == 10 && f[3] == 1, "gap with XO 12, XE 0: %d (xe %d)", f[2], f[3]);
+
+  // The T2T inputs: class, gap there, XE minus XE there, MAPQ there / 5, tier.
+  T2tView ta, tb;
+  t2t_model_features(a, ta, tb, f);
+  CHECK(same(f, {0, 12, 9, 0, 0, 0, 12}), "T2T inputs, unmapped there");
+  ta.cls = 1, ta.tier = kTierS1, ta.mapq = 47, ta.xe = 1, ta.xd = -1, ta.xo = 4;
+  tb.cls = 2, tb.xe = 0, tb.xd = 0, tb.xo = -1;
+  t2t_model_features(a, ta, tb, f);
+  CHECK(same(f, {1, 3, 4, 9, 2, 2, 0}), "T2T inputs, lifted here");
+  ta.xe = 9;
+  ta.mapq = 200;
+  t2t_model_features(a, ta, tb, f);
+  CHECK(f[2] == 0 && f[3] == 12, "T2T inputs, XE far below there: dx %d, mq %d", f[2], f[3]);
+
+  // The classes of a lift, on a reference of two contigs.
+  Reference two;
+  two.names = {"1", "2"};
+  two.offsets = {0, 10000};
+  two.lengths = {10000, 10000};
+  Placement p = model_placement(kTierS0, 60, 0, -1, -1, 1, 1, 60, 0, 10, 140);
+  p.r.ref_pos = 10500;  // unclipped leftmost 10490
+  p.r.strand = 1;
+  T2tLift l;
+  CHECK(t2t_view(l, p, two).cls == 0, "lift: unmapped there");
+  l.state = 3;
+  l.mapq = 33;
+  CHECK(t2t_view(l, p, two).cls == 3 && t2t_view(l, p, two).mapq == 33, "lift: not lifted");
+  l.state = 1, l.contig = 1, l.strand = 1, l.left = 10490 + 150;
+  CHECK(t2t_view(l, p, two).cls == 1, "lift: 150 bp away is here");
+  l.left = 10490 - 151;
+  CHECK(t2t_view(l, p, two).cls == 2, "lift: 151 bp away is elsewhere");
+  l.left = 10490, l.strand = 0;
+  CHECK(t2t_view(l, p, two).cls == 2, "lift: the other strand is elsewhere");
+  l.strand = 1, l.contig = 0;
+  CHECK(t2t_view(l, p, two).cls == 2, "lift: another contig is elsewhere");
+  Placement unmapped;
+  l.contig = 1;
+  CHECK(t2t_view(l, unmapped, two).cls == 0, "lift of an unmapped record");
+
+  // A hand-made model: tree 0 splits on MAPQ (> 39), tree 1 on the tier
+  // (> 5) one level down; every other node goes left.
+  int8_t feat[2][15], thr[2][15];
+  double leaf[2][16];
+  for (int t = 0; t < 2; ++t)
+    for (int k = 0; k < 15; ++k) feat[t][k] = -1, thr[t][k] = 0;
+  for (int t = 0; t < 2; ++t)
+    for (int k = 0; k < 16; ++k) leaf[t][k] = 100 * t + k;
+  feat[0][0] = 1, thr[0][0] = 39;
+  feat[1][1] = 0, thr[1][1] = 5;
+  int x[kT2tFeatures] = {};
+  x[0] = 6, x[1] = 40;  // tree 0: right at the root, then left (node 8); tree 1: left, right (node 4)
+  CHECK(tree_score(x, 0.5, feat, thr, leaf) == 0.5 + 8 + 104, "tree walk: %g", tree_score(x, 0.5, feat, thr, leaf));
+  x[0] = 5, x[1] = 39;
+  CHECK(tree_score(x, 0.5, feat, thr, leaf) == 0.5 + 0 + 100, "tree walk at the thresholds: %g",
+        tree_score(x, 0.5, feat, thr, leaf));
+  // MAPQ thresholds: decreasing; a score at a threshold takes it.
+  for (int k = 1; k < 60; ++k) CHECK(kModelQ[k] < kModelQ[k - 1] && kT2tModelQ[k] < kT2tModelQ[k - 1], "kModelQ order");
+  CHECK(score_mapq(100, kModelQ) == 0 && score_mapq(-100, kModelQ) == 60 && score_mapq(kModelQ[29], kModelQ) == 30 &&
+            score_mapq(std::nextafter(kModelQ[29], 1e9), kModelQ) == 29,
+        "MAPQ from the score");
+  // -10 log10 p rounded: a score at log odds of p = 10^-3.04 is MAPQ 30.
+  const double p3 = std::pow(10.0, -3.04);
+  CHECK(score_mapq(std::log(p3 / (1 - p3)), kModelQ) == 30, "MAPQ 30 at p = 10^-3.04");
+
+  // pair_model_mapq: an unmapped mate keeps its MAPQ; the result is
+  // deterministic and within 0..60 for both models.
+  Placement two_pl[2] = {a, u};
+  two_pl[1].mapq = 7;
+  pair_model_mapq(two_pl, false, 0, nullptr);
+  CHECK(two_pl[1].mapq == 7 && two_pl[0].mapq >= 0 && two_pl[0].mapq <= 60, "pair_model_mapq, one mate unmapped");
+  Placement q1[2] = {a, b}, q2[2] = {a, b};
+  T2tView tv[2] = {ta, tb};
+  pair_model_mapq(q1, true, 350, tv);
+  pair_model_mapq(q2, true, 350, tv);
+  CHECK(q1[0].mapq == q2[0].mapq && q1[1].mapq == q2[1].mapq && q1[0].mapq <= 60 && q1[1].mapq <= 60,
+        "pair_model_mapq with T2T views");
+  CHECK(same_alignment(q1[0].r, a.r) && q1[0].xq == a.xq, "pair_model_mapq changed more than MAPQ");
+  std::fprintf(stderr, "--mapq pair: inputs, T2T classes, tree walk and MAPQ thresholds checked\n");
+}
+
+// The chain lift (src/chain.cpp, bench/lift_sam.py's rule) on a small chain
+// file: a block, a gap, a reversed chain and a contig not in the reference.
+void test_chain() {
+  CHECK(ensembl_name("chr1") == "1" && ensembl_name("chrM") == "MT" && ensembl_name("chrX") == "X" &&
+            ensembl_name("chrUn_KI270302v1") == "KI270302.1" && ensembl_name("chr1_KI270706v1_random") == "KI270706.1" &&
+            ensembl_name("chr10_KN196480v1_fix") == "10_KN196480v1_fix" && ensembl_name("HLA-A") == "HLA-A",
+        "ensembl_name");
+  const std::string path = "test_certa." + std::to_string(getpid()) + ".tmp.chain";
+  {
+    std::ofstream o(path);
+    o << "chain 1000 chr1 1000 + 100 400 chr2 900 + 50 350 1\n100\t10\t20\n190\n\n"
+         "chain 1000 chr1 1000 + 500 600 chrUn_KI270302v1 500 - 0 100 2\n100\n\n"
+         "chain 10 chr1 1000 + 700 800 chrZ 1000 + 0 100 3\n100\n";
+  }
+  Reference ref;
+  ref.names = {"2", "KI270302.1"};
+  ref.offsets = {0, 900};
+  ref.lengths = {900, 500};
+  const Chain c = Chain::load(path, ref);
+  std::remove(path.c_str());
+  CHECK(c.blocks() == 4, "chain blocks: %zu", c.blocks());
+  int ct;
+  int64_t pos;
+  bool rev;
+  struct Want { int64_t p; bool ok; int c; int64_t out; bool rev; };
+  const Want w[] = {{100, true, 0, 50, false}, {150, true, 0, 100, false}, {199, true, 0, 149, false},
+                    {200, false, 0, 0, false}, {205, false, 0, 0, false}, {210, true, 0, 170, false},
+                    {399, true, 0, 359, false}, {400, false, 0, 0, false}, {99, false, 0, 0, false},
+                    {500, true, 1, 499, true},  {599, true, 1, 400, true},  {750, true, -1, 50, false}};
+  for (const Want& x : w) {
+    const bool ok = c.lift("chr1", x.p, &ct, &pos, &rev);
+    CHECK(ok == x.ok && (!ok || (ct == x.c && pos == x.out && rev == x.rev)), "lift chr1:%lld: %d %d %lld %d",
+          static_cast<long long>(x.p), ok, ct, static_cast<long long>(pos), rev);
+  }
+  CHECK(!c.lift("chr9", 150, &ct, &pos, &rev), "lift on a contig without chains");
+  bool flip;
+  CHECK(c.lift_record("chr1", 100, 50, &ct, &pos, &flip) && ct == 0 && pos == 50 && !flip, "record at a block start");
+  CHECK(c.lift_record("chr1", 195, 20, &ct, &pos, &flip) && ct == 0 && pos == 145 && !flip,
+        "record into a gap: its first base");
+  CHECK(c.lift_record("chr1", 203, 20, &ct, &pos, &flip) && ct == 0 && pos == 163 && !flip,
+        "record from a gap: its last base, offset by the span");
+  CHECK(c.lift_record("chr1", 500, 50, &ct, &pos, &flip) && ct == 1 && pos == 450 && flip,
+        "record on a reversed chain: %d %lld %d", ct, static_cast<long long>(pos), flip);
+  CHECK(!c.lift_record("chr1", 700, 10, &ct, &pos, &flip), "record lifted to a contig not in the reference");
+  CHECK(!c.lift_record("chr1", 401, 20, &ct, &pos, &flip), "record between chains");
+  std::fprintf(stderr, "chain lift: %zu blocks, positions and records checked\n", c.blocks());
+}
+
+// An index saved as v4 with 8 key bits per entry and with none, and loaded
+// back memory-mapped (the keyless one narrowed from the loaded 8-bit one).
+struct V4Copies {
+  Reference r8, r0;
+  Index i8, i0;
+};
+void v4_copies(const Reference& ref, const Index& ix, V4Copies& c) {
+  const std::string tmp = "test_certa." + std::to_string(getpid()) + ".v4.tmp.cidx";
+  save_index(tmp, ref, ix, 8);
+  load_index(tmp, c.r8, c.i8);
+  std::remove(tmp.c_str());
+  save_index(tmp, c.r8, c.i8, 0);
+  load_index(tmp, c.r0, c.i0);
+  std::remove(tmp.c_str());
+  const int shift = 2 * ix.q - ix.dir_bits;
+  const IndexView v8 = c.i8.view(c.r8), v0 = c.i0.view(c.r0);
+  CHECK(c.i8.key_bits() == 8 && v8.keys8 && v8.ref_key_bits == shift - 8 && !v8.keys16 && !v8.keys,
+        "v4 8-bit index: %d key bits, %d from the reference", c.i8.key_bits(), v8.ref_key_bits);
+  CHECK(c.i0.key_bits() == 0 && !v0.keys8 && v0.ref_key_bits == shift && !v0.keys16 && !v0.keys,
+        "v4 keyless index: %d key bits, %d from the reference", c.i0.key_bits(), v0.ref_key_bits);
+}
+
+// Every lookup range of a v4 copy equals the full-key index's: for every
+// 3rd entry's key, the same key with its last base changed (mostly absent,
+// in a populated bucket), with a base changed just below the stored byte,
+// and random keys. Returns the keys tried.
+uint64_t check_v4_ranges(const Reference& ref, const Index& ix, const V4Copies& c, uint64_t seed) {
+  const IndexView full = ix.view(ref), v8 = c.i8.view(c.r8), v0 = c.i0.view(c.r0);
+  const int shift = 2 * ix.q - ix.dir_bits;
+  const uint64_t all = (uint64_t(1) << (2 * ix.q)) - 1;
+  std::mt19937_64 kg(seed);
+  uint64_t tried = 0, diff = 0, nonempty = 0, present = 0;
+  auto same = [&](uint64_t key) {
+    uint64_t l[3], h[3];
+    lookup(full, key, &l[0], &h[0]);
+    lookup(v8, key, &l[1], &h[1]);
+    lookup(v0, key, &l[2], &h[2]);
+    ++tried;
+    nonempty += h[0] > l[0];
+    for (int k = 1; k < 3; ++k)
+      if (l[k] != l[0] || h[k] != h[0]) {
+        if (++diff <= 3)
+          CHECK(false, "v4 range of key %llx: [%llu, %llu) with %s, [%llu, %llu) with full keys",
+                static_cast<unsigned long long>(key), static_cast<unsigned long long>(l[k]),
+                static_cast<unsigned long long>(h[k]), k == 1 ? "8 bits" : "no bits",
+                static_cast<unsigned long long>(l[0]), static_cast<unsigned long long>(h[0]));
+      }
+  };
+  for (uint64_t e = 0; e < ix.keys.size(); e += 3) {
+    const uint64_t key = ix.keys[e];
+    same(key);
+    ++present;
+    same(key ^ (1 + kg() % 3));                                 // the last base
+    if (shift >= 10) same(key ^ (uint64_t(1 + kg() % 3) << (shift - 10)));  // a base below the stored byte
+  }
+  for (int i = 0; i < 100000; ++i) same(kg() & all);
+  CHECK(diff == 0, "%llu of %llu v4 lookups differ from full keys", static_cast<unsigned long long>(diff),
+        static_cast<unsigned long long>(tried));
+  CHECK(nonempty >= present, "v4 range test: %llu keys found, %llu entries' own keys tried",
+        static_cast<unsigned long long>(nonempty), static_cast<unsigned long long>(present));
+  return tried;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -601,6 +901,9 @@ int main(int argc, char** argv) {
     test_fastq_scan(gq);
   }
   test_iv_mapq();
+  test_cal_mapq();
+  test_pair_model();
+  test_chain();
   Reference ref = make_reference(g);
   // Adversarial reads for tier SL, planted before the index is built:
   //  (a) the read has a mismatch in most parts at its true locus (so few or
@@ -849,6 +1152,17 @@ int main(int argc, char** argv) {
   std::remove(tmp.c_str());  // the mapping stays valid until ix_m is gone
   const IndexView view_m = ix_m.view(ref_m);
   CHECK(view_m.keys16 != nullptr, "saved index should use 16-bit keys (q=14)");
+  // v4 files: 8 key bits per entry or none, the rest read from the
+  // reference. The same ranges, so the same results (mapped below, as
+  // view_m).
+  const int kshift = 2 * ix.q - ix.dir_bits;
+  CHECK(kshift > 8 && kshift <= 16, "test index: 2q - dir_bits = %d, not in (8, 16]", kshift);
+  V4Copies c4;
+  v4_copies(ref, ix, c4);
+  const IndexView view_m8 = c4.i8.view(c4.r8), view_m0 = c4.i0.view(c4.r0);
+  const uint64_t v4_tried = check_v4_ranges(ref, ix, c4, seed + 41);
+  std::fprintf(stderr, "v4 index (q=14 s=4, %d key bits below the bucket): %llu lookups equal with 8 and 0 bits\n",
+               kshift, static_cast<unsigned long long>(v4_tried));
   // The file stores the directory as 64 bits, memory holds it as 32.
   CHECK(ix_m.dir.size() == ix.dir.size() &&
             std::equal(ix.dir.data(), ix.dir.data() + ix.dir.size(), ix_m.dir.data()),
@@ -1087,6 +1401,13 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < reads.size(); ++i)
       CHECK(std::memcmp(&res[i], &resm[i], sizeof(Result)) == 0,
             "read %zu differs between in-memory and memory-mapped (16-bit key) index", i);
+    for (const IndexView* v4 : {&view_m8, &view_m0}) {
+      std::vector<Result> res4;
+      map_cpu(*v4, p, batch, res4, 4);
+      for (size_t i = 0; i < reads.size(); ++i)
+        CHECK(std::memcmp(&res[i], &res4[i], sizeof(Result)) == 0, "read %zu differs with the v4 index (%d key bits)",
+              i, v4->keys8 ? 8 : 0);
+    }
     Params prev = p;
     prev.reverse_order = 1;
     map_cpu(view, prev, batch, resrev, 4);
@@ -1758,6 +2079,33 @@ int main(int argc, char** argv) {
   {
     Index ix1 = Index::build(ref, 14, 1, 4);  // tier R needs s = 1
     const IndexView view1 = ix1.view(ref);
+    // The same index as v4 files (8 key bits, none): equal ranges, and tier R
+    // gives the same output with them (below).
+    V4Copies c41;
+    v4_copies(ref, ix1, c41);
+    const uint64_t v4_tried1 = check_v4_ranges(ref, ix1, c41, seed + 43);
+    std::fprintf(stderr, "v4 index (q=14 s=1, %d key bits below the bucket): %llu lookups equal with 8 and 0 bits\n",
+                 2 * ix1.q - ix1.dir_bits, static_cast<unsigned long long>(v4_tried1));
+    {
+      // An odd number of key bits below the bucket (one directory bit less,
+      // adjacent buckets merged): the reference supplies half a base more.
+      Index ixo;
+      ixo.q = ix1.q;
+      ixo.s = ix1.s;
+      ixo.dir_bits = ix1.dir_bits - 1;
+      ixo.keys.owned.assign(ix1.keys.data(), ix1.keys.data() + ix1.keys.size());
+      ixo.pos.owned.assign(ix1.pos.data(), ix1.pos.data() + ix1.pos.size());
+      ixo.dir.owned.resize((size_t(1) << ixo.dir_bits) + 1);
+      for (size_t b = 0; b < ixo.dir.owned.size(); ++b) ixo.dir.owned[b] = ix1.dir[2 * b];
+      V4Copies co;
+      v4_copies(ref, ixo, co);
+      const uint64_t t = check_v4_ranges(ref, ixo, co, seed + 47);
+      std::fprintf(stderr, "v4 index (q=14 s=1, %d key bits below the bucket): %llu lookups equal with 8 and 0 bits\n",
+                   2 * ixo.q - ixo.dir_bits, static_cast<unsigned long long>(t));
+    }
+    const IndexView view1_v4[2] = {c41.i8.view(c41.r8), c41.i0.view(c41.r0)};
+    RepeatScratch sc_v4[2];
+    int v4_tier_r = 0;
     const auto& R = ref.seq.owned;
     auto rcs = [](std::vector<uint8_t> v) {
       std::reverse(v.begin(), v.end());
@@ -1788,6 +2136,16 @@ int main(int argc, char** argv) {
         const auto& rd = reads[i].seq;
         const int L = static_cast<int>(rd.size());
         const RepeatOut o = repeat_tier(view1, cfgs[c], rd.data(), L, *ws, sc);
+        for (int k = 0; k < 2; ++k) {
+          const RepeatOut o4 = repeat_tier(view1_v4[k], cfgs[c], rd.data(), L, *ws, sc_v4[k]);
+          ++v4_tier_r;
+          CHECK(o4.claim == o.claim && o4.exact == o.exact && o4.lo == o.lo && o4.hi == o.hi &&
+                    o4.copies == o.copies && o4.copy_pos[0] == o.copy_pos[0] && o4.copy_pos[1] == o.copy_pos[1] &&
+                    o4.nparts == o.nparts && o4.nabsent == o.nabsent && o4.nocc == o.nocc && o4.sub_lo == o.sub_lo &&
+                    o4.sub_hi == o.sub_hi && o4.has_aln == o.has_aln &&
+                    (!o.has_aln || std::memcmp(&o4.aln, &o.aln, sizeof o.aln) == 0),
+                "tier R cfg %d read %zu: output differs with the v4 index (%d key bits)", c, i, k ? 0 : 8);
+        }
         if (!o.claim || o.lo == kNoSub) continue;
         if (local_truth[i] == INT32_MIN) local_truth[i] = oracle_local(R, rd.data(), L);
         ++checked;
@@ -1830,6 +2188,7 @@ int main(int argc, char** argv) {
     }
     std::fprintf(stderr, "tier R intervals checked against the local oracle: %d; SUB intervals: %d\n", checked,
                  sub_r_checked);
+    std::fprintf(stderr, "tier R with the v4 index (8 and 0 key bits): %d outputs equal\n", v4_tier_r);
 
     // ---- Interval-mode placement of pairs (certa/interval.h): every record
     // rescores to its AS, [XL, XU] contains the mate's optimum, a proper pair
@@ -1842,7 +2201,7 @@ int main(int argc, char** argv) {
       ip.fallback_samples = 8;
       ip.lb_chains = 8;
       PairScratch psc;
-      int placed = 0, proper_n = 0, rescued = 0, pair_checked = 0;
+      int placed = 0, proper_n = 0, rescued = 0, pair_checked = 0, improper_cert = 0, repaired = 0;
       auto contig_of = [&](int64_t pos) { return ref.contig_of(pos); };
       const check::Checker checker_p(ref, ix1);
       for (int n = 0; n < 60; ++n) {
@@ -1906,9 +2265,90 @@ int main(int argc, char** argv) {
                     rv.ref_pos - fw.ref_pos <= D,
                 "pair %d: claimed proper but not", n);
         }
+        // --iv-pair all: the same mates as if both were certified (tier S1,
+        // MAPQ 60) and not a proper pair. A moved mate becomes MR with XQ 0 and
+        // MAPQ <= 40; the other keeps its locus, tier and at least its MAPQ.
+        const Result& f0 = se[0].r.strand ? se[1].r : se[0].r;
+        const Result& r0s = se[0].r.strand ? se[0].r : se[1].r;
+        if (se[0].mapped && se[1].mapped &&
+            (se[0].r.strand == se[1].r.strand || r0s.ref_pos < f0.ref_pos || r0s.ref_pos - f0.ref_pos > D)) {
+          Placement cs[2], co[2];
+          for (int x = 0; x < 2; ++x) {
+            cs[x] = se[x];
+            cs[x].r.tier = kTierS1;
+            cs[x].r.certified = 1;
+            cs[x].mapq = 60;
+          }
+          const RepeatOut* none[2] = {nullptr, nullptr};
+          ++improper_cert;
+          if (place_pair(view1, D, 12, cs, none, cp, Ls, psc, contig_of, co)) {
+            ++repaired;
+            int moved = 0;
+            for (int x = 0; x < 2; ++x) {
+              CHECK(co[x].mapped, "certified pair %d mate %d: unmapped after re-pairing", n, x);
+              CHECK(rescore_affine(view1, co[x].r, *m[x]) == co[x].r.score, "certified pair %d mate %d: CIGAR", n, x);
+              if (co[x].r.tier == kTierMR) {
+                ++moved;
+                CHECK(co[x].xq == 0 && co[x].mapq <= 40, "certified pair %d mate %d: MR with XQ %d, MAPQ %d", n, x,
+                      co[x].xq, co[x].mapq);
+              } else {
+                CHECK(co[x].r.tier == kTierS1 && same_locus(co[x].r, cs[x].r) && co[x].mapq >= cs[x].mapq,
+                      "certified pair %d mate %d: the anchor changed", n, x);
+              }
+              check::Work w;
+              const check::Verdict v = checker_p.check(claim_of(co[x], *m[x]), &w);
+              CHECK(v == check::kAccepted, "certified pair %d mate %d: checker says %s", n, x, check::kVerdictNames[v]);
+            }
+            CHECK(moved >= 1, "certified pair %d: re-paired without moving a mate", n);
+            const Result& fw = co[0].r.strand ? co[1].r : co[0].r;
+            const Result& rv = co[0].r.strand ? co[0].r : co[1].r;
+            CHECK(co[0].r.strand != co[1].r.strand && rv.ref_pos >= fw.ref_pos && rv.ref_pos - fw.ref_pos <= D,
+                  "certified pair %d: re-paired but not proper", n);
+          }
+        }
+      }
+      {
+        // A mate just beyond its partner's window, inside the tandem array
+        // (30 copies of a 37-base unit at chr1:75000): its best alignments in
+        // the window are its copies one and two units earlier, which overlap
+        // its single-end alignment. The pair written must be the proper pair
+        // found, with that mate moved (MR), not its single-end record kept
+        // and flagged proper.
+        const int64_t arr = static_cast<int64_t>(ref.offsets[0]) + 75000;
+        const int64_t s1 = arr + 2 * 37 + 5, a0 = s1 - D - 20;
+        CHECK(std::equal(R.begin() + s1 - 37, R.begin() + s1 - 37 + Lp, R.begin() + s1) &&
+                  std::equal(R.begin() + s1 - 74, R.begin() + s1 - 74 + Lp, R.begin() + s1) &&
+                  !std::equal(R.begin() + s1 - 111, R.begin() + s1 - 111 + Lp, R.begin() + s1),
+              "tandem shift test: the array is not where expected");
+        std::vector<uint8_t> a(R.begin() + a0, R.begin() + a0 + Lp);
+        std::vector<uint8_t> b = rcs(std::vector<uint8_t>(R.begin() + s1, R.begin() + s1 + Lp));
+        Placement cs[2], co[2];
+        for (int x = 0; x < 2; ++x) {
+          cs[x] = model_placement(kTierS1, 60, 0, 3, 3, 1, 1, 40, 0, 0, Lp * kMatch);
+          cs[x].r.certified = 1;
+          cs[x].r.strand = static_cast<uint8_t>(x);
+          cs[x].r.ref_pos = x ? s1 : a0;
+          cs[x].xl = cs[x].xu = Lp * kMatch;
+        }
+        CHECK(rescore_affine(view1, cs[0].r, a) == cs[0].r.score && rescore_affine(view1, cs[1].r, b) == cs[1].r.score,
+              "tandem shift test: single-end alignments do not score %d", Lp * kMatch);
+        const RepeatOut* none[2] = {nullptr, nullptr};
+        const uint8_t* cp[2] = {a.data(), b.data()};
+        const int Ls[2] = {Lp, Lp};
+        const bool pr = place_pair(view1, D, 12, cs, none, cp, Ls, psc, contig_of, co);
+        CHECK(pr, "tandem shift test: no proper pair found");
+        if (pr) {
+          const int64_t gap = co[1].r.ref_pos - co[0].r.ref_pos;
+          CHECK(co[0].r.ref_pos == a0 && co[0].r.tier == kTierS1 && co[1].r.tier == kTierMR && co[1].xq == 0 &&
+                    gap >= 0 && gap <= D && same_locus(co[1].r, cs[1].r) && co[1].r.ref_pos != s1,
+                "tandem shift test: mate 2 at %lld (tier %d), %lld after mate 1; expected a moved copy within %d",
+                static_cast<long long>(co[1].r.ref_pos - arr), co[1].r.tier, static_cast<long long>(gap), D);
+        }
       }
       std::fprintf(stderr, "interval pairs: %d records placed (%d by the pair window), %d proper pairs of 60; %d checked\n",
                    placed, rescued, proper_n, pair_checked);
+      std::fprintf(stderr, "improper certified pairs: %d, re-paired %d\n", improper_cert, repaired);
+      CHECK(repaired > 0, "no improper certified pair was re-paired");
     }
 
     // ---- The checker on tier R and pair records (index q = 14, s = 1), and
@@ -1991,6 +2431,17 @@ int main(int argc, char** argv) {
       CHECK(check::validate_index(ref, ix, fa, 4, &why), "index q14 s4 invalid: %s", why.c_str());
       CHECK(check::validate_index(ref, ix1, fa, 4, &why), "index q14 s1 invalid: %s", why.c_str());
       CHECK(check::validate_index(ref_m, ix_m, fa, 4, &why), "memory-mapped index invalid: %s", why.c_str());
+      CHECK(check::validate_index(c4.r8, c4.i8, fa, 4, &why), "v4 index (8 key bits) invalid: %s", why.c_str());
+      CHECK(check::validate_index(c4.r0, c4.i0, fa, 4, &why), "v4 index (no key bits) invalid: %s", why.c_str());
+      {
+        // A stored byte that disagrees with the reference is rejected.
+        Index bad = c4.i8;
+        bad.keys8.owned.assign(c4.i8.keys8.data(), c4.i8.keys8.data() + c4.i8.keys8.size());
+        bad.keys8.ptr = nullptr;
+        bad.keys8.owned[bad.keys8.owned.size() / 2] ^= 1;
+        std::string w;
+        CHECK(!check::validate_index(c4.r8, bad, "", 4, &w), "v4 index with a wrong key byte accepted");
+      }
       auto corrupt = [&](const char* what, const std::function<void(Index&)>& f) {
         Index bad = ix;
         f(bad);
@@ -2012,7 +2463,7 @@ int main(int argc, char** argv) {
         CHECK(!check::validate_index(r2, ix, fa, 4, &w), "a reference differing from the FASTA accepted");
       }
       std::remove(fa.c_str());
-      std::fprintf(stderr, "checker: index validation (3 valid, 5 corruptions rejected) done\n");
+      std::fprintf(stderr, "checker: index validation (5 valid, 6 corruptions rejected) done\n");
     }
   }
 

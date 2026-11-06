@@ -26,6 +26,7 @@ namespace certa {
 struct MapConfig {
   // Inputs and outputs. Empty: not given (SAM then goes to stdout).
   std::string index_path, reads_path, mates_path, index2_path;  // mates_path empty: single-end
+  std::string t2t_path, t2t_chain_path;  // --t2t, --t2t-chain: T2T-CHM13's index, and its chain to the reference
   std::string sam_path, fq_path, fq2_path, single_path, stats_path;
   bool intervals = false;  // --intervals: every read to SAM, no fallback
   bool full_cert = false;  // --full-cert
@@ -50,6 +51,7 @@ struct MapConfig {
   bool pass_v() const { return pv.vparts > 0; }
   bool pass_l() const { return pl.local > 0; }
   bool index2() const { return !index2_path.empty(); }
+  bool t2t() const { return !t2t_path.empty(); }
 
   // Throws std::runtime_error, with a usage message, on a bad option.
   static MapConfig from_args(const Args& a);

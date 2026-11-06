@@ -164,7 +164,15 @@ IndexView Index::view(const Reference& ref) const {
   v.q = q;
   v.s = s;
   v.dir_bits = dir_bits;
+  v.keys8 = keys8.size() ? keys8.data() : nullptr;
+  v.ref_key_bits = ref_key_bits;
+  if (ref_key_bits) v.keys = nullptr;
   return v;
+}
+
+int Index::key_bits() const {
+  if (ref_key_bits) return 2 * q - dir_bits - ref_key_bits;  // 8 (keys8) or 0
+  return keys16.size() ? 16 : 64;
 }
 
 namespace {
@@ -177,6 +185,9 @@ const char kMagicV2[8] = {'C', 'E', 'R', 'T', 'A', 'I', 'X', '2'};
 // v3: as v2, plus a key-width field; keys are stored as their low 16 bits
 // whenever 2q - dir_bits <= 16 (the bucket directory holds the rest).
 const char kMagicV3[8] = {'C', 'E', 'R', 'T', 'A', 'I', 'X', '3'};
+// v4: as v3, with 8 key bits per entry (the high 8 of those below the bucket)
+// or none; the rest are read from the reference (IndexView::ref_key_bits).
+const char kMagicV4[8] = {'C', 'E', 'R', 'T', 'A', 'I', 'X', '4'};
 constexpr uint64_t kAlign = 64;
 constexpr uint64_t kChunk = uint64_t(1) << 21;  // directory entries per step (16 MB at 64 bits)
 
@@ -299,14 +310,22 @@ void narrow_dir(const uint64_t* src, uint64_t len, Array<uint32_t>& dir, bool dr
 
 }  // namespace
 
-void save_index(const std::string& path, const Reference& ref, const Index& ix) {
+void save_index(const std::string& path, const Reference& ref, const Index& ix, int key_bits) {
+  const int shift = 2 * ix.q - ix.dir_bits;
+  if (key_bits == -1) key_bits = shift <= 16 ? 16 : 64;
+  if (key_bits != 64 && key_bits != 16 && key_bits != 8 && key_bits != 0)
+    throw std::runtime_error("key bits must be 64, 16, 8 or 0");
+  if (key_bits == 16 && shift > 16) throw std::runtime_error("16-bit keys need 2q - dir_bits <= 16");
+  if ((key_bits == 8 || key_bits == 0) && (shift > 16 || (key_bits == 8 && shift <= 8)))
+    throw std::runtime_error("8-bit keys need 8 < 2q - dir_bits <= 16, no keys need 2q - dir_bits <= 16");
+  const int have = ix.key_bits();
+  if (have != 64 && key_bits > have) throw std::runtime_error("cannot widen the keys of a loaded index");
+  const bool v4 = key_bits == 8 || key_bits == 0;
   File f(path, "wb");
-  f.write(kMagicV3, sizeof kMagicV3);
+  f.write(v4 ? kMagicV4 : kMagicV3, 8);
   f.put<int32_t>(ix.q);
   f.put<int32_t>(ix.s);
   f.put<int32_t>(ix.dir_bits);
-  const int shift = 2 * ix.q - ix.dir_bits;
-  const int32_t key_bits = shift <= 16 ? 16 : 64;
   f.put<int32_t>(key_bits);
   f.put<uint64_t>(ref.names.size());
   for (size_t i = 0; i < ref.names.size(); ++i) {
@@ -316,21 +335,35 @@ void save_index(const std::string& path, const Reference& ref, const Index& ix) 
     f.put<uint64_t>(ref.lengths[i]);
   }
   f.put_array(ref.seq);
-  if (key_bits == 16) {
+  const uint64_t n = ix.pos.size();
+  const uint64_t mask = shift >= 64 ? ~uint64_t(0) : (uint64_t(1) << shift) - 1;
+  // The low `shift` bits of entry i's key, from whichever keys the index holds.
+  auto low = [&](uint64_t i) -> uint64_t {
+    if (ix.keys16.size()) return ix.keys16[i];
+    return ix.keys[i] & mask;
+  };
+  if (key_bits == 64) {
+    f.put_array(ix.keys);
+  } else if (key_bits == 16) {
     Array<uint16_t> k16;
     if (ix.keys16.size()) {
       k16.ptr = ix.keys16.data();
       k16.len = ix.keys16.size();
     } else {
-      const uint64_t mask = (uint64_t(1) << shift) - 1;
-      k16.owned.resize(ix.keys.size());
-      for (uint64_t i = 0; i < ix.keys.size(); ++i) k16.owned[i] = static_cast<uint16_t>(ix.keys[i] & mask);
+      k16.owned.resize(n);
+      for (uint64_t i = 0; i < n; ++i) k16.owned[i] = static_cast<uint16_t>(low(i));
     }
     f.put_array(k16);
-  } else {
-    if (!ix.keys.size() && ix.keys16.size())
-      throw std::runtime_error("cannot widen 16-bit keys");
-    f.put_array(ix.keys);
+  } else if (key_bits == 8) {
+    Array<uint8_t> k8;
+    if (ix.keys8.size()) {
+      k8.ptr = ix.keys8.data();
+      k8.len = ix.keys8.size();
+    } else {
+      k8.owned.resize(n);
+      for (uint64_t i = 0; i < n; ++i) k8.owned[i] = static_cast<uint8_t>(low(i) >> (shift - 8));
+    }
+    f.put_array(k8);
   }
   f.put_array(ix.pos);
   f.put_array64(ix.dir);
@@ -363,8 +396,8 @@ void load_index(const std::string& path, Reference& ref, Index& ix) {
       narrow_dir(dir64.data(), dir64.size(), ix.dir, false, path);
       return;
     }
-    if (std::memcmp(magic, kMagicV2, sizeof magic) != 0 &&
-        std::memcmp(magic, kMagicV3, sizeof magic) != 0)
+    if (std::memcmp(magic, kMagicV2, sizeof magic) != 0 && std::memcmp(magic, kMagicV3, sizeof magic) != 0 &&
+        std::memcmp(magic, kMagicV4, sizeof magic) != 0)
       throw std::runtime_error(path + " is not a CERTA index");
   }
   struct Fd {
@@ -383,8 +416,13 @@ void load_index(const std::string& path, Reference& ref, Index& ix) {
   ix.s = c.get<int32_t>();
   ix.dir_bits = c.get<int32_t>();
   const bool v3 = std::memcmp(magic, kMagicV3, sizeof magic) == 0;
-  const int key_bits = v3 ? c.get<int32_t>() : 64;
-  if (key_bits != 16 && key_bits != 64) throw std::runtime_error(path + ": bad key width");
+  const bool v4 = std::memcmp(magic, kMagicV4, sizeof magic) == 0;
+  const int key_bits = v3 || v4 ? c.get<int32_t>() : 64;
+  if (v4 ? key_bits != 8 && key_bits != 0 : key_bits != 16 && key_bits != 64)
+    throw std::runtime_error(path + ": bad key width");
+  const int shift = 2 * ix.q - ix.dir_bits;
+  if (v4 && (shift > 16 || (key_bits == 8 && shift <= 8))) throw std::runtime_error(path + ": bad key width");
+  ix.ref_key_bits = v4 ? shift - key_bits : 0;
   uint64_t n = c.get<uint64_t>();
   ref.names.resize(n);
   ref.offsets.resize(n);
@@ -399,7 +437,8 @@ void load_index(const std::string& path, Reference& ref, Index& ix) {
   }
   c.array(ref.seq);
   if (key_bits == 16) c.array(ix.keys16);
-  else c.array(ix.keys);
+  else if (key_bits == 8) c.array(ix.keys8);
+  else if (key_bits == 64) c.array(ix.keys);
   c.array(ix.pos);
   Array<uint64_t> dir64;
   c.array(dir64);

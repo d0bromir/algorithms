@@ -29,13 +29,14 @@ the same rule with a GRCh38 run of DIR as the second opinion, so that only
 the reference differs from BWA-MEM2 on T2T.
 """
 import argparse
+import os
 import sys
 
 import numpy as np
 
 sys.path.insert(0, __import__("os").path.dirname(__file__))
 from lift_sam import lift_record, load_chain  # noqa: E402
-from truth_eval import read_sam  # noqa: E402
+from truth_eval import TIER, read_sam  # noqa: E402
 from truth_lift import CLS_TRUTH, Ref  # noqa: E402
 
 LOCUS = 150
@@ -56,15 +57,20 @@ def cmd_place(a):
     left = np.zeros((n, 2), np.int64)
     strand = np.zeros((n, 2), np.int8)
     mapq = np.zeros((n, 2), np.uint8)
+    tier = np.full((n, 2), -1, np.int8)  # CERTA's XT on T2T, -1 for other aligners
     for line in sys.stdin:
         if line[0] == "@":
             continue
-        f = line.split("\t", 6)
+        f = line.split("\t", 11)
         flag = int(f[1])
         if flag & (4 | 256 | 2048):
             continue
         i, m = int(f[0][1:]), 1 if flag & 128 else 0
         mapq[i, m] = min(int(f[4]), 255)
+        if len(f) > 11:
+            x = f[11].find("XT:Z:")
+            if x >= 0:
+                tier[i, m] = TIER.get(f[11][x + 5:].split("\t", 1)[0].strip(), -1)
         lr = lift_record(index, f[2], int(f[3]), f[5])
         if lr is None or lr[0] not in ref.index:
             state[i, m] = 2
@@ -74,7 +80,7 @@ def cmd_place(a):
     ref.par_to_x(rc, left)
     print(f"[t2t place] mapped {int((state > 0).sum()):,}, lifted {int((state == 1).sum()):,}", file=sys.stderr)
     np.savez(a.out, placed=state == 1, state=state, rc=rc.astype(np.int16), left=left.astype(np.int32),
-             strand=strand, mapq=mapq)
+             strand=strand, mapq=mapq, tier=tier)
 
 
 def cmd_eval(a):
@@ -95,22 +101,28 @@ def cmd_eval(a):
     tr = {"placed": truth, "rc": t["tc"], "strand": t["ts"], "left": t["tp"].astype(np.int64) - 1}
     CERT, DEF, BIO = "certa interval mode, --iv-mapq cert", "certa + minibwa (MAPQ / 4)", \
         "certa --bio + minibwa (MAPQ / 4)"
-    runs = {CERT: load("ivcert"), DEF: load("def.complete"), BIO: load("bio.complete")}
-    for name, alone in ((DEF, "def"), (BIO, "bio")):
-        r = runs[name]
-        fb = r["placed"] & ~load(alone)["placed"]
-        r["mapq"] = np.where(fb, r["mapq"] // 4, r["mapq"])
+    have = lambda f: os.path.exists(f"{a.dir}/{f}.npz")  # noqa: E731
+    runs = {CERT: load("ivcert")} if have("ivcert") else {}
+    for name, f, alone in ((DEF, "def.complete", "def"), (BIO, "bio.complete", "bio")):
+        if have(f):
+            r = runs[name] = load(f)
+            fb = r["placed"] & ~load(alone)["placed"]
+            r["mapq"] = np.where(fb, r["mapq"] // 4, r["mapq"])
     for x in ("minibwa", "bwa-mem2", "strobealign", "minimap2"):
         runs[x] = load(x)
+    if have("ivcal"):  # the fitted MAPQ and re-paired certified mates
+        runs["certa interval mode, --iv-pair all --mapq cal"] = load("ivcal")
     ok = {name: at(r, tr) for name, r in runs.items()}
     if a.second:  # the control: a GRCh38 run as the second opinion
         t2 = dict(runs[a.second], state=runs[a.second]["placed"].astype(np.int8))
     else:
-        t2 = load("t2t")
+        t2 = load(a.t2t)
     unl = t2["state"] == 2
+    # --certified: only certified T2T placements (CERTA's S0, S1, PR) count
+    cert_t2 = np.isin(t2["tier"], [TIER["S0"], TIER["S1"], TIER["PR"]]) if a.certified else True
 
     def rule(r, qt=40, unlifted=False, confirm=False):
-        conf = t2["mapq"] >= qt
+        conf = (t2["mapq"] >= qt) & cert_t2
         same = at(r, t2)
         away = r["placed"] & conf & ((t2["placed"] & ~same) | (unl if unlifted else False))
         mq = np.where(away, 0, r["mapq"])
@@ -133,9 +145,8 @@ def cmd_eval(a):
     def conf(mq, pl, q=40):
         return int((pl & (mq >= q)).sum())
 
-    refs = {"interval mode": conf(runs[CERT]["mapq"], runs[CERT]["placed"] & truth),
-            "--bio + minibwa": conf(runs[BIO]["mapq"], runs[BIO]["placed"] & truth),
-            "minibwa": conf(runs["minibwa"]["mapq"], runs["minibwa"]["placed"] & truth)}
+    refs = {k: conf(runs[r]["mapq"], runs[r]["placed"] & truth)
+            for k, r in (("interval mode", CERT), ("--bio + minibwa", BIO), ("minibwa", "minibwa")) if r in runs}
     t2ok = at(t2, tr)
     src = a.second or "T2T-CHM13"
     print(f"Mates with a truth: {nt:,}. {src} records: {int((t2['state'] > 0).sum()):,} mapped, "
@@ -163,8 +174,8 @@ def cmd_eval(a):
     print("| run | as is | " + " | ".join(f"≥ {qt}{', unlifted' if u else ''}{', confirm' if c else ''}"
                                          for qt, u, c in variants) + " |")
     print("|---|---|" + "---|" * len(variants))
-    n = refs["interval mode"]
-    for name in (CERT, "minibwa", "bwa-mem2", "strobealign"):
+    n = next(iter(refs.values()))
+    for name in [x for x in (CERT, "minibwa", "bwa-mem2", "strobealign") if x in runs]:
         r = runs[name]
         pl = r["placed"] & truth
         mis = pl & ~ok[name]
@@ -185,6 +196,8 @@ def main():
     p.add_argument("out")
     e = sub.add_parser("eval")
     e.add_argument("--second", help="a GRCh38 run (minibwa, bwa-mem2, ...) as the second opinion instead of T2T")
+    e.add_argument("--t2t", default="t2t", help="DIR's file of T2T placements (t2t: BWA-MEM2; certa_t2t: CERTA)")
+    e.add_argument("--certified", action="store_true", help="count only certified T2T placements (S0, S1, PR)")
     e.add_argument("truth")
     e.add_argument("dir")
     a = ap.parse_args()

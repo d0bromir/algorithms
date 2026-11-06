@@ -83,7 +83,15 @@ bool MapOutputs::finish() {
 
 // Per-thread scratch of the fused stage.
 struct MapPipeline::ChunkScratch {
-  explicit ChunkScratch(bool index2) : wx(index2 ? new Workspace : nullptr) { civ.reserve(kChunk); }
+  explicit ChunkScratch(bool index2, bool t2t = false) : wx(index2 ? new Workspace : nullptr) {
+    civ.reserve(kChunk);
+    if (t2t) {
+      rt.reset(new Result[kChunk]());
+      st.reset(new Result[kChunk]());
+      lifts.reset(new T2tLift[kChunk]);
+      civ_t.reserve(kChunk);
+    }
+  }
   std::unique_ptr<Workspace> ws{new Workspace}, w1{new Workspace}, w2{new Workspace}, wr{new Workspace};
   std::unique_ptr<Workspace> wx;  // the second index's passes
   PairScratch sc, psc;            // the pair pass; interval mode's mate rescue
@@ -92,12 +100,25 @@ struct MapPipeline::ChunkScratch {
   size_t idx[kChunk], id2[kChunk], sub[kChunk];
   std::unique_ptr<Result[]> rr{new Result[kChunk]}, rx{new Result[kChunk]};
   std::unique_ptr<BioScratch> bsc{new BioScratch};  // --bio
+  // --t2t: the chunk's results on T2T-CHM13 (rt[k] for read a0 + k), their
+  // single-end results (pair certificate), tier R outputs and lifts.
+  std::unique_ptr<Result[]> rt, st;
+  std::unique_ptr<T2tLift[]> lifts;
+  std::vector<RepeatOut> civ_t;
+  Records discard;  // the T2T records, not written
 };
 
 MapPipeline::MapPipeline(const MapConfig& c, const Reference& ref, const IndexView& view, const IndexView* view2,
-                         FastqInput& reads, FastqInput* mates, MapOutputs& out)
+                         FastqInput& reads, FastqInput* mates, MapOutputs& out, const T2tRef* t2t)
     : c_(c), ref_(ref), view_(view), view2_(view2), reads_(reads), mates_(mates), out_(out),
-      writer_(ref, view, c.out), bio_model_(c.bp) {
+      writer_(ref, view, c.out), t2t_(t2t), bio_model_(c.bp) {
+  if (t2t_) {
+    // T2T placements as interval mode makes them, with the MAPQ the pair
+    // model was fitted on (--iv-mapq), no other model and no extra tags.
+    OutputOptions o = c.out;
+    o.mapq_cal = o.mapq_pair = o.feature_tags = o.witness = false;
+    writer_t2t_.reset(new RecordWriter(t2t_->ref, t2t_->view, o));
+  }
   // --bio: every band would scan its window's tandem runs; tabulate them
   // once instead (the same costs: run lengths are clamped where go no longer
   // falls). Without the table (or if go keeps falling past what four bits
@@ -215,7 +236,8 @@ RepeatOut MapPipeline::tier_r(const Slot& S, size_t i, Workspace& ws, RepeatScra
 // Formats reads [a0, b0) of a batch (whole pairs in paired mode: a0 and b0
 // even) into `out`, in input order, and counts them into s; psc is scratch
 // for interval mode's mate rescue.
-void MapPipeline::format(const Slot& S, size_t a0, size_t b0, Records& out, Stats& s, PairScratch& psc) const {
+void MapPipeline::format(const Slot& S, size_t a0, size_t b0, Records& out, Stats& s, PairScratch& psc,
+                         const T2tLift* lifts) const {
   const std::vector<FastqRecord>& recs = S.recs;
   const std::vector<Result>& res = S.res;
   if (c_.bio) {
@@ -261,7 +283,8 @@ void MapPipeline::format(const Slot& S, size_t a0, size_t b0, Records& out, Stat
       Placement pl[2];
       const RepeatOut* ivp[2] = {S.iv_ptr[i], S.iv_ptr[i + 1]};
       const uint8_t* cp[2] = {S.batch.codes.data() + S.batch.offs[i], S.batch.codes.data() + S.batch.offs[i + 1]};
-      proper = writer_.pair_interval(&res[i], &S.se_res[i], ivp, cp, &recs[i], psc, out, reason, pl);
+      proper = writer_.pair_interval(&res[i], &S.se_res[i], ivp, cp, &recs[i], psc, out, reason, pl,
+                                     lifts ? lifts + (i - a0) : nullptr);
       s.iv_proper += proper;
       s.count_iv(pl[0]);
       s.count_iv(pl[1]);
@@ -400,7 +423,7 @@ void MapPipeline::fused_stage(Slot& S, bool map) {
   std::atomic<size_t> next{0};
   run_workers(nt, [&](int w) {
     try {
-      ChunkScratch x(view2_ != nullptr);
+      ChunkScratch x(view2_ != nullptr, t2t_ != nullptr);
       for (size_t k; (k = next.fetch_add(1)) < nc;)
         fused_chunk(S, k * kChunk, std::min(n, (k + 1) * kChunk), map, x, chunks[k], st[w], counts[w]);
     } catch (...) {
@@ -485,7 +508,8 @@ void MapPipeline::fused_chunk(Slot& S, size_t a0, size_t b0, bool map, ChunkScra
     for (size_t k = 0; k < m; ++k) S.iv_ptr[idx[k]] = &x.civ[k];
     n.tier_r += m;
   }
-  format(S, a0, b0, out, s, x.psc);
+  if (t2t_) t2t_chunk(S, a0, b0, x);
+  format(S, a0, b0, out, s, x.psc, t2t_ ? x.lifts.get() : nullptr);
 }
 
 // Every pass again on the second index (passes 1, 2, 3 and L) for the reads
@@ -517,6 +541,96 @@ void MapPipeline::index2_passes(Slot& S, size_t a0, size_t b0, ChunkScratch& x, 
       ++n.index2_certified;
     }
   n.index2 += m2;
+}
+
+// --t2t: reads [a0, b0) (whole pairs) mapped on T2T-CHM13 as fused_chunk
+// maps them on the reference (passes 1, 2, 3, V and L, the pair certificate,
+// tier R and the pair placement; each read gets what a run on T2T-CHM13
+// alone gives it), and each mate's placement lifted to the reference
+// (x.lifts[k] for read a0 + k). The T2T records are formatted into scratch
+// and dropped.
+void MapPipeline::t2t_chunk(const Slot& S, size_t a0, size_t b0, ChunkScratch& x) const {
+  const ReadBatch& batch = S.batch;
+  const IndexView& v = t2t_->view;
+  const Reference& tref = t2t_->ref;
+  const size_t m0 = b0 - a0;
+  Result* const rt = x.rt.get();
+  size_t* const idx = x.idx;
+  std::iota(idx, idx + m0, a0);
+  map_reads(v, c_.p1, batch, idx, m0, rt, *x.ws);
+  auto rerun = [&](const Params& p, auto want, bool only_certified) {
+    size_t m = 0;
+    for (size_t k = 0; k < m0; ++k)
+      if (want(rt[k])) {
+        x.sub[m] = k;
+        idx[m++] = a0 + k;
+      }
+    if (m == 0) return;
+    map_reads(v, p, batch, idx, m, x.rr.get(), *x.ws);
+    for (size_t j = 0; j < m; ++j)
+      if (!only_certified || x.rr[j].certified == 1) rt[x.sub[j]] = x.rr[j];
+  };
+  if (c_.pass2()) rerun(c_.p2, retry, false);
+  if (c_.pass3()) rerun(c_.p3, [&](const Result& r) { return retry_pass3(r, c_.p3); }, false);
+  if (c_.pass_v()) rerun(c_.pv, retry, true);
+  if (c_.pass_l()) rerun(c_.pl, retry_local, false);
+  auto codes = [&](size_t i) { return batch.codes.data() + batch.offs[i]; };
+  for (size_t k = 0; k + 1 < m0; k += 2) {
+    if (!wants_pair_pass(rt[k], rt[k + 1])) continue;
+    const size_t i = a0 + k;
+    Result r1 = rt[k], r2 = rt[k + 1];
+    const PairOut po = certify_pair(v, c_.pp, codes(i), batch.lens[i], codes(i + 1), batch.lens[i + 1], *x.w1, *x.w2,
+                                    x.sc, r1, r2);
+    if (po.certified) {
+      x.st[k] = rt[k];
+      x.st[k + 1] = rt[k + 1];
+      rt[k] = r1;
+      rt[k + 1] = r2;
+    }
+  }
+  x.civ_t.clear();
+  const RepeatOut* ivp[kChunk];
+  for (size_t k = 0; k < m0; ++k) {
+    ivp[k] = nullptr;
+    if (wants_tier_r(rt[k], tref))
+      x.civ_t.push_back(repeat_tier(v, c_.rp, codes(a0 + k), batch.lens[a0 + k], *x.wr, x.rsc));
+  }
+  for (size_t k = 0, z = 0; k < m0; ++k)
+    if (wants_tier_r(rt[k], tref)) ivp[k] = &x.civ_t[z++];
+  for (size_t k = 0; k + 1 < m0; k += 2) {
+    const size_t i = a0 + k;
+    const RepeatOut* iv2[2] = {ivp[k], ivp[k + 1]};
+    const uint8_t* cp[2] = {codes(i), codes(i + 1)};
+    Placement pl[2];
+    int reason[2];
+    x.discard.sam.clear();
+    writer_t2t_->pair_interval(&rt[k], &x.st[k], iv2, cp, &S.recs[i], x.psc, x.discard, reason, pl);
+    for (int m = 0; m < 2; ++m) {
+      T2tLift& l = x.lifts[k + m];
+      l = T2tLift();
+      if (!pl[m].mapped) continue;
+      const Result& r = pl[m].r;
+      l.tier = r.tier;
+      l.mapq = pl[m].mapq;
+      l.xe = r.d1;
+      l.xd = r.d2;
+      l.xo = r.d2x;
+      l.state = 3;
+      const int ct = tref.contig_of(r.ref_pos);
+      if (ct < 0) continue;
+      const int lead = r.n_cigar && (r.cigar[0] & 0xF) == kOpS ? static_cast<int>(r.cigar[0] >> 4) : 0;
+      const int64_t left = r.ref_pos - static_cast<int64_t>(tref.offsets[ct]) - lead;
+      const int64_t span = ref_span_of(r) + soft_clips(r);
+      int c;
+      int64_t pos;
+      bool flip;
+      if (!t2t_->chain.lift_record(tref.names[ct], left, span, &c, &pos, &flip)) continue;
+      l.state = 1;
+      l.contig = c;
+      l.left = static_cast<int64_t>(ref_.offsets[c]) + pos;
+      l.strand = r.strand ^ (flip ? 1 : 0);
+    }
+  }
 }
 
 // --bio: every read of [a0, b0) through bio_place. In paired mode, a pair

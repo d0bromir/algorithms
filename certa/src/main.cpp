@@ -255,8 +255,23 @@ int cmd_check(const Args& a) {
 }
 
 int cmd_index(const Args& a) {
+  const int key_bits = a.geti("--key-bits", -1);
+  if (a.has("--from")) {
+    // Rewrites an existing index with fewer key bits: no FASTA, no sort.
+    if (!a.pos.empty() || !a.has("-o") || key_bits < 0)
+      throw std::runtime_error("usage: certa index --from in.cidx -o out.cidx --key-bits 16|8|0");
+    auto t0 = Clock::now();
+    Reference ref;
+    Index ix;
+    load_index(a.get("--from", ""), ref, ix);
+    save_index(a.get("-o", ""), ref, ix, key_bits);
+    std::fprintf(stderr, "[index] %s (%d key bits per entry) written as %s with %d, %llu entries, in %.1f s\n",
+                 a.get("--from", "").c_str(), ix.key_bits(), a.get("-o", "").c_str(), key_bits,
+                 static_cast<unsigned long long>(ix.pos.size()), secs(t0));
+    return 0;
+  }
   if (a.pos.size() != 1 || !a.has("-o"))
-    throw std::runtime_error("usage: certa index ref.fa -o ref.cidx [-q 22] [-s 8] [-t N]");
+    throw std::runtime_error("usage: certa index ref.fa -o ref.cidx [-q 22] [-s 8] [-t N] [--key-bits 16|8|0]");
   auto t0 = Clock::now();
   Reference ref = Reference::load_fasta(a.pos[0]);
   std::fprintf(stderr, "[index] %zu contigs, %llu bases (with padding) loaded in %.1f s\n",
@@ -266,7 +281,7 @@ int cmd_index(const Args& a) {
   std::fprintf(stderr, "[index] q=%d s=%d dir_bits=%d, %llu entries, built in %.1f s\n",
                ix.q, ix.s, ix.dir_bits, static_cast<unsigned long long>(ix.pos.size()), secs(t1));
   auto t2 = Clock::now();
-  save_index(a.get("-o", ""), ref, ix);
+  save_index(a.get("-o", ""), ref, ix, key_bits);
   std::fprintf(stderr, "[index] written to %s in %.1f s\n", a.get("-o", "").c_str(), secs(t2));
   return 0;
 }
@@ -279,12 +294,14 @@ int main(int argc, char** argv) {
     if (argc < 2) {
       std::fprintf(stderr,
                    "certa 0.7 - certified short-read fast path (prototype)\n"
-                   "  certa index ref.fa -o ref.cidx [-q 22] [-s 8] [-t N]\n"
+                   "  certa index ref.fa -o ref.cidx [-q 22] [-s 8] [-t N] [--key-bits 16|8|0]\n"
+                   "  certa index --from ref.cidx -o smaller.cidx --key-bits 8|0   (same results, less memory)\n"
                    "  certa map ref.cidx reads.fq[.gz] [-k 5] [--k1 2] [--budget 16] [--budget2 256]\n"
                    "            [--budget3 0|4096] [--support3 2] [--local 0|2] [--full-cert] [--adaptive-parts 0|1|2]\n"
                    "            [--index2 second.cidx] [-t N] [--gpu] [--device 0]\n"
                    "            [-o out.sam] [-u uncertified.fq] [--stats s.json] [--batch N] [--io-threads N]\n"
-                   "            [--intervals [--witness] [--iv-mapq point|cons|cert]]\n"
+                   "            [--intervals [--witness] [--iv-mapq point|cons|cert] [--iv-pair uncert|all] [--mapq point|cal|pair]\n"
+                   "             [--t2t t2t.cidx --t2t-chain t2tToRef.over.chain.gz] [--feature-tags]]\n"
                    "  certa repeat ref.cidx reads.fq [--tau 16] [--tsv out.tsv]\n"
                    "  certa check-index ref.cidx ref.fa       (once per reference build)\n"
                    "  certa check ref.cidx aln.sam|- [--sample N] [--failures f.txt]\n"

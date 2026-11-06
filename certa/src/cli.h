@@ -61,7 +61,8 @@ struct Args {
   // argv[start..argc). Options take the next argument as their value, except
   // the flags, which take none.
   static Args parse(int argc, char** argv, int start) {
-    static const char* flags[] = {"--gpu", "--unc-tags", "--intervals", "--witness", "--serial-stages", "--full-cert", "--bio"};
+    static const char* flags[] = {"--gpu", "--unc-tags", "--intervals", "--witness", "--serial-stages", "--full-cert",
+                                  "--bio", "--feature-tags"};
     Args a;
     for (int i = start; i < argc; ++i) {
       std::string s = argv[i];

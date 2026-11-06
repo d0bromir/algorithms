@@ -96,8 +96,7 @@ void map_reads(const IndexView& ix, const Params& p, const ReadBatch& batch, con
     const int slot = static_cast<int>(k % 3);
     for (int j = 0; j < nk[slot]; ++j) {
       const uint64_t l = ix.dir[keys[slot][j] >> shift];
-      if (ix.keys16) __builtin_prefetch(ix.keys16 + l);
-      else __builtin_prefetch(ix.keys + l);
+      prefetch_bucket(ix, l);
       __builtin_prefetch(ix.pos + l);
     }
   };

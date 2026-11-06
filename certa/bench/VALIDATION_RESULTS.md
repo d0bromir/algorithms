@@ -82,6 +82,47 @@ removes 42–59 % of every aligner's confident errors on real reads (minibwa
 ones. A second GRCh38 aligner in its place removes 0–3 %. It helps every
 aligner alike, so minibwa stays ahead.
 
+**Re-paired mates and a fitted MAPQ**
+([below](#re-paired-mates-and-a-fitted-mapq)): two opt-in options of paired
+interval mode. `--iv-pair all` re-pairs certified mates of improper pairs;
+`--mapq cal` writes a MAPQ fitted on HG002 from the gap to the second-best
+locus, the edits and the clusters verified. Held out on HG005
+([below](#held-out-hg005)), they make CERTA the most accurate aligner
+measured at operating points of 98 % of mates and below: 22–33 misplaced per
+million against minibwa's 37 and 108–110 for the others (14–19 against 22
+with the T2T veto on both). At 99.3 % and above minibwa stays ahead (80
+against 86).
+
+**A MAPQ from both mates** ([below](#a-mapq-from-both-mates)): two more
+opt-in options. `--mapq pair` writes a MAPQ from boosted trees over both
+mates' records, fitted on HG002. `--t2t` maps every pair on T2T-CHM13 too,
+in the same pass, and the trees read where that placement lifts to. Held
+out on HG005, CERTA is the most accurate aligner measured at every
+operating point. With one index it misplaces 186, 60, 20 and 9 per million
+of the 99.75, 99.29, 98 and 95 % most confident mates, against minibwa's
+208, 80, 37 and 37. With `--t2t` it is 93, 25, 7 and 3, ahead of minibwa
+with BWA-MEM2's T2T veto too (167, 48, 22, 22). Placements are unchanged,
+and CERTA's MAPQ equals the fit's replay on every mate.
+
+**Variant calling** ([below](#variant-calling)): DeepVariant on 30× HG002
+and HG005 (chr20 and the CMRG genes) makes 1.8–5.7× more SNV errors on
+CERTA's records with the fitted MAPQs than on minibwa's (HG002:
+3,214–6,052 against 1,745; HG005: 1,253–3,099 against 543).
+- **The cause is the MAPQ, not the placements:** the fitted MAPQ is lower
+  on reads that show the sample's variants, and refitting does not remove
+  that.
+- **With BWA-MEM's MAPQ formula** (the default), the same placements give
+  12 % (HG002) and 17 % (HG005) more SNV errors than minibwa.
+- **That remaining gap** is mostly reads CERTA does not place: chimeric,
+  very divergent, or with long deletions.
+
+So the fitted MAPQs are not fit for variant calling.
+
+**Smaller indexes** ([below](#smaller-indexes)): the key bits stored per
+entry can be read from the reference instead. `certa index --from X.cidx
+--key-bits 8` (or `0`) gives byte-identical output with a 17.6 GiB (or
+14.9 GiB) GRCh38 index instead of 20.4 GiB, at 21 % (35 %) more CPU time.
+
 ## Pilot (2 M HG002 NovaSeq X pairs, trimmed)
 
 | | default | `--bio` |
@@ -844,17 +885,592 @@ advantage of CERTA's. Larger gains need flags that are more precise and
 catch more: a certified T2T placement (CERTA on hs1), or more haplotypes
 than CHM13's.
 
+## Re-paired mates and a fitted MAPQ
+
+Two changes aimed at what the matched comparison found (2026-11-04;
+[truth_cal.sh](truth_cal.sh), [truth_mapq_fit.py](truth_mapq_fit.py);
+reports [cal_A.md](results/truth_2026-10/cal_A.md),
+[cal_B.md](results/truth_2026-10/cal_B.md)). Both are opt-in options of
+paired interval mode; the default mode is unchanged (same records on
+test A), and so is interval mode without them (same records as
+`--iv-mapq cert` on both tests).
+
+**`--iv-pair all`: certified mates of an improper pair are re-paired.**
+On simulated reads 82 % of interval mode's avoidable confident errors
+(1,360 of 1,651) were mates of pairs that were not proper, both mates
+certified: each sat at its single-end optimum, while the pair pointed at
+the truth. Interval mode already re-paired pairs with an uncertified mate
+the way BWA-MEM does (`place_pair`); `--iv-pair all` sends these pairs
+through it too. A mate's best alignment in the other's proper-pair window
+is taken when the pair beats the two single-end bests minus the unpaired
+penalty; the moved mate becomes MR (XQ 0, and its single-end certificate
+stays in XL/XU). Otherwise the records are the certified ones.
+- Avoidable errors per million at interval mode's N fall from 8.7 to 4.3
+  on real reads and from 93 to 34 on simulated ones. The mates at the
+  locus rise from 99.908 % to 99.911 % (real) and from 97.728 % to 97.788 %
+  (simulated).
+- The test re-pairs 14–20 improper certified pairs per seed and checks that
+  every re-paired pair is proper, every moved mate is MR with XQ 0, the
+  anchor keeps its locus, tier and MAPQ, and every claim passes the checker.
+
+**`--mapq cal`: MAPQ fitted at the locus.** BWA-MEM's formula, which
+interval mode uses, reaches 60 once the second locus is about three
+mismatches away. On real reads the error rate keeps falling with the gap
+over its whole range. For S0 mates at MAPQ ≥ 40 it is:
+
+| gap to the second-best locus (edits) | 2 | 3 | 4 | 5 | 6 | 8 | 10 | none within 10 |
+|---|---|---|---|---|---|---|---|---|
+| misplaced per million | 10,244 | 5,413 | 3,654 | 2,322 | 1,474 | 587 | 423 | 25 |
+
+A nearby paralog in GRCh38 marks the reads whose own copy may be missing
+from it. The edits of the best alignment and the clusters verified add to
+that: among S1 mates with no second locus within 10 edits, 47 per million
+are misplaced with one edit and one cluster, against 1,242 with two edits
+and two to four clusters. `--mapq cal` writes as MAPQ the Phred of the
+misplaced share of such records on HG002 (`cal_mapq`,
+[mapq_table.h](../include/certa/mapq_table.h)):
+- records with MAPQ ≥ 40 in tiers S0, S1 and PR, by tier, edits (0–5), the
+  gap to the second-best locus (0–10 edits, or none; `--mapq cal` sets
+  `--mapq-limit 10`) and clusters verified (1, 2–4, 5–16, 17 or more);
+- every other record by tier and MAPQ;
+- cells with fewer than 1,000 mates take their parent's value.
+
+The table was fitted on tests A and B pooled (HG002, the calibration
+sample). CERTA's output equals the fit's replay on every mate of both
+tests, and the placements are those of `--iv-pair all`. Its values are
+Phred-scaled error rates, so they are lower than the formula's: 74.5 % of
+real mates get MAPQ ≥ 40 (most S1 reads get 39), against 99.4 % before.
+
+Misplaced per million at matched sensitivity, at the locus; *veto*: the
+T2T rule of the previous section, with BWA-MEM2's or CERTA's placements on
+hs1:
+
+| run | B, N = 99.44 % | B, N = 95.58 % | A, N = 94.13 % | A, N = 83.10 % |
+|---|---|---|---|---|
+| `certa` interval mode, `--iv-mapq cert` | 122 | 77 | 1,232 | 762 |
+| the same, `--iv-pair all --mapq cal` | 100 | **34** | 1,063 | 267 |
+| the same, with BWA-MEM2's T2T veto | 58 | **21** | 894 | 224 |
+| the same, with CERTA's T2T veto | 70 | 23 | 966 | 239 |
+| minibwa | 89 | 46 | 430 | 262 |
+| minibwa, with BWA-MEM2's T2T veto | **52** | 27 | **354** | **209** |
+| BWA-MEM2 / strobealign / minimap2 | 114 / 111 / 130 | 114 / 111 / 121 | 767 / 995 / 831 | 767 / 995 / 831 |
+
+- **Real reads:** with both changes and BWA-MEM2's T2T veto, CERTA has
+  fewer confident errors than every aligner as shipped at both N (58 against
+  89–130; 21 against 46–121). minibwa with the same veto is ahead at the
+  looser N (52 against 58) and behind at the stricter one (27 against 21).
+- **Simulated reads:** at the stricter N, CERTA with the veto is ahead of
+  every aligner as shipped (224 against 262–995) but behind minibwa with
+  the veto (209). At the looser N it is behind minibwa as shipped (894
+  against 430). The simulated truth keeps the segmental duplications that
+  test B's labels under-sample (5.5 % against 2.7 % of mates).
+- **CERTA on hs1 as the second opinion** (interval mode, `--iv-pair all`)
+  takes 29 s for test B against BWA-MEM2's 411 s, and keeps 70–80 % of its
+  gain. Its flags are not more precise: 13–22 % of the confident mates it
+  sets to 0 on real reads were misplaced, against 14–23 % for BWA-MEM2's
+  (for the fitted MAPQ, whose confident mates are fewer, 6 % and 5 %).
+  Counting only certified hs1 placements changes nothing, since with
+  `--iv-mapq cert` every hs1 record at MAPQ ≥ 40 is S0, S1 or PR.
+- **What was fitted:** the table, on HG002 (both tests). HG005 is the
+  held-out check ([below](#held-out-hg005)).
+
+## Held out: HG005
+
+The configurations above were fixed on HG002 and then run once on HG005
+(2026-11-04; [truth_hg005.sh](truth_hg005.sh); reports
+[t2t_H.md](results/truth_2026-11_hg005/t2t_H.md),
+[curve_H.md](results/truth_2026-11_hg005/curve_H.md),
+[labels_H.txt](results/truth_2026-11_hg005/labels_H.txt)). The build is
+this section's commit
+([frozen_source.sha](results/truth_2026-11_hg005/frozen_source.sha)).
+- **Truth:**
+  - HG005's HPRC release 2 haplotypes (trio-phased hifiasm,
+    chromosome-level), aligned to GRCh38 with dipcall's minimap2 settings;
+  - the first 20 M NovaSeq 6000 pairs (2×151) of SRR14724528, trimmed as
+    test B's;
+  - labels made as test B's: certified unique on one haplotype, with
+    minibwa's check (52 disagreements).
+
+  30,127,192 mates (75.4 %) have a truth, in the same strata as test B
+  (2.7 % in segmental duplications, 34.9 % in difficult regions).
+
+Misplaced per million at the locus among each run's N most confident
+mates with a truth (N = 99.29 % is interval mode's confident share), and
+each run's cost on galaxy's 64 cores (CPU seconds as user + sys; peak
+memory). The veto adds BWA-MEM2 on hs1, a second run (21,819 s at
+38.3 GiB), so its rows add the times and take the larger memory:
+
+| run | 99.75 % | 99.29 % | 98 % | 95 % | CPU | memory |
+|---|---|---|---|---|---|---|
+| `certa` interval mode, `--iv-mapq cert` | 363 | 111 | 65 | 65 | **2,124 s** | 24.6 GiB |
+| the same, `--iv-pair all --mapq cal` | 319 | 86 | **33** | **22** | 2,149 s | 24.6 GiB |
+| minibwa | 208 | **80** | 37 | 37 | 3,741 s | **10.1 GiB** |
+| BWA-MEM2 | **202** | 108 | 108 | 108 | 17,300 s | 32.9 GiB |
+| strobealign | 323 | 108 | 108 | 108 | 4,000 s | 24.2 GiB |
+| minimap2 | 252 | 152 | 110 | 110 | 6,477 s | 12.7 GiB |
+| *with BWA-MEM2's T2T veto:* `--iv-pair all --mapq cal` | 185 | 50 | **19** | **14** | 23,968 s | 38.3 GiB |
+| *with the veto:* minibwa | 167 | **48** | 22 | 22 | 25,560 s | 38.3 GiB |
+| *with the veto:* BWA-MEM2 | **160** | 60 | 60 | 60 | 39,119 s | 38.3 GiB |
+
+- **The HG002 result holds.** The two changes cut interval mode's
+  confident errors by 23 % at N = 99.29 % (111 → 86; on test B 122 → 100
+  at 99.44 %) and by 66 % at 95 % (65 → 22).
+- **At 98 % and below, CERTA is the most accurate aligner measured:** 22–33
+  per million against minibwa's 37 and 108–110 for the others, so 1.1–1.7×
+  fewer than minibwa and 3–5× fewer than the rest. With the T2T veto on
+  both, it is 14–19 against minibwa's 22.
+- **At the loosest operating points minibwa is ahead:** 80 against 86 at
+  99.29 %, and 208 against 319 at 99.75 %. CERTA places 99.904 % of the
+  mates at the locus, minibwa 99.906 %.
+- **Why the curves flatten:** minibwa, BWA-MEM2 and strobealign give MAPQ 60
+  to more than 98 % of the mates, so below that their rate is the MAPQ-60
+  group's; the fitted MAPQ keeps ranking.
+- **The T2T veto** removes 41–51 % of every aligner's confident errors at
+  N = 99.29 %, as on HG002. CERTA on hs1 as the second opinion again keeps
+  70–80 % of BWA-MEM2's gain (`--mapq cal`: 86 → 59, against 50). A second
+  GRCh38 aligner in its place removes 0–7 %.
+
+So the lead is real but confined to the stricter operating points, and it
+is 1.1–1.7× over the best other aligner, not a large factor everywhere.
+
+## A MAPQ from both mates
+
+Two more opt-in options of paired interval mode (2026-11-05;
+[truth_pair.sh](truth_pair.sh), [truth_mapq_pair.py](truth_mapq_pair.py);
+reports in [results/truth_2026-11_pair/](results/truth_2026-11_pair/)).
+
+**What `--mapq cal` missed.** At the looser operating points the mates
+that decide the ranking are the less confident ones, and `--mapq cal`
+ranks those by tier and MAPQ alone. On test B at N = 99.44 %, minibwa's N
+most confident mates hold 76,245 correctly placed mates that interval
+mode's do not. 45,608 of them are PR mates (a mate in a repeat placed by
+the pair certificate), which `--mapq cal` puts at 14 and minibwa at 60. On
+test A it is 166,825 of 239,660. What ranks such a mate is the other mate:
+minibwa, as BWA-MEM, raises a repeat mate's MAPQ by its unique mate's.
+
+**`--mapq pair`: boosted trees over both mates' records**
+([pair_model.h](../include/certa/pair_model.h),
+[mapq_model.h](../include/certa/mapq_model.h)). For each mapped mate, the
+trees read:
+- its own record: tier, MAPQ (`--iv-mapq cert`), the gap to the
+  second-best locus (XD, else XO, minus XE), XE, the clusters verified
+  (log₂), XB, XQ, NM, soft clips, a PR mate's pair margin (AS plus the
+  other mate's AS minus XS, the bound on every other proper pair), the
+  proper and mate-unmapped flags, and |TLEN| in classes;
+- the other mate's tier, MAPQ, gap, XE, XQ, NM, soft clips and margin.
+
+The trees are fitted by Newton boosting on the log loss of "placed more
+than 150 bp from the truth", over HG002 tests A and B (every misplaced
+mate, and one in eight of the others with weight 8). MAPQ is
+−10 log₁₀ of the predicted probability, rounded, at most 60. The header
+holds the score threshold of every MAPQ value, so CERTA and the script
+compute MAPQ with the same additions and comparisons, and it is
+deterministic. The default is 300 trees of depth 4. Deeper trees (400 of
+depth 6) were compared on HG002 only, under a rule fixed beforehand: adopt
+them for a model if they lower test B's errors by at least 5 % at two of
+its three operating points and raise none by more than 5 %. They did for
+the T2T model (63 / 32 / 9 per million against 72 / 33 / 10) and not for
+the other (115 / 70 / 18 against 118 / 71 / 18).
+
+**`--t2t`: T2T-CHM13 in the same pass.** With `--t2t hs1.cidx --t2t-chain
+hs1ToHg38.over.chain.gz`, every chunk of reads is also mapped on T2T-CHM13
+the way it is mapped on GRCh38: passes 1 to L, the pair certificate, tier
+R and the pair placement ([map_pipeline.cpp](../src/map_pipeline.cpp)
+`t2t_chunk`). Each mate's T2T placement is lifted through the chain
+([chain.cpp](../src/chain.cpp), lift_sam.py's rule) and compared with its
+GRCh38 placement. The comparison gives one of four classes: lifted within
+150 bp (same contig and strand), lifted elsewhere, not lifted, or
+unmapped there. With `--mapq pair` a second set of trees
+([mapq_model_t2t.h](../include/certa/mapq_model_t2t.h)) also reads that
+class, the gap to the second-best locus there, XE minus XE there, the MAPQ
+and tier there, and the other mate's class and gap. Only MAPQ changes: on
+test A, every other field of every GRCh38 record is the same with and
+without `--t2t`. Mapping takes 1.9–2.2× as long (test B: 60 s against
+32 s on galaxy's 64 cores), at 46.1 GiB for both indexes.
+
+Checks:
+- the T2T MAPQ of every mate equals that of a separate CERTA run on hs1
+  (test A), and the C++ lift agrees with the Python one (lift_sam.py, with
+  chrY's PARs moved to chrX) on 99.975 % of placed mates; the rest are PAR
+  placements;
+- CERTA's MAPQ equals the script's replay of the trees on every mapped
+  mate of tests A and B and of HG005, with and without `--t2t` (the frozen
+  build);
+- unit tests of the inputs (worked by hand), the tree walk, the MAPQ
+  thresholds and the chain lift; mutants Q1–Q8 and N1–N4 are killed (201
+  in all, with P18 and K1–K7 below).
+
+**Held-out half of HG002.** Fitted on the even pairs of tests A and B,
+scored on the odd ones (misplaced per million among each run's N most
+confident mates with a truth, at the locus; [cv_A.md](results/truth_2026-11_pair/cv_A.md),
+[cv_B.md](results/truth_2026-11_pair/cv_B.md)), with each run's cost on
+the whole of test B on galaxy (CPU seconds as user + sys, the mean of three
+runs for CERTA; peak memory):
+
+| run | B, 99.75 % | B, 99.44 % | B, 95.58 % | A, 94.13 % | A, 83.10 % | CPU (B) | memory (B) |
+|---|---|---|---|---|---|---|---|
+| interval mode, `--iv-pair all --mapq cal` | 172 | 103 | 34 | 1,069 | 267 | **1,879 s** | 24.5 GiB |
+| the same, `--mapq pair` | **118** | **71** | **18** | **405** | **70** | 1,979 s | 24.5 GiB |
+| the same, `--mapq pair --t2t` (depth 6) | **63** | **32** | **9** | **111** | **23** | 3,876 s | 42.6 GiB |
+| minibwa | 137 | 93 | 48 | 433 | 262 | 3,367 s | **9.7 GiB** |
+| BWA-MEM2 | 143 | 119 | 119 | 778 | 778 | 16,111 s | 31.5 GiB |
+| strobealign | 169 | 115 | 115 | 1,005 | 1,005 | 3,753 s | 13.5 GiB |
+| minimap2 | 168 | 134 | 125 | 844 | 844 | 6,677 s | 12.6 GiB |
+
+CERTA's peak memory includes up to 2 GiB of SAM output queued for a reader
+slower than the mapper (here `grep | md5sum`); its index is 20.4 GiB
+(GRCh38) and 21.3 GiB (hs1).
+
+The halves share loci, so this checks the fit, not its transfer to
+another genome; HG005 does that.
+
+**Held out: HG005.** The models were then fitted on every pair of tests A
+and B, frozen ([frozen_source.sha](results/truth_2026-11_pair/frozen_source.sha)),
+and run once on HG005 ([holdout_H.md](results/truth_2026-11_pair/holdout_H.md);
+the truth and the other runs are those of the section above):
+
+| run | 99.75 % | 99.29 % | 98 % | 95 % | MAPQ ≥ 40 | CPU | memory |
+|---|---|---|---|---|---|---|---|
+| interval mode, `--iv-pair all --mapq cal` | 319 | 86 | 33 | 22 | 72.8 % | **2,149 s** | 24.6 GiB |
+| the same, `--mapq pair` | **186** | **60** | **20** | **9** | 89.3 % | 2,281 s | 24.6 GiB |
+| the same, `--mapq pair --t2t` | **93** | **25** | **7** | **3** | 95.6 % | 4,630 s | 45.9 GiB |
+| minibwa | 208 | 80 | 37 | 37 | 99.8 % | 3,741 s | **10.1 GiB** |
+| BWA-MEM2 | 202 | 108 | 108 | 108 | 99.8 % | 17,300 s | 32.9 GiB |
+| strobealign | 323 | 108 | 108 | 108 | 99.6 % | 4,000 s | 24.2 GiB |
+| minimap2 | 252 | 152 | 110 | 110 | 99.7 % | 6,477 s | 12.7 GiB |
+| *with BWA-MEM2's T2T veto:* minibwa | 167 | 48 | 22 | 22 | 99.7 % | 25,560 s | 38.3 GiB |
+| *with BWA-MEM2's T2T veto:* BWA-MEM2 | 160 | 60 | 60 | 60 | 99.7 % | 39,119 s | 38.3 GiB |
+
+- **With one index, CERTA is now the most accurate aligner measured at
+  every operating point.** `--mapq pair` misplaces 186, 60, 20 and 9 per
+  million against minibwa's 208, 80, 37 and 37: 1.1×, 1.3×, 1.9× and 4×
+  fewer. At the loosest point it also beats BWA-MEM2 (202).
+- **With T2T-CHM13 in the same pass, the lead is 2–12×:** 93, 25, 7 and 3
+  per million. It is also ahead of every other aligner given BWA-MEM2's
+  T2T veto, which needs a second aligner and a second index: 1.7× at
+  99.75 % (93 against 160), 1.9× at 99.29 % (25 against 48), 3.1× at 98 %
+  and 7× at 95 %.
+- **The HG002 gains held.** Between HG002's held-out half and HG005 the
+  ratios to minibwa are similar (test B at 99.44 %: 71 and 32 against 93;
+  HG005 at 99.29 %: 60 and 25 against 80), on another genome sequenced on
+  another instrument (NovaSeq 6000 against X).
+- **Placements are unchanged;** only the order of confidence changes. The
+  fitted MAPQ is an error rate, so fewer mates reach MAPQ 40 (89.3 % and
+  95.6 % against minibwa's 99.8 %). A pipeline that filters at a fixed
+  MAPQ keeps fewer reads than with the other aligners; matched sensitivity
+  compares at the same number of reads.
+- **The rows of the other aligners equal the section above**, as does
+  `--mapq cal`'s, so the scoring is the one used there.
+- **Cost** (HG005, galaxy, CPU seconds as user + sys, peak memory):
+  `--mapq pair` 2,281 s at 24.6 GiB, with `--t2t` 4,630 s at 45.9 GiB;
+  minibwa 3,741 s at 10.1 GiB, BWA-MEM2 17,300 s at 32.9 GiB. The veto
+  adds BWA-MEM2 on hs1 (21,819 s at 38.3 GiB). So `--t2t` costs 1.2×
+  minibwa's CPU time and 4.5× its memory. CERTA's mapping stage took
+  43.8 s, and 76.2 s with `--t2t` (the wall times here are those of the
+  scoring pipeline).
+
+What remains unproven: the model was fitted on HG002 with a truth from
+its Q100 assembly, so any bias of that truth's labels (certified unique on
+one haplotype) carries into the model; HG005 was labelled the same way.
+Neither option has been tested in variant calling.
+
+## Variant calling
+
+The MAPQ options of the last three sections were scored by how they rank
+misplaced reads. This section tests them where it matters downstream, in
+DeepVariant's calls (2026-11-05; scripts in [vc/](vc/)).
+
+**Setup.**
+- **Reads:** Google's 30× NovaSeq 6000 PCR-free 2×151 FASTQs of HG002 and
+  HG005 (`gs://brain-genomics-public/research/sequencing/fastq/novaseq/wgs_pcr_free/30x/`).
+  Each genome is streamed once to five mappings at the same time
+  ([vc/fanout.py](vc/fanout.py); nothing is stored).
+- **Regions:** each mapping keeps the records overlapping chr20 and the
+  CMRG genes, padded by 1 kb (81.3 Mbp; [vc/vc_map.sh](vc/vc_map.sh)).
+- **Aligners:**
+  - CERTA is PR #19's frozen build (`953e1f819c018e62`): interval mode with
+    `--iv-mapq cert --iv-pair all`, plus `--mapq cal`, `--mapq pair`, or
+    `--mapq pair --t2t`;
+  - minibwa and BWA-MEM2 run as in the sections above.
+- **Calling:** DeepVariant 1.10.0 (WGS model) over the same regions
+  ([vc/call.sh](vc/call.sh)).
+- **Scoring:** hap.py 0.3.15 with vcfeval, on PASS calls:
+  - HG002 against GIAB v5.0q (within the regions) and CMRG v1.00;
+  - HG005 against v4.2.1.
+
+  Errors are false negatives plus false positives.
+
+**HG002 against v5.0q.** The mapping cost is that of the 30× run on
+galaxy (CPU seconds as user + sys; peak memory). The five ran together, so
+their wall times, about 2.7 h, are the download's.
+
+| aligner | SNV errors | SNV recall | SNV precision | indel errors | indel recall | indel precision | CPU | memory |
+|---|---|---|---|---|---|---|---|---|
+| CERTA `--mapq cal` | 6,052 | 94.22 % | 99.32 % | 6,127 | 80.07 % | 92.85 % | **43,555 s** | 21.8 GiB |
+| CERTA `--mapq pair` | 4,040 | 96.24 % | 99.45 % | 4,253 | 86.37 % | 95.11 % | 45,126 s | 21.9 GiB |
+| CERTA `--mapq pair --t2t` | 3,214 | 97.07 % | 99.51 % | 3,280 | 89.58 % | 96.25 % | 90,488 s | 43.0 GiB |
+| minibwa | **1,745** | 98.48 % | **99.67 %** | **1,775** | **94.47 %** | **97.95 %** | 75,512 s | **9.5 GiB** |
+| BWA-MEM2 | 1,761 | **98.49 %** | 99.63 % | 1,848 | 94.26 % | 97.84 % | 333,333 s | 34.6 GiB |
+
+Against CMRG v1.00 the order is the same:
+- **SNV errors:** 1,719, 1,286 and 1,077 for the three CERTA runs, against
+  minibwa's 800 and BWA-MEM2's 805;
+- **indel errors:** 868, 620 and 500, against 278 and 291.
+
+**HG005 against v4.2.1** (a genome the models were not fitted on):
+
+| aligner | SNV errors | SNV recall | SNV precision | indel errors | indel recall | indel precision | CPU | memory |
+|---|---|---|---|---|---|---|---|---|
+| CERTA `--mapq cal` | 3,099 | 96.51 % | 99.72 % | 862 | 92.70 % | 98.78 % | **44,470 s** | 21.8 GiB |
+| CERTA `--mapq pair` | 1,654 | 98.13 % | 99.87 % | 373 | 96.85 % | 99.48 % | 46,058 s | 21.8 GiB |
+| CERTA `--mapq pair --t2t` | 1,253 | 98.65 % | 99.83 % | 251 | 97.95 % | 99.59 % | 93,154 s | 43.2 GiB |
+| minibwa | **543** | 99.43 % | **99.91 %** | **63** | **99.46 %** | **99.92 %** | 75,787 s | **9.0 GiB** |
+| BWA-MEM2 | 553 | **99.45 %** | 99.88 % | 73 | 99.37 % | 99.91 % | 335,649 s | 34.7 GiB |
+
+v4.2.1 leaves out more of the difficult regions than v5.0q, so every
+aligner makes fewer errors. CERTA's fitted MAPQs make 2.3–5.7× minibwa's
+SNV errors here, and 4–14× its indel errors.
+
+With the default MAPQ, the same reads mapped again (as for HG002, check 1
+below) give 633 SNV and 85 indel errors: 17 % and 35 % more than minibwa.
+`--iv-mapq cert` gives 1,133 and 207.
+
+**The MAPQ, not the placements.** Three checks on HG002:
+
+1. *The same reads, mapped again with each MAPQ mode*
+   ([vc/vc_subset.sh](vc/vc_subset.sh)): the 9.95 M read pairs in the five
+   runs' records, with the placements the same in every mode. This subset
+   reproduces the full runs: `--mapq cal` gives 6,047 SNV errors against
+   6,052, `--mapq pair` 4,036 against 4,040.
+
+   | CERTA's MAPQ | SNV errors | indel errors | SNV errors outside difficult regions |
+   |---|---|---|---|
+   | `--iv-mapq point` (BWA-MEM's formula; the default) | **1,956** | **2,060** | **108** |
+   | `--iv-mapq cert` (XQ for tiers R, IV and MR) | 3,156 | 3,590 | 340 |
+   | `--mapq cal` | 6,047 | 6,128 | 1,912 |
+   | `--mapq pair` | 4,036 | 4,254 | 866 |
+   | *minibwa (the full run)* | *1,745* | *1,775* | *67* |
+
+2. *MAPQ ≥ 30 set to 60* ([vc/remap60.sh](vc/remap60.sh)). SNV errors fall
+   from 6,052 to 3,761 (`--mapq cal`), from 4,040 to 2,689 (`--mapq pair`)
+   and from 3,214 to 2,198 (`--mapq pair --t2t`).
+3. *The reads at the misses.* The sites are 134 SNVs outside difficult
+   regions that CERTA `--mapq cal` misses and minibwa calls: one in ten of
+   chr20's 1,334 ([vc/allele_mapq.py](vc/allele_mapq.py)).
+
+   | run | reads showing the variant: mean MAPQ | showing the reference | variant reads below MAPQ 5 |
+   |---|---|---|---|
+   | CERTA `--mapq cal` | 22.9 | 33.3 | 9.3 % |
+   | CERTA `--mapq pair` | 28.7 | 38.2 | 2.7 % |
+   | CERTA `--mapq pair --t2t` | 34.8 | 41.4 | 0.7 % |
+   | minibwa | 58.3 | 59.5 | 0.3 % |
+
+What the checks show:
+- **The fitted MAPQs are biased against the sample's variants.**
+  - `--mapq cal`'s table and `--mapq pair`'s trees lower MAPQ with each edit
+    a read carries, because misplaced reads carry more edits.
+  - A read that shows the sample's own variant carries one edit more than
+    its neighbours that show the reference. So at the same locus it gets a
+    lower MAPQ: 22.9 against 33.3 with `--mapq cal`.
+  - 9.3 % of such reads fall below MAPQ 5, the threshold below which
+    DeepVariant drops reads.
+  - XQ (`--iv-mapq cert`) is biased the same way, less strongly.
+- **The scale matters too.**
+  - DeepVariant's model was trained on BWA-MEM, which gives a unique read 60.
+  - CERTA's fitted MAPQ is an error rate and tops out at 43–47.
+  - Raising MAPQ ≥ 30 to 60 removes a third to a half of the extra errors,
+    but not the bias.
+- **With BWA-MEM's MAPQ formula, CERTA's placements are close to minibwa's:**
+  - 1,956 SNV and 2,060 indel errors, 12 % and 16 % more than minibwa.
+  - The gap is in difficult regions, mostly indels: 2,044 indel errors there
+    against minibwa's 1,761.
+  - Outside difficult regions CERTA has 108 SNV errors against minibwa's 67.
+- **The accuracy score of the sections above cannot see this.**
+  - It ranks reads by their chance of being misplaced anywhere in the
+    genome. It does not check that reads at one locus are ranked alike,
+    whatever allele they carry.
+  - Those results stand as rankings of misplaced reads.
+  - For variant calling, use the default MAPQ.
+
+**Refitting does not remove the bias.** `truth_mapq_pair.py fit --drop`
+holds inputs at 0 so the trees cannot split on them; the header stays
+compatible, so CERTA runs the refit unchanged
+([vc/vc_model.sh](vc/vc_model.sh), [vc/neutral.sh](vc/neutral.sh),
+[vc/neutral3.sh](vc/neutral3.sh)). Each refit was fitted on HG002's even
+pairs, scored on the odd ones at matched N, and run through DeepVariant
+on the HG002 subset:
+
+| `--mapq pair` model | B, 99.75 % | B, 99.44 % | B, 95.58 % | A, 94.13 % | SNV errors | indel errors | variant reads' mean MAPQ (reference reads') |
+|---|---|---|---|---|---|---|---|
+| all inputs (as committed) | **118** | **71** | **18** | **405** | 4,036 | 4,254 | 28.7 (38.2) |
+| N1: no XE, NM, soft clips or XQ, either mate | 130 | 80 | 18 | 466 | 4,128 | 4,814 | 28.7 (38.8) |
+| N2: N1, no record MAPQ either | 162 | 97 | 18 | 694 | 4,353 | 5,037 | 27.3 (38.6) |
+| N3: none of the record's own inputs (only the gap, ties, the pair flags, \|TLEN\| and the mate) | 194 | 113 | 19 | 659 | 3,901 | 3,921 | 30.5 (38.1) |
+| *the default MAPQ* | | | | | *1,956* | *2,060* | *52.1 (57.7)* |
+| *minibwa* | 137 | 93 | 48 | 433 | *1,745* | *1,775* | *58.3 (59.5)* |
+
+The bias is in the tiers themselves ([vc/allele_tags.py](vc/allele_tags.py)).
+At the 134 sites above:
+- **S0:** 61.2 % of the reads that show the reference are S0 (exact);
+  none of the reads that show the variant can be.
+- **Weaker tiers:** the variant reads fall to PR, IV, R or MR 2.5× as
+  often (46.3 % against 16.1 %).
+
+Any MAPQ fitted to rank misplaced reads learns those tiers and their
+correlates (the mate's edits, the gap) and ranks variant reads lower.
+DeepVariant, trained on BWA-MEM, reads that pattern as a mapping artifact.
+
+**Where the default MAPQ loses: reads CERTA does not place.**
+- **How many:** of the 18.07 M reads minibwa places with MAPQ ≥ 20 in the
+  regions, CERTA puts 179,002 (0.99 %) more than 1 kb away, on another
+  contig, or nowhere ([vc/lost_reads.py](vc/lost_reads.py)).
+- **Which reads:** the more a read differs from GRCh38, the likelier this
+  is. By minibwa's NM, CERTA loses 970 per million of the reads with NM 0,
+  17,289 with NM 3, 60,829 with NM 6, and 317,308 with NM ≥ 10.
+- **Where they go:** 90,236 are unmapped; most of the rest are IV records
+  elsewhere, often clipped and at low MAPQ.
+- **Why:** 10 % are adapter read-through (the reads are untrimmed); 47 %
+  are reads minibwa soft-clips (chimeras, SV breakpoints); 43 % are
+  full-length but divergent.
+- **The cost:** at one missed cluster of four SNVs within 13 bp
+  (16:81,086,429–442), the reads that carry it have 7–13 mismatches. CERTA
+  places them elsewhere as local hits that clip most of the read, so that
+  haplotype loses coverage there.
+- **The existing options do not fix it:**
+  - `--full-cert` recovers 6.7 % of these reads, at about 4× the time;
+  - a 1,200 bp mate window (`--max-dist`; HG002's inserts: p99 954 bp)
+    recovers 0.4 % (1,950 SNV errors against 1,956).
+- **What could:** 57 % of the lost reads have a mate that CERTA placed
+  with MAPQ ≥ 20 within 2 kb. CERTA's mate rescue (`rescue_mate`) cannot
+  recover them: it aligns end to end, above L − 54 (about 10 mismatches),
+  in a band of 47 gaps.
+  - A sample of 40 of them shows why: they are mostly chimeric reads that
+    minibwa aligns in part (51M100S, 110S41M, 33M118S), full-length reads
+    with 11–21 mismatches, and reads with long deletions
+    (46M16D2M1I86M16S, 110M25D3M3D38M).
+  - A local alignment in the mate's window, with clipping and long gaps
+    allowed, as in BWA-MEM's mate rescue, could place them.
+
+## Smaller indexes
+
+What CERTA's index holds (2026-11-05):
+
+| part | GRCh38 (`-q 22 -s 1`) | T2T-CHM13 (hs1) | per entry |
+|---|---|---|---|
+| positions | 10.98 GiB | 11.61 GiB | 4 bytes |
+| key bits below the bucket | 5.49 GiB | 5.81 GiB | 2 bytes |
+| reference sequence | 2.89 GiB | 2.90 GiB | 1 byte per base |
+| bucket directory (2²⁸ buckets) | 1.00 GiB | 1.00 GiB | |
+| **in memory** | **20.36 GiB** | **21.32 GiB** | |
+
+Beyond the index, `certa map` holds the per-thread workspaces (0.9 MiB
+each), the read and record batches in flight (about 0.9 GiB), and up to
+2 GiB of SAM queued for a reader slower than the mapper.
+
+**Filtering repeats would save little.** The mapper enumerates a 22-mer's
+positions only when they fit a budget (at most 4,096 per strand) or tier
+R's anchor cap (4,096); otherwise it reads at most the first 64 (tier SR's
+sample). So the positions past the 64th of the 22-mers seen more than
+4,096 times are never read. They are 3.2 % of GRCh38's entries (9,797
+22-mers, 95 M entries; 5.2 % of hs1's). Dropping them, with each 22-mer's
+count kept, would save 0.53 GiB (0.89 GiB on hs1) without changing any
+output. It would also take from `certa check` the complete occurrence
+lists it verifies against. Not done.
+
+**The key bits are redundant.** An entry's position holds its 22-mer in
+the reference, so the 16 key bits below the bucket can be read there
+instead of stored. A v4 index stores the high 8 of them, or none:
+`certa index --from grch38.cidx -o grch38.k8.cidx --key-bits 8` (or `0`).
+The conversion needs no FASTA and no sort (5–11 s on galaxy). The lookup
+narrows the bucket by the stored byte, then reads the remaining bits from
+the reference at each candidate entry
+([core.h](../include/certa/core.h) `lookup_bucket_ref`). The ranges are
+those of the full keys, so every output is the same.
+
+Tests:
+- every key's range, and those of absent keys, equal the full-key index's
+  for 12, 13 and 14 bits below the bucket;
+- the mapping and tier R give the same results;
+- `check-index` validates v4 files and rejects a wrong stored byte;
+- mutants K1–K7 are killed.
+
+Measured on galaxy (64 threads on cores 0–63; `--intervals --iv-mapq
+cert --iv-pair all --mapq pair`; CPU seconds as user + sys, the mean of
+three runs on test B and one on A; the highest peak memory; the SAM body's
+md5):
+
+| index | in memory | B: CPU | B: peak memory | A: CPU | A: peak memory | SAM |
+|---|---|---|---|---|---|---|
+| v3, 16 key bits | 20.36 GiB | **1,979 s** | 24.5 GiB | **1,211 s** | 21.5 GiB | |
+| v4, 8 key bits | 17.62 GiB | 2,387 s (+21 %) | 19.7 GiB | 1,443 s (+19 %) | 18.5 GiB | the same |
+| v4, none | **14.87 GiB** | 2,665 s (+35 %) | **15.8 GiB** | 1,572 s (+30 %) | **15.8 GiB** | the same |
+| *with `--t2t`, both indexes:* v3 | 41.68 GiB | **3,876 s** | 42.6 GiB | **2,411 s** | 42.6 GiB | |
+| *with `--t2t`:* 8 key bits | 36.04 GiB | 4,796 s (+24 %) | 36.9 GiB | 2,965 s (+23 %) | 36.9 GiB | the same |
+| *with `--t2t`:* none | **30.38 GiB** | 5,283 s (+36 %) | **31.3 GiB** | 3,190 s (+32 %) | **31.3 GiB** | the same |
+
+- **Memory falls by the index's saving:** with `--t2t`, by 5.65 and
+  11.30 GiB, exactly the stored bytes dropped. GRCh38 alone falls by more
+  (4.8 and 8.6 GiB): the faster run there outpaces the `grep | md5sum`
+  reader, so up to 2 GiB of SAM waits in the output queue.
+- **The cost is CPU time:** each lookup waits on one more random read (the
+  reference at a candidate's position), +19–36 %. The wall time on test B
+  is the same with 8 key bits (41.1 s against 41.2 s) because the reader
+  limits it there; with `--t2t` it is 66 s, 79 s and 87 s.
+- **A prefetch of those reference bases does not help.** The test added a
+  third stage to the mapper's prefetch pipeline: the bytes a lookup will
+  read at its candidates, fetched one read ahead. It saved under 1 % (test
+  B, 8 key bits: 2,367 s against 2,387 s; none: 2,665 s, unchanged) and
+  was not kept. So the cost is not the latency of that read.
+
+## A pairing fix
+
+CI's seed 12 on PR #19 found a pair that `place_pair` reported as proper
+although its mates were not. The bug predates PR #19. When the best proper
+pair put a mate on a locus that overlapped the mate's single-end
+placement, `place_pair` treated the single-end record as that placement:
+it checked only that the two overlapped and that the scores agreed. So it
+kept the single-end record under the pair's flags. Now the single-end
+record is kept only when it is the same alignment (contig, strand,
+position and CIGAR; [interval.h](../include/certa/interval.h)
+`same_alignment`); otherwise the mate is placed by the pair (tier MR).
+
+A deterministic test reproduces the case in a tandem array (period 37), and
+mutant P18, the old rule, is killed on every seed.
+
+On real reads, with `--mapq pair`, the fix changes the placement or mate
+fields of 2,128 records of test A (106 per million) and 3,620 of test B
+(91 per million). It changes no FLAG; the moved mates' MAPQ changes.
+Against the truth it is neutral:
+- **Test A:** 597 mates move, 83 with a truth. 46 of those are at the
+  locus before and after: 3 move to it and 3 away from it.
+- **Test B:** 775 mates move, 49 with a truth. 47 are at the locus before
+  and after.
+- **Confident errors at matched N:** test A 393.3 and 73.3 per million
+  before, 393.0 and 73.3 after; test B 110.6, 66.8 and 17.5 before, 110.8,
+  66.9 and 17.5 after (the model fitted on all of tests A and B).
+
+So the fix is one of consistency: a pair flagged proper is now one.
+
 ## Next
 
-1. **Accuracy.** No CERTA configuration is more accurate than minibwa at the
-   locus and at matched sensitivity, and on GRCh38 almost no error is left
-   to fix by search ([above](#matched-sensitivity-and-the-locus-window)).
-   A T2T-CHM13 second opinion halves every aligner's confident errors on
-   real reads ([above](#a-mapq-from-t2t-chm13)).
-   - Map to hs1 with CERTA, and set MAPQ 0 where a certified hs1
-     placement lifts elsewhere: faster than BWA-MEM2, and perhaps more
-     precise flags.
-   - Hold the rule out on HG001 or HG005 (truth labels needed).
+1. **Accuracy.** With `--iv-pair all --mapq pair`, CERTA is the most
+   accurate aligner measured at every operating point, held out on HG005;
+   with `--t2t` by 2–12× over minibwa
+   ([above](#a-mapq-from-both-mates)).
+   - In variant calling the fitted MAPQs cost 1.8–3.5× minibwa's errors
+     ([above](#variant-calling)): they are lower on reads that show the
+     sample's variants. Refit them without the inputs that count a read's
+     own edits (XE, NM, soft clips, XQ), and score both the ranking and
+     DeepVariant's calls. Close the remaining 12–16 % gap of the default
+     MAPQ, which is in difficult regions and mostly indels.
+   - A second held-out genome (HG001 or another HPRC sample; a download).
+   - The truth labels of tests B and H are certified unique on one
+     haplotype, which under-samples segmental duplications (item 6); a
+     model fitted on them may rank those mates less well.
+   - `--t2t` holds two indexes (45.9 GiB). CHM13's copies of GRCh38's
+     collapsed duplications as extra contigs of one index (FixItFelix's
+     design; [the research report](../reports/Biologically%20correct%20read%20placement%20ideas.md))
+     might give most of the gain at one index's memory.
    - Score accuracy at the locus and at matched sensitivity from now on.
 2. **Cost.** The edit certificate that `--bio` runs first is now 48 % of
    its time; its band DP (`band_distance_vec8`) is also the largest cost of
@@ -871,5 +1487,6 @@ than CHM13's.
    (`bio_band`, Lemma B, the oracle test).
 6. **Test B labels.** Label PR-tier mates from the pair certificate, so the
    real-read truth covers segmental duplications.
-7. **Phase 2.** HG005 (download 1.8 GB), the held-out verdict, with the
-   build frozen after any change from 1–6.
+7. **Phase 2 for `--bio`.** HG005's truth is built and interval mode is
+   scored on it ([above](#held-out-hg005)); `--bio` has not been run on it.
+   Run it once, with the build frozen after any change from 1–6.

@@ -114,6 +114,17 @@ reads single-end and 97.4 % paired (default: 94.4 % and 95.4 %) in about
 21.3 GiB single-end and 21.5 GiB paired for GRCh38 (24.3 / 25.0 GiB with an
 A100), as for the default (`bench/results/hg002_2026-10/memory_*.tsv`).
 
+**Smaller indexes.** An entry's 16 key bits below the bucket are also in
+the reference at its position.
+- **Conversion:** `certa index --from grch38.cidx -o grch38.k8.cidx --key-bits 8`
+  (or `0`) rewrites an index with 8 of them or none, in seconds and without
+  the FASTA. `--key-bits` also applies when building.
+- **Memory:** the GRCh38 `-s 1` index takes 17.6 or 14.9 GiB instead of
+  20.4 GiB; with `--t2t`, both indexes take 36.0 or 30.4 GiB instead of
+  41.7 GiB.
+- **Cost:** the output is byte-identical, at 21 % or 35 % more CPU time
+  (`bench/VALIDATION_RESULTS.md`, "Smaller indexes").
+
 ### Interval output, no fallback (`--intervals`)
 
 ```bash
@@ -145,9 +156,52 @@ for tiers R, IV and MR, the reads the default certificate left.
   default mode plus minibwa with its MAPQ corrected, with no second aligner
   ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#mapq-of-the-uncertified-mates)).
 - XQ for every record (`cons`) leaves few reads confident and drops the
-  reads that carry variants ([FINDINGS.md](FINDINGS.md), Aim 3). `cert`
-  has not been tested in variant calling yet, so `point` stays the
-  default.
+  reads that carry variants ([FINDINGS.md](FINDINGS.md), Aim 3).
+- `cert` costs variant calls too. With DeepVariant on 30× HG002 (chr20 and
+  the CMRG genes), the same placements give 3,156 SNV errors with `cert`
+  against 1,956 with `point` (minibwa: 1,745)
+  ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#variant-calling)).
+  So `point` stays the default.
+
+**Pairs and the fitted MAPQ** (paired interval mode, opt-in;
+[VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#re-paired-mates-and-a-fitted-mapq)):
+- `--iv-pair all`: two certified mates that do not form a proper pair are
+  re-paired as an uncertified mate is: a mate's best alignment in the
+  other's proper-pair window is taken when the pair beats the two
+  single-end bests minus the unpaired penalty, and becomes MR.
+- `--mapq cal`: MAPQ is the Phred of the misplaced share of similar records
+  on HG002 (`include/certa/mapq_table.h`, fitted by
+  `bench/truth_mapq_fit.py`): by tier, edits, the gap to the second-best
+  locus within 10 edits and the clusters verified. It ranks reads near a
+  paralog lower, where the formula gives 60. The values are error rates,
+  so fewer reads reach MAPQ 40 (74 % of real HG002 mates).
+- `--mapq pair`: MAPQ from boosted trees over both mates' records
+  (`include/certa/pair_model.h`, trees in `include/certa/mapq_model.h`,
+  fitted at the locus on HG002 by `bench/truth_mapq_pair.py`). Besides a
+  record's own tier, edits, gap and clusters, the trees read the other
+  mate's tier, MAPQ and gap, a PR mate's pair margin and the insert size:
+  whether a mate in a repeat has a unique partner decides most of the
+  ranking among the less confident mates
+  ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#a-mapq-from-both-mates)).
+- `cal` and `pair` rank misplaced reads better, but they cost variant calls.
+  Each edit lowers MAPQ, the sample's own variants included, so with
+  DeepVariant they give 1.6–3.1× the SNV errors of `point`
+  ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#variant-calling)).
+  Use `point` (the default) for variant calling.
+- `--t2t T2T.cidx --t2t-chain T2TToRef.over.chain.gz`: every pair is also
+  mapped, the same way, on an index of T2T-CHM13 in the same pass, and each
+  mate's T2T placement is lifted to the reference through the chain (UCSC
+  `hs1ToHg38.over.chain.gz`). With `--mapq pair` the trees also read it
+  (`include/certa/mapq_model_t2t.h`): whether it lifts to the record's
+  locus, elsewhere or not at all, and its gap and MAPQ there. A mate from a
+  copy GRCh38 lacks tends to align elsewhere on T2T-CHM13. The records,
+  their placements and certificates are the reference's; only MAPQ
+  changes. It needs both indexes in memory (46 GiB for GRCh38 and hs1) and
+  about doubles the mapping time.
+- `--feature-tags` adds `XO` (the best other candidate's distance) and `XN`
+  (clusters verified), the fits' inputs not in other tags; with `--t2t`
+  also `XC:Z:class,tier,MAPQ,XE,XD,XO`, the mate's T2T placement as the
+  trees read it.
 
 **Tier R options:** `--iv-tau 256`, `--iv-margin 20`, `--iv-chains 8`,
 `--iv-fallback 8`.
@@ -300,6 +354,22 @@ alignments.
   Setting MAPQ 0 where T2T-CHM13 confidently places the read elsewhere
   removes about half of them on real reads, for every aligner alike
   ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#a-mapq-from-t2t-chm13)).
+- **Interval mode with `--iv-pair all --mapq pair`** (below, fitted on
+  HG002) is the most accurate aligner measured at every operating point,
+  held out on HG005. Of the 99.75, 99.29, 98 and 95 % most confident mates,
+  it misplaces 186, 60, 20 and 9 per million, against minibwa's 208, 80,
+  37 and 37 and BWA-MEM2's 202, 108, 108 and 108. With `--t2t` (T2T-CHM13
+  in the same pass) it is 93, 25, 7 and 3: 2–12× fewer than minibwa, and
+  ahead of minibwa with a T2T second opinion from BWA-MEM2 (167, 48, 22,
+  22). `--mapq cal` leads only at 98 % and below (22–33)
+  ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#a-mapq-from-both-mates)).
+- **But not for variant calling yet.** The fitted MAPQs give the reads that
+  show a sample's variant a lower MAPQ than their neighbours, so DeepVariant
+  misses variants:
+  - with them, CERTA's records on 30× HG002 give 3,214–6,052 SNV errors,
+    against minibwa's 1,745;
+  - with the default MAPQ, the same placements give 1,956
+    ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#variant-calling)).
 - **MAPQ of the fallback:** minibwa misplaces 6–7 % of the fallback mates
   it gives MAPQ ≥ 40. Divided by 4 (`drop_certified_mates.awk -v div=4`),
   their MAPQ comes within 4× of their error rates

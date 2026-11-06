@@ -234,7 +234,12 @@ void sam_unmapped(const FastqRecord& rec, const Reference& ref, const MateInfo& 
 //   XY:Z:D;t;o-e,...;o-e,...    PR mates: the proper-pair distance D and the
 //                               pair certificate's support and parts, which
 //                               prove XS (the bound on every other proper pair).
-std::string interval_tags(const Placement& p, const Reference& ref, const OutputOptions& opt) {
+//   XC:Z:c,t,q,e,d,o           --t2t with --feature-tags: the mate's placement
+//                               on T2T-CHM13 as the pair model reads it: class
+//                               (T2tView::cls), and its tier (XT index, -1
+//                               none), MAPQ, XE, XD and XO there.
+std::string interval_tags(const Placement& p, const Reference& ref, const OutputOptions& opt,
+                          const T2tView* tv = nullptr) {
   const int xv = opt.witness && p.xl_sep ? ref.contig_of(p.xl_r.ref_pos) : -1;  // XV's contig
   // Tags of 6 + 20 characters; two witnesses of up to 2 PMAX probes each,
   // "o-e," <= 14 characters; XV's contig name and CIGAR.
@@ -250,6 +255,18 @@ std::string interval_tags(const Placement& p, const Reference& ref, const Output
   if (p.xl != kNoSub) tag("\tXL:i:", p.xl);
   tag("\tXU:i:", p.xu);
   tag("\tXQ:i:", p.xq);
+  if (opt.feature_tags) {  // the inputs of cal_mapq and the pair model not in other tags
+    tag("\tXO:i:", p.r.d2x);
+    tag("\tXN:i:", p.r.n_clusters);
+    if (tv) {
+      q = put_str(q, "\tXC:Z:", 6);
+      const int v[6] = {tv->cls, tv->tier, tv->mapq, tv->xe, tv->xd, tv->xo};
+      for (int k = 0; k < 6; ++k) {
+        if (k) *q++ = ',';
+        q = put_int(q, v[k]);
+      }
+    }
+  }
   if (opt.witness) {
     if (p.xq > 0 && (p.r.tier != kTierPR || p.pr_xh)) tag("\tXH:i:", p.sub_hi);
     auto probes = [&](const Witness& w) {
@@ -410,30 +427,48 @@ int RecordWriter::single(const Result& r0, const FastqRecord& rec, Records& out)
 // with `placed` (interval mode) also the interval tags. Returns whether the
 // pair is proper.
 bool RecordWriter::certified_pair(const Result* r, const Result* se, const FastqRecord* rec, Records& out,
-                                  Placement* placed) const {
+                                  Placement* placed, const T2tLift* t2t) const {
   const bool proper = is_proper(r[0], r[1], ref_, opt_.max_dist);
   const int c0 = ref_.contig_of(r[0].ref_pos), c1 = ref_.contig_of(r[1].ref_pos);
+  MateInfo mi[2];
+  int mapq[2];
   for (int x = 0; x < 2; ++x) {
     const Result& a = r[x];
     const Result& b = r[1 - x];
-    MateInfo mi;
-    mi.flag = 1 | (proper ? 2 : 0) | (b.strand ? 32 : 0) | (x == 0 ? 64 : 128);
+    mi[x].flag = 1 | (proper ? 2 : 0) | (b.strand ? 32 : 0) | (x == 0 ? 64 : 128);
     const int cb = x == 0 ? c1 : c0;
-    mi.rnext = c0 == c1 ? "=" : ref_.names[cb];
-    mi.pnext = b.ref_pos - static_cast<int64_t>(ref_.offsets[cb]) + 1;
-    if (c0 == c1) mi.tlen = tlen(a, b, x);
+    mi[x].rnext = c0 == c1 ? "=" : ref_.names[cb];
+    mi[x].pnext = b.ref_pos - static_cast<int64_t>(ref_.offsets[cb]) + 1;
+    if (c0 == c1) mi[x].tlen = tlen(a, b, x);
     const int L = static_cast<int>(rec[x].seq.size());
-    const int mapq = mapq_pair(a, b, se[x], L, opt_.s2_limit);
+    mapq[x] = mapq_pair(a, b, se[x], L, opt_.s2_limit);
     if (placed) {
-      Placement pl = certified_placement(a, b, se[x], L, mapq, opt_.s2_limit);
+      Placement& pl = placed[x];
+      pl = certified_placement(a, b, se[x], L, mapq[x], opt_.s2_limit);
       keep_within_contigs(pl, ref_);
       pl.mapq = iv_mapq(pl, opt_.iv_mapq);
-      sam_line(a, rec[x], ref_, pl.mapq, mi, out.sam, interval_tags(pl, ref_, opt_).c_str());
-      placed[x] = pl;
-    } else {
-      sam_line(a, rec[x], ref_, mapq, mi, out.sam);
+      if (opt_.mapq_cal) pl.mapq = cal_mapq(pl.r, pl.mapq);
     }
   }
+  if (!placed) {
+    for (int x = 0; x < 2; ++x) sam_line(r[x], rec[x], ref_, mapq[x], mi[x], out.sam);
+    return proper;
+  }
+  // Both records are written, mapped, whatever keep_within_contigs says: the
+  // pair model reads them so.
+  T2tView tv[2];
+  if (t2t)
+    for (int x = 0; x < 2; ++x) tv[x] = t2t_view(t2t[x], placed[x], ref_);
+  if (opt_.mapq_pair) {
+    Placement as[2] = {placed[0], placed[1]};
+    as[0].mapped = as[1].mapped = true;
+    pair_model_mapq(as, proper, c0 == c1 ? std::llabs(mi[0].tlen) : 0, t2t ? tv : nullptr);
+    placed[0].mapq = as[0].mapq;
+    placed[1].mapq = as[1].mapq;
+  }
+  for (int x = 0; x < 2; ++x)
+    sam_line(r[x], rec[x], ref_, placed[x].mapq, mi[x], out.sam,
+             interval_tags(placed[x], ref_, opt_, t2t ? &tv[x] : nullptr).c_str());
   return proper;
 }
 
@@ -557,27 +592,55 @@ int RecordWriter::single_interval(const Result& r0, const RepeatOut* iv, const F
 
 bool RecordWriter::pair_interval(const Result* r0, const Result* se_res, const RepeatOut* const* iv,
                                  const uint8_t* const* codes, const FastqRecord* rec, PairScratch& sc, Records& out,
-                                 int* reason, Placement* placed) const {
+                                 int* reason, Placement* placed, const T2tLift* t2t) const {
   const Result r[2] = {mate_as_reported(r0[0], ref_), mate_as_reported(r0[1], ref_)};
-  if (r[0].certified == 1 && r[1].certified == 1) {
-    reason[0] = reason[1] = kOk;
-    return certified_pair(r, se_res, rec, out, placed);
-  }
-  // A mate without a certificate: both placed from their single-end
-  // placements and tier R outputs, with mate rescue in the pair window.
+  auto contig_of = [&](int64_t pos) { return ref_.contig_of(pos); };
   Placement se[2];
   int L[2];
-  for (int x = 0; x < 2; ++x) {
-    reason[x] = interval_reason(r[x]);
-    L[x] = static_cast<int>(rec[x].seq.size());
-    se[x] = place_single(r[x], r[x].certified == 1 ? mapq_of(r[x], L[x], opt_.s2_limit) : 0, iv[x], L[x]);
-    keep_within_contigs(se[x], ref_);
+  bool proper;
+  if (r[0].certified == 1 && r[1].certified == 1) {
+    reason[0] = reason[1] = kOk;
+    if (!opt_.iv_pair_all || is_proper(r[0], r[1], ref_, opt_.max_dist))
+      return certified_pair(r, se_res, rec, out, placed, t2t);
+    // --iv-pair all: both mates certified, but not as a proper pair. Each
+    // mate's best alignment in the other's proper-pair window, as for a
+    // mate without a certificate (BWA-MEM's rule): the pair is taken if it
+    // beats the two single-end bests minus the unpaired penalty, and the
+    // moved mate becomes MR. Otherwise the certified records are written.
+    const RepeatOut* none[2] = {nullptr, nullptr};
+    for (int x = 0; x < 2; ++x) {
+      L[x] = static_cast<int>(rec[x].seq.size());
+      const int mapq = mapq_pair(r[x], r[1 - x], se_res[x], L[x], opt_.s2_limit);
+      se[x] = certified_placement(r[x], r[1 - x], se_res[x], L[x], mapq, opt_.s2_limit);
+      keep_within_contigs(se[x], ref_);
+    }
+    if (!place_pair(view_, opt_.max_dist, 12, se, none, codes, L, sc, contig_of, placed))
+      return certified_pair(r, se_res, rec, out, placed, t2t);
+    proper = true;
+  } else {
+    // A mate without a certificate: both placed from their single-end
+    // placements and tier R outputs, with mate rescue in the pair window.
+    for (int x = 0; x < 2; ++x) {
+      reason[x] = interval_reason(r[x]);
+      L[x] = static_cast<int>(rec[x].seq.size());
+      se[x] = place_single(r[x], r[x].certified == 1 ? mapq_of(r[x], L[x], opt_.s2_limit) : 0, iv[x], L[x]);
+      keep_within_contigs(se[x], ref_);
+    }
+    proper = place_pair(view_, opt_.max_dist, 12, se, iv, codes, L, sc, contig_of, placed);
   }
-  auto contig_of = [&](int64_t pos) { return ref_.contig_of(pos); };
-  const bool proper = place_pair(view_, opt_.max_dist, 12, se, iv, codes, L, sc, contig_of, placed);
-  for (int x = 0; x < 2; ++x) placed[x].mapq = iv_mapq(placed[x], opt_.iv_mapq);
+  for (int x = 0; x < 2; ++x) {
+    placed[x].mapq = iv_mapq(placed[x], opt_.iv_mapq);
+    if (opt_.mapq_cal && placed[x].mapped) placed[x].mapq = cal_mapq(placed[x].r, placed[x].mapq);
+  }
   const int c0 = placed[0].mapped ? ref_.contig_of(placed[0].r.ref_pos) : -1;
   const int c1 = placed[1].mapped ? ref_.contig_of(placed[1].r.ref_pos) : -1;
+  T2tView tv[2];
+  if (t2t)
+    for (int x = 0; x < 2; ++x) tv[x] = t2t_view(t2t[x], placed[x], ref_);
+  if (opt_.mapq_pair) {
+    const bool both = placed[0].mapped && placed[1].mapped && c0 == c1;
+    pair_model_mapq(placed, proper, both ? std::llabs(tlen(placed[0].r, placed[1].r, 0)) : 0, t2t ? tv : nullptr);
+  }
   for (int x = 0; x < 2; ++x) {
     const Placement& a = placed[x];
     const Placement& b = placed[1 - x];
@@ -593,7 +656,7 @@ bool RecordWriter::pair_interval(const Result* r0, const Result* se_res, const R
       mi.pnext = a.r.ref_pos - static_cast<int64_t>(ref_.offsets[ca]) + 1;
     }
     if (a.mapped && b.mapped && ca == cb) mi.tlen = tlen(a.r, b.r, x);
-    const std::string t = interval_tags(a, ref_, opt_);
+    const std::string t = interval_tags(a, ref_, opt_, t2t ? &tv[x] : nullptr);
     if (a.mapped) sam_line(a.r, rec[x], ref_, a.mapq, mi, out.sam, t.c_str());
     else sam_unmapped(rec[x], ref_, mi, b.mapped ? b.r.ref_pos : 0, b.mapped ? cb : -1, t.c_str(), out.sam);
   }
