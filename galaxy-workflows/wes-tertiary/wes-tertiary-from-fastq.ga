@@ -1,0 +1,1566 @@
+{
+    "name": "WES tertiary analysis from FASTQ (v1)",
+    "a_galaxy_workflow": "true",
+    "format-version": "0.1",
+    "annotation": "Germline whole exome sequencing (WES) analysis from paired-end FASTQ to a prioritised, annotated variant table.\n\nRuns once per sample of a list:paired collection (element identifiers are used as sample names):\n\n1. Read QC (FastQC) and adapter/quality trimming (fastp).\n2. Alignment to the reference with BWA-MEM (read groups set from the sample name), duplicate marking\n   (Picard MarkDuplicates) and alignment statistics (samtools stats).\n3. Exome capture QC: Picard CollectHsMetrics (on-target rate, fold-80, % target bases >= 20x) and per-target\n   coverage with mosdepth (bases at 1/10/20/30/50x per target, for gap analysis).\n4. Germline variant calling with FreeBayes (standard input filters: MAPQ >= 30, BQ >= 20).\n5. Tertiary analysis, the embedded \"WES tertiary analysis from VCF (v2)\" workflow: normalisation, restriction\n   to the padded targets, quality filtering, ClinVar + gnomAD + SnpEff annotation, prioritisation and tables.\n6. One MultiQC report for all samples (FastQC, fastp, Picard, samtools, bcftools stats, SnpEff).\n\nReference FASTA, target BED, ClinVar and gnomAD must use the same genome build and chromosome naming.\n",
+    "tags": [
+        "WES",
+        "exome",
+        "germline",
+        "variant-calling",
+        "variant-annotation",
+        "variant-prioritization",
+        "tertiary-analysis"
+    ],
+    "license": "MIT",
+    "release": "0.1",
+    "uuid": "e4cd5a16-74be-5629-a676-4542c043ea15",
+    "comments": [],
+    "steps": {
+        "0": {
+            "id": 0,
+            "name": "Paired-end reads",
+            "type": "data_collection_input",
+            "label": "Paired-end reads",
+            "annotation": "list:paired collection with one element per sample (forward/reverse FASTQ). The element identifier becomes the sample name in the BAM read groups and the VCF.",
+            "tool_state": "{\"name\": \"Paired-end reads\", \"format\": [\"fastqsanger\", \"fastqsanger.gz\"], \"collection_type\": \"list:paired\"}",
+            "position": {
+                "top": 0,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "Paired-end reads",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "1": {
+            "id": 1,
+            "name": "Reference genome (FASTA)",
+            "type": "data_input",
+            "label": "Reference genome (FASTA)",
+            "annotation": "Reference genome (uncompressed FASTA), e.g. GRCh38/hg38 without ALT contigs (analysis set).",
+            "tool_state": "{\"name\": \"Reference genome (FASTA)\", \"format\": [\"fasta\"]}",
+            "position": {
+                "top": 140,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "Reference genome (FASTA)",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "2": {
+            "id": 2,
+            "name": "Exome target regions (BED)",
+            "type": "data_input",
+            "label": "Exome target regions (BED)",
+            "annotation": "Exome capture target regions (BED) of the enrichment kit, same genome build as the reference.",
+            "tool_state": "{\"name\": \"Exome target regions (BED)\", \"format\": [\"bed\"]}",
+            "position": {
+                "top": 280,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "Exome target regions (BED)",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "3": {
+            "id": 3,
+            "name": "Target padding (bp)",
+            "type": "parameter_input",
+            "label": "Target padding (bp)",
+            "annotation": "Bases added on both sides of every target region before restricting the calls (keeps splice-site variants).",
+            "tool_state": "{\"name\": \"Target padding (bp)\", \"parameter_type\": \"integer\", \"default\": 50}",
+            "position": {
+                "top": 420,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "Target padding (bp)",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "4": {
+            "id": 4,
+            "name": "SnpEff database",
+            "type": "data_input",
+            "label": "SnpEff database",
+            "annotation": "SnpEff genome database (SnpEff 5.x), e.g. GRCh38.105 created with the \"SnpEff download\" tool.",
+            "tool_state": "{\"name\": \"SnpEff database\", \"format\": [\"snpeffdb\"]}",
+            "position": {
+                "top": 560,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "SnpEff database",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "5": {
+            "id": 5,
+            "name": "ClinVar (VCF)",
+            "type": "data_input",
+            "label": "ClinVar (VCF)",
+            "annotation": "ClinVar VCF (clinvar.vcf.gz from NCBI) for the same build. Chromosome names must match the reference.",
+            "tool_state": "{\"name\": \"ClinVar (VCF)\", \"format\": [\"vcf\", \"vcf_bgzip\", \"bcf\"]}",
+            "position": {
+                "top": 700,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "ClinVar (VCF)",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "6": {
+            "id": 6,
+            "name": "Population allele frequencies (VCF)",
+            "type": "data_input",
+            "label": "Population allele frequencies (VCF)",
+            "annotation": "Population allele frequency VCF/BCF with INFO/AF, e.g. gnomAD exomes sites. A BCF with index is fastest; an AF-only, target-restricted file keeps it small.",
+            "tool_state": "{\"name\": \"Population allele frequencies (VCF)\", \"format\": [\"vcf\", \"vcf_bgzip\", \"bcf\"]}",
+            "position": {
+                "top": 840,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "Population allele frequencies (VCF)",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "7": {
+            "id": 7,
+            "name": "Quality filter (bcftools expression)",
+            "type": "parameter_input",
+            "label": "Quality filter (bcftools expression)",
+            "annotation": "bcftools filter --include expression applied to on-target calls (records failing it are removed).",
+            "tool_state": "{\"name\": \"Quality filter (bcftools expression)\", \"parameter_type\": \"text\", \"default\": \"(FILTER=\\\"PASS\\\" || FILTER=\\\".\\\") && QUAL>=20 && FMT/DP>=10\"}",
+            "position": {
+                "top": 980,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "Quality filter (bcftools expression)",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "8": {
+            "id": 8,
+            "name": "Prioritization filter (SnpSift expression)",
+            "type": "parameter_input",
+            "label": "Prioritization filter (SnpSift expression)",
+            "annotation": "SnpSift filter expression that selects candidate variants from the annotated calls.",
+            "tool_state": "{\"name\": \"Prioritization filter (SnpSift expression)\", \"parameter_type\": \"text\", \"default\": \"(CLNSIG =~ 'athogenic') | (((ANN[*].IMPACT = 'HIGH') | (ANN[*].IMPACT = 'MODERATE')) & ((! exists gnomAD_AF) | (gnomAD_AF < 0.01)))\"}",
+            "position": {
+                "top": 1120,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "Prioritization filter (SnpSift expression)",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "9": {
+            "id": 9,
+            "name": "toolshed.g2.bx.psu.edu/repos/devteam/fastqc/fastqc/0.74+galaxy1",
+            "type": "tool",
+            "label": "fastqc_raw",
+            "annotation": "Quality control of the raw reads.",
+            "tool_state": "{\"__page__\": 0, \"nogroup\": false, \"kmers\": 7}",
+            "tool_id": "toolshed.g2.bx.psu.edu/repos/devteam/fastqc/fastqc/0.74+galaxy1",
+            "tool_version": "0.74+galaxy1",
+            "position": {
+                "top": 0,
+                "left": 300
+            },
+            "input_connections": {
+                "input_file": [
+                    {
+                        "id": 0,
+                        "output_name": "output"
+                    }
+                ]
+            },
+            "inputs": [],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {
+                "RenameDatasetActionhtml_file": {
+                    "action_type": "RenameDatasetAction",
+                    "output_name": "html_file",
+                    "action_arguments": {
+                        "newname": "FastQC report"
+                    }
+                },
+                "HideDatasetActiontext_file": {
+                    "action_type": "HideDatasetAction",
+                    "output_name": "text_file",
+                    "action_arguments": {}
+                }
+            }
+        },
+        "10": {
+            "id": 10,
+            "name": "__FLATTEN__",
+            "type": "tool",
+            "label": "flatten_fastqc",
+            "annotation": "Flatten the per-sample/per-mate FastQC results into one list for MultiQC.",
+            "tool_state": "{\"__page__\": 0, \"join_identifier\": \"_\"}",
+            "tool_id": "__FLATTEN__",
+            "tool_version": "1.0.0",
+            "position": {
+                "top": 0,
+                "left": 560
+            },
+            "input_connections": {
+                "input": [
+                    {
+                        "id": 9,
+                        "output_name": "text_file"
+                    }
+                ]
+            },
+            "inputs": [],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {
+                "HideDatasetActionoutput": {
+                    "action_type": "HideDatasetAction",
+                    "output_name": "output",
+                    "action_arguments": {}
+                }
+            }
+        },
+        "11": {
+            "id": 11,
+            "name": "toolshed.g2.bx.psu.edu/repos/iuc/fastp/fastp/1.4.0+galaxy0",
+            "type": "tool",
+            "label": "trimming",
+            "annotation": "Adapter and quality trimming (fastp, paired-end adapter detection).",
+            "tool_state": "{\"__page__\": 0, \"single_paired\": {\"single_paired_selector\": \"paired_collection\", \"merge_reads\": {\"merge\": \"\"}, \"adapter_trimming_options\": {\"disable_adapter_trimming\": false, \"detect_adapter_for_pe\": true}}, \"output_options\": {\"report_html\": true, \"report_json\": true}}",
+            "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/fastp/fastp/1.4.0+galaxy0",
+            "tool_version": "1.4.0+galaxy0",
+            "position": {
+                "top": 220,
+                "left": 300
+            },
+            "input_connections": {
+                "single_paired|paired_input": [
+                    {
+                        "id": 0,
+                        "output_name": "output"
+                    }
+                ]
+            },
+            "inputs": [],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {
+                "HideDatasetActionoutput_paired_coll": {
+                    "action_type": "HideDatasetAction",
+                    "output_name": "output_paired_coll",
+                    "action_arguments": {}
+                },
+                "RenameDatasetActionreport_html": {
+                    "action_type": "RenameDatasetAction",
+                    "output_name": "report_html",
+                    "action_arguments": {
+                        "newname": "fastp report"
+                    }
+                },
+                "HideDatasetActionreport_json": {
+                    "action_type": "HideDatasetAction",
+                    "output_name": "report_json",
+                    "action_arguments": {}
+                }
+            }
+        },
+        "12": {
+            "id": 12,
+            "name": "toolshed.g2.bx.psu.edu/repos/devteam/bwa/bwa_mem/0.7.19+galaxy2",
+            "type": "tool",
+            "label": "mapping",
+            "annotation": "Align with BWA-MEM. The index is built from the history FASTA inside each job; switch \"Reference genome\" to a built-in (cached) BWA index in this step to skip indexing on servers that have one.",
+            "tool_state": "{\"__page__\": 0, \"reference_source\": {\"reference_source_selector\": \"history\", \"index_a\": \"auto\"}, \"fastq_input\": {\"fastq_input_selector\": \"paired_collection\", \"iset_stats\": \"\"}, \"rg\": {\"rg_selector\": \"set\", \"read_group_id_conditional\": {\"do_auto_name\": \"true\"}, \"read_group_sm_conditional\": {\"do_auto_name\": \"true\"}, \"read_group_lb_conditional\": {\"do_auto_name\": \"true\"}, \"PL\": \"ILLUMINA\", \"CN\": \"\", \"DS\": \"\", \"DT\": \"\", \"FO\": \"\", \"KS\": \"\", \"PG\": \"\", \"PI\": null, \"PU\": \"\"}, \"analysis_type\": {\"analysis_type_selector\": \"illumina\"}, \"output_sort\": \"coordinate\"}",
+            "tool_id": "toolshed.g2.bx.psu.edu/repos/devteam/bwa/bwa_mem/0.7.19+galaxy2",
+            "tool_version": "0.7.19+galaxy2",
+            "position": {
+                "top": 220,
+                "left": 560
+            },
+            "input_connections": {
+                "reference_source|ref_file": [
+                    {
+                        "id": 1,
+                        "output_name": "output"
+                    }
+                ],
+                "fastq_input|fastq_input1": [
+                    {
+                        "id": 11,
+                        "output_name": "output_paired_coll"
+                    }
+                ]
+            },
+            "inputs": [],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {
+                "HideDatasetActionbam_output": {
+                    "action_type": "HideDatasetAction",
+                    "output_name": "bam_output",
+                    "action_arguments": {}
+                }
+            }
+        },
+        "13": {
+            "id": 13,
+            "name": "toolshed.g2.bx.psu.edu/repos/devteam/picard/picard_MarkDuplicates/3.1.1.0",
+            "type": "tool",
+            "label": "mark_duplicates",
+            "annotation": "Mark PCR/optical duplicates (kept in the BAM, flagged 0x400; FreeBayes ignores them).",
+            "tool_state": "{\"__page__\": 0, \"remove_duplicates\": false, \"assume_sorted\": true, \"duplicate_scoring_strategy\": \"SUM_OF_BASE_QUALITIES\", \"read_name_regex\": \"\", \"optical_duplicate_pixel_distance\": 100, \"barcode_tag\": \"\", \"validation_stringency\": \"LENIENT\"}",
+            "tool_id": "toolshed.g2.bx.psu.edu/repos/devteam/picard/picard_MarkDuplicates/3.1.1.0",
+            "tool_version": "3.1.1.0",
+            "position": {
+                "top": 220,
+                "left": 820
+            },
+            "input_connections": {
+                "inputFile": [
+                    {
+                        "id": 12,
+                        "output_name": "bam_output"
+                    }
+                ]
+            },
+            "inputs": [],
+            "outputs": [],
+            "workflow_outputs": [
+                {
+                    "label": "deduplicated_bam",
+                    "output_name": "outFile"
+                }
+            ],
+            "post_job_actions": {
+                "RenameDatasetActionoutFile": {
+                    "action_type": "RenameDatasetAction",
+                    "output_name": "outFile",
+                    "action_arguments": {
+                        "newname": "Aligned reads (duplicates marked)"
+                    }
+                },
+                "HideDatasetActionmetrics_file": {
+                    "action_type": "HideDatasetAction",
+                    "output_name": "metrics_file",
+                    "action_arguments": {}
+                }
+            }
+        },
+        "14": {
+            "id": 14,
+            "name": "toolshed.g2.bx.psu.edu/repos/devteam/samtools_stats/samtools_stats/2.0.9",
+            "type": "tool",
+            "label": "alignment_stats",
+            "annotation": "Alignment statistics for MultiQC.",
+            "tool_state": "{\"__page__\": 0, \"coverage_cond\": {\"coverage_select\": \"no\"}, \"remove_dups\": false, \"split_output_cond\": {\"split_output_selector\": \"no\"}, \"filter_by_flags\": {\"filter_flags\": \"nofilter\"}, \"addref_cond\": {\"addref_select\": \"no\"}, \"cond_region\": {\"select_region\": \"no\"}, \"sparse\": false, \"remove_overlaps\": false}",
+            "tool_id": "toolshed.g2.bx.psu.edu/repos/devteam/samtools_stats/samtools_stats/2.0.9",
+            "tool_version": "2.0.9",
+            "position": {
+                "top": 120,
+                "left": 1080
+            },
+            "input_connections": {
+                "input": [
+                    {
+                        "id": 13,
+                        "output_name": "outFile"
+                    }
+                ]
+            },
+            "inputs": [],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {
+                "HideDatasetActionoutput": {
+                    "action_type": "HideDatasetAction",
+                    "output_name": "output",
+                    "action_arguments": {}
+                }
+            }
+        },
+        "15": {
+            "id": 15,
+            "name": "toolshed.g2.bx.psu.edu/repos/devteam/picard/picard_BedToIntervalList/3.1.1.0",
+            "type": "tool",
+            "label": "target_intervals",
+            "annotation": "Convert the target BED to a Picard interval list (sequence dictionary from the reference).",
+            "tool_state": "{\"__page__\": 0, \"reference_source\": {\"reference_source_selector\": \"history\"}}",
+            "tool_id": "toolshed.g2.bx.psu.edu/repos/devteam/picard/picard_BedToIntervalList/3.1.1.0",
+            "tool_version": "3.1.1.0",
+            "position": {
+                "top": 440,
+                "left": 300
+            },
+            "input_connections": {
+                "reference_source|ref_file": [
+                    {
+                        "id": 1,
+                        "output_name": "output"
+                    }
+                ],
+                "inputFile": [
+                    {
+                        "id": 2,
+                        "output_name": "output"
+                    }
+                ]
+            },
+            "inputs": [],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {
+                "HideDatasetActionoutFile": {
+                    "action_type": "HideDatasetAction",
+                    "output_name": "outFile",
+                    "action_arguments": {}
+                }
+            }
+        },
+        "16": {
+            "id": 16,
+            "name": "toolshed.g2.bx.psu.edu/repos/devteam/picard/picard_CollectHsMetrics/3.1.1",
+            "type": "tool",
+            "label": "hs_metrics",
+            "annotation": "Hybrid-selection (exome capture) metrics; the target BED is used as both bait and target intervals.",
+            "tool_state": "{\"__page__\": 0, \"minimum_mapping_quality\": 20, \"minimum_base_quality\": 20, \"coverage_cap\": 200, \"clip_overlapping_reads\": true, \"validation_stringency\": \"LENIENT\"}",
+            "tool_id": "toolshed.g2.bx.psu.edu/repos/devteam/picard/picard_CollectHsMetrics/3.1.1",
+            "tool_version": "3.1.1",
+            "position": {
+                "top": 320,
+                "left": 1080
+            },
+            "input_connections": {
+                "inputFile": [
+                    {
+                        "id": 13,
+                        "output_name": "outFile"
+                    }
+                ],
+                "baitFile": [
+                    {
+                        "id": 15,
+                        "output_name": "outFile"
+                    }
+                ],
+                "targetFile": [
+                    {
+                        "id": 15,
+                        "output_name": "outFile"
+                    }
+                ]
+            },
+            "inputs": [],
+            "outputs": [],
+            "workflow_outputs": [
+                {
+                    "label": "hs_metrics",
+                    "output_name": "outFile"
+                }
+            ],
+            "post_job_actions": {
+                "RenameDatasetActionoutFile": {
+                    "action_type": "RenameDatasetAction",
+                    "output_name": "outFile",
+                    "action_arguments": {
+                        "newname": "Exome capture metrics (HsMetrics)"
+                    }
+                }
+            }
+        },
+        "17": {
+            "id": 17,
+            "name": "toolshed.g2.bx.psu.edu/repos/iuc/mosdepth/mosdepth/0.3.14+galaxy0",
+            "type": "tool",
+            "label": "target_coverage",
+            "annotation": "Per-target coverage (mosdepth) with the number of bases at 1/10/20/30/50x for each target.",
+            "tool_state": "{\"__page__\": 0, \"per_base_coverage\": false, \"window\": {\"window_mode\": \"bed\"}, \"advanced\": {\"options\": \"yes\", \"chrom\": \"\", \"exclude_flag\": 1796, \"no_fast\": false, \"fragment_mode\": false, \"mapq\": 20, \"thresholds\": \"1,10,20,30,50\", \"use_median\": false, \"read_groups\": \"\", \"quantize\": []}}",
+            "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/mosdepth/mosdepth/0.3.14+galaxy0",
+            "tool_version": "0.3.14+galaxy0",
+            "position": {
+                "top": 520,
+                "left": 1080
+            },
+            "input_connections": {
+                "input_alignment": [
+                    {
+                        "id": 13,
+                        "output_name": "outFile"
+                    }
+                ],
+                "window|region_file": [
+                    {
+                        "id": 2,
+                        "output_name": "output"
+                    }
+                ]
+            },
+            "inputs": [],
+            "outputs": [],
+            "workflow_outputs": [
+                {
+                    "label": "target_coverage_summary",
+                    "output_name": "output_summary"
+                },
+                {
+                    "label": "target_coverage_thresholds",
+                    "output_name": "output_thresholds_bed"
+                }
+            ],
+            "post_job_actions": {
+                "RenameDatasetActionoutput_summary": {
+                    "action_type": "RenameDatasetAction",
+                    "output_name": "output_summary",
+                    "action_arguments": {
+                        "newname": "Coverage summary (mosdepth)"
+                    }
+                },
+                "RenameDatasetActionoutput_thresholds_bed": {
+                    "action_type": "RenameDatasetAction",
+                    "output_name": "output_thresholds_bed",
+                    "action_arguments": {
+                        "newname": "Per-target coverage thresholds (mosdepth)"
+                    }
+                },
+                "HideDatasetActionoutput_global_dist": {
+                    "action_type": "HideDatasetAction",
+                    "output_name": "output_global_dist",
+                    "action_arguments": {}
+                },
+                "HideDatasetActionoutput_region_dist": {
+                    "action_type": "HideDatasetAction",
+                    "output_name": "output_region_dist",
+                    "action_arguments": {}
+                },
+                "HideDatasetActionoutput_regions_bed": {
+                    "action_type": "HideDatasetAction",
+                    "output_name": "output_regions_bed",
+                    "action_arguments": {}
+                }
+            }
+        },
+        "18": {
+            "id": 18,
+            "name": "toolshed.g2.bx.psu.edu/repos/devteam/freebayes/freebayes/1.3.10+galaxy1",
+            "type": "tool",
+            "label": "variant_calling",
+            "annotation": "Germline calling with FreeBayes per sample, parallelised per chromosome. Calls are restricted to the padded targets afterwards (limiting FreeBayes by an exome BED would start one process per target).",
+            "tool_state": "{\"__page__\": 0, \"reference_source\": {\"reference_source_selector\": \"history\", \"batchmode\": {\"processmode\": \"individual\"}}, \"target_limit_type\": {\"target_limit_type_selector\": \"do_not_limit\"}, \"coverage_options\": {\"coverage_options_selector\": \"do_not_set\"}, \"options_type\": {\"options_type_selector\": \"simple_w_filters\"}, \"output_options\": {\"flavor\": \"vcf\"}}",
+            "tool_id": "toolshed.g2.bx.psu.edu/repos/devteam/freebayes/freebayes/1.3.10+galaxy1",
+            "tool_version": "1.3.10+galaxy1",
+            "position": {
+                "top": 220,
+                "left": 1340
+            },
+            "input_connections": {
+                "reference_source|batchmode|input_bams": [
+                    {
+                        "id": 13,
+                        "output_name": "outFile"
+                    }
+                ],
+                "reference_source|ref_file": [
+                    {
+                        "id": 1,
+                        "output_name": "output"
+                    }
+                ]
+            },
+            "inputs": [],
+            "outputs": [],
+            "workflow_outputs": [
+                {
+                    "label": "raw_vcf",
+                    "output_name": "output_vcf"
+                }
+            ],
+            "post_job_actions": {
+                "RenameDatasetActionoutput_vcf": {
+                    "action_type": "RenameDatasetAction",
+                    "output_name": "output_vcf",
+                    "action_arguments": {
+                        "newname": "Raw variant calls (FreeBayes)"
+                    }
+                }
+            }
+        },
+        "19": {
+            "id": 19,
+            "type": "subworkflow",
+            "label": "tertiary",
+            "annotation": "Tertiary analysis of each sample's VCF (embedded workflow \"WES tertiary analysis from VCF (v2)\").",
+            "tool_state": "{}",
+            "position": {
+                "top": 220,
+                "left": 1600
+            },
+            "input_connections": {
+                "Variant calls (VCF)": [
+                    {
+                        "id": 18,
+                        "output_name": "output_vcf",
+                        "input_subworkflow_step_id": 0
+                    }
+                ],
+                "Reference genome (FASTA)": [
+                    {
+                        "id": 1,
+                        "output_name": "output",
+                        "input_subworkflow_step_id": 1
+                    }
+                ],
+                "Exome target regions (BED)": [
+                    {
+                        "id": 2,
+                        "output_name": "output",
+                        "input_subworkflow_step_id": 2
+                    }
+                ],
+                "Target padding (bp)": [
+                    {
+                        "id": 3,
+                        "output_name": "output",
+                        "input_subworkflow_step_id": 3
+                    }
+                ],
+                "SnpEff database": [
+                    {
+                        "id": 4,
+                        "output_name": "output",
+                        "input_subworkflow_step_id": 4
+                    }
+                ],
+                "ClinVar (VCF)": [
+                    {
+                        "id": 5,
+                        "output_name": "output",
+                        "input_subworkflow_step_id": 5
+                    }
+                ],
+                "Population allele frequencies (VCF)": [
+                    {
+                        "id": 6,
+                        "output_name": "output",
+                        "input_subworkflow_step_id": 6
+                    }
+                ],
+                "Quality filter (bcftools expression)": [
+                    {
+                        "id": 7,
+                        "output_name": "output",
+                        "input_subworkflow_step_id": 7
+                    }
+                ],
+                "Prioritization filter (SnpSift expression)": [
+                    {
+                        "id": 8,
+                        "output_name": "output",
+                        "input_subworkflow_step_id": 8
+                    }
+                ]
+            },
+            "inputs": [],
+            "outputs": [],
+            "workflow_outputs": [
+                {
+                    "label": "annotated_vcf",
+                    "output_name": "annotated_vcf"
+                },
+                {
+                    "label": "annotated_table",
+                    "output_name": "annotated_table"
+                },
+                {
+                    "label": "candidate_vcf",
+                    "output_name": "candidate_vcf"
+                },
+                {
+                    "label": "candidate_table",
+                    "output_name": "candidate_table"
+                },
+                {
+                    "label": "snpeff_summary",
+                    "output_name": "snpeff_summary"
+                },
+                {
+                    "label": "variant_stats",
+                    "output_name": "variant_stats"
+                }
+            ],
+            "post_job_actions": {},
+            "subworkflow": {
+                "name": "WES tertiary analysis from VCF (v2)",
+                "a_galaxy_workflow": "true",
+                "format-version": "0.1",
+                "annotation": "Tertiary analysis of a germline whole exome sequencing (WES) VCF.\n\n1. Normalise the calls against the reference: split multiallelic records, left-align indels and drop\n   records whose REF does not match the reference (bcftools norm).\n2. Keep calls inside the exome target regions, padded by a configurable number of bases so that\n   canonical splice sites are retained, and that pass the quality expression (bcftools filter).\n3. Add ClinVar clinical significance (CLNSIG, CLNREVSTAT, CLNDN, CLNSIGCONF, ALLELEID) and the\n   population allele frequency from gnomAD (stored as INFO/gnomAD_AF) with bcftools annotate.\n4. Predict functional consequences (gene, effect, impact, HGVS c./p., LOF/NMD) with SnpEff.\n5. Prioritise candidates with a SnpSift expression. The default keeps ClinVar (likely) pathogenic\n   variants at any frequency, plus rare (gnomAD AF < 1% or absent) HIGH/MODERATE impact variants.\n6. Export tab-separated tables of all annotated variants and of the candidates, and variant statistics\n   (bcftools stats, SnpEff summary) for MultiQC.\n\nMap this workflow over a collection of VCFs to process a batch of samples.\nReference FASTA, target BED, ClinVar and gnomAD must use the same genome build and the same\nchromosome naming (e.g. \"chr1\" vs \"1\") as the VCF.\n",
+                "tags": [
+                    "WES",
+                    "exome",
+                    "variant-annotation",
+                    "variant-prioritization",
+                    "tertiary-analysis"
+                ],
+                "license": "MIT",
+                "release": "0.1",
+                "uuid": "78531b7b-9f58-59a0-8829-d8f09d35d038",
+                "comments": [],
+                "steps": {
+                    "0": {
+                        "id": 0,
+                        "name": "Variant calls (VCF)",
+                        "type": "data_input",
+                        "label": "Variant calls (VCF)",
+                        "annotation": "Germline variant calls for one exome (VCF, bgzipped VCF or BCF).",
+                        "tool_state": "{\"name\": \"Variant calls (VCF)\", \"format\": [\"vcf\", \"vcf_bgzip\", \"bcf\"]}",
+                        "position": {
+                            "top": 0,
+                            "left": 0
+                        },
+                        "input_connections": {},
+                        "inputs": [
+                            {
+                                "name": "Variant calls (VCF)",
+                                "description": ""
+                            }
+                        ],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {}
+                    },
+                    "1": {
+                        "id": 1,
+                        "name": "Reference genome (FASTA)",
+                        "type": "data_input",
+                        "label": "Reference genome (FASTA)",
+                        "annotation": "Reference genome (uncompressed FASTA) that the variants were called against, e.g. GRCh38/hg38.",
+                        "tool_state": "{\"name\": \"Reference genome (FASTA)\", \"format\": [\"fasta\"]}",
+                        "position": {
+                            "top": 120,
+                            "left": 0
+                        },
+                        "input_connections": {},
+                        "inputs": [
+                            {
+                                "name": "Reference genome (FASTA)",
+                                "description": ""
+                            }
+                        ],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {}
+                    },
+                    "2": {
+                        "id": 2,
+                        "name": "Exome target regions (BED)",
+                        "type": "data_input",
+                        "label": "Exome target regions (BED)",
+                        "annotation": "Exome capture target regions (BED) of the enrichment kit, same genome build as the reference.",
+                        "tool_state": "{\"name\": \"Exome target regions (BED)\", \"format\": [\"bed\"]}",
+                        "position": {
+                            "top": 240,
+                            "left": 0
+                        },
+                        "input_connections": {},
+                        "inputs": [
+                            {
+                                "name": "Exome target regions (BED)",
+                                "description": ""
+                            }
+                        ],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {}
+                    },
+                    "3": {
+                        "id": 3,
+                        "name": "Target padding (bp)",
+                        "type": "parameter_input",
+                        "label": "Target padding (bp)",
+                        "annotation": "Bases added on both sides of every target region before restricting the calls (keeps splice-site variants).",
+                        "tool_state": "{\"name\": \"Target padding (bp)\", \"parameter_type\": \"integer\", \"default\": 50}",
+                        "position": {
+                            "top": 360,
+                            "left": 0
+                        },
+                        "input_connections": {},
+                        "inputs": [
+                            {
+                                "name": "Target padding (bp)",
+                                "description": ""
+                            }
+                        ],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {}
+                    },
+                    "4": {
+                        "id": 4,
+                        "name": "SnpEff database",
+                        "type": "data_input",
+                        "label": "SnpEff database",
+                        "annotation": "SnpEff genome database (SnpEff 5.x), e.g. GRCh38.105 created with the \"SnpEff download\" tool.",
+                        "tool_state": "{\"name\": \"SnpEff database\", \"format\": [\"snpeffdb\"]}",
+                        "position": {
+                            "top": 480,
+                            "left": 0
+                        },
+                        "input_connections": {},
+                        "inputs": [
+                            {
+                                "name": "SnpEff database",
+                                "description": ""
+                            }
+                        ],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {}
+                    },
+                    "5": {
+                        "id": 5,
+                        "name": "ClinVar (VCF)",
+                        "type": "data_input",
+                        "label": "ClinVar (VCF)",
+                        "annotation": "ClinVar VCF (clinvar.vcf.gz from NCBI) for the same build. Chromosome names must match the reference.",
+                        "tool_state": "{\"name\": \"ClinVar (VCF)\", \"format\": [\"vcf\", \"vcf_bgzip\", \"bcf\"]}",
+                        "position": {
+                            "top": 600,
+                            "left": 0
+                        },
+                        "input_connections": {},
+                        "inputs": [
+                            {
+                                "name": "ClinVar (VCF)",
+                                "description": ""
+                            }
+                        ],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {}
+                    },
+                    "6": {
+                        "id": 6,
+                        "name": "Population allele frequencies (VCF)",
+                        "type": "data_input",
+                        "label": "Population allele frequencies (VCF)",
+                        "annotation": "Population allele frequency VCF/BCF with INFO/AF, e.g. gnomAD exomes sites. A BCF with index is fastest; an AF-only, target-restricted file keeps it small.",
+                        "tool_state": "{\"name\": \"Population allele frequencies (VCF)\", \"format\": [\"vcf\", \"vcf_bgzip\", \"bcf\"]}",
+                        "position": {
+                            "top": 720,
+                            "left": 0
+                        },
+                        "input_connections": {},
+                        "inputs": [
+                            {
+                                "name": "Population allele frequencies (VCF)",
+                                "description": ""
+                            }
+                        ],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {}
+                    },
+                    "7": {
+                        "id": 7,
+                        "name": "Quality filter (bcftools expression)",
+                        "type": "parameter_input",
+                        "label": "Quality filter (bcftools expression)",
+                        "annotation": "bcftools filter --include expression applied to on-target calls (records failing it are removed).",
+                        "tool_state": "{\"name\": \"Quality filter (bcftools expression)\", \"parameter_type\": \"text\", \"default\": \"(FILTER=\\\"PASS\\\" || FILTER=\\\".\\\") && QUAL>=20 && FMT/DP>=10\"}",
+                        "position": {
+                            "top": 840,
+                            "left": 0
+                        },
+                        "input_connections": {},
+                        "inputs": [
+                            {
+                                "name": "Quality filter (bcftools expression)",
+                                "description": ""
+                            }
+                        ],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {}
+                    },
+                    "8": {
+                        "id": 8,
+                        "name": "Prioritization filter (SnpSift expression)",
+                        "type": "parameter_input",
+                        "label": "Prioritization filter (SnpSift expression)",
+                        "annotation": "SnpSift filter expression that selects candidate variants from the annotated calls.",
+                        "tool_state": "{\"name\": \"Prioritization filter (SnpSift expression)\", \"parameter_type\": \"text\", \"default\": \"(CLNSIG =~ 'athogenic') | (((ANN[*].IMPACT = 'HIGH') | (ANN[*].IMPACT = 'MODERATE')) & ((! exists gnomAD_AF) | (gnomAD_AF < 0.01)))\"}",
+                        "position": {
+                            "top": 960,
+                            "left": 0
+                        },
+                        "input_connections": {},
+                        "inputs": [
+                            {
+                                "name": "Prioritization filter (SnpSift expression)",
+                                "description": ""
+                            }
+                        ],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {}
+                    },
+                    "9": {
+                        "id": 9,
+                        "name": "toolshed.g2.bx.psu.edu/repos/iuc/samtools_faidx/samtools_faidx/1.22+galaxy2",
+                        "type": "tool",
+                        "label": "chrom_sizes",
+                        "annotation": "Index the reference; the .fai provides chromosome lengths for padding.",
+                        "tool_state": "{\"__page__\": 0}",
+                        "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/samtools_faidx/samtools_faidx/1.22+galaxy2",
+                        "tool_version": "1.22+galaxy2",
+                        "position": {
+                            "top": 120,
+                            "left": 300
+                        },
+                        "input_connections": {
+                            "input": [
+                                {
+                                    "id": 1,
+                                    "output_name": "output"
+                                }
+                            ]
+                        },
+                        "inputs": [],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {
+                            "HideDatasetActionoutput": {
+                                "action_type": "HideDatasetAction",
+                                "output_name": "output",
+                                "action_arguments": {}
+                            }
+                        }
+                    },
+                    "10": {
+                        "id": 10,
+                        "name": "toolshed.g2.bx.psu.edu/repos/iuc/bedtools/bedtools_slopbed/2.31.1+galaxy1",
+                        "type": "tool",
+                        "label": "pad_targets",
+                        "annotation": "Pad every target region on both sides (bedtools slop).",
+                        "tool_state": "{\"__page__\": 0, \"genome_file_opts\": {\"genome_file_opts_selector\": \"hist\"}, \"pct\": false, \"strand\": false, \"addition\": {\"addition_select\": \"b\"}, \"header\": false}",
+                        "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bedtools/bedtools_slopbed/2.31.1+galaxy1",
+                        "tool_version": "2.31.1+galaxy1",
+                        "position": {
+                            "top": 240,
+                            "left": 560
+                        },
+                        "input_connections": {
+                            "inputA": [
+                                {
+                                    "id": 2,
+                                    "output_name": "output"
+                                }
+                            ],
+                            "genome_file_opts|genome": [
+                                {
+                                    "id": 9,
+                                    "output_name": "output"
+                                }
+                            ],
+                            "addition|b": [
+                                {
+                                    "id": 3,
+                                    "output_name": "output"
+                                }
+                            ]
+                        },
+                        "inputs": [],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {
+                            "HideDatasetActionoutput": {
+                                "action_type": "HideDatasetAction",
+                                "output_name": "output",
+                                "action_arguments": {}
+                            },
+                            "RenameDatasetActionoutput": {
+                                "action_type": "RenameDatasetAction",
+                                "output_name": "output",
+                                "action_arguments": {
+                                    "newname": "Padded exome targets"
+                                }
+                            }
+                        }
+                    },
+                    "11": {
+                        "id": 11,
+                        "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_norm/bcftools_norm/1.24+galaxy0",
+                        "type": "tool",
+                        "label": "normalize",
+                        "annotation": "Split multiallelic records, left-align/normalise indels, drop records with REF/reference mismatches.",
+                        "tool_state": "{\"__page__\": 0, \"reference_source\": {\"reference_source_selector\": \"history\"}, \"check_ref\": \"wx\", \"atomization\": \"\", \"normalize_indels\": false, \"old_rec_tag\": \"\", \"rm_dup\": \"\", \"multiallelics\": {\"mode\": \"-\", \"multiallelic_types\": \"both\"}, \"sec_restrict\": {\"regions\": {\"regions_src\": \"__none__\"}, \"targets\": {\"targets_src\": \"__none__\"}}, \"sec_default\": {\"site_win\": 1000, \"sort\": \"pos\"}, \"sec_filter_norm\": {\"include\": null, \"exclude\": null}, \"output_type\": \"v\"}",
+                        "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_norm/bcftools_norm/1.24+galaxy0",
+                        "tool_version": "1.24+galaxy0",
+                        "position": {
+                            "top": 0,
+                            "left": 300
+                        },
+                        "input_connections": {
+                            "input_file": [
+                                {
+                                    "id": 0,
+                                    "output_name": "output"
+                                }
+                            ],
+                            "reference_source|fasta_ref": [
+                                {
+                                    "id": 1,
+                                    "output_name": "output"
+                                }
+                            ]
+                        },
+                        "inputs": [],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {
+                            "HideDatasetActionoutput_file": {
+                                "action_type": "HideDatasetAction",
+                                "output_name": "output_file",
+                                "action_arguments": {}
+                            },
+                            "RenameDatasetActionoutput_file": {
+                                "action_type": "RenameDatasetAction",
+                                "output_name": "output_file",
+                                "action_arguments": {
+                                    "newname": "Normalised variants"
+                                }
+                            }
+                        }
+                    },
+                    "12": {
+                        "id": 12,
+                        "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_filter/bcftools_filter/1.24+galaxy0",
+                        "type": "tool",
+                        "label": "target_filter",
+                        "annotation": "Keep calls within the padded targets that satisfy the quality expression.",
+                        "tool_state": "{\"__page__\": 0, \"sec_restrict\": {\"regions\": {\"regions_src\": \"regions_file\", \"regions_overlap\": \"1\"}, \"targets\": {\"targets_src\": \"__none__\"}, \"exclude\": null}, \"sec_filter\": {\"SnpGap\": null, \"IndelGap\": null, \"mode\": null, \"conditional_soft_filter\": {\"selector\": \"disabled\"}, \"select_set_GTs\": null}, \"output_type\": \"v\"}",
+                        "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_filter/bcftools_filter/1.24+galaxy0",
+                        "tool_version": "1.24+galaxy0",
+                        "position": {
+                            "top": 0,
+                            "left": 820
+                        },
+                        "input_connections": {
+                            "input_file": [
+                                {
+                                    "id": 11,
+                                    "output_name": "output_file"
+                                }
+                            ],
+                            "sec_restrict|regions|regions_file": [
+                                {
+                                    "id": 10,
+                                    "output_name": "output"
+                                }
+                            ],
+                            "sec_restrict|include": [
+                                {
+                                    "id": 7,
+                                    "output_name": "output"
+                                }
+                            ]
+                        },
+                        "inputs": [],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {
+                            "HideDatasetActionoutput_file": {
+                                "action_type": "HideDatasetAction",
+                                "output_name": "output_file",
+                                "action_arguments": {}
+                            },
+                            "RenameDatasetActionoutput_file": {
+                                "action_type": "RenameDatasetAction",
+                                "output_name": "output_file",
+                                "action_arguments": {
+                                    "newname": "On-target QC-passed variants"
+                                }
+                            }
+                        }
+                    },
+                    "13": {
+                        "id": 13,
+                        "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
+                        "type": "tool",
+                        "label": "clinvar_annotation",
+                        "annotation": "Transfer ClinVar clinical significance (allele-specific match on CHROM, POS, REF, ALT).",
+                        "tool_state": "{\"__page__\": 0, \"sec_annofile\": {\"columns\": \"CLNSIG,CLNREVSTAT,CLNDN,CLNSIGCONF,ALLELEID\", \"annofile\": {\"anno_fmt\": \"vcf\"}, \"mark_sites\": \"\", \"min_overlap\": \"\", \"set_id\": \"\"}, \"sec_annotate\": {\"remove\": \"\"}, \"sec_restrict\": {\"include\": null, \"exclude\": null, \"collapse\": null, \"regions\": {\"regions_src\": \"__none__\"}, \"samples\": \"\", \"invert_samples\": false, \"invert_samples_file\": false}, \"output_type\": \"v\"}",
+                        "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
+                        "tool_version": "1.24+galaxy0",
+                        "position": {
+                            "top": 0,
+                            "left": 1080
+                        },
+                        "input_connections": {
+                            "input_file": [
+                                {
+                                    "id": 12,
+                                    "output_name": "output_file"
+                                }
+                            ],
+                            "sec_annofile|annofile|annotations": [
+                                {
+                                    "id": 5,
+                                    "output_name": "output"
+                                }
+                            ]
+                        },
+                        "inputs": [],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {
+                            "HideDatasetActionoutput_file": {
+                                "action_type": "HideDatasetAction",
+                                "output_name": "output_file",
+                                "action_arguments": {}
+                            },
+                            "RenameDatasetActionoutput_file": {
+                                "action_type": "RenameDatasetAction",
+                                "output_name": "output_file",
+                                "action_arguments": {
+                                    "newname": "ClinVar-annotated variants"
+                                }
+                            }
+                        }
+                    },
+                    "14": {
+                        "id": 14,
+                        "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
+                        "type": "tool",
+                        "label": "population_annotation",
+                        "annotation": "Transfer the population allele frequency as INFO/gnomAD_AF (keeps the caller's own INFO/AF intact).",
+                        "tool_state": "{\"__page__\": 0, \"sec_annofile\": {\"columns\": \"gnomAD_AF:=AF\", \"annofile\": {\"anno_fmt\": \"vcf\"}, \"mark_sites\": \"\", \"min_overlap\": \"\", \"set_id\": \"\"}, \"sec_annotate\": {\"remove\": \"\"}, \"sec_restrict\": {\"include\": null, \"exclude\": null, \"collapse\": null, \"regions\": {\"regions_src\": \"__none__\"}, \"samples\": \"\", \"invert_samples\": false, \"invert_samples_file\": false}, \"output_type\": \"v\"}",
+                        "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
+                        "tool_version": "1.24+galaxy0",
+                        "position": {
+                            "top": 0,
+                            "left": 1340
+                        },
+                        "input_connections": {
+                            "input_file": [
+                                {
+                                    "id": 13,
+                                    "output_name": "output_file"
+                                }
+                            ],
+                            "sec_annofile|annofile|annotations": [
+                                {
+                                    "id": 6,
+                                    "output_name": "output"
+                                }
+                            ]
+                        },
+                        "inputs": [],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {
+                            "HideDatasetActionoutput_file": {
+                                "action_type": "HideDatasetAction",
+                                "output_name": "output_file",
+                                "action_arguments": {}
+                            },
+                            "RenameDatasetActionoutput_file": {
+                                "action_type": "RenameDatasetAction",
+                                "output_name": "output_file",
+                                "action_arguments": {
+                                    "newname": "ClinVar+gnomAD-annotated variants"
+                                }
+                            }
+                        }
+                    },
+                    "15": {
+                        "id": 15,
+                        "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpeff/snpEff/5.4+galaxy0",
+                        "type": "tool",
+                        "label": "functional_annotation",
+                        "annotation": "Predict variant effects (gene, consequence, impact, HGVS, LOF/NMD) with SnpEff.",
+                        "tool_state": "{\"__page__\": 0, \"inputFormat\": \"vcf\", \"outputFormat\": \"vcf\", \"csvStats\": true, \"generate_stats\": true, \"generate_gene_stats\": false, \"snpDb\": {\"genomeSrc\": \"history\", \"reg_section\": {\"regulation\": null}}, \"udLength\": \"0\", \"spliceSiteSize\": \"2\", \"spliceRegion\": {\"setSpliceRegions\": \"no\"}, \"annotations\": null, \"filterOut\": null, \"filter\": {\"specificEffects\": \"no\"}, \"chr\": \"\", \"noLog\": true}",
+                        "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/snpeff/snpEff/5.4+galaxy0",
+                        "tool_version": "5.4+galaxy0",
+                        "position": {
+                            "top": 0,
+                            "left": 1600
+                        },
+                        "input_connections": {
+                            "input": [
+                                {
+                                    "id": 14,
+                                    "output_name": "output_file"
+                                }
+                            ],
+                            "snpDb|snpeff_db": [
+                                {
+                                    "id": 4,
+                                    "output_name": "output"
+                                }
+                            ]
+                        },
+                        "inputs": [],
+                        "outputs": [],
+                        "workflow_outputs": [
+                            {
+                                "label": "annotated_vcf",
+                                "output_name": "snpeff_output"
+                            },
+                            {
+                                "label": "snpeff_summary",
+                                "output_name": "statsFile"
+                            },
+                            {
+                                "label": "snpeff_csv_stats",
+                                "output_name": "csvFile"
+                            }
+                        ],
+                        "post_job_actions": {
+                            "RenameDatasetActionsnpeff_output": {
+                                "action_type": "RenameDatasetAction",
+                                "output_name": "snpeff_output",
+                                "action_arguments": {
+                                    "newname": "Annotated variants (VCF)"
+                                }
+                            },
+                            "RenameDatasetActionstatsFile": {
+                                "action_type": "RenameDatasetAction",
+                                "output_name": "statsFile",
+                                "action_arguments": {
+                                    "newname": "SnpEff summary"
+                                }
+                            },
+                            "RenameDatasetActioncsvFile": {
+                                "action_type": "RenameDatasetAction",
+                                "output_name": "csvFile",
+                                "action_arguments": {
+                                    "newname": "SnpEff stats (CSV)"
+                                }
+                            },
+                            "ChangeDatatypeActioncsvFile": {
+                                "action_type": "ChangeDatatypeAction",
+                                "output_name": "csvFile",
+                                "action_arguments": {
+                                    "newtype": "csv"
+                                }
+                            }
+                        }
+                    },
+                    "16": {
+                        "id": 16,
+                        "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_filter/5.4.0c+galaxy1",
+                        "type": "tool",
+                        "label": "prioritize",
+                        "annotation": "Select candidate variants with the prioritisation expression.",
+                        "tool_state": "{\"__page__\": 0, \"filter_expression\": {\"type\": \"simple\"}, \"inverse\": false, \"filtering\": {\"mode\": \"entries\"}}",
+                        "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_filter/5.4.0c+galaxy1",
+                        "tool_version": "5.4.0c+galaxy1",
+                        "position": {
+                            "top": 0,
+                            "left": 1860
+                        },
+                        "input_connections": {
+                            "input": [
+                                {
+                                    "id": 15,
+                                    "output_name": "snpeff_output"
+                                }
+                            ],
+                            "filter_expression|expr": [
+                                {
+                                    "id": 8,
+                                    "output_name": "output"
+                                }
+                            ]
+                        },
+                        "inputs": [],
+                        "outputs": [],
+                        "workflow_outputs": [
+                            {
+                                "label": "candidate_vcf",
+                                "output_name": "output"
+                            }
+                        ],
+                        "post_job_actions": {
+                            "RenameDatasetActionoutput": {
+                                "action_type": "RenameDatasetAction",
+                                "output_name": "output",
+                                "action_arguments": {
+                                    "newname": "Candidate variants (VCF)"
+                                }
+                            }
+                        }
+                    },
+                    "17": {
+                        "id": 17,
+                        "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1",
+                        "type": "tool",
+                        "label": "candidate_table",
+                        "annotation": "One row per candidate variant (most severe SnpEff effect, ClinVar, gnomAD, genotype).",
+                        "tool_state": "{\"__page__\": 0, \"extract\": \"CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P LOF NMD gnomAD_AF CLNSIG CLNREVSTAT CLNDN\", \"one_effect_per_line\": false, \"separator\": \",\", \"empty_text\": \".\"}",
+                        "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1",
+                        "tool_version": "5.4.0c+galaxy1",
+                        "position": {
+                            "top": 0,
+                            "left": 2120
+                        },
+                        "input_connections": {
+                            "input": [
+                                {
+                                    "id": 16,
+                                    "output_name": "output"
+                                }
+                            ]
+                        },
+                        "inputs": [],
+                        "outputs": [],
+                        "workflow_outputs": [
+                            {
+                                "label": "candidate_table",
+                                "output_name": "output"
+                            }
+                        ],
+                        "post_job_actions": {
+                            "RenameDatasetActionoutput": {
+                                "action_type": "RenameDatasetAction",
+                                "output_name": "output",
+                                "action_arguments": {
+                                    "newname": "Candidate variants (table)"
+                                }
+                            }
+                        }
+                    },
+                    "18": {
+                        "id": 18,
+                        "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1",
+                        "type": "tool",
+                        "label": "annotated_table",
+                        "annotation": "One row per on-target variant with the same columns as the candidate table.",
+                        "tool_state": "{\"__page__\": 0, \"extract\": \"CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P LOF NMD gnomAD_AF CLNSIG CLNREVSTAT CLNDN\", \"one_effect_per_line\": false, \"separator\": \",\", \"empty_text\": \".\"}",
+                        "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1",
+                        "tool_version": "5.4.0c+galaxy1",
+                        "position": {
+                            "top": 200,
+                            "left": 1860
+                        },
+                        "input_connections": {
+                            "input": [
+                                {
+                                    "id": 15,
+                                    "output_name": "snpeff_output"
+                                }
+                            ]
+                        },
+                        "inputs": [],
+                        "outputs": [],
+                        "workflow_outputs": [
+                            {
+                                "label": "annotated_table",
+                                "output_name": "output"
+                            }
+                        ],
+                        "post_job_actions": {
+                            "RenameDatasetActionoutput": {
+                                "action_type": "RenameDatasetAction",
+                                "output_name": "output",
+                                "action_arguments": {
+                                    "newname": "Annotated variants (table)"
+                                }
+                            }
+                        }
+                    },
+                    "19": {
+                        "id": 19,
+                        "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_stats/bcftools_stats/1.24+galaxy0",
+                        "type": "tool",
+                        "label": "variant_stats",
+                        "annotation": "Variant statistics of the annotated on-target calls (MultiQC compatible).",
+                        "tool_state": "{\"__page__\": 0, \"sec_restrict\": {\"samples\": \"\", \"invert_samples\": false, \"invert_samples_file\": false, \"apply_filters\": \"\", \"collapse\": null, \"regions\": {\"regions_src\": \"__none__\"}, \"targets\": {\"targets_src\": \"__none__\"}, \"include\": null, \"exclude\": null}, \"sec_default\": {\"first_allele_only\": false, \"depth\": {\"set_depth\": \"no\"}, \"reference_source\": {\"reference_source_selector\": \"\"}, \"split_by_ID\": false, \"user_tstv\": \"\", \"afbins\": {\"afbins_select\": \"default\"}, \"af_tag\": \"\", \"verbose\": false}, \"plot_title\": \"\"}",
+                        "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_stats/bcftools_stats/1.24+galaxy0",
+                        "tool_version": "1.24+galaxy0",
+                        "position": {
+                            "top": 400,
+                            "left": 1860
+                        },
+                        "input_connections": {
+                            "input_file": [
+                                {
+                                    "id": 15,
+                                    "output_name": "snpeff_output"
+                                }
+                            ]
+                        },
+                        "inputs": [],
+                        "outputs": [],
+                        "workflow_outputs": [
+                            {
+                                "label": "variant_stats",
+                                "output_name": "output_file"
+                            }
+                        ],
+                        "post_job_actions": {
+                            "RenameDatasetActionoutput_file": {
+                                "action_type": "RenameDatasetAction",
+                                "output_name": "output_file",
+                                "action_arguments": {
+                                    "newname": "Variant statistics (bcftools stats)"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "20": {
+            "id": 20,
+            "name": "toolshed.g2.bx.psu.edu/repos/iuc/multiqc/multiqc/1.35+galaxy5",
+            "type": "tool",
+            "label": "multiqc",
+            "annotation": "One QC report for all samples.",
+            "tool_state": "{\"__page__\": 0, \"results\": [{\"software_cond\": {\"software\": \"fastqc\", \"output\": [{\"type\": \"data\"}]}}, {\"software_cond\": {\"software\": \"fastp\"}}, {\"software_cond\": {\"software\": \"picard\", \"output\": [{\"type\": \"markdups\"}, {\"type\": \"hsmetrics\"}]}}, {\"software_cond\": {\"software\": \"samtools\", \"output\": [{\"type\": {\"type\": \"stats\"}}]}}, {\"software_cond\": {\"software\": \"bcftools\"}}, {\"software_cond\": {\"software\": \"snpeff\"}}], \"title\": \"WES QC report\", \"comment\": \"\", \"flat\": false, \"export\": false}",
+            "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/multiqc/multiqc/1.35+galaxy5",
+            "tool_version": "1.35+galaxy5",
+            "position": {
+                "top": 0,
+                "left": 1860
+            },
+            "input_connections": {
+                "results_0|software_cond|output_0|input": [
+                    {
+                        "id": 10,
+                        "output_name": "output"
+                    }
+                ],
+                "results_1|software_cond|input": [
+                    {
+                        "id": 11,
+                        "output_name": "report_json"
+                    }
+                ],
+                "results_2|software_cond|output_0|input": [
+                    {
+                        "id": 13,
+                        "output_name": "metrics_file"
+                    }
+                ],
+                "results_2|software_cond|output_1|input": [
+                    {
+                        "id": 16,
+                        "output_name": "outFile"
+                    }
+                ],
+                "results_3|software_cond|output_0|type|input": [
+                    {
+                        "id": 14,
+                        "output_name": "output"
+                    }
+                ],
+                "results_4|software_cond|input": [
+                    {
+                        "id": 19,
+                        "output_name": "variant_stats"
+                    }
+                ],
+                "results_5|software_cond|input": [
+                    {
+                        "id": 19,
+                        "output_name": "snpeff_csv_stats"
+                    }
+                ]
+            },
+            "inputs": [],
+            "outputs": [],
+            "workflow_outputs": [
+                {
+                    "label": "multiqc_report",
+                    "output_name": "html_report"
+                },
+                {
+                    "label": "multiqc_stats",
+                    "output_name": "stats"
+                }
+            ],
+            "post_job_actions": {
+                "RenameDatasetActionhtml_report": {
+                    "action_type": "RenameDatasetAction",
+                    "output_name": "html_report",
+                    "action_arguments": {
+                        "newname": "MultiQC report"
+                    }
+                },
+                "RenameDatasetActionstats": {
+                    "action_type": "RenameDatasetAction",
+                    "output_name": "stats",
+                    "action_arguments": {
+                        "newname": "MultiQC general statistics"
+                    }
+                }
+            }
+        }
+    }
+}
