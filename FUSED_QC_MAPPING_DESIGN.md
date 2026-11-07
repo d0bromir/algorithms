@@ -1,6 +1,9 @@
 # One pass from FASTQ to certified alignments: fastp-gpu × CERTA (design)
 
-**Status:** design, nothing built yet (2026-10-29). Repositories:
+**Status:** design (2026-10-29). M0, the fastp library, is built and tested on
+CPU (2026-11-07): branch `claude/m0-libfastp-core` of `d0bromir/fastp`, the
+work repository that `fastp-gpu` is published from (see its `docs/LIBRARY.md`).
+Sections 3.3 and 5 describe the library as built. Repositories:
 [d0bromir/fastp-gpu](https://github.com/d0bromir/fastp-gpu) (v1.3.3-d0bromir,
 QC/trimming, CUDA, nvCOMP, GPU-Direct Storage) and this repository's
 [`certa/`](certa/README.md) (certified mapping, CUDA). Working name of the new
@@ -95,28 +98,43 @@ direction.
 
 ### 3.3 Stage 2: QC (fastp)
 
-fastp's per-pack work (`SingleEndProcessor::processSingleEnd`,
-`PairEndProcessor::processPairEnd`: UMI, front/tail trimming, adapter
+fastp's per-pack work runs unchanged: UMI, front/tail trimming, adapter
 trimming by sequence or PE overlap, polyG/polyX, quality-window trimming,
-filtering, deduplication, pre- and post-filter statistics) runs unchanged,
-with one difference: instead of formatting the surviving reads as FASTQ text
-for its writer, it emits, per read, a **keep flag and a trim window**
-[start, end) into the batch. The read text is not copied. The GPU kernels
-(`filter_and_stats_warp_kernel`, `cuda_trim.cu`) already compute
-`trim_start`, `trim_end` and `polyG_trim_pos` per read (`ReadStatistics`).
+filtering, deduplication, pre- and post-filter statistics. M0 moved it into
+`SeCore` (single-end) and `PeCore` (paired-end). Where fastp appended a read
+to an output string, the core now calls an output object, in the same order. fastp's
+object appends the same text; `certa-qc`'s receives the reads.
 
-The **evaluator** (adapter auto-detection, read length, duplication model)
-reads the start of the input before processing in fastp. Here it runs on the
-first records, buffered, which are then processed normally. For
-reproducibility it uses a fixed number of first records, never "the first
-batch" (whose size is a parameter).
+**Where the trimming happens.** All trimming runs on the CPU and edits the
+read in place. The GPU kernel's `trim_start`, `trim_end` and `polyG_trim_pos`
+(`ReadStatistics`) are computed but not used to trim. So the trim window comes
+from the CPU steps, not from the kernel.
+
+**The trim window.** For each written read the core reports a front offset:
+the bases removed from the read start by UMI extraction, `--trim_front` and
+`--cut_front`. Every other step trims the end only. The written read equals
+the input read from that offset on, for its length, except in two cases:
+
+- `--correction` can change bases in the overlap. The core then marks both
+  mates as modified.
+- Merged reads (`-m`) and overlapped regions are new reads, always modified.
+
+A modified read has to reach the mapper as text, not as a window. Because
+fastp trims in place, the input read is gone after trimming. The core can keep
+a copy of it on request, for the soft clips (section 3.4).
+
+**The evaluator** (read length, adapter detection, two-colour check) reads
+the start of the input files before processing, as in fastp. A library
+session does the same, so its options equal fastp's.
 
 ### 3.4 Stage 3: the bridge
 
 A kernel (or, without a GPU, the existing `encode_batch` loop) writes the
 2-bit codes of each kept read's window straight into the mapper's code
 buffer, with its offset, length and name hash, so `GpuMapper` maps a
-device-resident batch. The one new entry point in CERTA:
+device-resident batch. The windows come from fastp's CPU trimming (section
+3.3) and are uploaded with the batch. Modified reads are uploaded as text.
+The one new entry point in CERTA:
 
 ```cpp
 // certa/src/mapper.h
@@ -207,12 +225,15 @@ Two things the fused program can do that two programs cannot:
 A new repository, `certa-qc`, with both projects as submodules (both MIT,
 fastp's upstream MIT too) and a CMake build:
 
-- **fastp-gpu → `libfastp_core`**: the per-pack processing, the options, the
-  evaluator, the statistics and reports and the GPU kernels as a library; the
-  reader and writer threads stay in fastp's `main`. The per-pack functions
-  write the trim window and keep flag into the batch through a callback
-  instead of formatting FASTQ. fastp-gpu's equivalence suite (654 cases) must
-  still pass, so fastp itself is unchanged.
+- **fastp → `libfastp_core.a`** (built in `d0bromir/fastp`, published to
+  fastp-gpu; M0). Everything except `main.cpp`: option parsing, the evaluator,
+  the per-pack cores, statistics, reports and GPU kernels. The reader and
+  writer threads stay in fastp's processors. Programs include one header,
+  `fastp_core.h`, with its own namespace and plain types (fastp's internal
+  headers put `Read`, `Options` and `Stats` in the global namespace).
+  A `fastpcore::Session` takes fastp's command line, hands out batches,
+  processes them on any worker slot, and writes fastp's reports. Each read
+  comes back as a record with its front offset and modified flag.
 - **CERTA**: `BatchSource` instead of `FastqInput` in `MapPipeline`,
   `GpuMapper::map_device`, soft clips for trimmed bases in `sam_output.cpp`.
 - **`certa-qc`**: the driver (options of both programs, one `--threads`), the
@@ -245,7 +266,7 @@ certa-qc ref.cidx R1.fq.gz R2.fq.gz --gpu --device 1 -t 64 \
 
 | | Deliverable | Done when |
 |---|---|---|
-| M0 | `libfastp_core` split out of fastp-gpu | fastp-gpu's equivalence suite and benchmark validation pass unchanged |
+| M0 | `libfastp_core` split out of fastp (done on CPU, 2026-11-07) | fastp's extended equivalence suite matches the build before the split; the library's reads and reports match fastp's; GPU build still to test on galaxy |
 | M1 | CPU `certa-qc`: ISA-L input, fastp per-pack work and CERTA's CPU passes in the same worker chunks, SAM output | equivalent to the two-step pipeline; no intermediate file |
 | M2 | GPU: one context, device batches, the bridge kernel, `GpuMapper::map_device` | equivalent; each batch's text uploaded once |
 | M3 | nvCOMP / GDS input straight into device batches; BAM output (BGZF pool or nvCOMP) | equivalent; host never holds the text with GDS |
@@ -254,8 +275,9 @@ certa-qc ref.cidx R1.fq.gz R2.fq.gz --gpu --device 1 -t 64 \
 ## 8. Risks
 
 - **fastp's structure.** Its processors own their reader and writer threads and
-  read global options; the library split (M0) is the largest piece of work, and
-  must not change fastp's own output.
+  read global options. M0 kept the threads in the processors and moved only the
+  per-pack work. fastp's output is unchanged on CPU; the GPU build is not yet
+  tested.
 - **CPU contention.** fastp's per-pack work and CERTA's CPU passes share the
   cores, and `--full-cert` and `--bio` move most of CERTA's work to the CPU.
   The worker pool takes both per chunk, so neither starves, but the stage
