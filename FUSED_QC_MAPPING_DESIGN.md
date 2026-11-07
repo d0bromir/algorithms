@@ -4,7 +4,9 @@
 [d0bromir/fastp-gpu](https://github.com/d0bromir/fastp-gpu) (v1.3.3-d0bromir,
 QC/trimming, CUDA, nvCOMP, GPU-Direct Storage) and this repository's
 [`certa/`](certa/README.md) (certified mapping, CUDA). Working name of the new
-program: **`certa-qc`**.
+program: **`certa-qc`**. The product built on it (assay detection,
+fit / not-fit reports, contamination) is planned in
+[FIT_FOR_PURPOSE_PIPELINE.md](FIT_FOR_PURPOSE_PIPELINE.md).
 
 ## 1. Goal
 
