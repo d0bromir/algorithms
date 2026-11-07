@@ -1,0 +1,372 @@
+class: GalaxyWorkflow
+label: WES tertiary analysis from VCF (v2)
+release: "0.1"
+license: MIT
+tags:
+  - WES
+  - exome
+  - variant-annotation
+  - variant-prioritization
+  - tertiary-analysis
+doc: |
+  Tertiary analysis of a germline whole exome sequencing (WES) VCF.
+
+  1. Normalise the calls against the reference: split multiallelic records, left-align indels and drop
+     records whose REF does not match the reference (bcftools norm).
+  2. Keep calls inside the exome target regions, padded by a configurable number of bases so that
+     canonical splice sites are retained, and that pass the quality expression (bcftools filter).
+  3. Add ClinVar clinical significance (CLNSIG, CLNREVSTAT, CLNDN, CLNSIGCONF, ALLELEID) and the
+     population allele frequency from gnomAD (stored as INFO/gnomAD_AF) with bcftools annotate.
+  4. Predict functional consequences (gene, effect, impact, HGVS c./p., LOF/NMD) with SnpEff.
+  5. Prioritise candidates with a SnpSift expression. The default keeps ClinVar (likely) pathogenic
+     variants at any frequency, plus rare (gnomAD AF < 1% or absent) HIGH/MODERATE impact variants.
+  6. Export tab-separated tables of all annotated variants and of the candidates, and variant statistics
+     (bcftools stats, SnpEff summary) for MultiQC.
+
+  Map this workflow over a collection of VCFs to process a batch of samples.
+  Reference FASTA, target BED, ClinVar and gnomAD must use the same genome build and the same
+  chromosome naming (e.g. "chr1" vs "1") as the VCF.
+
+inputs:
+  "Variant calls (VCF)":
+    type: data
+    format: [vcf, vcf_bgzip, bcf]
+    doc: Germline variant calls for one exome (VCF, bgzipped VCF or BCF).
+    position: {left: 0, top: 0}
+  "Reference genome (FASTA)":
+    type: data
+    format: [fasta]
+    doc: Reference genome (uncompressed FASTA) that the variants were called against, e.g. GRCh38/hg38.
+    position: {left: 0, top: 120}
+  "Exome target regions (BED)":
+    type: data
+    format: [bed]
+    doc: Exome capture target regions (BED) of the enrichment kit, same genome build as the reference.
+    position: {left: 0, top: 240}
+  "Target padding (bp)":
+    type: int
+    default: 50
+    doc: Bases added on both sides of every target region before restricting the calls (keeps splice-site variants).
+    position: {left: 0, top: 360}
+  "SnpEff database":
+    type: data
+    format: [snpeffdb]
+    doc: SnpEff genome database (SnpEff 5.x), e.g. GRCh38.105 created with the "SnpEff download" tool.
+    position: {left: 0, top: 480}
+  "ClinVar (VCF)":
+    type: data
+    format: [vcf, vcf_bgzip, bcf]
+    doc: ClinVar VCF (clinvar.vcf.gz from NCBI) for the same build. Chromosome names must match the reference.
+    position: {left: 0, top: 600}
+  "Population allele frequencies (VCF)":
+    type: data
+    format: [vcf, vcf_bgzip, bcf]
+    doc: >-
+      Population allele frequency VCF/BCF with INFO/AF, e.g. gnomAD exomes sites. A BCF with index is
+      fastest; an AF-only, target-restricted file keeps it small.
+    position: {left: 0, top: 720}
+  "Quality filter (bcftools expression)":
+    type: string
+    default: '(FILTER="PASS" || FILTER=".") && QUAL>=20 && FMT/DP>=10'
+    doc: bcftools filter --include expression applied to on-target calls (records failing it are removed).
+    position: {left: 0, top: 840}
+  "Prioritization filter (SnpSift expression)":
+    type: string
+    default: >-
+      (CLNSIG =~ 'athogenic') | (((ANN[*].IMPACT = 'HIGH') | (ANN[*].IMPACT = 'MODERATE')) &
+      ((! exists gnomAD_AF) | (gnomAD_AF < 0.01)))
+    doc: SnpSift filter expression that selects candidate variants from the annotated calls.
+    position: {left: 0, top: 960}
+
+outputs:
+  annotated_vcf:
+    outputSource: functional_annotation/snpeff_output
+  annotated_table:
+    outputSource: annotated_table/output
+  candidate_vcf:
+    outputSource: prioritize/output
+  candidate_table:
+    outputSource: candidate_table/output
+  snpeff_summary:
+    outputSource: functional_annotation/statsFile
+  snpeff_csv_stats:
+    outputSource: functional_annotation/csvFile
+  variant_stats:
+    outputSource: variant_stats/output_file
+
+steps:
+  chrom_sizes:
+    doc: Index the reference; the .fai provides chromosome lengths for padding.
+    tool_id: toolshed.g2.bx.psu.edu/repos/iuc/samtools_faidx/samtools_faidx/1.22+galaxy2
+    tool_version: 1.22+galaxy2
+    position: {left: 300, top: 120}
+    in:
+      input: "Reference genome (FASTA)"
+    out:
+      output: {hide: true}
+
+  pad_targets:
+    doc: Pad every target region on both sides (bedtools slop).
+    tool_id: toolshed.g2.bx.psu.edu/repos/iuc/bedtools/bedtools_slopbed/2.31.1+galaxy1
+    tool_version: 2.31.1+galaxy1
+    position: {left: 560, top: 240}
+    in:
+      inputA: "Exome target regions (BED)"
+      genome_file_opts|genome: chrom_sizes/output
+      addition|b: "Target padding (bp)"
+    state:
+      genome_file_opts:
+        genome_file_opts_selector: hist
+      pct: false
+      strand: false
+      addition:
+        addition_select: b
+      header: false
+    out:
+      output: {hide: true, rename: "Padded exome targets"}
+
+  normalize:
+    doc: Split multiallelic records, left-align/normalise indels, drop records with REF/reference mismatches.
+    tool_id: toolshed.g2.bx.psu.edu/repos/iuc/bcftools_norm/bcftools_norm/1.24+galaxy0
+    tool_version: 1.24+galaxy0
+    position: {left: 300, top: 0}
+    in:
+      input_file: "Variant calls (VCF)"
+      reference_source|fasta_ref: "Reference genome (FASTA)"
+    state:
+      reference_source:
+        reference_source_selector: history
+      check_ref: wx
+      atomization: ""
+      normalize_indels: false
+      old_rec_tag: ""
+      rm_dup: ""
+      multiallelics:
+        mode: "-"
+        multiallelic_types: both
+      sec_restrict:
+        regions:
+          regions_src: __none__
+        targets:
+          targets_src: __none__
+      sec_default:
+        site_win: 1000
+        sort: pos
+      sec_filter_norm:
+        include: null
+        exclude: null
+      output_type: v
+    out:
+      output_file: {hide: true, rename: "Normalised variants"}
+
+  target_filter:
+    doc: Keep calls within the padded targets that satisfy the quality expression.
+    tool_id: toolshed.g2.bx.psu.edu/repos/iuc/bcftools_filter/bcftools_filter/1.24+galaxy0
+    tool_version: 1.24+galaxy0
+    position: {left: 820, top: 0}
+    in:
+      input_file: normalize/output_file
+      sec_restrict|regions|regions_file: pad_targets/output
+      sec_restrict|include: "Quality filter (bcftools expression)"
+    state:
+      sec_restrict:
+        regions:
+          regions_src: regions_file
+          regions_overlap: "1"
+        targets:
+          targets_src: __none__
+        exclude: null
+      sec_filter:
+        SnpGap: null
+        IndelGap: null
+        mode: null
+        conditional_soft_filter:
+          selector: disabled
+        select_set_GTs: null
+      output_type: v
+    out:
+      output_file: {hide: true, rename: "On-target QC-passed variants"}
+
+  clinvar_annotation:
+    doc: Transfer ClinVar clinical significance (allele-specific match on CHROM, POS, REF, ALT).
+    tool_id: toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0
+    tool_version: 1.24+galaxy0
+    position: {left: 1080, top: 0}
+    in:
+      input_file: target_filter/output_file
+      sec_annofile|annofile|annotations: "ClinVar (VCF)"
+    state:
+      sec_annofile:
+        columns: CLNSIG,CLNREVSTAT,CLNDN,CLNSIGCONF,ALLELEID
+        annofile:
+          anno_fmt: vcf
+        mark_sites: ""
+        min_overlap: ""
+        set_id: ""
+      sec_annotate:
+        remove: ""
+      sec_restrict:
+        include: null
+        exclude: null
+        collapse: null
+        regions:
+          regions_src: __none__
+        samples: ""
+        invert_samples: false
+        invert_samples_file: false
+      output_type: v
+    out:
+      output_file: {hide: true, rename: "ClinVar-annotated variants"}
+
+  population_annotation:
+    doc: Transfer the population allele frequency as INFO/gnomAD_AF (keeps the caller's own INFO/AF intact).
+    tool_id: toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0
+    tool_version: 1.24+galaxy0
+    position: {left: 1340, top: 0}
+    in:
+      input_file: clinvar_annotation/output_file
+      sec_annofile|annofile|annotations: "Population allele frequencies (VCF)"
+    state:
+      sec_annofile:
+        columns: gnomAD_AF:=AF
+        annofile:
+          anno_fmt: vcf
+        mark_sites: ""
+        min_overlap: ""
+        set_id: ""
+      sec_annotate:
+        remove: ""
+      sec_restrict:
+        include: null
+        exclude: null
+        collapse: null
+        regions:
+          regions_src: __none__
+        samples: ""
+        invert_samples: false
+        invert_samples_file: false
+      output_type: v
+    out:
+      output_file: {hide: true, rename: "ClinVar+gnomAD-annotated variants"}
+
+  functional_annotation:
+    doc: Predict variant effects (gene, consequence, impact, HGVS, LOF/NMD) with SnpEff.
+    tool_id: toolshed.g2.bx.psu.edu/repos/iuc/snpeff/snpEff/5.4+galaxy0
+    tool_version: 5.4+galaxy0
+    position: {left: 1600, top: 0}
+    in:
+      input: population_annotation/output_file
+      snpDb|snpeff_db: "SnpEff database"
+    state:
+      inputFormat: vcf
+      outputFormat: vcf
+      csvStats: true
+      generate_stats: true
+      generate_gene_stats: false
+      snpDb:
+        genomeSrc: history
+        reg_section:
+          regulation: null
+      udLength: "0"
+      spliceSiteSize: "2"
+      spliceRegion:
+        setSpliceRegions: "no"
+      annotations: null
+      filterOut: null
+      filter:
+        specificEffects: "no"
+      chr: ""
+      noLog: true
+    out:
+      snpeff_output: {rename: "Annotated variants (VCF)"}
+      statsFile: {rename: "SnpEff summary"}
+      csvFile: {change_datatype: csv, rename: "SnpEff stats (CSV)"}
+
+  prioritize:
+    doc: Select candidate variants with the prioritisation expression.
+    tool_id: toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_filter/5.4.0c+galaxy1
+    tool_version: 5.4.0c+galaxy1
+    position: {left: 1860, top: 0}
+    in:
+      input: functional_annotation/snpeff_output
+      filter_expression|expr: "Prioritization filter (SnpSift expression)"
+    state:
+      filter_expression:
+        type: simple
+      inverse: false
+      filtering:
+        mode: entries
+    out:
+      output: {rename: "Candidate variants (VCF)"}
+
+  candidate_table:
+    doc: One row per candidate variant (most severe SnpEff effect, ClinVar, gnomAD, genotype).
+    tool_id: toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1
+    tool_version: 5.4.0c+galaxy1
+    position: {left: 2120, top: 0}
+    in:
+      input: prioritize/output
+    state:
+      extract: >-
+        CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD
+        ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P
+        LOF NMD gnomAD_AF CLNSIG CLNREVSTAT CLNDN
+      one_effect_per_line: false
+      separator: ","
+      empty_text: "."
+    out:
+      output: {rename: "Candidate variants (table)"}
+
+  annotated_table:
+    doc: One row per on-target variant with the same columns as the candidate table.
+    tool_id: toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1
+    tool_version: 5.4.0c+galaxy1
+    position: {left: 1860, top: 200}
+    in:
+      input: functional_annotation/snpeff_output
+    state:
+      extract: >-
+        CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD
+        ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P
+        LOF NMD gnomAD_AF CLNSIG CLNREVSTAT CLNDN
+      one_effect_per_line: false
+      separator: ","
+      empty_text: "."
+    out:
+      output: {rename: "Annotated variants (table)"}
+
+  variant_stats:
+    doc: Variant statistics of the annotated on-target calls (MultiQC compatible).
+    tool_id: toolshed.g2.bx.psu.edu/repos/iuc/bcftools_stats/bcftools_stats/1.24+galaxy0
+    tool_version: 1.24+galaxy0
+    position: {left: 1860, top: 400}
+    in:
+      input_file: functional_annotation/snpeff_output
+    state:
+      sec_restrict:
+        samples: ""
+        invert_samples: false
+        invert_samples_file: false
+        apply_filters: ""
+        collapse: null
+        regions:
+          regions_src: __none__
+        targets:
+          targets_src: __none__
+        include: null
+        exclude: null
+      sec_default:
+        first_allele_only: false
+        depth:
+          set_depth: "no"
+        reference_source:
+          reference_source_selector: ""
+        split_by_ID: false
+        user_tstv: ""
+        afbins:
+          afbins_select: default
+        af_tag: ""
+        verbose: false
+      plot_title: ""
+    out:
+      output_file: {rename: "Variant statistics (bcftools stats)"}

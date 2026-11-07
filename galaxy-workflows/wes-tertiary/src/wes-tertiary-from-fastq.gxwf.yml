@@ -1,0 +1,390 @@
+class: GalaxyWorkflow
+label: WES tertiary analysis from FASTQ (v1)
+release: "0.1"
+license: MIT
+tags:
+  - WES
+  - exome
+  - germline
+  - variant-calling
+  - variant-annotation
+  - variant-prioritization
+  - tertiary-analysis
+doc: |
+  Germline whole exome sequencing (WES) analysis from paired-end FASTQ to a prioritised, annotated variant table.
+
+  Runs once per sample of a list:paired collection (element identifiers are used as sample names):
+
+  1. Read QC (FastQC) and adapter/quality trimming (fastp).
+  2. Alignment to the reference with BWA-MEM (read groups set from the sample name), duplicate marking
+     (Picard MarkDuplicates) and alignment statistics (samtools stats).
+  3. Exome capture QC: Picard CollectHsMetrics (on-target rate, fold-80, % target bases >= 20x) and per-target
+     coverage with mosdepth (bases at 1/10/20/30/50x per target, for gap analysis).
+  4. Germline variant calling with FreeBayes (standard input filters: MAPQ >= 30, BQ >= 20).
+  5. Tertiary analysis, the embedded "WES tertiary analysis from VCF (v2)" workflow: normalisation, restriction
+     to the padded targets, quality filtering, ClinVar + gnomAD + SnpEff annotation, prioritisation and tables.
+  6. One MultiQC report for all samples (FastQC, fastp, Picard, samtools, bcftools stats, SnpEff).
+
+  Reference FASTA, target BED, ClinVar and gnomAD must use the same genome build and chromosome naming.
+
+inputs:
+  "Paired-end reads":
+    type: collection
+    collection_type: list:paired
+    format: [fastqsanger, fastqsanger.gz]
+    doc: >-
+      list:paired collection with one element per sample (forward/reverse FASTQ). The element identifier
+      becomes the sample name in the BAM read groups and the VCF.
+    position: {left: 0, top: 0}
+  "Reference genome (FASTA)":
+    type: data
+    format: [fasta]
+    doc: Reference genome (uncompressed FASTA), e.g. GRCh38/hg38 without ALT contigs (analysis set).
+    position: {left: 0, top: 140}
+  "Exome target regions (BED)":
+    type: data
+    format: [bed]
+    doc: Exome capture target regions (BED) of the enrichment kit, same genome build as the reference.
+    position: {left: 0, top: 280}
+  "Target padding (bp)":
+    type: int
+    default: 50
+    doc: Bases added on both sides of every target region before restricting the calls (keeps splice-site variants).
+    position: {left: 0, top: 420}
+  "SnpEff database":
+    type: data
+    format: [snpeffdb]
+    doc: SnpEff genome database (SnpEff 5.x), e.g. GRCh38.105 created with the "SnpEff download" tool.
+    position: {left: 0, top: 560}
+  "ClinVar (VCF)":
+    type: data
+    format: [vcf, vcf_bgzip, bcf]
+    doc: ClinVar VCF (clinvar.vcf.gz from NCBI) for the same build. Chromosome names must match the reference.
+    position: {left: 0, top: 700}
+  "Population allele frequencies (VCF)":
+    type: data
+    format: [vcf, vcf_bgzip, bcf]
+    doc: >-
+      Population allele frequency VCF/BCF with INFO/AF, e.g. gnomAD exomes sites. A BCF with index is
+      fastest; an AF-only, target-restricted file keeps it small.
+    position: {left: 0, top: 840}
+  "Quality filter (bcftools expression)":
+    type: string
+    default: '(FILTER="PASS" || FILTER=".") && QUAL>=20 && FMT/DP>=10'
+    doc: bcftools filter --include expression applied to on-target calls (records failing it are removed).
+    position: {left: 0, top: 980}
+  "Prioritization filter (SnpSift expression)":
+    type: string
+    default: >-
+      (CLNSIG =~ 'athogenic') | (((ANN[*].IMPACT = 'HIGH') | (ANN[*].IMPACT = 'MODERATE')) &
+      ((! exists gnomAD_AF) | (gnomAD_AF < 0.01)))
+    doc: SnpSift filter expression that selects candidate variants from the annotated calls.
+    position: {left: 0, top: 1120}
+
+outputs:
+  multiqc_report:
+    outputSource: multiqc/html_report
+  multiqc_stats:
+    outputSource: multiqc/stats
+  deduplicated_bam:
+    outputSource: mark_duplicates/outFile
+  hs_metrics:
+    outputSource: hs_metrics/outFile
+  target_coverage_summary:
+    outputSource: target_coverage/output_summary
+  target_coverage_thresholds:
+    outputSource: target_coverage/output_thresholds_bed
+  raw_vcf:
+    outputSource: variant_calling/output_vcf
+  annotated_vcf:
+    outputSource: tertiary/annotated_vcf
+  annotated_table:
+    outputSource: tertiary/annotated_table
+  candidate_vcf:
+    outputSource: tertiary/candidate_vcf
+  candidate_table:
+    outputSource: tertiary/candidate_table
+  snpeff_summary:
+    outputSource: tertiary/snpeff_summary
+  variant_stats:
+    outputSource: tertiary/variant_stats
+
+steps:
+  fastqc_raw:
+    doc: Quality control of the raw reads.
+    tool_id: toolshed.g2.bx.psu.edu/repos/devteam/fastqc/fastqc/0.74+galaxy1
+    tool_version: 0.74+galaxy1
+    position: {left: 300, top: 0}
+    in:
+      input_file: "Paired-end reads"
+    state:
+      nogroup: false
+      kmers: 7
+    out:
+      html_file: {rename: "FastQC report"}
+      text_file: {hide: true}
+
+  flatten_fastqc:
+    doc: Flatten the per-sample/per-mate FastQC results into one list for MultiQC.
+    tool_id: __FLATTEN__
+    tool_version: 1.0.0
+    position: {left: 560, top: 0}
+    in:
+      input: fastqc_raw/text_file
+    state:
+      join_identifier: _
+    out:
+      output: {hide: true}
+
+  trimming:
+    doc: Adapter and quality trimming (fastp, paired-end adapter detection).
+    tool_id: toolshed.g2.bx.psu.edu/repos/iuc/fastp/fastp/1.4.0+galaxy0
+    tool_version: 1.4.0+galaxy0
+    position: {left: 300, top: 220}
+    in:
+      single_paired|paired_input: "Paired-end reads"
+    state:
+      single_paired:
+        single_paired_selector: paired_collection
+        merge_reads:
+          merge: ""
+        adapter_trimming_options:
+          disable_adapter_trimming: false
+          detect_adapter_for_pe: true
+      output_options:
+        report_html: true
+        report_json: true
+    out:
+      output_paired_coll: {hide: true}
+      report_html: {rename: "fastp report"}
+      report_json: {hide: true}
+
+  mapping:
+    doc: >-
+      Align with BWA-MEM. The index is built from the history FASTA inside each job; switch "Reference genome"
+      to a built-in (cached) BWA index in this step to skip indexing on servers that have one.
+    tool_id: toolshed.g2.bx.psu.edu/repos/devteam/bwa/bwa_mem/0.7.19+galaxy2
+    tool_version: 0.7.19+galaxy2
+    position: {left: 560, top: 220}
+    in:
+      reference_source|ref_file: "Reference genome (FASTA)"
+      fastq_input|fastq_input1: trimming/output_paired_coll
+    state:
+      reference_source:
+        reference_source_selector: history
+        index_a: auto
+      fastq_input:
+        fastq_input_selector: paired_collection
+        iset_stats: ""
+      rg:
+        rg_selector: set
+        read_group_id_conditional:
+          do_auto_name: "true"
+        read_group_sm_conditional:
+          do_auto_name: "true"
+        read_group_lb_conditional:
+          do_auto_name: "true"
+        PL: ILLUMINA
+        CN: ""
+        DS: ""
+        DT: ""
+        FO: ""
+        KS: ""
+        PG: ""
+        PI: null
+        PU: ""
+      analysis_type:
+        analysis_type_selector: illumina
+      output_sort: coordinate
+    out:
+      bam_output: {hide: true}
+
+  mark_duplicates:
+    doc: Mark PCR/optical duplicates (kept in the BAM, flagged 0x400; FreeBayes ignores them).
+    tool_id: toolshed.g2.bx.psu.edu/repos/devteam/picard/picard_MarkDuplicates/3.1.1.0
+    tool_version: 3.1.1.0
+    position: {left: 820, top: 220}
+    in:
+      inputFile: mapping/bam_output
+    state:
+      remove_duplicates: false
+      assume_sorted: true
+      duplicate_scoring_strategy: SUM_OF_BASE_QUALITIES
+      read_name_regex: ""
+      optical_duplicate_pixel_distance: 100
+      barcode_tag: ""
+      validation_stringency: LENIENT
+    out:
+      outFile: {rename: "Aligned reads (duplicates marked)"}
+      metrics_file: {hide: true}
+
+  alignment_stats:
+    doc: Alignment statistics for MultiQC.
+    tool_id: toolshed.g2.bx.psu.edu/repos/devteam/samtools_stats/samtools_stats/2.0.9
+    tool_version: 2.0.9
+    position: {left: 1080, top: 120}
+    in:
+      input: mark_duplicates/outFile
+    state:
+      coverage_cond:
+        coverage_select: "no"
+      remove_dups: false
+      split_output_cond:
+        split_output_selector: "no"
+      filter_by_flags:
+        filter_flags: nofilter
+      addref_cond:
+        addref_select: "no"
+      cond_region:
+        select_region: "no"
+      sparse: false
+      remove_overlaps: false
+    out:
+      output: {hide: true}
+
+  target_intervals:
+    doc: Convert the target BED to a Picard interval list (sequence dictionary from the reference).
+    tool_id: toolshed.g2.bx.psu.edu/repos/devteam/picard/picard_BedToIntervalList/3.1.1.0
+    tool_version: 3.1.1.0
+    position: {left: 300, top: 440}
+    in:
+      reference_source|ref_file: "Reference genome (FASTA)"
+      inputFile: "Exome target regions (BED)"
+    state:
+      reference_source:
+        reference_source_selector: history
+    out:
+      outFile: {hide: true}
+
+  hs_metrics:
+    doc: Hybrid-selection (exome capture) metrics; the target BED is used as both bait and target intervals.
+    tool_id: toolshed.g2.bx.psu.edu/repos/devteam/picard/picard_CollectHsMetrics/3.1.1
+    tool_version: 3.1.1
+    position: {left: 1080, top: 320}
+    in:
+      inputFile: mark_duplicates/outFile
+      baitFile: target_intervals/outFile
+      targetFile: target_intervals/outFile
+    state:
+      minimum_mapping_quality: 20
+      minimum_base_quality: 20
+      coverage_cap: 200
+      clip_overlapping_reads: true
+      validation_stringency: LENIENT
+    out:
+      outFile: {rename: "Exome capture metrics (HsMetrics)"}
+
+  target_coverage:
+    doc: Per-target coverage (mosdepth) with the number of bases at 1/10/20/30/50x for each target.
+    tool_id: toolshed.g2.bx.psu.edu/repos/iuc/mosdepth/mosdepth/0.3.14+galaxy0
+    tool_version: 0.3.14+galaxy0
+    position: {left: 1080, top: 520}
+    in:
+      input_alignment: mark_duplicates/outFile
+      window|region_file: "Exome target regions (BED)"
+    state:
+      per_base_coverage: false
+      window:
+        window_mode: bed
+      advanced:
+        options: "yes"
+        chrom: ""
+        exclude_flag: 1796
+        no_fast: false
+        fragment_mode: false
+        mapq: 20
+        thresholds: "1,10,20,30,50"
+        use_median: false
+        read_groups: ""
+        quantize: []
+    out:
+      output_summary: {rename: "Coverage summary (mosdepth)"}
+      output_thresholds_bed: {rename: "Per-target coverage thresholds (mosdepth)"}
+      output_global_dist: {hide: true}
+      output_region_dist: {hide: true}
+      output_regions_bed: {hide: true}
+
+  variant_calling:
+    doc: >-
+      Germline calling with FreeBayes per sample, parallelised per chromosome. Calls are restricted to the
+      padded targets afterwards (limiting FreeBayes by an exome BED would start one process per target).
+    tool_id: toolshed.g2.bx.psu.edu/repos/devteam/freebayes/freebayes/1.3.10+galaxy1
+    tool_version: 1.3.10+galaxy1
+    position: {left: 1340, top: 220}
+    in:
+      reference_source|batchmode|input_bams: mark_duplicates/outFile
+      reference_source|ref_file: "Reference genome (FASTA)"
+    state:
+      reference_source:
+        reference_source_selector: history
+        batchmode:
+          processmode: individual
+      target_limit_type:
+        target_limit_type_selector: do_not_limit
+      coverage_options:
+        coverage_options_selector: do_not_set
+      options_type:
+        options_type_selector: simple_w_filters
+      output_options:
+        flavor: vcf
+    out:
+      output_vcf: {rename: "Raw variant calls (FreeBayes)"}
+
+  tertiary:
+    doc: Tertiary analysis of each sample's VCF (embedded workflow "WES tertiary analysis from VCF (v2)").
+    position: {left: 1600, top: 220}
+    run:
+      "@import": wes-tertiary-from-vcf.gxwf.yml
+    in:
+      "Variant calls (VCF)": variant_calling/output_vcf
+      "Reference genome (FASTA)": "Reference genome (FASTA)"
+      "Exome target regions (BED)": "Exome target regions (BED)"
+      "Target padding (bp)": "Target padding (bp)"
+      "SnpEff database": "SnpEff database"
+      "ClinVar (VCF)": "ClinVar (VCF)"
+      "Population allele frequencies (VCF)": "Population allele frequencies (VCF)"
+      "Quality filter (bcftools expression)": "Quality filter (bcftools expression)"
+      "Prioritization filter (SnpSift expression)": "Prioritization filter (SnpSift expression)"
+
+  multiqc:
+    doc: One QC report for all samples.
+    tool_id: toolshed.g2.bx.psu.edu/repos/iuc/multiqc/multiqc/1.35+galaxy5
+    tool_version: 1.35+galaxy5
+    position: {left: 1860, top: 0}
+    in:
+      results_0|software_cond|output_0|input: flatten_fastqc/output
+      results_1|software_cond|input: trimming/report_json
+      results_2|software_cond|output_0|input: mark_duplicates/metrics_file
+      results_2|software_cond|output_1|input: hs_metrics/outFile
+      results_3|software_cond|output_0|type|input: alignment_stats/output
+      results_4|software_cond|input: tertiary/variant_stats
+      results_5|software_cond|input: tertiary/snpeff_csv_stats
+    state:
+      results:
+        - software_cond:
+            software: fastqc
+            output:
+              - type: data
+        - software_cond:
+            software: fastp
+        - software_cond:
+            software: picard
+            output:
+              - type: markdups
+              - type: hsmetrics
+        - software_cond:
+            software: samtools
+            output:
+              - type:
+                  type: stats
+        - software_cond:
+            software: bcftools
+        - software_cond:
+            software: snpeff
+      title: WES QC report
+      comment: ""
+      flat: false
+      export: false
+    out:
+      html_report: {rename: "MultiQC report"}
+      stats: {rename: "MultiQC general statistics"}

@@ -64,8 +64,13 @@ algorithms/
 │   ├── minimizer_chaining.cpp
 │   └── strobemer_mapping.cpp
 ├── examples/             # Example usage
+├── galaxy-workflows/
+│   └── wes-tertiary/     # Galaxy workflows: WES tertiary analysis from FASTQ (v1) and from VCF (v2)
 └── SWOT_ANALYSIS.md      # Literature review + SWOT analysis for the PhD thesis
 ```
+
+See [`galaxy-workflows/wes-tertiary/README.md`](galaxy-workflows/wes-tertiary/README.md) for the whole exome
+sequencing workflows (import, reference data, parameters, validation).
 
 ## Algorithms
 
