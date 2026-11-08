@@ -970,13 +970,13 @@
                     },
                     "9": {
                         "id": 9,
-                        "name": "toolshed.g2.bx.psu.edu/repos/iuc/samtools_faidx/samtools_faidx/1.22+galaxy2",
+                        "name": "toolshed.g2.bx.psu.edu/repos/iuc/samtools_faidx/samtools_faidx/1.22+galaxy1",
                         "type": "tool",
                         "label": "chrom_sizes",
                         "annotation": "Index the reference; the .fai provides chromosome lengths for padding.",
                         "tool_state": "{\"__page__\": 0}",
-                        "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/samtools_faidx/samtools_faidx/1.22+galaxy2",
-                        "tool_version": "1.22+galaxy2",
+                        "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/samtools_faidx/samtools_faidx/1.22+galaxy1",
+                        "tool_version": "1.22+galaxy1",
                         "position": {
                             "top": 120,
                             "left": 300
