@@ -48,9 +48,17 @@ pinned versions need **Galaxy ≥ 25.0**. On older servers, install older revisi
 then uses the installed version when it opens the workflow and shows a "tool version changed" notice. The
 parameters used here are present in older versions too, but check those steps in the editor.
 
-The `.gxwf.yml` files in [`src/`](src) are the human-readable sources (Galaxy Format 2). Edit them and regenerate
-the `.ga` files with `python build.py` (needs `pip install gxformat2`). Import the `.ga` files, not the sources:
-the v1 source references v2 with `@import`, which only `build.py` resolves.
+The `.ga` files are prebuilt; nothing needs to be compiled to use them. The `.gxwf.yml` files in [`src/`](src)
+are the human-readable sources (Galaxy Format 2). Rebuild only after editing them, which needs Python ≥ 3.10 and
+`gxformat2` (a virtual environment avoids the "externally managed environment" error of system pip):
+```bash
+python3 -m venv .venv && .venv/bin/pip install "gxformat2>=0.29"
+```
+```bash
+.venv/bin/python build.py
+```
+Import the `.ga` files, not the sources: the v1 source references v2 with `@import`, which only `build.py`
+resolves.
 
 ## 2. Reference data (prepare once, keep in a shared history or data library)
 
