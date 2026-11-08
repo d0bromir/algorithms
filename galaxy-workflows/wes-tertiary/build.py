@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Build the importable Galaxy workflows (.ga) from the gxformat2 sources in ./src.
 
-    pip install gxformat2
-    python build.py
+The .ga files are already committed; run this only after editing src/*.gxwf.yml.
+Requires Python >= 3.10 and gxformat2 >= 0.29:
+
+    python3 -m venv .venv && .venv/bin/pip install "gxformat2>=0.29"
+    .venv/bin/python build.py
 
 * ``run: {"@import": "<file>.gxwf.yml"}`` in a step is replaced by the content of that file, so the
   FASTQ workflow carries the VCF workflow as an embedded (self-contained) subworkflow.
@@ -15,8 +18,16 @@ import os
 import sys
 import uuid
 
-from gxformat2.converter import python_to_workflow
-from gxformat2.yaml import ordered_load
+try:
+    from gxformat2.converter import python_to_workflow
+    from gxformat2.yaml import ordered_load
+except ImportError:
+    sys.exit(
+        "build.py needs the 'gxformat2' package (Python >= 3.10):\n"
+        "    python3 -m venv .venv && .venv/bin/pip install 'gxformat2>=0.29'\n"
+        "    .venv/bin/python build.py\n"
+        "You do not need to build anything to use the workflows: import the committed .ga files into Galaxy."
+    )
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, "src")
