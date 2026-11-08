@@ -31,10 +31,23 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 WORKFLOW = os.path.join(HERE, "..", "wes-tertiary-from-vcf.ga")
 
 
+
+def load_state(tool_state):
+    """tool_state as a nested dict, whether plain JSON (gxformat2) or Galaxy's own encoding.
+
+    Galaxy (and build.py, which stores Galaxy's complete states) JSON-encodes every top-level value
+    a second time and always adds __rerun_remap_job_id__; gxformat2 writes one plain JSON object.
+    """
+    state = json.loads(tool_state) if isinstance(tool_state, str) else tool_state
+    if "__rerun_remap_job_id__" in state:
+        state = {k: (json.loads(v) if isinstance(v, str) and not k.startswith("__") else v)
+                 for k, v in state.items()}
+    return state
+
 def workflow_settings():
     wf = json.load(open(WORKFLOW))
     steps = {s["label"]: s for s in wf["steps"].values()}
-    state = {k: json.loads(s["tool_state"]) for k, s in steps.items()}
+    state = {k: load_state(s["tool_state"]) for k, s in steps.items()}
     return {
         "check_ref": state["normalize"]["check_ref"],
         "multiallelics": state["normalize"]["multiallelics"]["mode"] + state["normalize"]["multiallelics"]["multiallelic_types"],

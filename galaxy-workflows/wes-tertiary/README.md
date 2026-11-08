@@ -63,6 +63,19 @@ python3 -m venv .venv && .venv/bin/pip install "gxformat2>=0.29"
 Import the `.ga` files, not the sources: the v1 source references v2 with `@import`, which only `build.py`
 resolves.
 
+**Complete tool states.** The sources set only the parameters that matter. Galaxy would fill every other
+parameter with its default when loading a step, and then mark the workflow with "may contain tools which have
+changed". To avoid that notice, `build.py` takes each tool step's complete state from
+[`src/galaxy-tool-states.json`](src/galaxy-tool-states.json), which holds the states Galaxy computed for these
+exact steps. A recorded state is used only if the tool version is the same and the state agrees with every value
+the source sets. Otherwise `build.py` keeps the source state and prints a warning. After changing a source or a
+tool version, refresh the file:
+1. Run `build.py`.
+2. Import both `.ga` files into a Galaxy that has the tools installed.
+3. Run `python tests/refresh_tool_states.py --galaxy http://192.168.191.12`. It reads the API key from
+   `$GALAXY_API_KEY` or `~/.galaxy_admin_key`.
+4. Run `build.py` again.
+
 ## 2. Reference data (prepare once, keep in a shared history or data library)
 
 Every reference must use **the same genome build and the same chromosome naming** (`chr1` vs `1`) as the reads
