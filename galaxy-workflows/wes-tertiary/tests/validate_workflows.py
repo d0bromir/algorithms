@@ -175,7 +175,7 @@ class Validator:
             flat = {}
             for page in ts.parse_input_pages().page_sources:
                 flatten(page.parse_input_sources(), "", flat, ())
-        state = strip_private(json.loads(step["tool_state"]))
+        state = strip_private(load_state(step["tool_state"]))
         for name, conns in (step.get("input_connections") or {}).items():
             if name == "when":
                 continue
@@ -204,6 +204,7 @@ class Validator:
                                  f"not accepted by {name} {fmts}")
             set_connected(state, name)
         if bundle is not None:
+            coerce_numbers(state, bundle.parameters)
             try:
                 validate_workflow_step_linked(bundle, state)
             except Exception as e:  # pydantic ValidationError / RequestParameterInvalidException
@@ -287,9 +288,56 @@ def set_connected(state, path):
             node = node[part]
 
 
+
+def load_state(tool_state):
+    """tool_state as a nested dict, whether plain JSON (gxformat2) or Galaxy's own encoding.
+
+    Galaxy (and build.py, which stores Galaxy's complete states) JSON-encodes every top-level value
+    a second time and always adds __rerun_remap_job_id__; gxformat2 writes one plain JSON object.
+    """
+    state = json.loads(tool_state) if isinstance(tool_state, str) else tool_state
+    if "__rerun_remap_job_id__" in state:
+        state = {k: (json.loads(v) if isinstance(v, str) and not k.startswith("__") else v)
+                 for k, v in state.items()}
+    return state
+
+def coerce_numbers(state, parameters):
+    """Galaxy stores integer/float values as strings ("7"); give them the type the strict model expects."""
+    if not isinstance(state, dict):
+        return
+    for p in parameters:
+        ptype = getattr(p, "parameter_type", "")
+        if p.name not in state:
+            continue
+        value = state[p.name]
+        if ptype in ("gx_integer", "gx_float") and isinstance(value, str):
+            try:
+                state[p.name] = None if value == "" else (int(value) if ptype == "gx_integer" else float(value))
+            except ValueError:
+                pass  # leave it for the validator to report
+        elif ptype == "gx_section":
+            coerce_numbers(value, p.parameters)
+        elif ptype == "gx_repeat" and isinstance(value, list):
+            for item in value:
+                coerce_numbers(item, p.parameters)
+        elif ptype == "gx_conditional" and isinstance(value, dict):
+            test = value.get(p.test_parameter.name)
+            for when in p.whens:
+                if _scalar_eq(when.discriminator, test):
+                    coerce_numbers(value, when.parameters)
+
+
+def _scalar_eq(a, b):
+    norm = lambda v: ("true" if v else "false") if isinstance(v, bool) else str(v)  # noqa: E731
+    return norm(a) == norm(b)
+
+
 def strip_private(d):
     if isinstance(d, dict):
-        return {k: strip_private(v) for k, v in d.items() if not k.startswith("__") or k == "__class__"}
+        # {"__class__": "RuntimeValue"} is Galaxy's marker for an unconnected optional data input that
+        # may be set on the run form; the static "linked" model has no such value, so treat it as unset.
+        return {k: strip_private(v) for k, v in d.items()
+                if (not k.startswith("__") or k == "__class__") and v != {"__class__": "RuntimeValue"}}
     if isinstance(d, list):
         return [strip_private(v) for v in d]
     return d
@@ -322,7 +370,8 @@ def self_test(tool_index, registry, vcf_workflow):
     ids = {s["label"]: k for k, s in wf["steps"].items()}
 
     def edit_state(label, fn):
-        state = json.loads(by_label[label]["tool_state"])
+        state = load_state(by_label[label]["tool_state"])
+        state.pop("__rerun_remap_job_id__", None)  # written back as plain JSON
         fn(state)
         by_label[label]["tool_state"] = json.dumps(state)
 

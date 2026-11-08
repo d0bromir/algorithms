@@ -12,6 +12,11 @@ Requires Python >= 3.10 and gxformat2 >= 0.29:
 * UUIDs are derived from the workflow/step labels, so rebuilding an unchanged source produces
   an identical .ga file. They are hashed like uuid5 but stamped as version 4, because Galaxy's API
   validates workflow UUIDs as UUID4 and returns HTTP 500 when opening a workflow with a uuid5.
+* Tool states are completed from src/galaxy-tool-states.json: the states Galaxy computes when it loads
+  each step, with every parameter the sources leave out set to its default. Without them Galaxy fills
+  the defaults itself and shows "may contain tools which have changed" on every import. A recorded
+  state is used only if the tool version matches and it agrees with every value the source sets;
+  otherwise the source state is kept and a warning asks to refresh (tests/refresh_tool_states.py).
 """
 import copy
 import json
@@ -75,11 +80,82 @@ def pin_uuids(native, scope):
             pin_uuids(step["subworkflow"], step_scope)
 
 
+def load_recorded_states():
+    path = os.path.join(SRC, "galaxy-tool-states.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        return json.load(f)
+
+
+def _scalar(v):
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    return None if v is None else str(v)
+
+
+def agrees(source, recorded, path=""):
+    """Every value the source sets must equal the recorded one; returns the first mismatch or None."""
+    if isinstance(source, dict):
+        if not isinstance(recorded, dict):
+            return f"{path}: {source!r} vs {recorded!r}"
+        for k, v in source.items():
+            if k not in recorded:
+                return f"{path}/{k}: missing in recorded state"
+            bad = agrees(v, recorded[k], f"{path}/{k}")
+            if bad:
+                return bad
+        return None
+    if isinstance(source, list) or isinstance(recorded, list):  # repeats: same length, item by item
+        if not (isinstance(source, list) and isinstance(recorded, list)) or len(source) != len(recorded):
+            return f"{path}: {source!r} vs {recorded!r}"
+        for i, (s, r) in enumerate(zip(source, recorded)):
+            bad = agrees(s, r, f"{path}[{i}]")
+            if bad:
+                return bad
+        return None
+    return None if _scalar(source) == _scalar(recorded) else f"{path}: {source!r} vs {recorded!r}"
+
+
+def galaxy_encode(state):
+    """Encode like Galaxy's own export: top-level values JSON strings, __page__ etc. left as they are."""
+    return json.dumps({k: (v if k.startswith("__") else json.dumps(v)) for k, v in state.items()})
+
+
+def complete_tool_states(native, scope, recorded, report):
+    for key, step in native["steps"].items():
+        step_scope = f"{scope}/{step.get('label') or key}"
+        if step.get("type") == "tool":
+            rec = recorded.get(step_scope)
+            if rec is None:
+                report.append(f"no recorded state for {step_scope}")
+                continue
+            if (rec["tool_id"], rec["tool_version"]) != (step["tool_id"], step["tool_version"]):
+                report.append(f"{step_scope}: recorded for {rec['tool_version']}, step uses {step['tool_version']}")
+                continue
+            source = json.loads(step["tool_state"])
+            bad = agrees({k: v for k, v in source.items() if not k.startswith("__")}, rec["tool_state"])
+            if bad:
+                report.append(f"{step_scope}: source differs from recorded state at {bad}")
+                continue
+            step["tool_state"] = galaxy_encode(rec["tool_state"])
+        if isinstance(step.get("subworkflow"), dict):
+            complete_tool_states(step["subworkflow"], step_scope, recorded, report)
+
+
 def main():
+    recorded = load_recorded_states()
     for src, dest in WORKFLOWS.items():
         wf = inline_imports(load(src))
         native = python_to_workflow(wf, workflow_directory=SRC)
         pin_uuids(native, native["name"])
+        report = []
+        complete_tool_states(native, native["name"], recorded, report)
+        for line in report:
+            print(f"WARNING {dest}: {line}", file=sys.stderr)
+        if report:
+            print("  -> those steps keep the source state; Galaxy will fill their defaults and show the\n"
+                  "     'tools have changed' notice. Refresh with tests/refresh_tool_states.py.", file=sys.stderr)
         with open(os.path.join(HERE, dest), "w") as f:
             json.dump(native, f, indent=4)
             f.write("\n")

@@ -219,7 +219,7 @@
             "type": "tool",
             "label": "chrom_sizes",
             "annotation": "Index the reference; the .fai provides chromosome lengths for padding.",
-            "tool_state": "{\"__page__\": 0}",
+            "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"input\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\"}",
             "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/samtools_faidx/samtools_faidx/1.22+galaxy1",
             "tool_version": "1.22+galaxy1",
             "position": {
@@ -251,7 +251,7 @@
             "type": "tool",
             "label": "pad_targets",
             "annotation": "Pad every target region on both sides (bedtools slop).",
-            "tool_state": "{\"__page__\": 0, \"genome_file_opts\": {\"genome_file_opts_selector\": \"hist\"}, \"pct\": false, \"strand\": false, \"addition\": {\"addition_select\": \"b\"}, \"header\": false}",
+            "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"addition\": \"{\\\"__current_case__\\\": 0, \\\"addition_select\\\": \\\"b\\\", \\\"b\\\": {\\\"__class__\\\": \\\"ConnectedValue\\\"}}\", \"genome_file_opts\": \"{\\\"__current_case__\\\": 1, \\\"genome\\\": {\\\"__class__\\\": \\\"ConnectedValue\\\"}, \\\"genome_file_opts_selector\\\": \\\"hist\\\"}\", \"header\": \"false\", \"inputA\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"pct\": \"false\", \"strand\": \"false\"}",
             "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bedtools/bedtools_slopbed/2.31.1+galaxy1",
             "tool_version": "2.31.1+galaxy1",
             "position": {
@@ -302,7 +302,7 @@
             "type": "tool",
             "label": "normalize",
             "annotation": "Split multiallelic records, left-align/normalise indels, drop records with REF/reference mismatches.",
-            "tool_state": "{\"__page__\": 0, \"reference_source\": {\"reference_source_selector\": \"history\"}, \"check_ref\": \"wx\", \"atomization\": \"\", \"normalize_indels\": false, \"old_rec_tag\": \"\", \"rm_dup\": \"\", \"multiallelics\": {\"mode\": \"-\", \"multiallelic_types\": \"both\"}, \"sec_restrict\": {\"regions\": {\"regions_src\": \"__none__\"}, \"targets\": {\"targets_src\": \"__none__\"}}, \"sec_default\": {\"site_win\": 1000, \"sort\": \"pos\"}, \"sec_filter_norm\": {\"include\": null, \"exclude\": null}, \"output_type\": \"v\"}",
+            "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"atomization\": \"\\\"\\\"\", \"check_ref\": \"\\\"wx\\\"\", \"input_file\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"multiallelics\": \"{\\\"__current_case__\\\": 1, \\\"mode\\\": \\\"-\\\", \\\"multiallelic_types\\\": \\\"both\\\"}\", \"normalize_indels\": \"false\", \"old_rec_tag\": \"\\\"\\\"\", \"output_type\": \"\\\"v\\\"\", \"reference_source\": \"{\\\"__current_case__\\\": 1, \\\"fasta_ref\\\": {\\\"__class__\\\": \\\"ConnectedValue\\\"}, \\\"reference_source_selector\\\": \\\"history\\\"}\", \"rm_dup\": \"\\\"\\\"\", \"sec_default\": \"{\\\"site_win\\\": \\\"1000\\\", \\\"sort\\\": \\\"pos\\\"}\", \"sec_filter_norm\": \"{\\\"exclude\\\": null, \\\"include\\\": null}\", \"sec_restrict\": \"{\\\"regions\\\": {\\\"__current_case__\\\": 0, \\\"regions_src\\\": \\\"__none__\\\"}, \\\"targets\\\": {\\\"__current_case__\\\": 0, \\\"targets_src\\\": \\\"__none__\\\"}}\"}",
             "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_norm/bcftools_norm/1.24+galaxy0",
             "tool_version": "1.24+galaxy0",
             "position": {
@@ -347,7 +347,7 @@
             "type": "tool",
             "label": "target_filter",
             "annotation": "Keep calls within the padded targets that satisfy the quality expression.",
-            "tool_state": "{\"__page__\": 0, \"sec_restrict\": {\"regions\": {\"regions_src\": \"regions_file\", \"regions_overlap\": \"1\"}, \"targets\": {\"targets_src\": \"__none__\"}, \"exclude\": null}, \"sec_filter\": {\"SnpGap\": null, \"IndelGap\": null, \"mode\": null, \"conditional_soft_filter\": {\"selector\": \"disabled\"}, \"select_set_GTs\": null}, \"output_type\": \"v\"}",
+            "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"input_file\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"output_type\": \"\\\"v\\\"\", \"sec_filter\": \"{\\\"IndelGap\\\": null, \\\"SnpGap\\\": null, \\\"conditional_soft_filter\\\": {\\\"__current_case__\\\": 0, \\\"selector\\\": \\\"disabled\\\"}, \\\"mode\\\": null, \\\"select_set_GTs\\\": null}\", \"sec_restrict\": \"{\\\"exclude\\\": null, \\\"include\\\": {\\\"__class__\\\": \\\"ConnectedValue\\\"}, \\\"regions\\\": {\\\"__current_case__\\\": 2, \\\"regions_file\\\": {\\\"__class__\\\": \\\"ConnectedValue\\\"}, \\\"regions_overlap\\\": \\\"1\\\", \\\"regions_src\\\": \\\"regions_file\\\"}, \\\"targets\\\": {\\\"__current_case__\\\": 0, \\\"targets_src\\\": \\\"__none__\\\"}}\"}",
             "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_filter/bcftools_filter/1.24+galaxy0",
             "tool_version": "1.24+galaxy0",
             "position": {
@@ -398,7 +398,7 @@
             "type": "tool",
             "label": "clinvar_annotation",
             "annotation": "Transfer ClinVar clinical significance (allele-specific match on CHROM, POS, REF, ALT).",
-            "tool_state": "{\"__page__\": 0, \"sec_annofile\": {\"columns\": \"CLNSIG,CLNREVSTAT,CLNDN,CLNSIGCONF,ALLELEID\", \"annofile\": {\"anno_fmt\": \"vcf\"}, \"mark_sites\": \"\", \"min_overlap\": \"\", \"set_id\": \"\"}, \"sec_annotate\": {\"remove\": \"\"}, \"sec_restrict\": {\"include\": null, \"exclude\": null, \"collapse\": null, \"regions\": {\"regions_src\": \"__none__\"}, \"samples\": \"\", \"invert_samples\": false, \"invert_samples_file\": false}, \"output_type\": \"v\"}",
+            "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"input_file\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"output_type\": \"\\\"v\\\"\", \"sec_annofile\": \"{\\\"annofile\\\": {\\\"__current_case__\\\": 1, \\\"anno_fmt\\\": \\\"vcf\\\", \\\"annotations\\\": {\\\"__class__\\\": \\\"ConnectedValue\\\"}}, \\\"columns\\\": \\\"CLNSIG,CLNREVSTAT,CLNDN,CLNSIGCONF,ALLELEID\\\", \\\"mark_sites\\\": \\\"\\\", \\\"min_overlap\\\": \\\"\\\", \\\"set_id\\\": \\\"\\\"}\", \"sec_annotate\": \"{\\\"remove\\\": \\\"\\\", \\\"rename_annots\\\": {\\\"__class__\\\": \\\"RuntimeValue\\\"}, \\\"rename_chrs\\\": {\\\"__class__\\\": \\\"RuntimeValue\\\"}}\", \"sec_restrict\": \"{\\\"collapse\\\": null, \\\"exclude\\\": null, \\\"include\\\": null, \\\"invert_samples\\\": false, \\\"invert_samples_file\\\": false, \\\"regions\\\": {\\\"__current_case__\\\": 0, \\\"regions_src\\\": \\\"__none__\\\"}, \\\"samples\\\": \\\"\\\", \\\"samples_file\\\": {\\\"__class__\\\": \\\"RuntimeValue\\\"}}\"}",
             "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
             "tool_version": "1.24+galaxy0",
             "position": {
@@ -443,7 +443,7 @@
             "type": "tool",
             "label": "population_annotation",
             "annotation": "Transfer the population allele frequency as INFO/gnomAD_AF (keeps the caller's own INFO/AF intact).",
-            "tool_state": "{\"__page__\": 0, \"sec_annofile\": {\"columns\": \"gnomAD_AF:=AF\", \"annofile\": {\"anno_fmt\": \"vcf\"}, \"mark_sites\": \"\", \"min_overlap\": \"\", \"set_id\": \"\"}, \"sec_annotate\": {\"remove\": \"\"}, \"sec_restrict\": {\"include\": null, \"exclude\": null, \"collapse\": null, \"regions\": {\"regions_src\": \"__none__\"}, \"samples\": \"\", \"invert_samples\": false, \"invert_samples_file\": false}, \"output_type\": \"v\"}",
+            "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"input_file\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"output_type\": \"\\\"v\\\"\", \"sec_annofile\": \"{\\\"annofile\\\": {\\\"__current_case__\\\": 1, \\\"anno_fmt\\\": \\\"vcf\\\", \\\"annotations\\\": {\\\"__class__\\\": \\\"ConnectedValue\\\"}}, \\\"columns\\\": \\\"gnomAD_AF:=AF\\\", \\\"mark_sites\\\": \\\"\\\", \\\"min_overlap\\\": \\\"\\\", \\\"set_id\\\": \\\"\\\"}\", \"sec_annotate\": \"{\\\"remove\\\": \\\"\\\", \\\"rename_annots\\\": {\\\"__class__\\\": \\\"RuntimeValue\\\"}, \\\"rename_chrs\\\": {\\\"__class__\\\": \\\"RuntimeValue\\\"}}\", \"sec_restrict\": \"{\\\"collapse\\\": null, \\\"exclude\\\": null, \\\"include\\\": null, \\\"invert_samples\\\": false, \\\"invert_samples_file\\\": false, \\\"regions\\\": {\\\"__current_case__\\\": 0, \\\"regions_src\\\": \\\"__none__\\\"}, \\\"samples\\\": \\\"\\\", \\\"samples_file\\\": {\\\"__class__\\\": \\\"RuntimeValue\\\"}}\"}",
             "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
             "tool_version": "1.24+galaxy0",
             "position": {
@@ -488,7 +488,7 @@
             "type": "tool",
             "label": "functional_annotation",
             "annotation": "Predict variant effects (gene, consequence, impact, HGVS, LOF/NMD) with SnpEff.",
-            "tool_state": "{\"__page__\": 0, \"inputFormat\": \"vcf\", \"outputFormat\": \"vcf\", \"csvStats\": true, \"generate_stats\": true, \"generate_gene_stats\": false, \"snpDb\": {\"genomeSrc\": \"history\", \"reg_section\": {\"regulation\": null}}, \"udLength\": \"0\", \"spliceSiteSize\": \"2\", \"spliceRegion\": {\"setSpliceRegions\": \"no\"}, \"annotations\": null, \"filterOut\": null, \"filter\": {\"specificEffects\": \"no\"}, \"chr\": \"\", \"noLog\": true}",
+            "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"annotations\": \"null\", \"chr\": \"\\\"\\\"\", \"csvStats\": \"true\", \"filter\": \"{\\\"__current_case__\\\": 0, \\\"specificEffects\\\": \\\"no\\\"}\", \"filterOut\": \"null\", \"generate_gene_stats\": \"false\", \"generate_stats\": \"true\", \"input\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"inputFormat\": \"\\\"vcf\\\"\", \"intervals\": \"{\\\"__class__\\\": \\\"RuntimeValue\\\"}\", \"noLog\": \"true\", \"outputFormat\": \"\\\"vcf\\\"\", \"snpDb\": \"{\\\"__current_case__\\\": 1, \\\"genomeSrc\\\": \\\"history\\\", \\\"reg_section\\\": {\\\"regulation\\\": null}, \\\"snpeff_db\\\": {\\\"__class__\\\": \\\"ConnectedValue\\\"}}\", \"spliceRegion\": \"{\\\"__current_case__\\\": 0, \\\"setSpliceRegions\\\": \\\"no\\\"}\", \"spliceSiteSize\": \"\\\"2\\\"\", \"transcripts\": \"{\\\"__class__\\\": \\\"RuntimeValue\\\"}\", \"udLength\": \"\\\"0\\\"\"}",
             "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/snpeff/snpEff/5.4+galaxy0",
             "tool_version": "5.4+galaxy0",
             "position": {
@@ -562,7 +562,7 @@
             "type": "tool",
             "label": "prioritize",
             "annotation": "Select candidate variants with the prioritisation expression.",
-            "tool_state": "{\"__page__\": 0, \"filter_expression\": {\"type\": \"simple\"}, \"inverse\": false, \"filtering\": {\"mode\": \"entries\"}}",
+            "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"filter_expression\": \"{\\\"__current_case__\\\": 0, \\\"expr\\\": {\\\"__class__\\\": \\\"ConnectedValue\\\"}, \\\"type\\\": \\\"simple\\\"}\", \"filtering\": \"{\\\"__current_case__\\\": 0, \\\"mode\\\": \\\"entries\\\"}\", \"input\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"inverse\": \"false\"}",
             "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_filter/5.4.0c+galaxy1",
             "tool_version": "5.4.0c+galaxy1",
             "position": {
@@ -607,7 +607,7 @@
             "type": "tool",
             "label": "candidate_table",
             "annotation": "One row per candidate variant (most severe SnpEff effect, ClinVar, gnomAD, genotype).",
-            "tool_state": "{\"__page__\": 0, \"extract\": \"CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P LOF NMD gnomAD_AF CLNSIG CLNREVSTAT CLNDN\", \"one_effect_per_line\": false, \"separator\": \",\", \"empty_text\": \".\"}",
+            "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"empty_text\": \"\\\".\\\"\", \"extract\": \"\\\"CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P LOF NMD gnomAD_AF CLNSIG CLNREVSTAT CLNDN\\\"\", \"input\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"one_effect_per_line\": \"false\", \"separator\": \"\\\",\\\"\"}",
             "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1",
             "tool_version": "5.4.0c+galaxy1",
             "position": {
@@ -646,7 +646,7 @@
             "type": "tool",
             "label": "annotated_table",
             "annotation": "One row per on-target variant with the same columns as the candidate table.",
-            "tool_state": "{\"__page__\": 0, \"extract\": \"CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P LOF NMD gnomAD_AF CLNSIG CLNREVSTAT CLNDN\", \"one_effect_per_line\": false, \"separator\": \",\", \"empty_text\": \".\"}",
+            "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"empty_text\": \"\\\".\\\"\", \"extract\": \"\\\"CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P LOF NMD gnomAD_AF CLNSIG CLNREVSTAT CLNDN\\\"\", \"input\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"one_effect_per_line\": \"false\", \"separator\": \"\\\",\\\"\"}",
             "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1",
             "tool_version": "5.4.0c+galaxy1",
             "position": {
@@ -685,7 +685,7 @@
             "type": "tool",
             "label": "variant_stats",
             "annotation": "Variant statistics of the annotated on-target calls (MultiQC compatible).",
-            "tool_state": "{\"__page__\": 0, \"sec_restrict\": {\"samples\": \"\", \"invert_samples\": false, \"invert_samples_file\": false, \"apply_filters\": \"\", \"collapse\": null, \"regions\": {\"regions_src\": \"__none__\"}, \"targets\": {\"targets_src\": \"__none__\"}, \"include\": null, \"exclude\": null}, \"sec_default\": {\"first_allele_only\": false, \"depth\": {\"set_depth\": \"no\"}, \"reference_source\": {\"reference_source_selector\": \"\"}, \"split_by_ID\": false, \"user_tstv\": \"\", \"afbins\": {\"afbins_select\": \"default\"}, \"af_tag\": \"\", \"verbose\": false}, \"plot_title\": \"\"}",
+            "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"inputB_file\": \"{\\\"__class__\\\": \\\"RuntimeValue\\\"}\", \"input_file\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"plot_title\": \"\\\"\\\"\", \"sec_default\": \"{\\\"af_tag\\\": \\\"\\\", \\\"afbins\\\": {\\\"__current_case__\\\": 0, \\\"afbins_select\\\": \\\"default\\\"}, \\\"depth\\\": {\\\"__current_case__\\\": 0, \\\"set_depth\\\": \\\"no\\\"}, \\\"exons_file\\\": {\\\"__class__\\\": \\\"RuntimeValue\\\"}, \\\"first_allele_only\\\": false, \\\"reference_source\\\": {\\\"__current_case__\\\": 0, \\\"reference_source_selector\\\": \\\"\\\"}, \\\"split_by_ID\\\": false, \\\"user_tstv\\\": \\\"\\\", \\\"verbose\\\": false}\", \"sec_restrict\": \"{\\\"apply_filters\\\": \\\"\\\", \\\"collapse\\\": null, \\\"exclude\\\": null, \\\"include\\\": null, \\\"invert_samples\\\": false, \\\"invert_samples_file\\\": false, \\\"regions\\\": {\\\"__current_case__\\\": 0, \\\"regions_src\\\": \\\"__none__\\\"}, \\\"samples\\\": \\\"\\\", \\\"samples_file\\\": {\\\"__class__\\\": \\\"RuntimeValue\\\"}, \\\"targets\\\": {\\\"__current_case__\\\": 0, \\\"targets_src\\\": \\\"__none__\\\"}}\"}",
             "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_stats/bcftools_stats/1.24+galaxy0",
             "tool_version": "1.24+galaxy0",
             "position": {
