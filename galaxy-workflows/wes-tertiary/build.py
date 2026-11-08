@@ -9,8 +9,9 @@ Requires Python >= 3.10 and gxformat2 >= 0.29:
 
 * ``run: {"@import": "<file>.gxwf.yml"}`` in a step is replaced by the content of that file, so the
   FASTQ workflow carries the VCF workflow as an embedded (self-contained) subworkflow.
-* UUIDs are derived from the workflow/step labels (uuid5), so rebuilding an unchanged source produces
-  an identical .ga file.
+* UUIDs are derived from the workflow/step labels, so rebuilding an unchanged source produces
+  an identical .ga file. They are hashed like uuid5 but stamped as version 4, because Galaxy's API
+  validates workflow UUIDs as UUID4 and returns HTTP 500 when opening a workflow with a uuid5.
 """
 import copy
 import json
@@ -56,15 +57,20 @@ def inline_imports(wf):
     return wf
 
 
+def stable_uuid4(name):
+    """Deterministic UUID with version 4 bits (Galaxy rejects other versions)."""
+    return str(uuid.UUID(bytes=uuid.uuid5(NAMESPACE, name).bytes, version=4))
+
+
 def pin_uuids(native, scope):
-    native["uuid"] = str(uuid.uuid5(NAMESPACE, scope))
+    native["uuid"] = stable_uuid4(scope)
     for key, step in native["steps"].items():
         step_scope = f"{scope}/{step.get('label') or key}"
         if "uuid" in step:
-            step["uuid"] = str(uuid.uuid5(NAMESPACE, step_scope))
+            step["uuid"] = stable_uuid4(step_scope)
         for i, wo in enumerate(step.get("workflow_outputs") or []):
             if "uuid" in wo:
-                wo["uuid"] = str(uuid.uuid5(NAMESPACE, f"{step_scope}/output/{wo.get('label') or i}"))
+                wo["uuid"] = stable_uuid4(f"{step_scope}/output/{wo.get('label') or i}")
         if isinstance(step.get("subworkflow"), dict):
             pin_uuids(step["subworkflow"], step_scope)
 
