@@ -1,7 +1,8 @@
 # Tool Shed repositories used by the WES workflows.
-# Install with Ephemeris (https://ephemeris.readthedocs.io):
-#   pip install ephemeris
-#   shed-tools install -g http://192.168.191.12 -a <ADMIN_API_KEY> -t tools.yml
+# Install with Ephemeris (https://ephemeris.readthedocs.io), in a virtual environment
+# (system pip on Debian/Ubuntu refuses with "externally-managed-environment"):
+#   python3 -m venv ~/ephemeris-venv && ~/ephemeris-venv/bin/pip install ephemeris
+#   ~/ephemeris-venv/bin/shed-tools install -g http://192.168.191.12 -a <ADMIN_API_KEY> -t tools.yml
 # No revisions are pinned, so the latest installable revision of each repository is installed.
 # The workflows were built against: fastqc 0.74+galaxy1, fastp 1.4.0+galaxy0, bwa_mem 0.7.19+galaxy2,
 # picard 3.1.1(.0), samtools_stats 2.0.9, samtools_faidx 1.22+galaxy2, mosdepth 0.3.14+galaxy0,

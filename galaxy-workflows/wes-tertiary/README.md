@@ -32,13 +32,16 @@ flowchart LR
 ## 1. Install the tools and import the workflows
 
 1. **Tools**: as a Galaxy admin, install the repositories listed in [`tools.yml`](tools.yml). You can use
-   *Admin → Install and Uninstall*, or [Ephemeris](https://ephemeris.readthedocs.io):
+   *Admin → Install and Uninstall*, or [Ephemeris](https://ephemeris.readthedocs.io). Install Ephemeris into a
+   virtual environment; Debian/Ubuntu refuse a system-wide `pip install` with "externally-managed-environment":
    ```bash
-   pip install ephemeris
+   python3 -m venv ~/ephemeris-venv && ~/ephemeris-venv/bin/pip install ephemeris
    ```
    ```bash
-   shed-tools install -g http://192.168.191.12 -a <ADMIN_API_KEY> -t tools.yml
+   ~/ephemeris-venv/bin/shed-tools install -g http://192.168.191.12 -a <ADMIN_API_KEY> -t tools.yml
    ```
+   If `python3 -m venv` reports that `ensurepip` is not available, install `python3-venv` (or `python3-full`)
+   with `apt` first. The API key belongs to a Galaxy admin user (*User → Preferences → Manage API Key*).
 2. **Workflows**: *Workflows → Import*, then upload `wes-tertiary-from-vcf.ga` and `wes-tertiary-from-fastq.ga`
    (or paste the raw GitHub URL of each file).
 
