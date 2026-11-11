@@ -138,7 +138,7 @@ steps:
         reference_source_selector: history
       check_ref: wx
       atomization: ""
-      normalize_indels: false
+      normalize_indels: true
       old_rec_tag: ""
       rm_dup: ""
       multiallelics:
