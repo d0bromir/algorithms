@@ -86,7 +86,7 @@ and VCFs. A naming mismatch does not raise an error. ClinVar/gnomAD annotations 
 | **Reference genome (FASTA)** | GRCh38 without ALT contigs, e.g. the *GRCh38 no-alt analysis set* (UCSC naming `chr1…`) | Upload as datatype `fasta` (uncompressed). For VCF input (v2) it must be the genome the variants were called on. |
 | **Exome target regions (BED)** | The capture kit's target (or "covered") BED for the same build, from Twist, IDT, Agilent, etc. | No `track`/`browser` header lines. v1 uses it unpadded for coverage QC. The workflows pad it themselves for variant restriction. |
 | **Target padding (bp)** | Default `50` | Keeps canonical and extended splice-site variants just outside the targets. |
-| **SnpEff database** | Run the **SnpEff download** tool once, e.g. an Ensembl database such as `GRCh38.105` or a RefSeq/MANE one such as `GRCh38.mane.1.2.refseq` | The **SnpEff databases** tool lists the exact names available for SnpEff 5.4. MANE Select databases give clinically conventional NM_ HGVS. SnpEff itself tolerates `chr1` vs `1`. The default Java heap is 8 GB (`GALAXY_MEMORY_MB`). |
+| **SnpEff database** | Run the **SnpEff download** tool once, e.g. an Ensembl database such as `GRCh38.115` or a RefSeq/MANE one such as `GRCh38.mane.1.2.refseq` | The **SnpEff databases** tool lists the exact names available for SnpEff 5.4. MANE Select databases give clinically conventional NM_ HGVS. SnpEff itself tolerates `chr1` vs `1`. The default Java heap is 8 GB (`GALAXY_MEMORY_MB`). |
 | **ClinVar (VCF)** | `clinvar.vcf.gz` from https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/ | ClinVar uses `1, 2, …, MT`. For a `chr`-named reference, run **bcftools annotate** on it once with *Rename chromosomes* = [`data/ncbi_to_ucsc_chromosomes.tsv`](data/ncbi_to_ucsc_chromosomes.tsv) and output type *compressed BCF*. |
 | **Population allele frequencies (VCF)** | gnomAD exomes (v4.1 recommended) reduced to `INFO/AF` and to the padded targets, as an indexed **BCF** (recipe below) | The full gnomAD VCFs are hundreds of GB. Plain VCF inputs are re-compressed and indexed in every job, while BCF is used directly. Only `INFO/AF` is read; it is stored as `INFO/gnomAD_AF`. |
 
@@ -187,7 +187,7 @@ To add columns, edit the *Fields to extract* of the `candidate_table` / `annotat
 
 ## 7. Validation
 
-This environment could not reach your Galaxy server, so the workflows were checked offline:
+The workflows were first checked offline:
 
 - **Structure and tool parameters**: [`tests/validate_workflows.py`](tests/validate_workflows.py) checks every
   step of both `.ga` files, including the embedded subworkflow, against the actual wrapper XML from
@@ -218,8 +218,39 @@ python tests/validate_workflows.py --tools-iuc /tmp/tools-iuc --self-test
 python tests/test_annotation_logic.py --snpsift-jar /path/to/SnpSift.jar
 ```
 
-**Not yet done:** an end-to-end run inside Galaxy. Before using the results, run v1 once on a known exome, e.g.
-GIAB HG001/NA12878 with its benchmark VCF, and check the MultiQC report, the HsMetrics and the candidate table.
+### End-to-end run in Galaxy (HG001)
+
+v1 was run once in Galaxy 26.2 (aarch64 server) on a GIAB HG001/NA12878 exome. All 23 jobs finished. Inputs:
+- **Reads:** GIAB Garvan HiSeq 2500 exome, library NIST7035, lane 1 only (38.2 M reads). The full sample has two
+  libraries × two lanes; one lane is a deliberately thin, quick test.
+- **Targets:** Illumina Nextera Rapid Capture Expanded Exome BED, lifted from hg19 to GRCh38 with CrossMap
+  (201,442 targets, 62.1 Mb).
+- **Reference and annotation:** Ensembl GRCh38 primary assembly (`1, 2, …` naming), SnpEff `GRCh38.115`, ClinVar
+  (NCBI), and population AF from GATK's `af-only-gnomad.hg38` (gnomAD v2) reduced to the padded targets. A v4.1
+  subset was impractical here: its records carry several KB of INFO each, so extracting the targets downloads most
+  of the full exome VCFs.
+
+Capture QC (Picard HsMetrics): mean target coverage 23×, median 20×, 77 % of target bases ≥ 10×, 50 % ≥ 20×,
+fold-80 2.88, 6.1 % duplicates.
+
+Accuracy against the GIAB v4.2.1 benchmark, inside targets ∩ benchmark regions (56.9 Mb). Calls and truth were
+normalised with `bcftools norm` and matched on exact alleles (stricter than hap.py for complex indels):
+
+| Call set | Type | Recall | Precision | F1 | Genotype match |
+|---|---|--:|--:|--:|--:|
+| `annotated_vcf`, all evaluated targets | SNV | 0.728 | 0.993 | 0.840 | 0.996 |
+| `annotated_vcf`, all evaluated targets | indel | 0.504 | 0.828 | 0.627 | 0.925 |
+| `annotated_vcf`, targets fully ≥ 10× (13.8 Mb) | SNV | 0.956 | 0.990 | 0.973 | 0.997 |
+| `annotated_vcf`, targets fully ≥ 10× (13.8 Mb) | indel | 0.889 | 0.707 | 0.787 | 0.960 |
+
+The low overall recall comes from coverage: with one lane, 23 % of the target bases stay below the `FMT/DP>=10`
+quality filter. On well-covered targets SNV recall is 95.6 %. 85 % of the 55,655 reported variants received a
+gnomAD AF and 21 % a ClinVar record. The candidate table had 1,357 variants, 104 of them ClinVar (likely)
+pathogenic or with conflicting classifications.
+
+Lessons from the run, reflected in section 2:
+- Fetch inputs into Galaxy by `https://` URLs. The same NCBI files fetched by `ftp://` URL arrived corrupted.
+- SnpEff 5.4 has no `GRCh38.105`; use a name that the **SnpEff databases** tool lists, such as `GRCh38.115`.
 
 ## 8. Scope and limitations
 
