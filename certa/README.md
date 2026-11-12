@@ -469,12 +469,16 @@ certa-qc GRCh38.cidx -t 32 -o certified.sam -u fallback_R1.fq -U fallback_R2.fq 
 simulated data with adapter read-through, poly-G tails and poor 3' ends. It
 compares the SAM, the uncertified FASTQ files and fastp's files for dropped
 reads byte for byte, and both JSON reports (without timings).
-Result on 40 000 simulated pairs (single-end and paired, six fastp option
-sets, four certa modes, `-w`/`-t` 1 and 4, plain and gzip input): 76 of 80
-cases identical. The four others used `--dedup` with four fastp workers.
-fastp's own output then changes from run to run, because the copy of a
-duplicate it keeps depends on the order of its packs. That option set now
-runs at `-w 1`.
+Result on 40 000 simulated pairs: all 72 cases identical. The cases cover
+single-end and paired input, six fastp option sets, four certa modes,
+`-w`/`-t` 1 and 4, and plain and gzip input. fastp lowers `-w` for small
+inputs. At `-w 4` it used four workers on the plain input and two on the
+gzip input.
+
+The option set with `--dedup` runs at `-w 1` only. With more than one
+worker, fastp's own output changes from run to run. The copy of a duplicate
+it keeps depends on the order of its packs. In a first run at `-w 4`, these
+were the only 4 of 80 cases that differed.
 
 **Limits (next steps in the design):**
 
