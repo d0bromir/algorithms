@@ -109,8 +109,9 @@ struct MapPipeline::ChunkScratch {
 };
 
 MapPipeline::MapPipeline(const MapConfig& c, const Reference& ref, const IndexView& view, const IndexView* view2,
-                         FastqInput& reads, FastqInput* mates, MapOutputs& out, const T2tRef* t2t)
-    : c_(c), ref_(ref), view_(view), view2_(view2), reads_(reads), mates_(mates), out_(out),
+                         FastqInput* reads, FastqInput* mates, MapOutputs& out, const T2tRef* t2t,
+                         RecordSource* source)
+    : c_(c), ref_(ref), view_(view), view2_(view2), reads_(reads), mates_(mates), source_(source), out_(out),
       writer_(ref, view, c.out), t2t_(t2t), bio_model_(c.bp) {
   if (t2t_) {
     // T2T placements as interval mode makes them, with the MAPQ the pair
@@ -154,8 +155,19 @@ void MapPipeline::load(int slot) {
   Slot& S = slots_[slot];
   try {
     auto t = Clock::now();
-    if (!c_.paired()) {
-      reads_.next_batch(S.recs, c_.batch_size, c_.io_threads);
+    if (source_) {
+      // The same batch sizes as from FASTQ files: batch_size reads, or
+      // batch_size / 2 pairs.
+      const size_t want = c_.paired() ? 2 * std::max<size_t>(1, c_.batch_size / 2) : c_.batch_size;
+      source_->next(S.recs, want);
+      if (c_.paired()) {
+        if (S.recs.size() % 2) throw std::runtime_error("record source: a mate without its pair");
+        for (size_t i = 0; i < S.recs.size(); i += 2)
+          if (S.recs[i].name != S.recs[i + 1].name)
+            throw std::runtime_error("mate names differ: " + S.recs[i].name + " / " + S.recs[i + 1].name);
+      }
+    } else if (!c_.paired()) {
+      reads_->next_batch(S.recs, c_.batch_size, c_.io_threads);
     } else {
       // Mates interleaved: read 2i is mate 1, read 2i + 1 its mate 2, each
       // parsed straight into its place (strings reused from the slot's
@@ -163,7 +175,7 @@ void MapPipeline::load(int slot) {
       // split, and a gzip file inflated, on one thread).
       const size_t half = std::max<size_t>(1, c_.batch_size / 2);
       auto n2 = std::async(std::launch::async, [&] { return mates_->next_spans(spans_[1], half, c_.io_threads); });
-      const size_t n1 = reads_.next_spans(spans_[0], half, c_.io_threads);
+      const size_t n1 = reads_->next_spans(spans_[0], half, c_.io_threads);
       if (n1 != n2.get()) throw std::runtime_error("mate files have different numbers of reads");
       std::vector<FastqRecord>& out = S.recs;
       out.resize(2 * n1);

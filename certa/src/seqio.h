@@ -78,6 +78,17 @@ class MappedFastq {
   FastqSpans spans_;             // next_batch's (buffers reused)
 };
 
+// Records that come from somewhere other than a FASTQ file (certa-qc: the
+// reads fastp keeps). next() puts up to `max_records` records into `out`, in
+// input order, resizing it to that many, and returns the number; 0 at the
+// end. For paired input record 2i is mate 1 and record 2i + 1 its mate 2.
+// It may reuse the strings already in `out`.
+class RecordSource {
+ public:
+  virtual ~RecordSource() = default;
+  virtual size_t next(std::vector<FastqRecord>& out, size_t max_records) = 0;
+};
+
 // A FASTQ input: memory-mapped when it is an uncompressed regular file,
 // streamed otherwise (gzip, pipes).
 class FastqInput {

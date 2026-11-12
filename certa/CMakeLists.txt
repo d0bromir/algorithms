@@ -63,6 +63,31 @@ else()
 endif()
 target_link_libraries(certa PRIVATE certa_core)
 
+# certa-qc: fastp's QC and trimming and certa map in one process. It needs a
+# d0bromir/fastp checkout where `make lib` has built libfastp_core.a (see
+# docs/LIBRARY.md there), e.g. cmake -DFASTP_DIR=$HOME/fastp. Without
+# FASTP_DIR it is not built, and certa does not depend on fastp.
+set(FASTP_DIR "" CACHE PATH "d0bromir/fastp checkout with libfastp_core.a, for certa-qc")
+set(FASTP_LIBS "isal;deflate" CACHE STRING "The libraries libfastp_core.a needs (fastp: make print-libs)")
+if(FASTP_DIR)
+  if(NOT EXISTS "${FASTP_DIR}/libfastp_core.a" OR NOT EXISTS "${FASTP_DIR}/src/fastp_core.h")
+    message(FATAL_ERROR "FASTP_DIR=${FASTP_DIR}: run `make lib` there first (libfastp_core.a, src/fastp_core.h)")
+  endif()
+  # Only fastp's public header: its src/ also holds a cli.h and other names
+  # that would shadow certa's.
+  file(COPY "${FASTP_DIR}/src/fastp_core.h" DESTINATION "${CMAKE_BINARY_DIR}/fastp_include")
+  set(CERTA_MAP_SOURCES src/cmd_map.cpp src/map_config.cpp src/map_pipeline.cpp src/map_stats.cpp src/sam_output.cpp)
+  if(USE_CUDA)
+    add_executable(certa-qc src/qc_main.cpp ${CERTA_MAP_SOURCES} src/mapper_gpu.cu)
+    set_target_properties(certa-qc PROPERTIES CUDA_SEPARABLE_COMPILATION OFF)
+    target_compile_options(certa-qc PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-O3 --expt-relaxed-constexpr>)
+  else()
+    add_executable(certa-qc src/qc_main.cpp ${CERTA_MAP_SOURCES} src/gpu_stub.cpp)
+  endif()
+  target_include_directories(certa-qc PRIVATE "${CMAKE_BINARY_DIR}/fastp_include")
+  target_link_libraries(certa-qc PRIVATE certa_core "${FASTP_DIR}/libfastp_core.a" ${FASTP_LIBS} Threads::Threads)
+endif()
+
 enable_testing()
 add_executable(test_certa tests/test_certa.cpp src/gpu_stub.cpp)
 target_link_libraries(test_certa PRIVATE certa_core)

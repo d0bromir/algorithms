@@ -49,9 +49,11 @@ struct T2tRef {
 class MapPipeline {
  public:
   // `view2`: the second index (--index2), or null; `mates`: null for
-  // single-end input; `t2t`: T2T-CHM13 (--t2t), or null.
+  // single-end input; `t2t`: T2T-CHM13 (--t2t), or null. `source`: where the
+  // records come from instead of `reads` and `mates` (both null then), or null.
   MapPipeline(const MapConfig& c, const Reference& ref, const IndexView& view, const IndexView* view2,
-              FastqInput& reads, FastqInput* mates, MapOutputs& out, const T2tRef* t2t = nullptr);
+              FastqInput* reads, FastqInput* mates, MapOutputs& out, const T2tRef* t2t = nullptr,
+              RecordSource* source = nullptr);
 
   // Maps and writes every batch. wait_for_gpu() is called once the first
   // batch is read (so reading overlaps the GPU upload) and returns the GPU
@@ -100,8 +102,9 @@ class MapPipeline {
   const Reference& ref_;
   const IndexView& view_;
   const IndexView* view2_;
-  FastqInput& reads_;
+  FastqInput* reads_;
   FastqInput* mates_;
+  RecordSource* source_;
   MapOutputs& out_;
   RecordWriter writer_;
   const T2tRef* t2t_;
@@ -117,5 +120,9 @@ class MapPipeline {
   PassCounts first_counts_, rest_counts_;
   Timings time_;
 };
+
+// certa map, from loading the index to the summary: the records come from
+// `source`, or from the FASTQ files in `c` when it is null (cmd_map.cpp).
+int run_map(const MapConfig& c, RecordSource* source);
 
 }  // namespace certa

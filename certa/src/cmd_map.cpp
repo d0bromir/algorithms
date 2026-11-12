@@ -20,8 +20,10 @@
 
 namespace certa {
 
-int cmd_map(const Args& a) {
-  MapConfig c = MapConfig::from_args(a);
+int cmd_map(const Args& a) { return run_map(MapConfig::from_args(a), nullptr); }
+
+int run_map(const MapConfig& config, RecordSource* source) {
+  MapConfig c = config;
 
   auto t_all = Clock::now();
   Reference ref;
@@ -86,8 +88,8 @@ int cmd_map(const Args& a) {
 
   // Open input and outputs first, so a failure cannot leave the upload
   // thread running.
-  FastqInput reads(c.reads_path);
-  std::unique_ptr<FastqInput> mates(c.paired() ? new FastqInput(c.mates_path) : nullptr);
+  std::unique_ptr<FastqInput> reads(source ? nullptr : new FastqInput(c.reads_path));
+  std::unique_ptr<FastqInput> mates(!source && c.paired() ? new FastqInput(c.mates_path) : nullptr);
   std::FILE* sam = c.sam_path.empty() ? stdout : open_output(c.sam_path, "SAM output");
   std::FILE* fq = c.fq_path.empty() ? nullptr : open_output(c.fq_path, "uncertified FASTQ output");
   std::FILE* fq2 = c.fq2_path.empty() ? nullptr : open_output(c.fq2_path, "uncertified mates output");
@@ -122,7 +124,7 @@ int cmd_map(const Args& a) {
     return gm.get();
   };
 
-  MapPipeline pipeline(c, ref, view, view2.get(), reads, mates.get(), out, t2t.get());
+  MapPipeline pipeline(c, ref, view, view2.get(), reads.get(), mates.get(), out, t2t.get(), source);
   pipeline.run(wait_for_gpu);
   if (!out.finish()) throw std::runtime_error("writing an output failed");
 
