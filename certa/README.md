@@ -424,6 +424,70 @@ Parameters:
 | `--adaptive-parts` / `--vbudget` | 0 / 4096 | pass V (CPU, s = 1 index): for reads still uncertified after pass 3, parts chosen per read: 1 = the rarest disjoint q-mers (radius \|S\| − 1); 2 = then q-mers searched with up to one edit (radius 2\|S\| − 1, at most 12); hits per strand ≤ `--vbudget`. Not with `--witness` |
 | `--index2` | none | not recommended since pass V: a second index of the same reference (e.g. built with `-q 15 -s 1`, about 23 GB for GRCh38) on which reads still uncertified after every pass get every pass again (CPU). With `--full-cert` it adds 0.1 points for twice the memory and 50 % more time (HG002). Not with `--witness` or `--serial-stages` |
 
+## QC and mapping in one pass: `certa-qc`
+
+`certa-qc` runs fastp's QC, trimming and filtering and `certa map` in one
+process. fastp reads the input, and the reads it keeps go straight into
+certa map's pipeline. Nothing is compressed, written or read back in between.
+This is milestone M1 (CPU) of
+[FUSED_QC_MAPPING_DESIGN.md](../FUSED_QC_MAPPING_DESIGN.md).
+
+It needs a [d0bromir/fastp](https://github.com/d0bromir/fastp) checkout with
+the library built (`make lib`, see `docs/LIBRARY.md` there):
+
+```bash
+make -C ~/fastp -j && make -C ~/fastp lib
+cmake -S certa -B build -DFASTP_DIR=$HOME/fastp
+cmake --build build -j --target certa-qc
+```
+
+For a CUDA build of fastp, pass its libraries as a CMake list:
+`-DFASTP_LIBS="$(make -s -C ~/fastp print-libs | tr ' ' ';')"`.
+
+```bash
+certa-qc ref.cidx [certa map options] --fastp [fastp options]
+
+certa-qc GRCh38.cidx -t 32 -o certified.sam -u fallback_R1.fq -U fallback_R2.fq --stats map.json \
+    --fastp -i R1.fq.gz -I R2.fq.gz -w 16 --detect_adapter_for_pe -j qc.json -h qc.html
+```
+
+- **Options.** Before `--fastp` come certa map's options, without the FASTQ
+  inputs. After it come fastp's, with fastp's `-i`/`-I` as the input.
+- **Refused fastp options.** `-o`, `-O` and `--stdout` are refused, because
+  the reads fastp keeps are mapped. `--merge` and `--split` are not supported
+  yet.
+- **Dropped reads.** `--failed_out`, `--unpaired1`/`--unpaired2` and
+  `--overlapped_out` are written as fastp writes them. A name ending in `.gz`
+  is gzip-compressed.
+- **Reports.** fastp's JSON and HTML reports (`-j`, `-h`) and certa's
+  `--stats` are written as the two programs write them.
+- **Threads.** fastp's work runs on its own `-w` workers, ahead of certa's
+  `-t` threads, so trimming overlaps loading the index and mapping.
+
+**The output equals the two-step pipeline** `fastp -o trimmed.fq ...` then
+`certa map ref.cidx trimmed.fq ...`. `tests/qc_equivalence.py` runs both on
+simulated data with adapter read-through, poly-G tails and poor 3' ends. It
+compares the SAM, the uncertified FASTQ files and fastp's files for dropped
+reads byte for byte, and both JSON reports (without timings).
+Result on 40 000 simulated pairs (single-end and paired, six fastp option
+sets, four certa modes, `-w`/`-t` 1 and 4, plain and gzip input): 76 of 80
+cases identical. The four others used `--dedup` with four fastp workers.
+fastp's own output then changes from run to run, because the copy of a
+duplicate it keeps depends on the order of its packs. That option set now
+runs at `-w 1`.
+
+**Limits (next steps in the design):**
+
+- **Hard trim.** Reads are written as fastp trimmed them. Soft clips for the
+  trimmed bases, the design's default, are not implemented yet. The library
+  already reports each read's front offset and its input read for this.
+- **Two thread pools.** fastp and certa map have separate threads. The design
+  shares one pool, so that neither waits on the other.
+- **Copies.** Each kept read is copied from fastp's record into certa's.
+  Handing device batches over without a copy is milestone M2.
+- **GPU.** `--gpu` uses certa map's GPU mapper as `certa map` does. It has
+  not been tested with `certa-qc` yet.
+
 ## Results on real data: GIAB HG002, NovaSeq X
 
 The current numbers are in the paper ([paper/main.tex](paper/main.tex),
@@ -522,7 +586,8 @@ src/check.*                independent checker (certa check, check-index)
 src/mapper_cpu.cpp         multi-threaded CPU driver
 src/mapper_gpu.cu          CUDA driver (one thread per read)
 src/main.cpp               CLI: index, repeat, check, check-index; dispatch
-src/cmd_map.cpp            certa map: load, open outputs, run the pipeline, report
+src/cmd_map.cpp            certa map: load, open outputs, run the pipeline, report (run_map)
+src/qc_main.cpp            certa-qc: fastp (libfastp_core) as the input of certa map's pipeline
 src/map_config.*           certa map's options, parsed and checked up front
 src/map_pipeline.*         batches through passes 1-3, V, L, pairs, tier R and output
 src/sam_output.*           SAM and fallback FASTQ records, MAPQ
@@ -532,6 +597,7 @@ tests/test_certa.cpp       brute-force oracle tests of every bound
 tests/verify_lemmas.cpp    exhaustive checks of the finite lemmas
 tests/test_longread.cpp    long-read certificates against a brute-force DP (planted SVs)
 tests/test_bio.cpp         --bio against a whole-reference likelihood oracle; Lemma B against an exact DP
+tests/qc_equivalence.py    certa-qc against fastp, then certa map (byte-identical outputs)
 tests/mutants.tsv          one mutant per bound; tests/run_mutants.sh runs them
 tools/simulate.py          synthetic genome/reads and placement evaluation
 tools/lr_ceiling.cpp       long reads: Lemma L ceiling vs best known alignment; --certify proves OPT (Aim 6)

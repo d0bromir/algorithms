@@ -3,7 +3,11 @@
 **Status:** design (2026-10-29). M0, the fastp library, is built and tested on
 CPU (2026-11-07): branch `claude/m0-libfastp-core` of `d0bromir/fastp`, the
 work repository that `fastp-gpu` is published from (see its `docs/LIBRARY.md`).
-Sections 3.3 and 5 describe the library as built. Repositories:
+Sections 3.3 and 5 describe the library as built. A first M1 is built
+(2026-11-12): `certa-qc` in `certa/`, built when CMake is given `FASTP_DIR`.
+Its output equals the two-step pipeline. It still uses two thread pools and
+writes reads hard-trimmed (section 3.4's soft clips are not done yet).
+Repositories:
 [d0bromir/fastp-gpu](https://github.com/d0bromir/fastp-gpu) (v1.3.3-d0bromir,
 QC/trimming, CUDA, nvCOMP, GPU-Direct Storage) and this repository's
 [`certa/`](certa/README.md) (certified mapping, CUDA). Working name of the new
@@ -267,7 +271,7 @@ certa-qc ref.cidx R1.fq.gz R2.fq.gz --gpu --device 1 -t 64 \
 | | Deliverable | Done when |
 |---|---|---|
 | M0 | `libfastp_core` split out of fastp (done on CPU, 2026-11-07) | fastp's extended equivalence suite matches the build before the split; the library's reads and reports match fastp's; GPU build still to test on galaxy |
-| M1 | CPU `certa-qc`: ISA-L input, fastp per-pack work and CERTA's CPU passes in the same worker chunks, SAM output | equivalent to the two-step pipeline; no intermediate file |
+| M1 | CPU `certa-qc`: ISA-L input, fastp per-pack work and CERTA's CPU passes in the same worker chunks, SAM output (built 2026-11-12 with two thread pools and hard trim; see certa/README.md) | equivalent to the two-step pipeline; no intermediate file |
 | M2 | GPU: one context, device batches, the bridge kernel, `GpuMapper::map_device` | equivalent; each batch's text uploaded once |
 | M3 | nvCOMP / GDS input straight into device batches; BAM output (BGZF pool or nvCOMP) | equivalent; host never holds the text with GDS |
 | M4 | combined report; data-driven fragment-length model for `--bio`; fallback aligner on a pipe | `--bio` pairs use the overlap histogram; one BAM with fallback reads |
