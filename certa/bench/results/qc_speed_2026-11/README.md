@@ -14,7 +14,7 @@ python3 bench/qc_speed.py --certa build/certa --certa-qc build/certa-qc --fastp 
 - **Builds.** `certa` and `certa-qc` from commit cf6b460 (the sources are unchanged since), Release,
   `-march=native`, GCC 13.3. `fastp` and `libfastp_core.a` from d0bromir/fastp commit 5b7d127
   (branch `claude/m0-libfastp-core`).
-- **Script.** `run1.log` and `run2.log` come from the script at commit 79d5f50. `run3.log` comes
+- **Script.** `run1.txt` and `run2.txt` come from the script at commit 79d5f50. `run3.txt` comes
   from commit 7f73f03, which also prints the two-step pipeline's fastp and certa map times.
 
 Every run wrote the same SAM. Medians of three rounds per run (wall time / CPU time, in seconds):

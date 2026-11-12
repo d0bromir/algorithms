@@ -1,0 +1,31 @@
+400000 pairs, 4 CPUs, 3 rounds
+round 1  two-step gzip   -w 4 -t 4  wall  10.99 s  cpu  37.37 s  (fastp wall 3.07 s cpu 8.94 s; certa map wall 7.92 s cpu 28.43 s)
+round 1  two-step plain  -w 4 -t 4  wall  10.42 s  cpu  33.71 s  (fastp wall 2.69 s cpu 6.76 s; certa map wall 7.73 s cpu 26.95 s)
+round 1  certa-qc        -w 4 -t 4  wall  10.16 s  cpu  35.19 s
+round 1  certa-qc        -w 1 -t 4  wall  11.11 s  cpu  36.40 s
+round 1  certa-qc        -w 1 -t 3  wall  12.14 s  cpu  36.47 s
+round 1  two-step plain  -w 1 -t 1  wall  32.19 s  cpu  34.04 s  (fastp wall 5.11 s cpu 6.83 s; certa map wall 27.08 s cpu 27.21 s)
+round 1  certa-qc        -w 1 -t 1  wall  28.42 s  cpu  35.43 s
+round 2  two-step gzip   -w 4 -t 4  wall  11.25 s  cpu  38.05 s  (fastp wall 3.52 s cpu 10.45 s; certa map wall 7.74 s cpu 27.61 s)
+round 2  two-step plain  -w 4 -t 4  wall   9.75 s  cpu  32.27 s  (fastp wall 2.54 s cpu 6.15 s; certa map wall 7.21 s cpu 26.12 s)
+round 2  certa-qc        -w 4 -t 4  wall  10.53 s  cpu  36.53 s
+round 2  certa-qc        -w 1 -t 4  wall  11.47 s  cpu  37.73 s
+round 2  certa-qc        -w 1 -t 3  wall  12.19 s  cpu  35.91 s
+round 2  two-step plain  -w 1 -t 1  wall  30.41 s  cpu  32.17 s  (fastp wall 4.96 s cpu 6.59 s; certa map wall 25.45 s cpu 25.57 s)
+round 2  certa-qc        -w 1 -t 1  wall  27.81 s  cpu  34.76 s
+round 3  two-step gzip   -w 4 -t 4  wall  10.21 s  cpu  34.55 s  (fastp wall 2.98 s cpu 8.77 s; certa map wall 7.23 s cpu 25.78 s)
+round 3  two-step plain  -w 4 -t 4  wall   9.61 s  cpu  31.73 s  (fastp wall 2.55 s cpu 6.31 s; certa map wall 7.06 s cpu 25.42 s)
+round 3  certa-qc        -w 4 -t 4  wall   9.73 s  cpu  33.92 s
+round 3  certa-qc        -w 1 -t 4  wall  11.15 s  cpu  37.10 s
+round 3  certa-qc        -w 1 -t 3  wall  12.14 s  cpu  36.42 s
+round 3  two-step plain  -w 1 -t 1  wall  30.72 s  cpu  32.56 s  (fastp wall 5.24 s cpu 6.94 s; certa map wall 25.47 s cpu 25.61 s)
+round 3  certa-qc        -w 1 -t 1  wall  27.23 s  cpu  34.13 s
+distinct SAM files: 1
+configuration    -w  -t  wall (median)  cpu (median)     wall range
+two-step gzip     4   4        10.99 s       37.37 s  10.21-11.25 s
+two-step plain    4   4         9.75 s       32.27 s   9.61-10.42 s
+certa-qc          4   4        10.16 s       35.19 s   9.73-10.53 s
+certa-qc          1   4        11.15 s       37.10 s  11.11-11.47 s
+certa-qc          1   3        12.14 s       36.42 s  12.14-12.19 s
+two-step plain    1   1        30.72 s       32.56 s  30.41-32.19 s
+certa-qc          1   1        27.81 s       34.76 s  27.23-28.42 s
