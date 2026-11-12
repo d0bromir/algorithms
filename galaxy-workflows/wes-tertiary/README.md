@@ -103,9 +103,16 @@ for c in $(seq 1 22) X Y; do
 done
 ```
 ```bash
-bcftools concat -Ob -o gnomad.exomes.v4.1.AF.targets.bcf gnomad_af.chr*.bcf && bcftools index gnomad.exomes.v4.1.AF.targets.bcf
+bcftools concat -Ou gnomad_af.chr*.bcf | bcftools norm -m -any -f GRCh38.fa -Ob -o gnomad.exomes.v4.1.AF.targets.bcf && bcftools index gnomad.exomes.v4.1.AF.targets.bcf
 ```
 Upload the resulting `.bcf` with datatype `bcf`.
+
+The `bcftools norm -m -any -f` step is required for any population or ClinVar file: split multiallelic records and
+left-align/trim indels against the same reference the reads are aligned to. The workflow normalises the calls, and
+annotations are transferred only on an exact `CHROM/POS/REF/ALT` match. If a source keeps multiallelic or padded
+records, common indels look absent and pass the rarity filter. In the HG001 test run, before normalising the
+population file, homozygous deletions with gnomAD AF 0.94 were reported as rare loss-of-function variants.
+Expect the v4.1 extraction to download most of the exome VCFs, because each record carries several KB of INFO.
 
 ## 3. Running
 

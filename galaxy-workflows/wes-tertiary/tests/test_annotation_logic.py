@@ -50,6 +50,8 @@ def workflow_settings():
     state = {k: load_state(s["tool_state"]) for k, s in steps.items()}
     return {
         "check_ref": state["normalize"]["check_ref"],
+        # wrapper: checked -> no flag; unchecked -> --do-not-normalize (no left-align / trimming of indels)
+        "normalize_indels": str(state["normalize"].get("normalize_indels")).lower() == "true",
         "multiallelics": state["normalize"]["multiallelics"]["mode"] + state["normalize"]["multiallelics"]["multiallelic_types"],
         "regions_overlap": state["target_filter"]["sec_restrict"]["regions"]["regions_overlap"],
         "quality": state["Quality filter (bcftools expression)"]["default"],
@@ -87,6 +89,11 @@ def test_bcftools(cfg, work):
         recs.append((c, p, r, alt or alt_base(ref(c, p)), qual, flt, gt, dp, ad, keep, why))
     add("chr1", 1050, 200, ".", "0/1", 40, "20,20", True, "on target, ClinVar P + common in gnomAD")
     add("chr1", 1100, 150, ".", "0/1", 35, "18,17", True, "on target; ClinVar/gnomAD only have another ALT here")
+    # FreeBayes-style padded insertion (REF/ALT share 2 trailing bases); gnomAD has the minimal form
+    r0, r1, r2 = ref("chr1", 1120), ref("chr1", 1121), ref("chr1", 1122)
+    ins = alt_base(r0)
+    add("chr1", 1120, 150, ".", "1/1", 30, "0,30", True, "padded insertion, trimmed to match gnomAD",
+        alt=r0 + ins + r1 + r2, ref_override=r0 + r1 + r2)
     add("chr1", 1150, 120, ".", "1/2", 30, "1,15,14", True, "multiallelic, split into two records",
         alt=alt_base(ref("chr1", 1150)) + "," + alt_base(alt_base(ref("chr1", 1150))))
     add("chr1", 1180, 10, ".", "0/1", 30, "15,15", False, "QUAL 10 < 20")
@@ -129,6 +136,7 @@ def test_bcftools(cfg, work):
         f.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n")
         f.write(f"chr1\t1050\t.\t{r1050}\t{alt_base(r1050)}\t.\tPASS\tAF=0.2\n")
         f.write(f"chr1\t1100\t.\t{r1100}\t{alt_base(alt_base(r1100))}\t.\tPASS\tAF=0.3\n")
+        f.write(f"chr1\t1120\t.\t{r0}\t{r0 + ins}\t.\tPASS\tAF=0.7\n")
         f.write(f"chr2\t250\t.\t{r250}\t{alt_base(r250)}\t.\tPASS\tAF=0.001\n")
     for name in ("input.vcf", "clinvar.vcf", "gnomad.vcf"):  # the wrappers bgzip + index their inputs
         pysam.tabix_compress(name, name + ".gz", force=True)
@@ -139,6 +147,7 @@ def test_bcftools(cfg, work):
         bcftools.index(out, catch_stdout=False)
 
     run(bcftools.norm, "--check-ref", cfg["check_ref"], "--fasta-ref", "ref.fa",
+        *([] if cfg["normalize_indels"] else ["--do-not-normalize"]),
         "--multiallelics", cfg["multiallelics"], "input.vcf.gz", out="norm.vcf.gz")
     run(bcftools.filter, "--regions-file", "padded.bed", "--regions-overlap", cfg["regions_overlap"],
         "--include", cfg["quality"], "norm.vcf.gz", out="filtered.vcf.gz")
@@ -162,6 +171,8 @@ def test_bcftools(cfg, work):
         ("CLNSIG=Pathogenic" in kept.get(("chr1", 1050, alt_base(r1050)), ""), "ClinVar CLNSIG transferred (allele match)"),
         ("gnomAD_AF=0.2" in kept.get(("chr1", 1050, alt_base(r1050)), ""), "gnomAD AF transferred as gnomAD_AF"),
         ("AF=0.5" in kept.get(("chr1", 1050, alt_base(r1050)), ""), "caller INFO/AF left untouched"),
+        ("gnomAD_AF=0.7" in kept.get(("chr1", 1120, r0 + ins), ""),
+         "padded indel normalised (trimmed/left-aligned) and matched to gnomAD"),
         ("CLNSIG" not in kept.get(("chr1", 1100, alt_base(r1100)), "CLNSIG"), "no ClinVar transfer from a different ALT"),
         ("gnomAD_AF" not in kept.get(("chr1", 1100, alt_base(r1100)), "gnomAD_AF"), "no gnomAD transfer from a different ALT"),
     ]

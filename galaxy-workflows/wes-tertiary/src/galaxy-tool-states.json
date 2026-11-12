@@ -480,7 +480,7 @@
         "mode": "-",
         "multiallelic_types": "both"
       },
-      "normalize_indels": false,
+      "normalize_indels": true,
       "old_rec_tag": "",
       "output_type": "v",
       "reference_source": {
@@ -994,7 +994,7 @@
         "mode": "-",
         "multiallelic_types": "both"
       },
-      "normalize_indels": false,
+      "normalize_indels": true,
       "old_rec_tag": "",
       "output_type": "v",
       "reference_source": {
