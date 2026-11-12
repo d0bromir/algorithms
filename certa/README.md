@@ -480,13 +480,43 @@ worker, fastp's own output changes from run to run. The copy of a duplicate
 it keeps depends on the order of its packs. In a first run at `-w 4`, these
 were the only 4 of 80 cases that differed.
 
+**Speed on four cores: about the same as a plain intermediate file.**
+`bench/qc_speed.py` times both on larger test data: 400 000 pairs, gzip
+input, on a 4-core virtual machine. It ran three times, three rounds each.
+Every run wrote the same SAM. The logs and the builds are in
+[bench/results/qc_speed_2026-11/](bench/results/qc_speed_2026-11/README.md).
+Medians per run, in seconds:
+
+| Pipeline | fastp `-w` | certa `-t` | Wall time | CPU time |
+|---|---|---|---|---|
+| fastp, gzip file, certa map | 4 | 4 | 10.64, 10.63, 10.99 | 35.9–37.4 |
+| fastp, plain file, certa map | 4 | 4 | 9.50, 9.62, 9.75 | 32.0–33.2 |
+| `certa-qc` | 4 | 4 | 9.59, 9.80, 10.16 | 33.3–35.2 |
+| fastp, plain file, certa map | 1 | 1 | 31.12, 31.07, 30.72 | 32.6–33.1 |
+| `certa-qc` | 1 | 1 | 27.46, 28.53, 27.81 | 34.3–35.0 |
+
+- **Four threads each.** `certa-qc` takes 1–4 % longer than the pipeline
+  with a plain file, and 8–10 % less than with a gzip file.
+- **Why no gain.** Mapping takes 80 % of the CPU time. In run 3, with a
+  plain file and four threads each, certa map used 25.4–27.0 s and fastp
+  6.2–6.8 s. All four cores are already mapping, so fastp's work takes
+  cores away from the mapping.
+- **One thread each.** Cores are free, so fastp's work runs beside the
+  mapping. `certa-qc` takes 8–12 % less time.
+- **CPU time.** `certa-qc` uses 0–9 % more CPU time than the pipeline with a
+  plain file. Where that time goes is not measured yet.
+- **Not tested.** GRCh38, more cores, and intermediate files on a disk
+  rather than in the page cache.
+
 **Limits (next steps in the design):**
 
 - **Hard trim.** Reads are written as fastp trimmed them. Soft clips for the
   trimmed bases, the design's default, are not implemented yet. The library
   already reports each read's front offset and its input read for this.
-- **Two thread pools.** fastp and certa map have separate threads. The design
-  shares one pool, so that neither waits on the other.
+- **Two thread pools.** fastp and certa map have separate threads, so `-w`
+  and `-t` together can ask for more threads than there are cores. The
+  design shares one pool. That removes the excess threads, not fastp's CPU
+  work.
 - **Copies.** Each kept read is copied from fastp's record into certa's.
   Handing device batches over without a copy is milestone M2.
 - **GPU.** `--gpu` uses certa map's GPU mapper as `certa map` does. It has
@@ -609,6 +639,7 @@ tools/payoff.cpp           part choices taken from the slow mappers, certified o
 tools/bio_score.cpp        the --bio model's penalty of any aligner's SAM alignments (soundness at scale)
 tools/bio_probe.cpp        per read: why --bio certifies or falls back, and the work (parts, horizon, bands, time)
 bench/truth_*.py, *.sh     truth on GRCh38 for HG002 reads (Q100 haplotypes, GIAB alignments), scoring, reports
+bench/qc_speed.py          certa-qc against fastp, then certa map: wall and CPU time
 scripts/                   build.sh, demo.sh
 THEORY.md                  the proofs, with code, tests and mutants per statement
 lean/                      machine-checked proofs (Lean 4; lake build): Lemmas L, E, H, S, W, C; Theorem G; band pruning, DP row

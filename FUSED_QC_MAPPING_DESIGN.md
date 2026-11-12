@@ -6,7 +6,8 @@ work repository that `fastp-gpu` is published from (see its `docs/LIBRARY.md`).
 Sections 3.3 and 5 describe the library as built. A first M1 is built
 (2026-11-12): `certa-qc` in `certa/`, built when CMake is given `FASTP_DIR`.
 Its output equals the two-step pipeline. It still uses two thread pools and
-writes reads hard-trimmed (section 3.4's soft clips are not done yet).
+writes reads hard-trimmed (section 3.4's soft clips are not done yet). On 4
+cores it is about as fast as fastp, a plain file, then certa map (section 8).
 Repositories:
 [d0bromir/fastp-gpu](https://github.com/d0bromir/fastp-gpu) (v1.3.3-d0bromir,
 QC/trimming, CUDA, nvCOMP, GPU-Direct Storage) and this repository's
@@ -271,7 +272,7 @@ certa-qc ref.cidx R1.fq.gz R2.fq.gz --gpu --device 1 -t 64 \
 | | Deliverable | Done when |
 |---|---|---|
 | M0 | `libfastp_core` split out of fastp (done on CPU, 2026-11-07) | fastp's extended equivalence suite matches the build before the split; the library's reads and reports match fastp's; GPU build still to test on galaxy |
-| M1 | CPU `certa-qc`: ISA-L input, fastp per-pack work and CERTA's CPU passes in the same worker chunks, SAM output (built 2026-11-12 with two thread pools and hard trim; see certa/README.md) | equivalent to the two-step pipeline; no intermediate file |
+| M1 | CPU `certa-qc`: ISA-L input, fastp per-pack work and CERTA's CPU passes in the same worker chunks, SAM output (built 2026-11-12 with two thread pools and hard trim; output equal, speed on 4 cores measured; see certa/README.md) | equivalent to the two-step pipeline; no intermediate file |
 | M2 | GPU: one context, device batches, the bridge kernel, `GpuMapper::map_device` | equivalent; each batch's text uploaded once |
 | M3 | nvCOMP / GDS input straight into device batches; BAM output (BGZF pool or nvCOMP) | equivalent; host never holds the text with GDS |
 | M4 | combined report; data-driven fragment-length model for `--bio`; fallback aligner on a pipe | `--bio` pairs use the overlap histogram; one BAM with fallback reads |
@@ -285,6 +286,12 @@ certa-qc ref.cidx R1.fq.gz R2.fq.gz --gpu --device 1 -t 64 \
 - **CPU contention.** fastp's per-pack work and CERTA's CPU passes share the
   cores, and `--full-cert` and `--bio` move most of CERTA's work to the CPU.
   The worker pool takes both per chunk, so neither starves, but the stage
-  balance has to be measured (M1).
+  balance has to be measured (M1). First measurement, with two pools on a
+  4-core machine (certa/README.md, "Speed on four cores"): certa map took
+  80 % of the CPU time. With four threads each, `certa-qc` was 1–4 %
+  slower than fastp, a plain file, then certa map, and 8–10 % faster than
+  with a gzip file. With one thread each it was 8–12 % faster. So on the
+  CPU the fused program gains where cores are free, not where mapping
+  already fills them.
 - **GPU memory.** With a `-s 1` index (21.3 GiB) and three batches in flight,
   an A100 40 GB is tight; batch size has to adapt to the free memory.
