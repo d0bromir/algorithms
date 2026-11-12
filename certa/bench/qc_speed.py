@@ -49,6 +49,7 @@ def run(a, cfg):
     inputs = ["-i", os.path.join(a.workdir, "in1.fq.gz"), "-I", os.path.join(a.workdir, "in2.fq.gz")]
     reports = ["-j", o + "/fastp.json", "-h", o + "/fastp.html"]
     mapped = ["-t", str(t), "-o", o + "/out.sam", "-u", o + "/u1.fq", "-U", o + "/u2.fq"]
+    steps = ""
     if kind == "one":
         wall, cpu = timed([a.certa_qc, idx] + mapped + ["--fastp"] + inputs + ["-w", str(w)] + reports)
     else:
@@ -56,8 +57,9 @@ def run(a, cfg):
         w1, c1 = timed([a.fastp] + inputs + ["-o", c[0], "-O", c[1], "-w", str(w)] + reports)
         w2, c2 = timed([a.certa, "map", idx] + c + mapped)
         wall, cpu = w1 + w2, c1 + c2
+        steps = f"  (fastp wall {w1:.2f} s cpu {c1:.2f} s; certa map wall {w2:.2f} s cpu {c2:.2f} s)"
     with open(o + "/out.sam", "rb") as f:
-        return wall, cpu, hashlib.md5(f.read()).hexdigest()
+        return wall, cpu, hashlib.md5(f.read()).hexdigest(), steps
 
 
 def main():
@@ -76,8 +78,9 @@ def main():
     for r in range(a.rounds):
         for cfg in CONFIGS:
             res[cfg].append(run(a, cfg))
-            wall, cpu, _ = res[cfg][-1]
-            print(f"round {r + 1}  {cfg[0]:15} -w {cfg[2]} -t {cfg[3]}  wall {wall:6.2f} s  cpu {cpu:6.2f} s", flush=True)
+            wall, cpu, _, steps = res[cfg][-1]
+            print(f"round {r + 1}  {cfg[0]:15} -w {cfg[2]} -t {cfg[3]}  wall {wall:6.2f} s  cpu {cpu:6.2f} s{steps}",
+                  flush=True)
     sams = {x[2] for runs in res.values() for x in runs}
     print(f"distinct SAM files: {len(sams)}")
     print(f"{'configuration':15} {'-w':>3} {'-t':>3} {'wall (median)':>14} {'cpu (median)':>13} {'wall range':>14}")
