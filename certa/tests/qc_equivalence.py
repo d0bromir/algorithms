@@ -69,15 +69,15 @@ def content_md5(path):
     return h.hexdigest()
 
 
-def make_data(wd, certa):
+def make_data(wd, certa, pairs=40000, seed=6):
     """Simulated genome, index and reads with fastp work in them."""
     g = os.path.join(wd, "genome.fa")
     if not os.path.exists(os.path.join(wd, "genome.cidx")):
         subprocess.run([sys.executable, SIMULATE, "genome", g, "--length", "2000000", "--contigs", "3",
                         "--seed", "5"], check=True, stdout=subprocess.DEVNULL)
-        subprocess.run([sys.executable, SIMULATE, "reads", g, os.path.join(wd, "sim1.fq"), "--n", "40000",
+        subprocess.run([sys.executable, SIMULATE, "reads", g, os.path.join(wd, "sim1.fq"), "--n", str(pairs),
                         "--length", "150", "--quality", "novaseqx", "--mates", os.path.join(wd, "sim2.fq"),
-                        "--insert", "300,60", "--seed", "6"], check=True, stdout=subprocess.DEVNULL)
+                        "--insert", "300,60", "--seed", str(seed)], check=True, stdout=subprocess.DEVNULL)
         subprocess.run([certa, "index", g, "-o", os.path.join(wd, "genome.cidx"), "-t", "4"], check=True,
                        stderr=subprocess.DEVNULL)
     rng = random.Random(17)
