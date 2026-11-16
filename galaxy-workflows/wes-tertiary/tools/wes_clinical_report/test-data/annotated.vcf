@@ -1,0 +1,27 @@
+##fileformat=VCFv4.2
+##contig=<ID=1,length=248956422>
+##contig=<ID=10,length=133797422>
+##contig=<ID=12,length=133275309>
+##contig=<ID=13,length=114364328>
+##contig=<ID=17,length=83257441>
+##contig=<ID=X,length=156040895>
+##INFO=<ID=ANN,Number=.,Type=String,Description="Functional annotations: 'Allele|Annotation|Annotation_Impact|Gene_Name|Gene_ID|Feature_Type|Feature_ID|Transcript_BioType|Rank|HGVS.c|HGVS.p|cDNA.pos / cDNA.length|CDS.pos / CDS.length|AA.pos / AA.length|Distance|ERRORS / WARNINGS / INFO' ">
+##INFO=<ID=LOF,Number=.,Type=String,Description="Predicted loss of function effects for this variant">
+##INFO=<ID=NMD,Number=.,Type=String,Description="Predicted nonsense mediated decay effects for this variant">
+##INFO=<ID=gnomAD_AF,Number=A,Type=Float,Description="Population allele frequency">
+##INFO=<ID=CLNSIG,Number=.,Type=String,Description="CLNSIG">
+##INFO=<ID=CLNREVSTAT,Number=.,Type=String,Description="CLNREVSTAT">
+##INFO=<ID=CLNDN,Number=.,Type=String,Description="CLNDN">
+##INFO=<ID=RS,Number=.,Type=String,Description="RS">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read depth">
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	TEST1
+1	1000100	.	C	T	200	PASS	gnomAD_AF=0.00001;ANN=T|stop_gained|HIGH|GENEX|GENEX|transcript|TXX|protein_coding|1/10|c.100C>T|p.Gln34*|||||;NMD=(GENEX|GENEX|1|1.00)	GT:DP:AD	0/1:40:20,20
+1	45331556	.	C	T	200	PASS	CLNSIG=Pathogenic;CLNREVSTAT=criteria_provided,_multiple_submitters,_no_conflicts;CLNDN=MUTYH-associated_polyposis;gnomAD_AF=0.003;ANN=T|missense_variant|MODERATE|MUTYH|MUTYH|transcript|TXM|protein_coding|1/10|c.1187G>A|p.Gly396Asp|||||	GT:DP:AD	0/1:48:25,23
+10	94781859	.	G	A	200	PASS	CLNSIG=drug_response;CLNREVSTAT=criteria_provided,_multiple_submitters,_no_conflicts;RS=4244285;ANN=A|splice_region_variant&synonymous_variant|LOW|CYP2C19|CYP2C19|transcript|TXC|protein_coding|1/10|c.681G>A|p.Pro227Pro|||||	GT:DP:AD	1/1:45:0,45
+12	102840474	.	T	C	200	PASS	CLNSIG=Pathogenic;CLNREVSTAT=reviewed_by_expert_panel;CLNDN=Phenylketonuria;gnomAD_AF=0.0003;ANN=C|missense_variant|MODERATE|PAH|PAH|transcript|TXP|protein_coding|1/10|c.1241A>G|p.Tyr414Cys|||||	GT:DP:AD	0/1:57:30,27
+13	32340301	.	C	T	200	PASS	CLNSIG=Pathogenic;CLNREVSTAT=reviewed_by_expert_panel;CLNDN=Hereditary_breast_ovarian_cancer_syndrome;ANN=T|stop_gained|HIGH|BRCA2|BRCA2|transcript|TXB|protein_coding|1/10|c.1234C>T|p.Gln412*|||||	GT:DP:AD	0/1:50:26,24
+17	7676154	.	G	C	200	PASS	CLNSIG=Benign;gnomAD_AF=0.6;ANN=C|missense_variant|MODERATE|TP53|TP53|transcript|TXT|protein_coding|1/10|c.215C>G|p.Pro72Arg|||||	GT:DP:AD	0/1:60:30,30
+17	41000100	.	C	T	200	PASS	CLNSIG=Pathogenic;CLNREVSTAT=criteria_provided,_multiple_submitters,_no_conflicts;gnomAD_AF=0.2;ANN=T|missense_variant|MODERATE|GENED|GENED|transcript|TXD|protein_coding|1/10|c.47C>T|p.Ala16Val|||||	GT:DP:AD	0/1:40:20,20
+17	41000200	.	G	A	200	PASS	ANN=A|stop_gained|HIGH|GENEM|GENEM|transcript|TXM2|protein_coding|1/10|c.300G>A|p.Trp100*|||||	GT:DP:AD	1/1:35:0,35

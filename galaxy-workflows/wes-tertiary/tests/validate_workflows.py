@@ -45,10 +45,14 @@ REPOSITORIES = [
     ("iuc", "bcftools_filter", "tools/bcftools", ["bcftools_filter.xml"]),
     ("iuc", "bcftools_annotate", "tools/bcftools", ["bcftools_annotate.xml"]),
     ("iuc", "bcftools_stats", "tools/bcftools", ["bcftools_stats.xml"]),
+    ("iuc", "bcftools_roh", "tools/bcftools", ["bcftools_roh.xml"]),
     ("iuc", "snpeff", "tool_collections/snpeff", ["snpEff.xml"]),
     ("iuc", "snpsift", "tool_collections/snpsift/snpsift", ["snpSift_filter.xml", "snpSift_extractFields.xml"]),
     ("iuc", "multiqc", "tools/multiqc", ["multiqc.xml"]),
 ]
+
+# Local tools shipped in this directory (tool id -> wrapper XML), installed on the server outside the Tool Shed.
+LOCAL_TOOLS = {"wes_clinical_report": os.path.join(HERE, "..", "tools", "wes_clinical_report", "wes_clinical_report.xml")}
 
 # Galaxy built-in tools: flat inputs (type, formats, multiple) and outputs.
 BUILTIN_TOOLS = {
@@ -350,6 +354,7 @@ def build_tool_index(tools_iuc):
             path = os.path.join(tools_iuc, directory, xml)
             ts = get_tool_source(path)
             index[f"{TOOL_SHED}/repos/{owner}/{repo}/{ts.parse_id()}/{ts.parse_version()}"] = path
+    index.update(LOCAL_TOOLS)
     return index
 
 

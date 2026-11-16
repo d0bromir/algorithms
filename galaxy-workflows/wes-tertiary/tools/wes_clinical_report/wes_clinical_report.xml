@@ -1,0 +1,148 @@
+<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.1.2+galaxy0" profile="23.0">
+    <description>diagnostic, secondary, carrier, pharmacogenomic and risk findings in one human-readable report</description>
+    <requirements>
+        <requirement type="package" version="3.12">python</requirement>
+        <requirement type="package" version="1.22">samtools</requirement>
+    </requirements>
+    <version_command>python3 '$__tool_directory__/wes_clinical_report.py' --help | head -1</version_command>
+    <command detect_errors="exit_code"><![CDATA[
+#if $bam:
+    ln -s '$bam' input.bam &&
+    ln -s '${bam.metadata.bam_index}' input.bam.bai &&
+#end if
+#if $reference:
+    ln -s '$reference' reference.fa &&
+    samtools faidx reference.fa &&
+#end if
+python3 '$__tool_directory__/wes_clinical_report.py'
+    --vcf '$vcf'
+    #if $sample_name and str($sample_name).strip():
+        --sample-name '$sample_name'
+    #else:
+        --sample-name '$vcf.element_identifier'
+    #end if
+    #if $gencc:
+        --gencc '$gencc'
+    #end if
+    #if $constraint:
+        --constraint '$constraint'
+    #end if
+    #if $hpo_genes:
+        --hpo-genes '$hpo_genes'
+    #end if
+    #if $hpo_terms and str($hpo_terms).strip():
+        --hpo-terms '$hpo_terms'
+    #end if
+    #if $roh:
+        --roh '$roh'
+    #end if
+    #if $bam:
+        --bam input.bam
+    #end if
+    #if $reference:
+        --reference reference.fa
+    #end if
+    #if $target_coverage:
+        --target-coverage '$target_coverage'
+    #end if
+    #if $gene_coverage:
+        --gene-coverage '$gene_coverage'
+    #end if
+    #if $coverage_summary:
+        --coverage-summary '$coverage_summary'
+    #end if
+    --max-af $max_af
+    --min-ref-depth $min_ref_depth
+    --max-candidates $max_candidates
+    --html '$report'
+    --tsv '$findings'
+    ]]></command>
+    <inputs>
+        <param name="vcf" type="data" format="vcf,vcf_bgzip" label="Annotated variants"
+               help="Output of the WES tertiary workflow: SnpEff ANN/LOF/NMD, ClinVar CLNSIG/CLNREVSTAT/CLNDN, INFO/gnomAD_AF."/>
+        <param name="sample_name" type="text" value="" optional="true" label="Sample name"
+               help="Defaults to the dataset's element identifier.">
+            <sanitizer invalid_char="_">
+                <valid initial="string.ascii_letters,string.digits"><add value="-"/><add value="_"/><add value="."/></valid>
+            </sanitizer>
+        </param>
+        <param name="gencc" type="data" format="tabular,tsv,txt" optional="true" label="Gene-disease validity (GenCC submissions TSV)"
+               help="https://search.thegencc.org/download: gene-disease associations with mode of inheritance."/>
+        <param name="constraint" type="data" format="tabular,tsv,txt" optional="true" label="Gene constraint (gnomAD constraint metrics TSV)"
+               help="gnomAD v4.1 constraint metrics (LOEUF, pLI, missense Z)."/>
+        <param name="hpo_genes" type="data" format="tabular,tsv,txt" optional="true" label="HPO phenotype_to_genes.txt"
+               help="HPO release file (propagated term to gene annotations)."/>
+        <param name="hpo_terms" type="text" value="" optional="true" label="Patient phenotype (HPO terms)"
+               help="Comma- or space-separated HPO ids, e.g. HP:0001250, HP:0001263. Used to rank candidates.">
+            <sanitizer invalid_char="">
+                <valid initial="string.digits"><add value="H"/><add value="P"/><add value=":"/><add value=","/><add value=" "/></valid>
+            </sanitizer>
+        </param>
+        <param name="roh" type="data" format="tabular" optional="true" label="Runs of homozygosity (bcftools roh)"/>
+        <param name="bam" type="data" format="bam" optional="true" label="Aligned reads (BAM)"
+               help="Read depth at pharmacogenomic and risk-allele positions; without it, absent variants cannot be told apart from missing coverage."/>
+        <param name="reference" type="data" format="fasta" optional="true" label="Reference genome (FASTA)"
+               help="Repeat context (homopolymers, tandem repeats) of reported variants."/>
+        <param name="target_coverage" type="data" format="bed" optional="true" label="Per-target coverage (mosdepth thresholds BED)"/>
+        <param name="gene_coverage" type="data" format="bed" optional="true" label="Coding-exon coverage (mosdepth thresholds BED, gene in column 4)"/>
+        <param name="coverage_summary" type="data" format="tabular" optional="true" label="Coverage summary (mosdepth summary)"/>
+        <param name="max_af" type="float" value="0.01" min="0" max="1" label="Rare variant cut-off (population allele frequency)"/>
+        <param name="min_ref_depth" type="integer" value="15" min="1" label="Reads needed to read an uncalled pharmacogenomic position as reference"/>
+        <param name="max_candidates" type="integer" value="60" min="1" label="Candidate variants shown in the report (all are in the TSV)"/>
+    </inputs>
+    <outputs>
+        <data name="report" format="html" label="${tool.name} on ${on_string}: report"/>
+        <data name="findings" format="tabular" label="${tool.name} on ${on_string}: findings (TSV)"/>
+    </outputs>
+    <tests>
+        <test expect_num_outputs="2">
+            <param name="vcf" value="annotated.vcf" ftype="vcf"/>
+            <param name="gencc" value="gencc.tsv" ftype="tabular"/>
+            <param name="constraint" value="constraint.tsv" ftype="tabular"/>
+            <output name="report" ftype="html">
+                <assert_contents>
+                    <has_text text="Exome interpretation report"/>
+                    <has_text text="Research use / decision support only"/>
+                </assert_contents>
+            </output>
+            <output name="findings" ftype="tabular">
+                <assert_contents>
+                    <has_text_matching expression="\tcarrier\tPAH\t"/>
+                    <has_text_matching expression="\tdiagnostic\tBRCA2\t"/>
+                    <has_text_matching expression="\tacmg_sf_reportable\tBRCA2\t"/>
+                </assert_contents>
+            </output>
+        </test>
+    </tests>
+    <help><![CDATA[
+**What it does**
+
+Turns the annotated variants of one exome into a self-contained HTML report for review by a clinical
+scientist, plus a TSV of every finding. All conclusions come from explicit, versioned rules applied to the
+inputs (ClinVar, GenCC, gnomAD, HPO, CPIC allele tables); there is no statistical or language model involved.
+
+Sections:
+
+1. Sample and data quality: variant counts, Ts/Tv, het/hom ratio, allele-balance contamination hint, genetic sex
+   (chrX heterozygosity, chrY coverage), target coverage.
+2. Diagnostic findings: ClinVar pathogenic/likely pathogenic variants whose genotype fits the gene's mode of
+   inheritance (GenCC); a review table for genes with mixed or unknown inheritance and X-linked heterozygous females.
+3. Candidate variants not classified in ClinVar: rare predicted loss-of-function variants in established disease
+   genes (and rare missense variants in phenotype-matched genes), with automated ACMG/AMP evidence codes for triage.
+4. ACMG SF v3.2 secondary findings (81 genes, gene-specific rules).
+5. Carrier status for recessive conditions.
+6. Pharmacogenomics: CPIC genes with single-nucleotide star alleles (CYP2C19, CYP2C9, VKORC1, CYP4F2, SLCO1B1,
+   DPYD, TPMT, NUDT15, CYP3A5, CYP2B6, UGT1A1) and ClinVar drug-response variants.
+7. Risk alleles (Factor V Leiden, prothrombin G20210A, HFE, APOE) and ClinVar risk/association variants.
+8. Runs of homozygosity (bcftools roh).
+9. Coverage of clinically relevant genes.
+10. Methods and limitations.
+
+Every flagged result must be confirmed by an orthogonal method in an accredited laboratory before clinical use.
+    ]]></help>
+    <citations>
+        <citation type="doi">10.1016/j.gim.2023.100866</citation>
+        <citation type="doi">10.1038/gim.2015.30</citation>
+        <citation type="doi">10.1038/s41586-020-2308-7</citation>
+    </citations>
+</tool>

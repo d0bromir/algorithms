@@ -40,6 +40,41 @@
     },
     "tool_version": "2.0.9"
   },
+  "WES tertiary analysis from FASTQ (v1)/coding_coverage": {
+    "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/mosdepth/mosdepth/0.3.14+galaxy0",
+    "tool_state": {
+      "__page__": 0,
+      "__rerun_remap_job_id__": null,
+      "advanced": {
+        "__current_case__": 1,
+        "chrom": "",
+        "exclude_flag": "1796",
+        "fragment_mode": false,
+        "include_flag": null,
+        "mapq": "20",
+        "max_frag_len": null,
+        "min_frag_len": null,
+        "no_fast": false,
+        "options": "yes",
+        "quantize": [],
+        "read_groups": "",
+        "thresholds": "1,10,20,30,50",
+        "use_median": false
+      },
+      "input_alignment": {
+        "__class__": "ConnectedValue"
+      },
+      "per_base_coverage": false,
+      "window": {
+        "__current_case__": 2,
+        "region_file": {
+          "__class__": "ConnectedValue"
+        },
+        "window_mode": "bed"
+      }
+    },
+    "tool_version": "0.3.14+galaxy0"
+  },
   "WES tertiary analysis from FASTQ (v1)/fastqc_raw": {
     "tool_id": "toolshed.g2.bx.psu.edu/repos/devteam/fastqc/fastqc/0.74+galaxy1",
     "tool_state": {
@@ -370,6 +405,51 @@
     },
     "tool_version": "1.22+galaxy1"
   },
+  "WES tertiary analysis from FASTQ (v1)/tertiary/clinical_report": {
+    "tool_id": "wes_clinical_report",
+    "tool_state": {
+      "__page__": 0,
+      "__rerun_remap_job_id__": null,
+      "bam": {
+        "__class__": "ConnectedValue"
+      },
+      "constraint": {
+        "__class__": "ConnectedValue"
+      },
+      "coverage_summary": {
+        "__class__": "ConnectedValue"
+      },
+      "gencc": {
+        "__class__": "ConnectedValue"
+      },
+      "gene_coverage": {
+        "__class__": "ConnectedValue"
+      },
+      "hpo_genes": {
+        "__class__": "ConnectedValue"
+      },
+      "hpo_terms": {
+        "__class__": "ConnectedValue"
+      },
+      "max_af": "0.01",
+      "max_candidates": "60",
+      "min_ref_depth": "15",
+      "reference": {
+        "__class__": "ConnectedValue"
+      },
+      "roh": {
+        "__class__": "ConnectedValue"
+      },
+      "sample_name": "",
+      "target_coverage": {
+        "__class__": "ConnectedValue"
+      },
+      "vcf": {
+        "__class__": "ConnectedValue"
+      }
+    },
+    "tool_version": "0.1.2+galaxy0"
+  },
   "WES tertiary analysis from FASTQ (v1)/tertiary/clinvar_annotation": {
     "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
     "tool_state": {
@@ -387,7 +467,7 @@
             "__class__": "ConnectedValue"
           }
         },
-        "columns": "CLNSIG,CLNREVSTAT,CLNDN,CLNSIGCONF,ALLELEID",
+        "columns": "CLNSIG,CLNREVSTAT,CLNDN,CLNSIGCONF,ALLELEID,RS",
         "mark_sites": "",
         "min_overlap": "",
         "set_id": ""
@@ -470,7 +550,7 @@
     "tool_state": {
       "__page__": 0,
       "__rerun_remap_job_id__": null,
-      "atomization": "",
+      "atomization": "--atomize",
       "check_ref": "wx",
       "input_file": {
         "__class__": "ConnectedValue"
@@ -611,6 +691,62 @@
       "inverse": false
     },
     "tool_version": "5.4.0c+galaxy1"
+  },
+  "WES tertiary analysis from FASTQ (v1)/tertiary/runs_of_homozygosity": {
+    "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_roh/bcftools_roh/1.24+galaxy1",
+    "tool_state": {
+      "__page__": 0,
+      "__rerun_remap_job_id__": null,
+      "input_file": {
+        "__class__": "ConnectedValue"
+      },
+      "output_type": "r",
+      "sec_general": {
+        "AF_dflt": null,
+        "AF_file": {
+          "__class__": "RuntimeValue"
+        },
+        "AF_tag": "gnomAD_AF",
+        "GTs_only": "30.0",
+        "buffer_overlap": null,
+        "buffer_size": null,
+        "estimate_AF": {
+          "__class__": "RuntimeValue"
+        },
+        "genetic_map": {
+          "__class__": "RuntimeValue"
+        },
+        "ignore_homref": false,
+        "include_noalt": false,
+        "rec_rate": null,
+        "sample": null,
+        "skip_indels": true
+      },
+      "sec_hmm": {
+        "az_to_hw": "5e-09",
+        "hw_to_az": "6.7e-08",
+        "viterbi_training": null
+      },
+      "sec_restrict": {
+        "exclude": null,
+        "include": null,
+        "invert_samples": false,
+        "invert_samples_file": false,
+        "regions": {
+          "__current_case__": 0,
+          "regions_src": "__none__"
+        },
+        "samples": "",
+        "samples_file": {
+          "__class__": "RuntimeValue"
+        },
+        "targets": {
+          "__current_case__": 0,
+          "targets_src": "__none__"
+        }
+      }
+    },
+    "tool_version": "1.24+galaxy1"
   },
   "WES tertiary analysis from FASTQ (v1)/tertiary/target_filter": {
     "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_filter/bcftools_filter/1.24+galaxy0",
@@ -884,6 +1020,51 @@
     },
     "tool_version": "1.22+galaxy1"
   },
+  "WES tertiary analysis from VCF (v2)/clinical_report": {
+    "tool_id": "wes_clinical_report",
+    "tool_state": {
+      "__page__": 0,
+      "__rerun_remap_job_id__": null,
+      "bam": {
+        "__class__": "ConnectedValue"
+      },
+      "constraint": {
+        "__class__": "ConnectedValue"
+      },
+      "coverage_summary": {
+        "__class__": "ConnectedValue"
+      },
+      "gencc": {
+        "__class__": "ConnectedValue"
+      },
+      "gene_coverage": {
+        "__class__": "ConnectedValue"
+      },
+      "hpo_genes": {
+        "__class__": "ConnectedValue"
+      },
+      "hpo_terms": {
+        "__class__": "ConnectedValue"
+      },
+      "max_af": "0.01",
+      "max_candidates": "60",
+      "min_ref_depth": "15",
+      "reference": {
+        "__class__": "ConnectedValue"
+      },
+      "roh": {
+        "__class__": "ConnectedValue"
+      },
+      "sample_name": "",
+      "target_coverage": {
+        "__class__": "ConnectedValue"
+      },
+      "vcf": {
+        "__class__": "ConnectedValue"
+      }
+    },
+    "tool_version": "0.1.2+galaxy0"
+  },
   "WES tertiary analysis from VCF (v2)/clinvar_annotation": {
     "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
     "tool_state": {
@@ -901,7 +1082,7 @@
             "__class__": "ConnectedValue"
           }
         },
-        "columns": "CLNSIG,CLNREVSTAT,CLNDN,CLNSIGCONF,ALLELEID",
+        "columns": "CLNSIG,CLNREVSTAT,CLNDN,CLNSIGCONF,ALLELEID,RS",
         "mark_sites": "",
         "min_overlap": "",
         "set_id": ""
@@ -984,7 +1165,7 @@
     "tool_state": {
       "__page__": 0,
       "__rerun_remap_job_id__": null,
-      "atomization": "",
+      "atomization": "--atomize",
       "check_ref": "wx",
       "input_file": {
         "__class__": "ConnectedValue"
@@ -1125,6 +1306,62 @@
       "inverse": false
     },
     "tool_version": "5.4.0c+galaxy1"
+  },
+  "WES tertiary analysis from VCF (v2)/runs_of_homozygosity": {
+    "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_roh/bcftools_roh/1.24+galaxy1",
+    "tool_state": {
+      "__page__": 0,
+      "__rerun_remap_job_id__": null,
+      "input_file": {
+        "__class__": "ConnectedValue"
+      },
+      "output_type": "r",
+      "sec_general": {
+        "AF_dflt": null,
+        "AF_file": {
+          "__class__": "RuntimeValue"
+        },
+        "AF_tag": "gnomAD_AF",
+        "GTs_only": "30.0",
+        "buffer_overlap": null,
+        "buffer_size": null,
+        "estimate_AF": {
+          "__class__": "RuntimeValue"
+        },
+        "genetic_map": {
+          "__class__": "RuntimeValue"
+        },
+        "ignore_homref": false,
+        "include_noalt": false,
+        "rec_rate": null,
+        "sample": null,
+        "skip_indels": true
+      },
+      "sec_hmm": {
+        "az_to_hw": "5e-09",
+        "hw_to_az": "6.7e-08",
+        "viterbi_training": null
+      },
+      "sec_restrict": {
+        "exclude": null,
+        "include": null,
+        "invert_samples": false,
+        "invert_samples_file": false,
+        "regions": {
+          "__current_case__": 0,
+          "regions_src": "__none__"
+        },
+        "samples": "",
+        "samples_file": {
+          "__class__": "RuntimeValue"
+        },
+        "targets": {
+          "__current_case__": 0,
+          "targets_src": "__none__"
+        }
+      }
+    },
+    "tool_version": "1.24+galaxy1"
   },
   "WES tertiary analysis from VCF (v2)/target_filter": {
     "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_filter/bcftools_filter/1.24+galaxy0",
