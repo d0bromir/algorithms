@@ -1,4 +1,4 @@
-<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.1.2+galaxy0" profile="23.0">
+<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.2.0+galaxy0" profile="23.0">
     <description>diagnostic, secondary, carrier, pharmacogenomic and risk findings in one human-readable report</description>
     <requirements>
         <requirement type="package" version="3.12">python</requirement>
@@ -59,7 +59,7 @@ python3 '$__tool_directory__/wes_clinical_report.py'
     ]]></command>
     <inputs>
         <param name="vcf" type="data" format="vcf,vcf_bgzip" label="Annotated variants"
-               help="Output of the WES tertiary workflow: SnpEff ANN/LOF/NMD, ClinVar CLNSIG/CLNREVSTAT/CLNDN, INFO/gnomAD_AF."/>
+               help="Output of the WES tertiary workflow: SnpEff ANN/LOF/NMD, ClinVar CLNSIG/CLNREVSTAT/CLNDN, gnomAD v4.1 INFO/gnomAD_* fields."/>
         <param name="sample_name" type="text" value="" optional="true" label="Sample name"
                help="Defaults to the dataset's element identifier.">
             <sanitizer invalid_char="_">
@@ -86,7 +86,8 @@ python3 '$__tool_directory__/wes_clinical_report.py'
         <param name="target_coverage" type="data" format="bed" optional="true" label="Per-target coverage (mosdepth thresholds BED)"/>
         <param name="gene_coverage" type="data" format="bed" optional="true" label="Coding-exon coverage (mosdepth thresholds BED, gene in column 4)"/>
         <param name="coverage_summary" type="data" format="tabular" optional="true" label="Coverage summary (mosdepth summary)"/>
-        <param name="max_af" type="float" value="0.01" min="0" max="1" label="Rare variant cut-off (population allele frequency)"/>
+        <param name="max_af" type="float" value="0.01" min="0" max="1" label="Rare variant cut-off (population allele frequency)"
+               help="Applied to the higher of the overall gnomAD AF and the grpmax filtering AF (FAF95)."/>
         <param name="min_ref_depth" type="integer" value="15" min="1" label="Reads needed to read an uncalled pharmacogenomic position as reference"/>
         <param name="max_candidates" type="integer" value="60" min="1" label="Candidate variants shown in the report (all are in the TSV)"/>
     </inputs>
@@ -129,7 +130,7 @@ Sections:
    inheritance (GenCC); a review table for genes with mixed or unknown inheritance and X-linked heterozygous females.
 3. Candidate variants not classified in ClinVar: rare predicted loss-of-function variants in established disease
    genes (and rare missense variants in phenotype-matched genes), with automated ACMG/AMP evidence codes for triage.
-4. ACMG SF v3.2 secondary findings (81 genes, gene-specific rules).
+4. ACMG SF v3.3 secondary findings (84 genes, gene-specific rules).
 5. Carrier status for recessive conditions.
 6. Pharmacogenomics: CPIC genes with single-nucleotide star alleles (CYP2C19, CYP2C9, VKORC1, CYP4F2, SLCO1B1,
    DPYD, TPMT, NUDT15, CYP3A5, CYP2B6, UGT1A1) and ClinVar drug-response variants.

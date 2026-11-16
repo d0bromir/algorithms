@@ -24,7 +24,7 @@ flowchart LR
   subgraph v2["v2: from VCF (tertiary analysis)"]
     vcf[VCF] --> norm[bcftools norm<br/>split multiallelics, atomize complex alleles,<br/>left-align, REF check]
     norm --> filt[bcftools filter<br/>padded exome targets + quality]
-    filt --> clin[bcftools annotate<br/>ClinVar] --> gnomad[bcftools annotate<br/>gnomAD AF as gnomAD_AF]
+    filt --> clin[bcftools annotate<br/>ClinVar] --> gnomad[bcftools annotate<br/>gnomAD v4.1 AF, grpmax, FAF95,<br/>homozygotes as gnomAD_*]
     gnomad --> eff[SnpEff<br/>consequence, HGVS, LOF/NMD]
     eff --> prio[SnpSift filter<br/>prioritisation] --> ctab[candidate table]
     eff --> atab[annotated table] & bstats[bcftools stats] & roh[bcftools roh]
@@ -112,23 +112,23 @@ and VCFs. A naming mismatch does not raise an error. ClinVar/gnomAD annotations 
 | **Gene-disease validity (GenCC TSV)** (optional) | [GenCC submissions export](https://search.thegencc.org/download) (TSV, CC0) | Diseases and mode of inheritance per gene; decides diagnostic vs carrier vs review. |
 | **Gene constraint (gnomAD TSV)** (optional) | `gnomad.v4.1.constraint_metrics.tsv` from the gnomAD downloads page | LOEUF/pLI for loss-of-function intolerance (PVS1 applicability). |
 | **HPO gene annotations** (optional) | `phenotype_to_genes.txt` from the latest [HPO release](https://github.com/obophenotype/human-phenotype-ontology/releases) | With *Patient phenotype (HPO terms)*, ranks candidates by phenotype match. |
-| **Population allele frequencies (VCF)** | gnomAD exomes (v4.1 recommended) reduced to `INFO/AF` and to the padded targets, as an indexed **BCF** (recipe below) | The full gnomAD VCFs are hundreds of GB. Plain VCF inputs are re-compressed and indexed in every job, while BCF is used directly. Only `INFO/AF` is read; it is stored as `INFO/gnomAD_AF`. |
+| **Population allele frequencies (VCF)** | gnomAD v4.1 joint (exome + genome) frequencies reduced to the padded targets, as an indexed **BCF** built with [`data/build_gnomad_extract.sh`](data/build_gnomad_extract.sh) (below) | Transferred fields: `gnomAD_AF`, `_AN`, `_nhomalt` (homozygotes), `_grpmax` / `_grpmax_AF` / `_grpmax_AN` (genetic ancestry group with the highest AF), `_FAF95` / `_FAF95_grp` (highest filtering allele frequency, the statistic of the ACMG BA1/BS1 rules), `_filter` (gnomAD PASS / EXOMES_FILTERED / GENOMES_FILTERED / BOTH_FILTERED) and `_discordance_p` (exome vs genome frequency test). The caller's own `INFO/AF` is untouched. A file without these fields (e.g. an AF-only one) stops the annotation step with "tag not defined". |
 
-Recipe for the gnomAD file, run once on any machine with `bcftools` and `bedtools`. Take the per-chromosome
-exome sites VCF URLs from the gnomAD downloads page. The pattern below is for v4.1; `targets.bed` is the kit BED.
+The gnomAD file is built once with [`data/build_gnomad_extract.sh`](data/build_gnomad_extract.sh) on any Linux
+machine with `bcftools` (≥ 1.17) and `bedtools`. It reads only the indexed blocks of the public gnomAD v4.1 joint
+VCFs (877 GB in all) that overlap the regions, over plain HTTP from Google Cloud Storage. `regions.bed` uses Ensembl
+names and should cover every capture kit you use plus the coding exons (the coding-region BED below), and the
+reference is the workflow's FASTA with its `.fai`:
 ```bash
-bedtools slop -b 100 -i targets.bed -g GRCh38.fa.fai > targets.padded100.bed
+cat kit1.bed kit2.bed canonical_cds.GRCh38.115.bed | cut -f1-3 > regions.bed
 ```
 ```bash
-for c in $(seq 1 22) X Y; do
-  bcftools view -R targets.padded100.bed -Ou \
-    "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/exomes/gnomad.exomes.v4.1.sites.chr${c}.vcf.bgz" |
-  bcftools annotate -x '^INFO/AF' -Ob -o "gnomad_af.chr${c}.bcf"
-done
+build_gnomad_extract.sh regions.bed GRCh38.fa gnomad.v4.1.joint.targets.GRCh38.bcf 64
 ```
-```bash
-bcftools concat -Ou gnomad_af.chr*.bcf | bcftools norm -m -any -f GRCh38.fa -Ob -o gnomad.exomes.v4.1.AF.targets.bcf && bcftools index gnomad.exomes.v4.1.AF.targets.bcf
-```
+For two exome kits plus all coding exons (110 Mb with 100 bp padding) this took 1 h 51 min with 64
+parallel readers (about 116 MB/s from the bucket) and produced a BCF of 1.6 GB with 65.0 M allele records (the
+padding and the gnomAD genomes add many intronic and rare alleles). gnomAD data are CC0. The joint VCF carries no CADD or
+SpliceAI scores, so the extract has no non-commercial terms.
 Upload the resulting `.bcf` with datatype `bcf`.
 
 Recipe for the coding-region BED (Ensembl canonical transcripts; use the Ensembl release of the SnpEff database).
@@ -194,14 +194,23 @@ laboratory.
 |---|---|
 | Sample and data quality | Ts/Tv, het/hom, het allele-fraction distribution (contamination hint), genetic sex from chrX heterozygosity and chrY coverage, target coverage at 10/20/30× |
 | Diagnostic findings | ClinVar pathogenic/likely pathogenic (not conflicting) **and** a genotype that fits the gene's mode of inheritance in GenCC: one allele for dominant genes, hemizygous for X-linked genes in males, two alleles for recessive genes. Genes with both dominant and recessive disorders, X-linked heterozygous females and genes without a GenCC entry go to a *review* table |
-| Candidate variants | Not classified in ClinVar (or VUS/conflicting), gnomAD AF below the cut-off (default 1 %), predicted loss-of-function in a GenCC gene, plus missense/in-frame variants in genes matching the HPO terms. Automated ACMG/AMP evidence codes (PVS1, PM2_supporting, BA1, BS1, PP2, PP4) for triage, inheritance fit (incl. possible compound heterozygotes) and ranking by phenotype match |
-| ACMG SF v3.2 | 81 genes; biallelic only for MUTYH, ATP7B, BTD, GAA, RPE65; HFE p.Cys282Tyr homozygotes only; TTN truncating only. Rare loss-of-function variants not in ClinVar are listed as *review* |
+| Candidate variants | Not classified in ClinVar (or VUS/conflicting), gnomAD frequency below the cut-off (default 1 %), predicted loss-of-function in a GenCC gene, plus missense/in-frame variants in genes matching the HPO terms. Automated ACMG/AMP evidence codes (PVS1, PM2_supporting, BA1, BS1, PP2, PP4) for triage, inheritance fit (incl. possible compound heterozygotes) and ranking by phenotype match |
+| ACMG SF v3.3 | 84 genes (v3.2 plus ABCD1, CYP27A1, PLN; Genet Med 2025;27:101454); biallelic only for MUTYH, ATP7B, BTD, GAA, RPE65, CYP27A1; ABCD1 hemizygous, homozygous or two heterozygous variants (not a single heterozygous variant in a female); HFE p.Cys282Tyr homozygotes only; TTN truncating only. Rare loss-of-function variants not in ClinVar are listed as *review* |
 | Carrier status | One P/LP allele in a recessive gene |
 | Pharmacogenomics | CYP2C19, CYP2C9, VKORC1, CYP4F2, SLCO1B1, DPYD, TPMT, NUDT15, CYP3A5, CYP2B6, UGT1A1 at fixed GRCh38 positions (checked against ClinVar and the reference). A missing variant counts as the reference allele only with ≥ 15 reads at the position (BAM in v1); otherwise the gene is *indeterminate*. CPIC phenotypes, ClinVar drug-response variants (≥ 1 star) |
 | Risk alleles | Factor V Leiden, prothrombin G20210A, HFE p.Cys282Tyr/p.His63Asp, APOE (flagged: disclose only with counselling and consent), ClinVar risk/association variants (≥ 1 star) |
 | Runs of homozygosity | Total length of runs ≥ 1 Mb (consanguinity), runs concentrated on one chromosome (uniparental disomy), homozygous findings inside runs |
 | Coverage | Per-gene coding coverage at 10/20×; clinically relevant genes below 95 % at 20× are listed, because a negative result there is not reliable |
 | Limits | Lists what an exome pipeline cannot detect (CNVs, SVs, repeat expansions, mtDNA, CYP2D6, HLA, pseudogene regions, mosaicism…) |
+
+**Population frequency.** Every frequency rule (BA1 > 5 %, BS1 above the cut-off, PM2_supporting below 0.01 %
+for dominant and 0.1 % for recessive genes, "too common for a penetrant disorder", the candidate cut-off) uses the
+higher of the overall gnomAD AF and the highest group filtering AF (FAF95: the lower 95 % confidence bound of the AF
+in the most frequent non-bottlenecked group; Whiffin et al. 2017). The FAF stops a variant that is rare overall but
+common in one ancestry group from passing as rare, and the overall AF still catches founder variants of the
+Ashkenazi or Finnish groups, which FAF excludes. A homozygous candidate in a recessive gene seen homozygous in two or
+more gnomAD individuals does not count as fitting the inheritance. Frequencies from sites that failed gnomAD's own
+filters, or whose exome and genome frequencies disagree (p < 10⁻⁴), are flagged.
 
 Each reported variant carries QC flags: low depth, allele imbalance, low QUAL, indel, homopolymer or tandem
 repeat context (from the reference), difficult/polymorphic region (HLA, KIR, mucins), segmental duplication / pseudogene genes. A call is marked **low confidence** when it has a het alt fraction < 0.25, QUAL < 30, an indel in a homopolymer or tandem repeat of ≥ 8, or lies in a paralogous/hypervariable gene; low-confidence findings stay listed, after the confident ones. In the GIAB validation below every false-positive finding was low confidence and no confirmed finding was.
@@ -219,15 +228,15 @@ Both filters are workflow parameters, so you can change them on the run form wit
 
 **Prioritisation filter** (SnpSift):
 ```
-(CLNSIG =~ 'athogenic') | (((ANN[*].IMPACT = 'HIGH') | (ANN[*].IMPACT = 'MODERATE')) & ((! exists gnomAD_AF) | (gnomAD_AF < 0.01)))
+(CLNSIG =~ 'athogenic') | (((ANN[*].IMPACT = 'HIGH') | (ANN[*].IMPACT = 'MODERATE')) & ((! exists gnomAD_AF) | (gnomAD_AF < 0.01)) & ((! exists gnomAD_FAF95) | (gnomAD_FAF95 < 0.01)))
 ```
 This keeps:
 - ClinVar *Pathogenic*, *Likely pathogenic* or *Conflicting classifications of pathogenicity*, at any frequency;
-- rare (gnomAD AF < 1 % or absent) variants with HIGH (stop-gain, frameshift, canonical splice, start-loss, …) or
+- rare (gnomAD AF and highest group FAF95 < 1 %, or absent) variants with HIGH (stop-gain, frameshift, canonical splice, start-loss, …) or
   MODERATE (missense, in-frame indel) impact in any transcript.
 
 Variations:
-- Stricter frequency for dominant disorders: replace `0.01` with `0.001`.
+- Stricter frequency for dominant disorders: replace both `0.01` with `0.001`.
 - Only homozygous / hemizygous candidates (recessive model): wrap the expression in parentheses and append the
   genotype test: `(<default expression>) & (GEN[0].GT = '1/1')`.
 - Also report LOW-impact splice-region variants: add `| (ANN[*].EFFECT has 'splice_region_variant')` inside the
@@ -244,7 +253,7 @@ To add columns, edit the *Fields to extract* of the `candidate_table` / `annotat
 - **Normalise before annotating.** Multiallelic records are split and indels left-aligned against the reference,
   so ClinVar and gnomAD are matched on exact `CHROM/POS/REF/ALT`. Records whose REF does not match the reference
   (a wrong build) are dropped.
-- **`gnomAD_AF:=AF`.** The population AF is stored under its own name so that the caller's `INFO/AF` (genotype
+- **`gnomAD_*` names.** The population frequencies carry their own prefix, so the caller's `INFO/AF` (genotype
   allele frequency) is not overwritten.
 - **Target restriction after calling.** The FreeBayes wrapper starts one FreeBayes process per BED line, which is
   impractical for ~200 000 exome targets. The workflow calls per chromosome and then keeps calls inside the
@@ -294,9 +303,8 @@ v1 was run once in Galaxy 26.2 (aarch64 server) on a GIAB HG001/NA12878 exome. A
 - **Targets:** Illumina Nextera Rapid Capture Expanded Exome BED, lifted from hg19 to GRCh38 with CrossMap
   (201,442 targets, 62.1 Mb).
 - **Reference and annotation:** Ensembl GRCh38 primary assembly (`1, 2, …` naming), SnpEff `GRCh38.115`, ClinVar
-  (NCBI), and population AF from GATK's `af-only-gnomad.hg38` (gnomAD v2) reduced to the padded targets. A v4.1
-  subset was impractical here: its records carry several KB of INFO each, so extracting the targets downloads most
-  of the full exome VCFs.
+  (NCBI), and population AF from GATK's `af-only-gnomad.hg38` (gnomAD v2) reduced to the padded targets (since
+  replaced by the gnomAD v4.1 extract; the GIAB validation below was rerun with it).
 
 Capture QC (Picard HsMetrics): mean target coverage 23×, median 20×, 77 % of target bases ≥ 10×, 50 % ≥ 20×,
 fold-80 2.88, 6.1 % duplicates.
@@ -384,25 +392,45 @@ recorded by this Galaxy's job metrics.
 Genotype agreement among matched variants: 99.6–99.7 % for SNVs, 92–94 % for indels. Missed SNVs are mostly
 in targets with stretches below 20×.
 
-**Clinical concordance** (matched / in truth report; extra findings in brackets):
+**Clinical concordance** with report 0.2.0 (ACMG SF v3.3, gnomAD v4.1 joint extract), matched / in truth report;
+extra findings in brackets:
 
 | Finding group | HG001 | HG002 | HG005 |
 |---|---|---|---|
 | ClinVar pathogenic / likely pathogenic | 2/2 (0) | 1/1 (+2) | 4/4 (0) |
-| ACMG SF v3.2 (reportable or review) | 0/0 (0) | 0/0 (0) | 1/1 (0) |
-| Candidate rare loss-of-function | 1/1 (0) | 2/2 (+1) | 3/3 (0) |
+| ACMG SF v3.3 (reportable or review) | 0/0 (0) | 0/0 (0) | 1/1 (0) |
+| Candidate rare loss-of-function | 1/1 (0) | 1/1 (0) | 3/3 (0) |
 | ClinVar drug response | 26/26 (0) | 24/24 (+1) | 20/20 (0) |
 | ClinVar risk factor / association | 27/27 (0) | 30/30 (0) | 28/28 (0) |
-| Pharmacogenomic genotypes (8 assessable genes + APOE) | all equal | all equal | all equal |
+| Pharmacogenomic genotypes (8 assessable genes + APOE; first run, with the BAM) | all equal | all equal | all equal |
 
-No finding supported by the truth genotypes was missed. All four extra findings, all in HG002 (*MNS1*
-c.605delA, alt fraction 0.17 in a T×10 homopolymer; *CNGA1* p.Glu117\*, alt fraction 0.24, QUAL 20; *PRSS1*
-p.Gly177\* in the PRSS1/PRSS2 segmental duplication; *CYP2D6* c.941G>A drug-response variant, alt fraction 0.16
-in the CYP2D6/CYP2D7 paralog region), are marked **low confidence** by the report (section 4a), so precision of
-the high-confidence findings was 100 % in all three samples. Findings in the samples' reports that the truth
+No finding supported by the truth genotypes was missed. All three extra findings, all in HG002 (*MNS1*
+c.605delA, alt fraction 0.17 in a T×10 homopolymer; *CNGA1* p.Glu117\*, alt fraction 0.24, QUAL 20; *CYP2D6*
+c.941G>A drug-response variant, alt fraction 0.16 in the CYP2D6/CYP2D7 paralog region), are marked **low
+confidence** by the report (section 4a), so precision of the high-confidence findings was 100 % in all three
+samples. *MNS1* and *CNGA1* now also carry gnomAD's own warnings (site filtered, exome/genome frequencies
+discordant). The fourth extra finding of the gnomAD v2 run, *PRSS1* p.Gly177\* in the PRSS1/PRSS2 segmental
+duplication, is gone: gnomAD v4.1 has it at AF 0.24 (FAF95 0.39 in African-ancestry samples, filtered in both
+exomes and genomes). Findings in the samples' reports that the truth
 confirms include *PAH* p.Tyr414Cys and *TPP1* c.509-1G>A (HG001 carrier), *F11* p.Glu135\* (HG002, the
 Ashkenazi factor XI deficiency allele), *BBS5* p.Arg89\* (HG005 carrier) and a rare *RYR2* frameshift (HG005,
 ACMG SF review), and NUDT15 \*1/\*3 (HG005, intermediate metabolizer for thiopurines).
+
+**gnomAD v2 → v4.1.** The VCF workflow was rerun on each sample's called VCF and truth VCF with the v4.1 extract
+and report 0.2.0 (same calls, so the accuracy above is unchanged). The candidate table lost 36–48 % of its rows,
+nearly all of them alleles the gnomAD v2 AF-only file had as rare or absent but that are ≥ 1 % overall or in one
+genetic ancestry group in v4.1. The only report findings that changed were in the "inheritance not met" group:
+*MYO5A*, *IFIH1*, *VPS13B*, *PITRM1*, *HOXD12*, *IFNAR2* and *PRSS1* alleles left (v4.1 AF or FAF95 1.1–24 %),
+and an *HLA-DRB1* allele (v4.1 AF 0.14 %, flagged discordant and difficult region) entered.
+
+| Sample | Candidate table rows, called VCF (v2 → v4.1) | Report findings, called VCF (v2 → v4.1) | Clinical concordance (above) | VCF workflow, 13 jobs (called VCF) | gnomAD annotation step | Peak memory, gnomAD annotation |
+|---|--:|--:|---|--:|--:|--:|
+| HG001 | 1,151 → 722 | 88 → 84 | no finding missed | 5.6 min | 22 s (v2: 8 s) | 18 MB |
+| HG002 | 1,298 → 797 | 83 → 81 | no finding missed | 5.5 min | 22 s (v2: 7 s) | not measured |
+| HG005 | 1,542 → 797 | 79 → 78 | no finding missed | 5.5 min | 22 s (v2: 8 s) | not measured |
+
+98.9 % of HG001's 54,975 reported variants received a gnomAD v4.1 record. Peak memory was measured outside Galaxy
+(`/usr/bin/time`, same input), as this Galaxy does not record job memory.
 
 **Pharmacogenomics against the CDC GeT-RM consensus (HG001 = NA12878).** HG002 and HG005 are not GeT-RM samples.
 

@@ -1,6 +1,6 @@
 class: GalaxyWorkflow
 label: WES tertiary analysis from VCF (v2)
-release: "0.1"
+release: "0.2"
 license: MIT
 tags:
   - WES
@@ -16,16 +16,17 @@ doc: |
   2. Keep calls inside the exome target regions, padded by a configurable number of bases so that
      canonical splice sites are retained, and that pass the quality expression (bcftools filter).
   3. Add ClinVar clinical significance (CLNSIG, CLNREVSTAT, CLNDN, CLNSIGCONF, ALLELEID) and the
-     population allele frequency from gnomAD (stored as INFO/gnomAD_AF) with bcftools annotate.
+     gnomAD v4.1 population frequencies (INFO/gnomAD_AF, grpmax AF, filtering AF FAF95, homozygote count, gnomAD
+     filter and exome/genome discordance) with bcftools annotate.
   4. Predict functional consequences (gene, effect, impact, HGVS c./p., LOF/NMD) with SnpEff.
   5. Prioritise candidates with a SnpSift expression. The default keeps ClinVar (likely) pathogenic
-     variants at any frequency, plus rare (gnomAD AF < 1% or absent) HIGH/MODERATE impact variants.
+     variants at any frequency, plus rare (gnomAD AF and grpmax FAF95 < 1% or absent) HIGH/MODERATE impact variants.
   6. Export tab-separated tables of all annotated variants and of the candidates, and variant statistics
      (bcftools stats, SnpEff summary) for MultiQC.
   7. Runs of homozygosity (bcftools roh, using the population allele frequencies).
   8. Clinical interpretation report (HTML) and findings table: diagnostic ClinVar pathogenic/likely pathogenic
      findings checked against the gene's mode of inheritance (GenCC), candidate loss-of-function variants with
-     automated ACMG/AMP evidence codes and optional HPO phenotype ranking, ACMG SF v3.2 secondary findings,
+     automated ACMG/AMP evidence codes and optional HPO phenotype ranking, ACMG SF v3.3 secondary findings,
      carrier status, pharmacogenomics (CPIC genes), risk alleles, runs of homozygosity, coverage of clinically
      relevant genes and the limits of the analysis. The optional inputs (GenCC, gnomAD constraint, HPO, BAM,
      coverage) refine the report; the FASTQ workflow connects all of them.
@@ -69,8 +70,9 @@ inputs:
     type: data
     format: [vcf, vcf_bgzip, bcf]
     doc: >-
-      Population allele frequency VCF/BCF with INFO/AF, e.g. gnomAD exomes sites. A BCF with index is
-      fastest; an AF-only, target-restricted file keeps it small.
+      gnomAD v4.1 joint (exome + genome) frequencies reduced to the padded targets, as an indexed BCF built with
+      data/build_gnomad_extract.sh: INFO/gnomAD_AF, _AN, _nhomalt, _grpmax, _grpmax_AF, _grpmax_AN, _FAF95,
+      _FAF95_grp, _filter and _discordance_p (see README).
     position: {left: 0, top: 720}
   "Quality filter (bcftools expression)":
     type: string
@@ -81,7 +83,7 @@ inputs:
     type: string
     default: >-
       (CLNSIG =~ 'athogenic') | (((ANN[*].IMPACT = 'HIGH') | (ANN[*].IMPACT = 'MODERATE')) &
-      ((! exists gnomAD_AF) | (gnomAD_AF < 0.01)))
+      ((! exists gnomAD_AF) | (gnomAD_AF < 0.01)) & ((! exists gnomAD_FAF95) | (gnomAD_FAF95 < 0.01)))
     doc: SnpSift filter expression that selects candidate variants from the annotated calls.
     position: {left: 0, top: 960}
   "Gene-disease validity (GenCC TSV)":
@@ -285,7 +287,9 @@ steps:
       output_file: {hide: true, rename: "ClinVar-annotated variants"}
 
   population_annotation:
-    doc: Transfer the population allele frequency as INFO/gnomAD_AF (keeps the caller's own INFO/AF intact).
+    doc: >-
+      Transfer the gnomAD v4.1 frequency fields (INFO/gnomAD_*; the caller's own INFO/AF is left intact), matched
+      on CHROM/POS/REF/ALT.
     tool_id: toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0
     tool_version: 1.24+galaxy0
     position: {left: 1340, top: 0}
@@ -294,7 +298,7 @@ steps:
       sec_annofile|annofile|annotations: "Population allele frequencies (VCF)"
     state:
       sec_annofile:
-        columns: gnomAD_AF:=AF
+        columns: gnomAD_AF,gnomAD_AN,gnomAD_nhomalt,gnomAD_grpmax,gnomAD_grpmax_AF,gnomAD_grpmax_AN,gnomAD_FAF95,gnomAD_FAF95_grp,gnomAD_filter,gnomAD_discordance_p
         annofile:
           anno_fmt: vcf
         mark_sites: ""
@@ -376,7 +380,7 @@ steps:
       extract: >-
         CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD
         ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P
-        LOF NMD gnomAD_AF CLNSIG CLNREVSTAT CLNDN
+        LOF NMD gnomAD_AF gnomAD_grpmax_AF gnomAD_FAF95 gnomAD_nhomalt CLNSIG CLNREVSTAT CLNDN
       one_effect_per_line: false
       separator: ","
       empty_text: "."
@@ -394,7 +398,7 @@ steps:
       extract: >-
         CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD
         ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P
-        LOF NMD gnomAD_AF CLNSIG CLNREVSTAT CLNDN
+        LOF NMD gnomAD_AF gnomAD_grpmax_AF gnomAD_FAF95 gnomAD_nhomalt CLNSIG CLNREVSTAT CLNDN
       one_effect_per_line: false
       separator: ","
       empty_text: "."
@@ -460,7 +464,7 @@ steps:
       Human-readable clinical interpretation report and findings table (local tool tools/wes_clinical_report;
       install it on the Galaxy server, see README).
     tool_id: wes_clinical_report
-    tool_version: 0.1.2+galaxy0
+    tool_version: 0.2.0+galaxy0
     position: {left: 2380, top: 300}
     in:
       vcf: functional_annotation/snpeff_output

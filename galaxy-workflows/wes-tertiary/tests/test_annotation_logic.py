@@ -137,12 +137,20 @@ def test_bcftools(cfg, work):
                 "CLNREVSTAT=criteria_provided,_single_submitter;CLNSIG=Likely_pathogenic\n")
     with open("gnomad.vcf", "w") as f:
         f.write("##fileformat=VCFv4.2\n##contig=<ID=chr1>\n##contig=<ID=chr2>\n")
-        f.write('##INFO=<ID=AF,Number=A,Type=Float,Description="Alternate allele frequency">\n')
+        # the layout of data/build_gnomad_extract.sh (gnomAD v4.1 joint fields renamed to gnomAD_*)
+        for tag, typ, num in [("gnomAD_AF", "Float", "A"), ("gnomAD_AC", "Integer", "A"), ("gnomAD_AN", "Integer", "1"),
+                              ("gnomAD_nhomalt", "Integer", "A"), ("gnomAD_grpmax", "String", "A"),
+                              ("gnomAD_grpmax_AF", "Float", "A"), ("gnomAD_grpmax_AN", "Integer", "A"),
+                              ("gnomAD_FAF95", "Float", "A"), ("gnomAD_FAF95_grp", "String", "A"),
+                              ("gnomAD_discordance_p", "Float", "A"), ("gnomAD_filter", "String", "1")]:
+            f.write(f'##INFO=<ID={tag},Number={num},Type={typ},Description="{tag}">\n')
         f.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n")
-        f.write(f"chr1\t1050\t.\t{r1050}\t{alt_base(r1050)}\t.\tPASS\tAF=0.2\n")
-        f.write(f"chr1\t1100\t.\t{r1100}\t{alt_base(alt_base(r1100))}\t.\tPASS\tAF=0.3\n")
-        f.write(f"chr1\t1120\t.\t{r0}\t{r0 + ins}\t.\tPASS\tAF=0.7\n")
-        f.write(f"chr2\t250\t.\t{r250}\t{alt_base(r250)}\t.\tPASS\tAF=0.001\n")
+        f.write(f"chr1\t1050\t.\t{r1050}\t{alt_base(r1050)}\t.\t.\tgnomAD_AC=1000;gnomAD_AN=5000;gnomAD_AF=0.2;"
+                "gnomAD_nhomalt=40;gnomAD_grpmax=afr;gnomAD_grpmax_AF=0.3;gnomAD_grpmax_AN=1000;gnomAD_FAF95=0.25;"
+                "gnomAD_FAF95_grp=afr;gnomAD_discordance_p=0.5;gnomAD_filter=PASS\n")
+        f.write(f"chr1\t1100\t.\t{r1100}\t{alt_base(alt_base(r1100))}\t.\t.\tgnomAD_AF=0.3;gnomAD_filter=PASS\n")
+        f.write(f"chr1\t1120\t.\t{r0}\t{r0 + ins}\t.\t.\tgnomAD_AF=0.7;gnomAD_filter=PASS\n")
+        f.write(f"chr2\t250\t.\t{r250}\t{alt_base(r250)}\t.\t.\tgnomAD_AF=0.001;gnomAD_filter=EXOMES_FILTERED\n")
     for name in ("input.vcf", "clinvar.vcf", "gnomad.vcf"):  # the wrappers bgzip + index their inputs
         pysam.tabix_compress(name, name + ".gz", force=True)
         bcftools.index(name + ".gz", catch_stdout=False)
@@ -179,6 +187,11 @@ def test_bcftools(cfg, work):
          and not any(k[:2] == ("chr1", 1160) and len(k[2]) > 1 for k in kept), "complex allele atomized into SNVs"),
         ("gnomAD_AF=0.2" in kept.get(("chr1", 1050, alt_base(r1050)), ""), "gnomAD AF transferred as gnomAD_AF"),
         ("AF=0.5" in kept.get(("chr1", 1050, alt_base(r1050)), ""), "caller INFO/AF left untouched"),
+        (all(x in kept.get(("chr1", 1050, alt_base(r1050)), "") for x in (
+            "gnomAD_AN=5000", "gnomAD_nhomalt=40", "gnomAD_grpmax=afr", "gnomAD_grpmax_AF=0.3", "gnomAD_grpmax_AN=1000",
+            "gnomAD_FAF95=0.25", "gnomAD_FAF95_grp=afr", "gnomAD_discordance_p=0.5", "gnomAD_filter=PASS")),
+         "gnomAD v4.1 grpmax, FAF95, homozygotes, filter and discordance transferred"),
+        ("gnomAD_filter=EXOMES_FILTERED" in kept.get(("chr2", 250, alt_base(r250)), ""), "gnomAD filter transferred"),
         ("gnomAD_AF=0.7" in kept.get(("chr1", 1120, r0 + ins), ""),
          "padded indel normalised (trimmed/left-aligned) and matched to gnomAD"),
         ("CLNSIG" not in kept.get(("chr1", 1100, alt_base(r1100)), "CLNSIG"), "no ClinVar transfer from a different ALT"),
@@ -216,11 +229,17 @@ def test_snpsift(cfg, jar):
         ("chr2", 370, "C", "A", "CLNSIG=Pathogenic/Likely_pathogenic;gnomAD_AF=0.04;ANN=" + ann("A", "synonymous_variant", "LOW", "GENEC", "TX4", "c.130C>A", "p.Ala44Ala"), True, "ClinVar P/LP, LOW impact, 4%"),
         ("chr2", 380, "T", "C", "gnomAD_AF=0.0099;ANN=" + ann("C", "frameshift_variant", "HIGH", "GENEC", "TX4", "c.140del", "p.Leu47fs"), True, "HIGH, gnomAD 0.99%"),
         ("chr2", 390, "T", "G", "gnomAD_AF=0.01;ANN=" + ann("G", "stop_gained", "HIGH", "GENEC", "TX4", "c.150T>G", "p.Tyr50*"), False, "HIGH, gnomAD exactly 1%"),
+        ("chr2", 400, "C", "G", "gnomAD_AF=0.0005;gnomAD_FAF95=0.02;ANN=" + ann("G", "stop_gained", "HIGH", "GENEC", "TX4", "c.160C>G", "p.Tyr54*"), False, "HIGH, rare overall but grpmax FAF95 2%"),
+        ("chr2", 410, "C", "T", "gnomAD_AF=0.0005;gnomAD_FAF95=0.0002;ANN=" + ann("T", "stop_gained", "HIGH", "GENEC", "TX4", "c.170C>T", "p.Gln57*"), True, "HIGH, rare overall and in every group"),
     ]
     header = ["##fileformat=VCFv4.2", "##contig=<ID=chr1>", "##contig=<ID=chr2>",
               '##INFO=<ID=DP,Number=1,Type=Integer,Description="Total depth">',
               '##INFO=<ID=AF,Number=A,Type=Float,Description="Caller allele frequency">',
-              '##INFO=<ID=gnomAD_AF,Number=A,Type=Float,Description="gnomAD allele frequency">'] + [
+              '##INFO=<ID=gnomAD_AF,Number=A,Type=Float,Description="gnomAD allele frequency">',
+              '##INFO=<ID=gnomAD_FAF95,Number=A,Type=Float,Description="gnomAD grpmax filtering allele frequency">',
+              # SnpSift extractFields fails on fields missing from the header; the gnomAD file's header supplies them
+              '##INFO=<ID=gnomAD_grpmax_AF,Number=A,Type=Float,Description="gnomAD grpmax allele frequency">',
+              '##INFO=<ID=gnomAD_nhomalt,Number=A,Type=Integer,Description="gnomAD homozygote count">'] + [
               f'##INFO=<ID={t},Number=.,Type=String,Description="{t}">' for t in ("CLNSIG", "CLNREVSTAT", "CLNDN", "CLNSIGCONF")] + [
               '##INFO=<ID=ALLELEID,Number=1,Type=Integer,Description="ALLELEID">'] + SNPEFF_HEADER + [
               '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',

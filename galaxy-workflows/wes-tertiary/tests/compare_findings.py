@@ -16,7 +16,7 @@ import sys
 GROUPS = collections.OrderedDict([
     ("ClinVar P/LP (diagnostic, review, carrier, low penetrance)",
      ("diagnostic", "pathogenic_review", "carrier", "low_penetrance")),
-    ("ACMG SF v3.2 (reportable or review)", ("acmg_sf_reportable", "acmg_sf_review", "acmg_sf_not")),
+    ("ACMG SF (reportable or review)", ("acmg_sf_reportable", "acmg_sf_review", "acmg_sf_not")),
     ("Candidate rare LoF (not in ClinVar)", ("candidate", "candidate_inheritance_not_met")),
     ("ClinVar drug response", ("clinvar_drug_response",)),
     ("ClinVar risk factor / association", ("clinvar_association",)),

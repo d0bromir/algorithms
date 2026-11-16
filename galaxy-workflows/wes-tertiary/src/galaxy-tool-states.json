@@ -370,7 +370,7 @@
       "__page__": 0,
       "__rerun_remap_job_id__": null,
       "empty_text": ".",
-      "extract": "CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P LOF NMD gnomAD_AF CLNSIG CLNREVSTAT CLNDN",
+      "extract": "CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P LOF NMD gnomAD_AF gnomAD_grpmax_AF gnomAD_FAF95 gnomAD_nhomalt CLNSIG CLNREVSTAT CLNDN",
       "input": {
         "__class__": "ConnectedValue"
       },
@@ -385,7 +385,7 @@
       "__page__": 0,
       "__rerun_remap_job_id__": null,
       "empty_text": ".",
-      "extract": "CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P LOF NMD gnomAD_AF CLNSIG CLNREVSTAT CLNDN",
+      "extract": "CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P LOF NMD gnomAD_AF gnomAD_grpmax_AF gnomAD_FAF95 gnomAD_nhomalt CLNSIG CLNREVSTAT CLNDN",
       "input": {
         "__class__": "ConnectedValue"
       },
@@ -448,7 +448,7 @@
         "__class__": "ConnectedValue"
       }
     },
-    "tool_version": "0.1.2+galaxy0"
+    "tool_version": "0.2.0+galaxy0"
   },
   "WES tertiary analysis from FASTQ (v1)/tertiary/clinvar_annotation": {
     "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
@@ -637,7 +637,7 @@
             "__class__": "ConnectedValue"
           }
         },
-        "columns": "gnomAD_AF:=AF",
+        "columns": "gnomAD_AF,gnomAD_AN,gnomAD_nhomalt,gnomAD_grpmax,gnomAD_grpmax_AF,gnomAD_grpmax_AN,gnomAD_FAF95,gnomAD_FAF95_grp,gnomAD_filter,gnomAD_discordance_p",
         "mark_sites": "",
         "min_overlap": "",
         "set_id": ""
@@ -985,7 +985,7 @@
       "__page__": 0,
       "__rerun_remap_job_id__": null,
       "empty_text": ".",
-      "extract": "CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P LOF NMD gnomAD_AF CLNSIG CLNREVSTAT CLNDN",
+      "extract": "CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P LOF NMD gnomAD_AF gnomAD_grpmax_AF gnomAD_FAF95 gnomAD_nhomalt CLNSIG CLNREVSTAT CLNDN",
       "input": {
         "__class__": "ConnectedValue"
       },
@@ -1000,7 +1000,7 @@
       "__page__": 0,
       "__rerun_remap_job_id__": null,
       "empty_text": ".",
-      "extract": "CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P LOF NMD gnomAD_AF CLNSIG CLNREVSTAT CLNDN",
+      "extract": "CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P LOF NMD gnomAD_AF gnomAD_grpmax_AF gnomAD_FAF95 gnomAD_nhomalt CLNSIG CLNREVSTAT CLNDN",
       "input": {
         "__class__": "ConnectedValue"
       },
@@ -1063,7 +1063,7 @@
         "__class__": "ConnectedValue"
       }
     },
-    "tool_version": "0.1.2+galaxy0"
+    "tool_version": "0.2.0+galaxy0"
   },
   "WES tertiary analysis from VCF (v2)/clinvar_annotation": {
     "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
@@ -1252,7 +1252,7 @@
             "__class__": "ConnectedValue"
           }
         },
-        "columns": "gnomAD_AF:=AF",
+        "columns": "gnomAD_AF,gnomAD_AN,gnomAD_nhomalt,gnomAD_grpmax,gnomAD_grpmax_AF,gnomAD_grpmax_AN,gnomAD_FAF95,gnomAD_FAF95_grp,gnomAD_filter,gnomAD_discordance_p",
         "mark_sites": "",
         "min_overlap": "",
         "set_id": ""

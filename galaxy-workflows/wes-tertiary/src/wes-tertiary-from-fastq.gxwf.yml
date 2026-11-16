@@ -1,6 +1,6 @@
 class: GalaxyWorkflow
 label: WES tertiary analysis from FASTQ (v1)
-release: "0.1"
+release: "0.2"
 license: MIT
 tags:
   - WES
@@ -68,8 +68,9 @@ inputs:
     type: data
     format: [vcf, vcf_bgzip, bcf]
     doc: >-
-      Population allele frequency VCF/BCF with INFO/AF, e.g. gnomAD exomes sites. A BCF with index is
-      fastest; an AF-only, target-restricted file keeps it small.
+      gnomAD v4.1 joint (exome + genome) frequencies reduced to the padded targets, as an indexed BCF built with
+      data/build_gnomad_extract.sh: INFO/gnomAD_AF, _AN, _nhomalt, _grpmax, _grpmax_AF, _grpmax_AN, _FAF95,
+      _FAF95_grp, _filter and _discordance_p (see README).
     position: {left: 0, top: 840}
   "Quality filter (bcftools expression)":
     type: string
@@ -80,7 +81,7 @@ inputs:
     type: string
     default: >-
       (CLNSIG =~ 'athogenic') | (((ANN[*].IMPACT = 'HIGH') | (ANN[*].IMPACT = 'MODERATE')) &
-      ((! exists gnomAD_AF) | (gnomAD_AF < 0.01)))
+      ((! exists gnomAD_AF) | (gnomAD_AF < 0.01)) & ((! exists gnomAD_FAF95) | (gnomAD_FAF95 < 0.01)))
     doc: SnpSift filter expression that selects candidate variants from the annotated calls.
     position: {left: 0, top: 1120}
   "Coding regions (BED)":
