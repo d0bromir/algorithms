@@ -9,6 +9,14 @@
 ##INFO=<ID=LOF,Number=.,Type=String,Description="Predicted loss of function effects for this variant">
 ##INFO=<ID=NMD,Number=.,Type=String,Description="Predicted nonsense mediated decay effects for this variant">
 ##INFO=<ID=gnomAD_AF,Number=A,Type=Float,Description="Population allele frequency">
+##INFO=<ID=gnomAD_AN,Number=1,Type=Integer,Description="gnomAD v4.1 joint allele number">
+##INFO=<ID=gnomAD_nhomalt,Number=A,Type=Integer,Description="gnomAD v4.1 joint homozygote count">
+##INFO=<ID=gnomAD_grpmax,Number=A,Type=String,Description="gnomAD v4.1 group with the highest AF">
+##INFO=<ID=gnomAD_grpmax_AF,Number=A,Type=Float,Description="gnomAD v4.1 highest group AF">
+##INFO=<ID=gnomAD_FAF95,Number=A,Type=Float,Description="gnomAD v4.1 highest group FAF95">
+##INFO=<ID=gnomAD_FAF95_grp,Number=A,Type=String,Description="group of gnomAD_FAF95">
+##INFO=<ID=gnomAD_filter,Number=1,Type=String,Description="gnomAD v4.1 joint FILTER">
+##INFO=<ID=gnomAD_discordance_p,Number=A,Type=Float,Description="gnomAD exome/genome discordance p">
 ##INFO=<ID=CLNSIG,Number=.,Type=String,Description="CLNSIG">
 ##INFO=<ID=CLNREVSTAT,Number=.,Type=String,Description="CLNREVSTAT">
 ##INFO=<ID=CLNDN,Number=.,Type=String,Description="CLNDN">
@@ -19,9 +27,13 @@
 #CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	TEST1
 1	1000100	.	C	T	200	PASS	gnomAD_AF=0.00001;ANN=T|stop_gained|HIGH|GENEX|GENEX|transcript|TXX|protein_coding|1/10|c.100C>T|p.Gln34*|||||;NMD=(GENEX|GENEX|1|1.00)	GT:DP:AD	0/1:40:20,20
 1	45331556	.	C	T	200	PASS	CLNSIG=Pathogenic;CLNREVSTAT=criteria_provided,_multiple_submitters,_no_conflicts;CLNDN=MUTYH-associated_polyposis;gnomAD_AF=0.003;ANN=T|missense_variant|MODERATE|MUTYH|MUTYH|transcript|TXM|protein_coding|1/10|c.1187G>A|p.Gly396Asp|||||	GT:DP:AD	0/1:48:25,23
+6	118559100	.	C	T	200	PASS	CLNSIG=Pathogenic;CLNREVSTAT=reviewed_by_expert_panel;CLNDN=Dilated_cardiomyopathy_1P;ANN=T|missense_variant|MODERATE|PLN|PLN|transcript|TPLN|protein_coding|1/10|c.40C>T|p.Arg14Cys|||||	GT:DP:AD	0/1:44:22,22
 10	94781859	.	G	A	200	PASS	CLNSIG=drug_response;CLNREVSTAT=criteria_provided,_multiple_submitters,_no_conflicts;RS=4244285;ANN=A|splice_region_variant&synonymous_variant|LOW|CYP2C19|CYP2C19|transcript|TXC|protein_coding|1/10|c.681G>A|p.Pro227Pro|||||	GT:DP:AD	1/1:45:0,45
 12	102840474	.	T	C	200	PASS	CLNSIG=Pathogenic;CLNREVSTAT=reviewed_by_expert_panel;CLNDN=Phenylketonuria;gnomAD_AF=0.0003;ANN=C|missense_variant|MODERATE|PAH|PAH|transcript|TXP|protein_coding|1/10|c.1241A>G|p.Tyr414Cys|||||	GT:DP:AD	0/1:57:30,27
 13	32340301	.	C	T	200	PASS	CLNSIG=Pathogenic;CLNREVSTAT=reviewed_by_expert_panel;CLNDN=Hereditary_breast_ovarian_cancer_syndrome;ANN=T|stop_gained|HIGH|BRCA2|BRCA2|transcript|TXB|protein_coding|1/10|c.1234C>T|p.Gln412*|||||	GT:DP:AD	0/1:50:26,24
 17	7676154	.	G	C	200	PASS	CLNSIG=Benign;gnomAD_AF=0.6;ANN=C|missense_variant|MODERATE|TP53|TP53|transcript|TXT|protein_coding|1/10|c.215C>G|p.Pro72Arg|||||	GT:DP:AD	0/1:60:30,30
 17	41000100	.	C	T	200	PASS	CLNSIG=Pathogenic;CLNREVSTAT=criteria_provided,_multiple_submitters,_no_conflicts;gnomAD_AF=0.2;ANN=T|missense_variant|MODERATE|GENED|GENED|transcript|TXD|protein_coding|1/10|c.47C>T|p.Ala16Val|||||	GT:DP:AD	0/1:40:20,20
 17	41000200	.	G	A	200	PASS	ANN=A|stop_gained|HIGH|GENEM|GENEM|transcript|TXM2|protein_coding|1/10|c.300G>A|p.Trp100*|||||	GT:DP:AD	1/1:35:0,35
+17	41000300	.	C	T	200	PASS	CLNSIG=Pathogenic;CLNREVSTAT=criteria_provided,_single_submitter;gnomAD_AF=0.0004;gnomAD_AN=1500000;gnomAD_nhomalt=0;gnomAD_grpmax=afr;gnomAD_grpmax_AF=0.006;gnomAD_FAF95=0.004;gnomAD_FAF95_grp=afr;gnomAD_filter=EXOMES_FILTERED;ANN=T|missense_variant|MODERATE|GENEF|GENEF|transcript|TGENEF|protein_coding|1/10|c.10C>T|p.Arg4Cys|||||	GT:DP:AD	0/1:40:20,20
+17	41000400	.	G	A	200	PASS	gnomAD_AF=0.0005;gnomAD_AN=1500000;gnomAD_nhomalt=6;gnomAD_filter=PASS;ANN=A|stop_gained|HIGH|GENER|GENER|transcript|TGENER|protein_coding|1/10|c.20G>A|p.Trp7*|||||	GT:DP:AD	1/1:30:0,30
+X	153725300	.	G	A	200	PASS	CLNSIG=Pathogenic;CLNREVSTAT=criteria_provided,_multiple_submitters,_no_conflicts;CLNDN=Adrenoleukodystrophy;ANN=A|missense_variant|MODERATE|ABCD1|ABCD1|transcript|TABCD1|protein_coding|1/10|c.796G>A|p.Gly266Arg|||||	GT:DP:AD	0/1:38:19,19

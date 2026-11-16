@@ -7,3 +7,5 @@ x	HGNC:1	TP53	MONDO:1	Li-Fraumeni syndrome	Definitive	Autosomal dominant	Test su
 x	HGNC:1	GENED	MONDO:1	example dominant disorder D	Definitive	Autosomal dominant	Test submitter
 x	HGNC:1	GENEM	MONDO:1	example dominant disorder M	Definitive	Autosomal dominant	Test submitter
 x	HGNC:1	GENEM	MONDO:1	example recessive disorder M	Definitive	Autosomal recessive	Test submitter
+x	HGNC:1	GENEF	MONDO:1	example dominant disorder F	Definitive	Autosomal dominant	Test submitter
+x	HGNC:1	GENER	MONDO:1	example recessive disorder R	Definitive	Autosomal recessive	Test submitter

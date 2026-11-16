@@ -2,14 +2,15 @@
 """Human-readable clinical interpretation report for one germline exome.
 
 Input is the annotated VCF of the "WES tertiary analysis from VCF" workflow (SnpEff ANN/LOF/NMD,
-ClinVar CLNSIG/CLNREVSTAT/CLNDN/..., population frequency INFO/gnomAD_AF), plus optional knowledge
+ClinVar CLNSIG/CLNREVSTAT/CLNDN/..., gnomAD v4.1 frequencies INFO/gnomAD_AF, _FAF95, _grpmax_AF, _nhomalt, ...),
+plus optional knowledge
 bases and QC outputs. Every statement in the report is derived by explicit, versioned rules from those
 inputs; nothing is inferred by a statistical or language model. The report is decision support for a
 qualified reviewer (clinical geneticist / laboratory scientist), not a diagnosis.
 
 Sections: sample QC and sex check; diagnostic findings (ClinVar P/LP with inheritance-consistent
 genotype); candidate variants not classified in ClinVar (rare predicted loss-of-function, and rare
-missense in phenotype-matched genes) with automated ACMG/AMP evidence codes; ACMG SF v3.2 secondary
+missense in phenotype-matched genes) with automated ACMG/AMP evidence codes; ACMG SF v3.3 secondary
 findings; carrier status; pharmacogenomics (CPIC genes, single-nucleotide star alleles); risk alleles
 and other ClinVar associations; runs of homozygosity; coverage of clinically relevant genes; limits.
 
@@ -25,32 +26,35 @@ import re
 import subprocess
 import sys
 
-VERSION = "0.1.2"
+VERSION = "0.2.0"
 
 # --------------------------------------------------------------------------------------------- rules
-# ACMG secondary findings v3.2 (Miller et al., Genet Med 2023;25:100866). Value: reporting rule.
+# ACMG secondary findings v3.3 (ACMG policy statement, Genet Med 2025;27:101454): the 81 genes of v3.2 (Miller et al.,
+# Genet Med 2023;25:100866) plus ABCD1, CYP27A1 and PLN. Value: reporting rule.
 #   "het" = one P/LP variant is reportable; "biallelic" = two P/LP alleles (hom or two het);
-#   "hfe" = HFE p.Cys282Tyr homozygotes only; "ttn" = truncating variants only (TTN).
+#   "xl" = hemizygous or homozygous, or two heterozygous P/LP variants (ABCD1; a single heterozygous variant in a
+#   female is not reported); "hfe" = HFE p.Cys282Tyr homozygotes only; "ttn" = truncating variants only (TTN).
 ACMG_SF = {g: "het" for g in (
     "APC RET BRCA1 BRCA2 PALB2 SDHD SDHAF2 SDHC SDHB MAX TMEM127 BMPR1A SMAD4 TP53 MLH1 MSH2 MSH6 PMS2 "
     "MEN1 NF2 STK11 PTEN RB1 TSC1 TSC2 VHL WT1 FBN1 TGFBR1 TGFBR2 SMAD3 ACTA2 MYH11 PKP2 DSP DSC2 TMEM43 "
     "DSG2 RYR2 CASQ2 TRDN CALM1 CALM2 CALM3 TNNT2 LMNA FLNC BAG3 DES RBM20 TNNC1 KCNQ1 KCNH2 SCN5A MYBPC3 "
     "MYH7 TNNI3 TPM1 MYL3 ACTC1 PRKAG2 MYL2 GLA COL3A1 LDLR APOB PCSK9 OTC RYR1 CACNA1S HNF1A TTR "
-    "ACVRL1 ENG").split()}
+    "ACVRL1 ENG PLN").split()}
 ACMG_SF.update({"MUTYH": "biallelic", "ATP7B": "biallelic", "BTD": "biallelic", "GAA": "biallelic",
-                "RPE65": "biallelic", "HFE": "hfe", "TTN": "ttn"})
+                "RPE65": "biallelic", "CYP27A1": "biallelic", "ABCD1": "xl", "HFE": "hfe", "TTN": "ttn"})
+ACMG_SF_VERSION = "ACMG SF v3.3"
 ACMG_SF_CATEGORY = {}
 for _cat, _genes in (
         ("Cancer predisposition", "APC RET BRCA1 BRCA2 PALB2 SDHD SDHAF2 SDHC SDHB MAX TMEM127 BMPR1A SMAD4 TP53 "
                                   "MLH1 MSH2 MSH6 PMS2 MEN1 MUTYH NF2 STK11 PTEN RB1 TSC1 TSC2 VHL WT1"),
         ("Cardiovascular", "FBN1 TGFBR1 TGFBR2 SMAD3 ACTA2 MYH11 PKP2 DSP DSC2 TMEM43 DSG2 RYR2 CASQ2 TRDN CALM1 "
                            "CALM2 CALM3 TNNT2 LMNA FLNC TTN BAG3 DES RBM20 TNNC1 KCNQ1 KCNH2 SCN5A MYBPC3 MYH7 "
-                           "TNNI3 TPM1 MYL3 ACTC1 PRKAG2 MYL2 GLA COL3A1 LDLR APOB PCSK9 TTR"),
-        ("Inborn errors of metabolism", "OTC GAA BTD"),
+                           "TNNI3 TPM1 MYL3 ACTC1 PRKAG2 MYL2 GLA COL3A1 LDLR APOB PCSK9 TTR PLN"),
+        ("Inborn errors of metabolism", "OTC GAA BTD CYP27A1 ABCD1"),
         ("Miscellaneous", "ACVRL1 ENG ATP7B HFE RPE65 RYR1 CACNA1S HNF1A")):
     for _g in _genes.split():
         ACMG_SF_CATEGORY[_g] = _cat
-assert len(ACMG_SF) == 81, len(ACMG_SF)
+assert len(ACMG_SF) == 84, len(ACMG_SF)
 
 LOF_EFFECTS = ("stop_gained", "frameshift_variant", "splice_acceptor_variant", "splice_donor_variant",
                "start_lost", "exon_loss_variant", "transcript_ablation")
@@ -168,10 +172,45 @@ def fmt_af(af):
     return f"{af:.2g}" if af < 0.001 else f"{af:.4f}".rstrip("0")
 
 
+def freq(v):
+    """Population frequency used by the frequency rules: the higher of the overall gnomAD AF and the highest
+    filtering allele frequency of a genetic ancestry group (FAF95; Whiffin et al. 2017, the statistic of the ClinGen
+    BA1/BS1 recommendations). FAF excludes bottlenecked groups (Ashkenazi, Finnish, Amish, remaining), so the overall
+    AF still catches founder variants. None if the variant is absent from gnomAD (or no frequency file was given)."""
+    xs = [x for x in (v.af, v.faf) if x is not None]
+    return max(xs) if xs else None
+
+
+def gnomad_caveats(v):
+    out = []
+    if v.gfilter and v.gfilter not in ("PASS", "."):
+        out.append(f"gnomAD site filtered ({v.gfilter})")
+    if v.gdisc is not None and v.gdisc < 1e-4:
+        out.append("gnomAD exome/genome frequencies discordant")
+    return out
+
+
+def freq_cell(v):
+    """HTML: overall AF, then grpmax AF, FAF95 and homozygote count where the v4.1 fields are present."""
+    overall = v.af
+    s = esc(fmt_af(overall))
+    det = []
+    if v.grpmax_af is not None and v.grpmax:
+        det.append(f"max {esc(v.grpmax)} {fmt_af(v.grpmax_af)}")
+    if v.faf is not None:
+        det.append(f"FAF95 {fmt_af(v.faf)}" + (f" ({esc(v.faf_grp)})" if v.faf_grp else ""))
+    if v.nhomalt:
+        det.append(f"{int(v.nhomalt)} hom")
+    if det:
+        s += "<br><span class='small'>" + " &middot; ".join(det) + "</span>"
+    return s
+
+
 class Variant:
     __slots__ = ("chrom", "pos", "ref", "alt", "qual", "filter", "info", "gt", "dp", "ad", "anns", "lof",
                  "zyg", "gene", "effect", "impact", "hgvs_c", "hgvs_p", "feature", "af", "clnsig", "revstat",
-                 "clndn", "stars", "rs", "ab", "flags")
+                 "clndn", "stars", "rs", "ab", "flags",
+                 "an", "nhomalt", "grpmax", "grpmax_af", "faf", "faf_grp", "gfilter", "gdisc")
 
     def key(self):
         return f"{self.chrom}:{self.pos}:{self.ref}>{self.alt}"
@@ -259,7 +298,13 @@ def parse_vcf(path, sample_index=0):
                 v.effect, v.impact, v.gene, v.feature = first[1], first[2], first[3], first[6]
                 v.hgvs_c, v.hgvs_p = first[9], first[10]
                 v.lof = info.get("LOF")
-                v.af = fnum(str(info.get("gnomAD_AF", "")).split(",")[0])
+                gn = {k: str(x).split(",")[0] for k, x in info.items() if k.startswith("gnomAD_")}
+                v.af = fnum(gn.get("gnomAD_AF"))
+                v.an = fnum(gn.get("gnomAD_AN"))
+                v.nhomalt = fnum(gn.get("gnomAD_nhomalt"))
+                v.grpmax, v.grpmax_af = gn.get("gnomAD_grpmax"), fnum(gn.get("gnomAD_grpmax_AF"))
+                v.faf, v.faf_grp = fnum(gn.get("gnomAD_FAF95")), gn.get("gnomAD_FAF95_grp")
+                v.gfilter, v.gdisc = gn.get("gnomAD_filter"), fnum(gn.get("gnomAD_discordance_p"))
                 v.clnsig = str(info.get("CLNSIG", "")) if info.get("CLNSIG") not in (None, True, ".") else ""
                 v.revstat = str(info.get("CLNREVSTAT", "")) if info.get("CLNREVSTAT") not in (None, True) else ""
                 v.clndn = str(info.get("CLNDN", "")).replace("_", " ") if info.get("CLNDN") not in (None, True) else ""
@@ -598,7 +643,7 @@ def variant_flags(v):
         f.append("difficult/polymorphic region")
     elif g in PARALOG_GENES:
         f.append("segmental duplication / pseudogene: short-read calls unreliable")
-    return f
+    return f + gnomad_caveats(v)
 
 
 def acmg_evidence(v, gene, moi, constraint, hpo_hit, max_af):
@@ -610,11 +655,12 @@ def acmg_evidence(v, gene, moi, constraint, hpo_hit, max_af):
         nmd = "NMD" in v.info
         codes.append("PVS1" if (nmd or "splice" in ann[1] or "start_lost" in ann[1] or "exon_loss" in ann[1]
                                 or "stop_gained" in ann[1] or "frameshift" in ann[1]) else "PVS1_moderate")
-    if v.af is None or v.af < (1e-4 if ("AD" in moi and "AR" not in moi) else 1e-3):
+    p = freq(v)
+    if p is None or p < (1e-4 if ("AD" in moi and "AR" not in moi) else 1e-3):
         codes.append("PM2_supporting")
-    if v.af is not None and v.af > 0.05:
+    if p is not None and p > 0.05:
         codes.append("BA1")
-    elif v.af is not None and v.af > max_af:
+    elif p is not None and p > max_af:
         codes.append("BS1")
     if is_missense(v, gene):
         z = constraint.get(gene, (None, None, None))[2]
@@ -838,7 +884,7 @@ def build(args):
     def moi_of(g):
         m = gene_moi(gencc.get(g, []))
         if not m and g in ACMG_SF:
-            m = {"AR"} if ACMG_SF[g] in ("biallelic", "hfe") else {"AD"}
+            m = {"AR"} if ACMG_SF[g] in ("biallelic", "hfe") else ({"XL"} if ACMG_SF[g] == "xl" else {"AD"})
         if not m and v_chrom_of_gene.get(g) == "X":
             m = {"XL"}
         return m
@@ -862,11 +908,14 @@ def build(args):
         biallelic = v.zyg == "hom" or len(by_gene_plp[g]) >= 2
         two = ("homozygous" if v.zyg == "hom" else
                "two P/LP alleles in this gene (possible compound heterozygote, phase unknown)")
+        if v.zyg == "hom" and v.nhomalt and v.nhomalt >= 2:
+            two += (f" ({int(v.nhomalt)} homozygotes in gnomAD: the condition is probably mild, late-onset or of "
+                    "reduced penetrance)")
         dominant_only = bool(moi) and "AR" not in moi
         if is_low_penetrance_only(v):
             lowpen.append(v)
-        elif v.af is not None and (v.af > 0.05 or (dominant_only and v.af > 0.001)):
-            review.append((v, f"ClinVar P/LP, but gnomAD AF {fmt_af(v.af)} is too common for a highly penetrant "
+        elif freq(v) is not None and (freq(v) > 0.05 or (dominant_only and freq(v) > 0.001)):
+            review.append((v, f"ClinVar P/LP, but gnomAD frequency {fmt_af(freq(v))} is too common for a highly penetrant "
                               + ("dominant disorder" if dominant_only else "disorder")
                               + ": a low-penetrance/risk allele, an outdated assertion or a mapping artefact"))
         elif not moi:
@@ -896,7 +945,7 @@ def build(args):
     for v in variants:
         if v.clnsig and not any(t in v.clnsig.lower() for t in ("uncertain", "not_provided", "conflicting")):
             continue  # classified in ClinVar (handled elsewhere)
-        if v.af is not None and v.af >= args.max_af:
+        if freq(v) is not None and freq(v) >= args.max_af:
             continue
         for g in genes_of(v)[:3]:
             if g in gencc or g in ACMG_SF:
@@ -911,12 +960,14 @@ def build(args):
             reasons, consistent = [], False
             if "AR" in moi:  # recessive model: two alleles needed
                 ok = v.zyg == "hom" or len(vs) + len(by_gene_plp.get(g, [])) >= 2
-                consistent |= ok
-                reasons.append("recessive: " + ("homozygous" if v.zyg == "hom" else
+                hom_pop = v.zyg == "hom" and (v.nhomalt or 0) >= 2
+                consistent |= ok and not hom_pop
+                reasons.append("recessive: " + (f"homozygous, but {int(v.nhomalt)} homozygotes in gnomAD" if hom_pop else
+                                                "homozygous" if v.zyg == "hom" else
                                                 "second rare allele in the gene (phase unknown)" if ok else
                                                 "single heterozygous allele (carrier at most)"))
             if not moi or {"AD", "XL", "MT"} & moi:  # dominant / X-linked model: one rare allele
-                strict = v.af is None or v.af < 1e-4
+                strict = freq(v) is None or freq(v) < 1e-4
                 tolerant = lof and loeuf is not None and loeuf >= 0.6 and "XL" not in moi
                 consistent |= strict and not tolerant
                 r = ("dominant/X-linked" if moi else "inheritance unknown")
@@ -947,13 +998,15 @@ def build(args):
             if rule == "ttn" and plp_v and not is_lof(v, g):
                 continue
             if plp_v:
-                if rule == "biallelic":
-                    n = sum(2 if x.zyg == "hom" else 1 for x in variants if is_plp(x) and g in genes_of(x)[:2])
+                if rule in ("biallelic", "xl"):
+                    hemi = rule == "xl" and sex == "male"
+                    n = sum(2 if (x.zyg == "hom" or hemi) else 1 for x in variants if is_plp(x) and g in genes_of(x)[:2])
                     sf.append((v, g, "reportable" if n >= 2 else "not reportable (single allele: carrier)",
-                               "biallelic only"))
+                               "hemizygous, homozygous or two heterozygous P/LP variants only" if rule == "xl"
+                               else "biallelic only"))
                 else:
                     sf.append((v, g, "reportable", "P/LP in ClinVar"))
-            elif (not v.clnsig or "uncertain" in v.clnsig.lower()) and is_lof(v, g) and (v.af is None or v.af < 1e-4):
+            elif (not v.clnsig or "uncertain" in v.clnsig.lower()) and is_lof(v, g) and (freq(v) is None or freq(v) < 1e-4):
                 sf.append((v, g, "review", "rare predicted loss-of-function, not classified in ClinVar"))
             break
 
@@ -1063,7 +1116,7 @@ def build(args):
         + (": " + ", ".join(short(v) for v, _ in review) if review else "") + "</li>")
     R.h(f"<li><b>Candidate variants needing review</b> (not classified in ClinVar): <b>{sum(1 for c in cands if c[3])}</b> "
         f"inheritance-consistent of {len(cands)}</li>")
-    R.h(f"<li><b>ACMG secondary findings (v3.2)</b>: <b>{len(sf_rep)}</b> reportable"
+    R.h(f"<li><b>Secondary findings ({ACMG_SF_VERSION})</b>: <b>{len(sf_rep)}</b> reportable"
         + (": " + ", ".join(short(v) for v, *_ in sf_rep) if sf_rep else "") + "</li>")
     R.h(f"<li><b>Carrier status</b> (one P/LP allele in a recessive gene): <b>{len(carrier)}</b>"
         + (": " + ", ".join(short(v, gene=False) for v in carrier) if carrier else "") + "</li>")
@@ -1113,28 +1166,28 @@ def build(args):
         "conflicting) whose genotype fits the gene's mode of inheritance (GenCC): one allele in dominant or X-linked "
         "genes, two alleles in recessive genes. Whether a finding explains the patient's condition depends on the "
         "clinical picture.</p>")
-    R.table(["Variant", "Genotype", "ClinVar", "gnomAD AF", "Gene-disease (GenCC)", "Interpretation"],
-            [[var_cell(v), call_cell(v, sex), clinvar_cell(v), fmt_af(v.af),
+    R.table(["Variant", "Genotype", "ClinVar", "gnomAD frequency", "Gene-disease (GenCC)", "Interpretation"],
+            [[var_cell(v), call_cell(v, sex), clinvar_cell(v), freq_cell(v),
               disease_cell(v.gene, gencc, hpo_match, hpo_names), esc(why)] for v, why in diag])
     for v, why in diag:
         R.rows.append(("diagnostic", v, why))
     R.h("<h3>Pathogenic variants whose relevance depends on the condition (review)</h3><p class='small'>Genes with "
         "both dominant and recessive disorders, X-linked genes in heterozygous females, and genes without an "
         "established disease association in GenCC.</p>")
-    R.table(["Variant", "Genotype", "ClinVar", "gnomAD AF", "Gene-disease (GenCC)", "Why review"],
-            [[var_cell(v), call_cell(v, sex), clinvar_cell(v), fmt_af(v.af),
+    R.table(["Variant", "Genotype", "ClinVar", "gnomAD frequency", "Gene-disease (GenCC)", "Why review"],
+            [[var_cell(v), call_cell(v, sex), clinvar_cell(v), freq_cell(v),
               disease_cell(v.gene, gencc, hpo_match, hpo_names), esc(why)] for v, why in review])
     for v, why in review:
         R.rows.append(("pathogenic_review", v, why))
     if lowpen:
         R.h("<h3>Low-penetrance pathogenic alleles</h3>")
-        R.table(["Variant", "Genotype", "ClinVar", "gnomAD AF"],
-                [[var_cell(v), call_cell(v, sex), clinvar_cell(v), fmt_af(v.af)] for v in lowpen])
+        R.table(["Variant", "Genotype", "ClinVar", "gnomAD frequency"],
+                [[var_cell(v), call_cell(v, sex), clinvar_cell(v), freq_cell(v)] for v in lowpen])
         for v in lowpen:
             R.rows.append(("low_penetrance", v, ""))
 
     # candidates
-    R.h("<h2>3. Candidate variants not classified in ClinVar</h2><p class='small'>Rare (gnomAD AF &lt; "
+    R.h("<h2>3. Candidate variants not classified in ClinVar</h2><p class='small'>Rare (gnomAD frequency &lt; "
         f"{args.max_af:g}) predicted loss-of-function variants in genes with an established disease association "
         "(GenCC definitive/strong/moderate/supportive)" + (", and rare missense/in-frame variants in genes matching "
                                                           "the patient's phenotype" if hpo_terms else "")
@@ -1147,30 +1200,31 @@ def build(args):
         loeuf = constraint.get(g, (None, None, None))[0]
         rows.append([var_cell(v).replace(f"<b>{esc(v.gene)}</b>", f"<b>{esc(g)}</b>"), call_cell(v, sex),
                      esc(a[1].replace("&", " & ")) + (f"<br><span class='small'>LOEUF {loeuf:.2f}</span>" if loeuf is not None else ""),
-                     fmt_af(v.af), disease_cell(g, gencc, hpo_match, hpo_names),
+                     freq_cell(v), disease_cell(g, gencc, hpo_match, hpo_names),
                      ("" if consistent else tag("inheritance not met", "t-grn") + "<br>") + esc(why),
                      " ".join(tag(c, "t-red" if c.startswith("PVS") else ("t-grn" if c.startswith("B") else "")) for c in ev)])
         R.rows.append(("candidate" if consistent else "candidate_inheritance_not_met", v, why + "; " + ",".join(ev)))
-    R.table(["Variant", "Genotype", "Consequence", "gnomAD AF", "Gene-disease (GenCC)", "Inheritance fit", "Evidence"], rows)
+    R.table(["Variant", "Genotype", "Consequence", "gnomAD frequency", "Gene-disease (GenCC)", "Inheritance fit", "Evidence"], rows)
     if len(cands) > args.max_candidates:
         R.h(f"<p class='small'>{len(cands) - args.max_candidates} more candidates in the TSV output.</p>")
         for score, v, g, consistent, why, ev in cands[args.max_candidates:]:
             R.rows.append(("candidate" if consistent else "candidate_inheritance_not_met", v, why + "; " + ",".join(ev)))
 
     # ACMG SF
-    R.h("<h2>4. Secondary findings: ACMG SF v3.2 (81 genes)</h2><p class='small'>Medically actionable genes that "
-        "the ACMG recommends reporting regardless of the indication for testing, if the patient has opted in. "
-        "Gene-specific rules applied: biallelic only for MUTYH, ATP7B, BTD, GAA, RPE65; HFE p.Cys282Tyr homozygotes "
-        "only; TTN truncating variants only.</p>")
+    R.h(f"<h2>4. Secondary findings: {ACMG_SF_VERSION} ({len(ACMG_SF)} genes)</h2><p class='small'>Medically "
+        "actionable genes that the ACMG recommends reporting regardless of the indication for testing, if the patient "
+        "has opted in. Gene-specific rules applied: biallelic only for MUTYH, ATP7B, BTD, GAA, RPE65, CYP27A1; ABCD1 "
+        "hemizygous, homozygous or two heterozygous variants (not a single heterozygous variant in a female); HFE "
+        "p.Cys282Tyr homozygotes only; TTN truncating variants only.</p>")
     if sf:
-        R.table(["Variant", "Genotype", "ClinVar", "gnomAD AF", "Category", "Status"],
-                [[var_cell(v), call_cell(v, sex), clinvar_cell(v), fmt_af(v.af), esc(ACMG_SF_CATEGORY.get(g, "")),
+        R.table(["Variant", "Genotype", "ClinVar", "gnomAD frequency", "Category", "Status"],
+                [[var_cell(v), call_cell(v, sex), clinvar_cell(v), freq_cell(v), esc(ACMG_SF_CATEGORY.get(g, "")),
                   tag(st, "t-red" if st == "reportable" else "t-amb") + "<br>" + esc(note)] for v, g, st, note in sf])
         for v, g, st, note in sf:
             R.rows.append(("acmg_sf_" + st.split()[0], v, note))
     else:
         R.h("<div class='box ok'>No reportable secondary findings: no ClinVar pathogenic/likely pathogenic variants "
-            "and no rare predicted loss-of-function variants in the 81 ACMG SF v3.2 genes.</div>")
+            f"and no rare predicted loss-of-function variants in the {len(ACMG_SF)} {ACMG_SF_VERSION} genes.</div>")
     if gene_cov:
         low = sorted((g for g in ACMG_SF if g in gene_cov and gene_cov[g][0] and gene_cov[g][1] / gene_cov[g][0] < 0.95),
                      key=lambda g: gene_cov[g][1] / gene_cov[g][0])
@@ -1183,8 +1237,8 @@ def build(args):
     R.h("<h2>5. Carrier status for recessive conditions</h2><p class='small'>One pathogenic/likely pathogenic "
         "allele in a gene associated with autosomal recessive disease. Carriers are usually unaffected; the result "
         "matters for reproductive risk if a partner carries a pathogenic variant in the same gene.</p>")
-    R.table(["Variant", "Genotype", "ClinVar", "gnomAD AF", "Condition (GenCC)"],
-            [[var_cell(v), call_cell(v, sex), clinvar_cell(v), fmt_af(v.af), disease_cell(v.gene, gencc, {}, {})]
+    R.table(["Variant", "Genotype", "ClinVar", "gnomAD frequency", "Condition (GenCC)"],
+            [[var_cell(v), call_cell(v, sex), clinvar_cell(v), freq_cell(v), disease_cell(v.gene, gencc, {}, {})]
              for v in carrier])
     for v in carrier:
         R.rows.append(("carrier", v, ""))
@@ -1253,8 +1307,8 @@ def build(args):
         R.h(f"<h3>Other ClinVar risk factor / association / protective variants</h3><p class='small'>{len(shown)} with "
             f"review status &ge; 1 star shown; {len(other_assoc) - len(shown)} without assertion criteria (mostly common "
             "polymorphisms from early association studies) are listed in the TSV only.</p>")
-        R.table(["Variant", "Genotype", "ClinVar", "gnomAD AF"],
-                [[var_cell(v), call_cell(v, sex), clinvar_cell(v), fmt_af(v.af)] for v in shown[:100]])
+        R.table(["Variant", "Genotype", "ClinVar", "gnomAD frequency"],
+                [[var_cell(v), call_cell(v, sex), clinvar_cell(v), freq_cell(v)] for v in shown[:100]])
         for v in other_assoc:
             R.rows.append(("clinvar_association", v, ""))
 
@@ -1308,10 +1362,16 @@ def build(args):
     R.h("<h2>10. Methods, data sources and limitations</h2><ul>")
     R.h("<li>Variant annotation: SnpEff (consequence, HGVS), ClinVar (clinical significance and review status), "
         "gnomAD (population allele frequency) as provided to the workflow.</li>")
+    R.h("<li>Frequency rules use the higher of the overall gnomAD allele frequency and the highest filtering allele "
+        "frequency (FAF95) of a genetic ancestry group, where the frequency file provides it (gnomAD v4.1 joint "
+        "exome + genome extract): BA1 above 5%, BS1 above the rare-variant cut-off, PM2_supporting below 0.01% "
+        "(dominant) or 0.1% (recessive). Frequencies from gnomAD sites that failed gnomAD's own filters or whose exome "
+        "and genome frequencies disagree are flagged. A variant absent from gnomAD is not proof of rarity where gnomAD "
+        "coverage is low.</li>")
     R.h(f"<li>Gene-disease validity and inheritance: GenCC ({'loaded, ' + str(len(gencc)) + ' genes' if gencc else 'not provided'}); "
         f"gene constraint: gnomAD LOEUF ({'loaded, ' + str(len(constraint)) + ' genes' if constraint else 'not provided'}); "
         f"phenotype: HPO phenotype_to_genes ({'loaded' if args.hpo_genes else 'not provided'}).</li>")
-    R.h("<li>Rules: ACMG SF v3.2 gene list and reporting rules (Miller et al. 2023); automated ACMG/AMP 2015 evidence "
+    R.h("<li>Rules: ACMG SF v3.3 gene list and reporting rules (Genet Med 2025;27:101454); automated ACMG/AMP 2015 evidence "
         "subset (Richards et al. 2015; PVS1 after Abou Tayoun et al. 2018, simplified); CPIC allele-function and "
         "phenotype assignments for single-nucleotide alleles.</li>")
     R.h("<li><b>Not detected by this pipeline:</b> copy-number variants and exon deletions/duplications, structural "
@@ -1330,23 +1390,26 @@ def build(args):
 def write_tsv(R, path, sample):
     with open(path, "w") as f:
         f.write("sample\tcategory\tgene\tchrom\tpos\tref\talt\tgenotype\tdepth\talt_fraction\thgvs_c\thgvs_p\teffect\t"
-                "gnomad_af\tclinvar\tclinvar_review\tclinvar_condition\tqc_flags\tconfidence\tnote\n")
+                "gnomad_af\tgnomad_grpmax_af\tgnomad_faf95\tgnomad_nhomalt\tclinvar\tclinvar_review\tclinvar_condition\t"
+                "qc_flags\tconfidence\tnote\n")
         for cat, v, note in R.rows:
             if v is None:  # gene-level result: (gene, genotype, phenotype)
                 gene, genotype, pheno = note
-                f.write("\t".join([sample, cat, gene, "", "", "", "", genotype] + [""] * 11 + [pheno]) + "\n")
+                f.write("\t".join([sample, cat, gene, "", "", "", "", genotype] + [""] * 14 + [pheno]) + "\n")
                 continue
             lc = low_confidence(v)
             f.write("\t".join(str(x) for x in (
                 sample, cat, v.gene, v.chrom, v.pos, v.ref, v.alt, v.gt, v.dp if v.dp is not None else "",
-                f"{v.ab:.3f}" if v.ab is not None else "", v.hgvs_c, v.hgvs_p, v.effect, fmt_af(v.af), v.clnsig,
+                f"{v.ab:.3f}" if v.ab is not None else "", v.hgvs_c, v.hgvs_p, v.effect, fmt_af(v.af),
+                fmt_af(v.grpmax_af) if v.grpmax_af is not None else "", fmt_af(v.faf) if v.faf is not None else "",
+                int(v.nhomalt) if v.nhomalt is not None else "", v.clnsig,
                 v.revstat, v.clndn, ";".join(v.flags), "low: " + ", ".join(lc) if lc else "high",
                 note.replace("\t", " "))) + "\n")
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--vcf", required=True, help="annotated VCF (SnpEff ANN, ClinVar CLN*, INFO/gnomAD_AF)")
+    ap.add_argument("--vcf", required=True, help="annotated VCF (SnpEff ANN, ClinVar CLN*, INFO/gnomAD_AF and the other gnomAD_* fields)")
     ap.add_argument("--sample-name")
     ap.add_argument("--gencc", help="GenCC submissions TSV")
     ap.add_argument("--constraint", help="gnomAD gene constraint TSV")
@@ -1360,7 +1423,7 @@ def main(argv=None):
     ap.add_argument("--reference", help="indexed reference FASTA: repeat context of reported variants (needs samtools)")
     ap.add_argument("--min-ref-depth", type=int, default=15,
                     help="reads needed to read an uncalled pharmacogenomic/risk position as reference")
-    ap.add_argument("--max-af", type=float, default=0.01, help="rare-variant population frequency cut-off")
+    ap.add_argument("--max-af", type=float, default=0.01, help="rare-variant cut-off, applied to the higher of gnomAD AF and grpmax FAF95")
     ap.add_argument("--max-candidates", type=int, default=60)
     ap.add_argument("--html", required=True)
     ap.add_argument("--tsv", required=True)

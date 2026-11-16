@@ -36,9 +36,40 @@ def categories(rows, gene):
 
 
 def test_acmg_sf_list():
-    assert len(rep.ACMG_SF) == 81
+    assert len(rep.ACMG_SF) == 84, "ACMG SF v3.3"
     assert rep.ACMG_SF["MUTYH"] == "biallelic" and rep.ACMG_SF["HFE"] == "hfe" and rep.ACMG_SF["TTN"] == "ttn"
+    assert rep.ACMG_SF["PLN"] == "het" and rep.ACMG_SF["CYP27A1"] == "biallelic" and rep.ACMG_SF["ABCD1"] == "xl"
     assert set(rep.ACMG_SF) == set(rep.ACMG_SF_CATEGORY)
+
+
+def test_sf_v33_genes():
+    rows, html = run_report()
+    assert categories(rows, "PLN") == {"diagnostic", "acmg_sf_reportable"}, "PLN P/LP het: reportable (dominant)"
+    assert "acmg_sf_not" in categories(rows, "ABCD1"), "a single heterozygous ABCD1 variant is not an SF"
+    assert "acmg_sf_reportable" not in categories(rows, "ABCD1")
+    assert "ACMG SF v3.3 (84 genes)" in html
+
+
+def test_gnomad_v41_frequency_rules():
+    rows, html = run_report()
+    assert categories(rows, "GENEF") == {"pathogenic_review"}, \
+        "overall AF 0.0004 but grpmax FAF95 0.004: too common for a dominant disorder"
+    f = next(r for r in rows if r["gene"] == "GENEF")
+    assert f["gnomad_faf95"] == "0.004" and f["gnomad_grpmax_af"] == "0.006"
+    assert "gnomAD site filtered (EXOMES_FILTERED)" in f["qc_flags"] and f["confidence"] == "high"
+    assert categories(rows, "GENER") == {"candidate_inheritance_not_met"}, "6 homozygotes in gnomAD"
+    assert "6 homozygotes in gnomAD" in next(r["note"] for r in rows if r["gene"] == "GENER")
+    assert "FAF95 0.004 (afr)" in html
+
+
+def test_freq():
+    v = rep.Variant()
+    v.af, v.faf = None, None
+    assert rep.freq(v) is None
+    v.af, v.faf = 0.02, 0.001
+    assert rep.freq(v) == 0.02, "founder variants: FAF excludes bottlenecked groups"
+    v.af, v.faf = 0.0004, 0.004
+    assert rep.freq(v) == 0.004
 
 
 def test_findings_by_inheritance():
@@ -74,7 +105,7 @@ def test_pharmacogenomics_vcf_only():
     pgx = {r["gene"]: (r["genotype"], r["note"]) for r in rows if r["category"] == "pgx"}
     assert pgx["CYP2C19"] == ("*2/*2", "Poor metabolizer")
     assert pgx["CYP2C9"][1].startswith("Normal metabolizer")
-    assert all(len(r) == 20 and None not in r.values() for r in rows)
+    assert all(len(r) == 23 and None not in r.values() for r in rows)
     assert "absence of a variant is assumed to be the reference allele" in html
 
 
