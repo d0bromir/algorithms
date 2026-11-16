@@ -18,11 +18,14 @@ doc: |
   1. Read QC (FastQC) and adapter/quality trimming (fastp).
   2. Alignment to the reference with BWA-MEM (read groups set from the sample name), duplicate marking
      (Picard MarkDuplicates) and alignment statistics (samtools stats).
-  3. Exome capture QC: Picard CollectHsMetrics (on-target rate, fold-80, % target bases >= 20x) and per-target
-     coverage with mosdepth (bases at 1/10/20/30/50x per target, for gap analysis).
+  3. Exome capture QC: Picard CollectHsMetrics (on-target rate, fold-80, % target bases >= 20x), per-target
+     coverage with mosdepth (bases at 1/10/20/30/50x per target, for gap analysis) and per-gene coverage of the
+     coding exons (mosdepth over the coding-region BED).
   4. Germline variant calling with FreeBayes (standard input filters: MAPQ >= 30, BQ >= 20).
   5. Tertiary analysis, the embedded "WES tertiary analysis from VCF (v2)" workflow: normalisation, restriction
-     to the padded targets, quality filtering, ClinVar + gnomAD + SnpEff annotation, prioritisation and tables.
+     to the padded targets, quality filtering, ClinVar + gnomAD + SnpEff annotation, prioritisation and tables,
+     runs of homozygosity, and the clinical interpretation report (diagnostic, candidate, ACMG secondary,
+     carrier, pharmacogenomic and risk-allele findings, with read depth and coverage from this workflow).
   6. One MultiQC report for all samples (FastQC, fastp, Picard, samtools, bcftools stats, SnpEff).
 
   Reference FASTA, target BED, ClinVar and gnomAD must use the same genome build and chromosome naming.
@@ -80,6 +83,36 @@ inputs:
       ((! exists gnomAD_AF) | (gnomAD_AF < 0.01)))
     doc: SnpSift filter expression that selects candidate variants from the annotated calls.
     position: {left: 0, top: 1120}
+  "Coding regions (BED)":
+    type: data
+    format: [bed]
+    doc: >-
+      Coding exons with the gene symbol in column 4 (e.g. Ensembl canonical CDS, see README), same build and
+      chromosome naming as the reference. Used for per-gene coverage in the clinical report.
+    position: {left: 0, top: 1260}
+  "Gene-disease validity (GenCC TSV)":
+    type: data
+    format: [tabular, tsv, txt]
+    optional: true
+    doc: GenCC submissions export (https://search.thegencc.org/download); diseases and mode of inheritance per gene.
+    position: {left: 0, top: 1400}
+  "Gene constraint (gnomAD TSV)":
+    type: data
+    format: [tabular, tsv, txt]
+    optional: true
+    doc: gnomAD v4.1 constraint metrics (LOEUF, pLI, missense Z).
+    position: {left: 0, top: 1540}
+  "HPO gene annotations (phenotype_to_genes.txt)":
+    type: data
+    format: [tabular, tsv, txt]
+    optional: true
+    doc: HPO release file phenotype_to_genes.txt; used with the patient's HPO terms.
+    position: {left: 0, top: 1680}
+  "Patient phenotype (HPO terms)":
+    type: string
+    optional: true
+    doc: Comma-separated HPO term ids describing the patient (e.g. HP:0001250, HP:0001263); ranks candidates.
+    position: {left: 0, top: 1820}
 
 outputs:
   multiqc_report:
@@ -108,6 +141,14 @@ outputs:
     outputSource: tertiary/snpeff_summary
   variant_stats:
     outputSource: tertiary/variant_stats
+  coding_coverage_thresholds:
+    outputSource: coding_coverage/output_thresholds_bed
+  runs_of_homozygosity:
+    outputSource: tertiary/runs_of_homozygosity
+  clinical_report:
+    outputSource: tertiary/clinical_report
+  clinical_findings:
+    outputSource: tertiary/clinical_findings
 
 steps:
   fastqc_raw:
@@ -304,6 +345,36 @@ steps:
       output_region_dist: {hide: true}
       output_regions_bed: {hide: true}
 
+  coding_coverage:
+    doc: Coverage of the coding exons, per exon with the gene name (bases at 1/10/20/30/50x), for per-gene coverage.
+    tool_id: toolshed.g2.bx.psu.edu/repos/iuc/mosdepth/mosdepth/0.3.14+galaxy0
+    tool_version: 0.3.14+galaxy0
+    position: {left: 1080, top: 720}
+    in:
+      input_alignment: mark_duplicates/outFile
+      window|region_file: "Coding regions (BED)"
+    state:
+      per_base_coverage: false
+      window:
+        window_mode: bed
+      advanced:
+        options: "yes"
+        chrom: ""
+        exclude_flag: 1796
+        no_fast: false
+        fragment_mode: false
+        mapq: 20
+        thresholds: "1,10,20,30,50"
+        use_median: false
+        read_groups: ""
+        quantize: []
+    out:
+      output_summary: {hide: true}
+      output_thresholds_bed: {rename: "Per-exon coverage thresholds (mosdepth)"}
+      output_global_dist: {hide: true}
+      output_region_dist: {hide: true}
+      output_regions_bed: {hide: true}
+
   variant_calling:
     doc: >-
       Germline calling with FreeBayes per sample, parallelised per chromosome. Calls are restricted to the
@@ -345,6 +416,14 @@ steps:
       "Population allele frequencies (VCF)": "Population allele frequencies (VCF)"
       "Quality filter (bcftools expression)": "Quality filter (bcftools expression)"
       "Prioritization filter (SnpSift expression)": "Prioritization filter (SnpSift expression)"
+      "Gene-disease validity (GenCC TSV)": "Gene-disease validity (GenCC TSV)"
+      "Gene constraint (gnomAD TSV)": "Gene constraint (gnomAD TSV)"
+      "HPO gene annotations (phenotype_to_genes.txt)": "HPO gene annotations (phenotype_to_genes.txt)"
+      "Patient phenotype (HPO terms)": "Patient phenotype (HPO terms)"
+      "Aligned reads (BAM)": mark_duplicates/outFile
+      "Per-target coverage (mosdepth thresholds)": target_coverage/output_thresholds_bed
+      "Coverage summary (mosdepth)": target_coverage/output_summary
+      "Coding-exon coverage (mosdepth thresholds)": coding_coverage/output_thresholds_bed
 
   multiqc:
     doc: One QC report for all samples.

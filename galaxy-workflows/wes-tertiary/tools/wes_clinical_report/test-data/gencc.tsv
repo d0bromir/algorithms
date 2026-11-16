@@ -1,0 +1,9 @@
+uuid	gene_curie	gene_symbol	disease_curie	disease_title	classification_title	moi_title	submitter_title
+x	HGNC:1	BRCA2	MONDO:1	hereditary breast ovarian cancer syndrome	Definitive	Autosomal dominant	Test submitter
+x	HGNC:1	PAH	MONDO:1	phenylketonuria	Definitive	Autosomal recessive	Test submitter
+x	HGNC:1	MUTYH	MONDO:1	MUTYH-associated polyposis	Definitive	Autosomal recessive	Test submitter
+x	HGNC:1	GENEX	MONDO:1	example dominant syndrome	Definitive	Autosomal dominant	Test submitter
+x	HGNC:1	TP53	MONDO:1	Li-Fraumeni syndrome	Definitive	Autosomal dominant	Test submitter
+x	HGNC:1	GENED	MONDO:1	example dominant disorder D	Definitive	Autosomal dominant	Test submitter
+x	HGNC:1	GENEM	MONDO:1	example dominant disorder M	Definitive	Autosomal dominant	Test submitter
+x	HGNC:1	GENEM	MONDO:1	example recessive disorder M	Definitive	Autosomal recessive	Test submitter

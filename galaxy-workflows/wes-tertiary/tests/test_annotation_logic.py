@@ -53,6 +53,7 @@ def workflow_settings():
         # wrapper: checked -> no flag; unchecked -> --do-not-normalize (no left-align / trimming of indels)
         "normalize_indels": str(state["normalize"].get("normalize_indels")).lower() == "true",
         "multiallelics": state["normalize"]["multiallelics"]["mode"] + state["normalize"]["multiallelics"]["multiallelic_types"],
+        "atomization": state["normalize"]["atomization"],
         "regions_overlap": state["target_filter"]["sec_restrict"]["regions"]["regions_overlap"],
         "quality": state["Quality filter (bcftools expression)"]["default"],
         "clinvar_columns": state["clinvar_annotation"]["sec_annofile"]["columns"],
@@ -94,6 +95,10 @@ def test_bcftools(cfg, work):
     ins = alt_base(r0)
     add("chr1", 1120, 150, ".", "1/1", 30, "0,30", True, "padded insertion, trimmed to match gnomAD",
         alt=r0 + ins + r1 + r2, ref_override=r0 + r1 + r2)
+    # FreeBayes-style complex allele: two SNVs 2 bp apart in one record; atomized into two SNV records
+    m0, m1, m2 = ref("chr1", 1160), ref("chr1", 1161), ref("chr1", 1162)
+    add("chr1", 1160, 150, ".", "1/1", 30, "0,30", True, "complex allele (MNV), atomized into two SNVs",
+        alt=alt_base(m0) + m1 + alt_base(m2), ref_override=m0 + m1 + m2)
     add("chr1", 1150, 120, ".", "1/2", 30, "1,15,14", True, "multiallelic, split into two records",
         alt=alt_base(ref("chr1", 1150)) + "," + alt_base(alt_base(ref("chr1", 1150))))
     add("chr1", 1180, 10, ".", "0/1", 30, "15,15", False, "QUAL 10 < 20")
@@ -123,11 +128,11 @@ def test_bcftools(cfg, work):
     with open("clinvar.vcf", "w") as f:
         f.write("##fileformat=VCFv4.1\n##contig=<ID=chr1>\n##contig=<ID=chr2>\n")
         for tag, typ, num in [("ALLELEID", "Integer", "1"), ("CLNDN", "String", "."), ("CLNREVSTAT", "String", "."),
-                              ("CLNSIG", "String", "."), ("CLNSIGCONF", "String", ".")]:
+                              ("CLNSIG", "String", "."), ("CLNSIGCONF", "String", "."), ("RS", "String", ".")]:
             f.write(f'##INFO=<ID={tag},Number={num},Type={typ},Description="{tag}">\n')
         f.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n")
         f.write(f"chr1\t1050\t1\t{r1050}\t{alt_base(r1050)}\t.\t.\tALLELEID=1;CLNDN=Disease_A;"
-                "CLNREVSTAT=criteria_provided,_multiple_submitters,_no_conflicts;CLNSIG=Pathogenic\n")
+                "CLNREVSTAT=criteria_provided,_multiple_submitters,_no_conflicts;CLNSIG=Pathogenic;RS=12345\n")
         f.write(f"chr1\t1100\t2\t{r1100}\t{alt_base(alt_base(r1100))}\t.\t.\tALLELEID=2;CLNDN=Disease_B;"
                 "CLNREVSTAT=criteria_provided,_single_submitter;CLNSIG=Likely_pathogenic\n")
     with open("gnomad.vcf", "w") as f:
@@ -147,7 +152,7 @@ def test_bcftools(cfg, work):
         bcftools.index(out, catch_stdout=False)
 
     run(bcftools.norm, "--check-ref", cfg["check_ref"], "--fasta-ref", "ref.fa",
-        *([] if cfg["normalize_indels"] else ["--do-not-normalize"]),
+        *([] if cfg["normalize_indels"] else ["--do-not-normalize"]), *cfg["atomization"].split(),
         "--multiallelics", cfg["multiallelics"], "input.vcf.gz", out="norm.vcf.gz")
     run(bcftools.filter, "--regions-file", "padded.bed", "--regions-overlap", cfg["regions_overlap"],
         "--include", cfg["quality"], "norm.vcf.gz", out="filtered.vcf.gz")
@@ -169,6 +174,9 @@ def test_bcftools(cfg, work):
     checks = [
         (sum(1 for k in kept if k[:2] == ("chr1", 1150)) == 2, "multiallelic record split into 2 biallelic records"),
         ("CLNSIG=Pathogenic" in kept.get(("chr1", 1050, alt_base(r1050)), ""), "ClinVar CLNSIG transferred (allele match)"),
+        ("RS=12345" in kept.get(("chr1", 1050, alt_base(r1050)), ""), "ClinVar rsID transferred"),
+        (("chr1", 1160, alt_base(m0)) in kept and ("chr1", 1162, alt_base(m2)) in kept
+         and not any(k[:2] == ("chr1", 1160) and len(k[2]) > 1 for k in kept), "complex allele atomized into SNVs"),
         ("gnomAD_AF=0.2" in kept.get(("chr1", 1050, alt_base(r1050)), ""), "gnomAD AF transferred as gnomAD_AF"),
         ("AF=0.5" in kept.get(("chr1", 1050, alt_base(r1050)), ""), "caller INFO/AF left untouched"),
         ("gnomAD_AF=0.7" in kept.get(("chr1", 1120, r0 + ins), ""),

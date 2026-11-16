@@ -5,7 +5,11 @@ Two Galaxy workflows for germline whole exome sequencing. Import the `.ga` files
 | File | Version | Starts from | What it does |
 |---|---|---|---|
 | [`wes-tertiary-from-fastq.ga`](wes-tertiary-from-fastq.ga) | **v1** | paired-end FASTQ (`list:paired` collection, one element per sample) | Read QC and trimming, alignment, duplicate marking, capture/coverage QC, variant calling, then the full v2 tertiary analysis, plus one MultiQC report for all samples |
-| [`wes-tertiary-from-vcf.ga`](wes-tertiary-from-vcf.ga) | **v2** | a germline VCF/BCF from any caller (FreeBayes, GATK, DeepVariant, DRAGEN, …) | Normalisation, restriction to the exome targets, quality filtering, ClinVar, gnomAD and SnpEff annotation, prioritisation, tables |
+| [`wes-tertiary-from-vcf.ga`](wes-tertiary-from-vcf.ga) | **v2** | a germline VCF/BCF from any caller (FreeBayes, GATK, DeepVariant, DRAGEN, …) | Normalisation, restriction to the exome targets, quality filtering, ClinVar, gnomAD and SnpEff annotation, prioritisation, tables, runs of homozygosity and a **clinical interpretation report** |
+
+Both end in a human-readable HTML report of the medically significant findings (section 4a): diagnostic
+findings, candidate variants, ACMG secondary findings, carrier status, pharmacogenomics, risk alleles,
+runs of homozygosity, coverage of clinically relevant genes, and what the analysis cannot detect.
 
 v1 embeds v2 as a subworkflow, so both workflows apply exactly the same tertiary logic.
 
@@ -14,18 +18,20 @@ flowchart LR
   subgraph v1["v1: from FASTQ (per sample)"]
     fq[FASTQ pairs] --> fastqc[FastQC] & fastp[fastp trimming]
     fastp --> bwa[BWA-MEM] --> md[Picard MarkDuplicates]
-    md --> stats[samtools stats] & hs[Picard CollectHsMetrics] & mos[mosdepth per-target coverage]
+    md --> stats[samtools stats] & hs[Picard CollectHsMetrics] & mos[mosdepth per-target coverage] & cds[mosdepth coding-exon coverage]
     md --> fb[FreeBayes]
   end
   subgraph v2["v2: from VCF (tertiary analysis)"]
-    vcf[VCF] --> norm[bcftools norm<br/>split multiallelics, left-align, REF check]
+    vcf[VCF] --> norm[bcftools norm<br/>split multiallelics, atomize complex alleles,<br/>left-align, REF check]
     norm --> filt[bcftools filter<br/>padded exome targets + quality]
     filt --> clin[bcftools annotate<br/>ClinVar] --> gnomad[bcftools annotate<br/>gnomAD AF as gnomAD_AF]
     gnomad --> eff[SnpEff<br/>consequence, HGVS, LOF/NMD]
     eff --> prio[SnpSift filter<br/>prioritisation] --> ctab[candidate table]
-    eff --> atab[annotated table] & bstats[bcftools stats]
+    eff --> atab[annotated table] & bstats[bcftools stats] & roh[bcftools roh]
+    eff & roh --> rep[clinical report<br/>HTML + findings TSV]
   end
   fb --> vcf
+  md & mos & cds -.-> rep
   fastqc & fastp & md & stats & hs & bstats & eff --> mqc[MultiQC]
 ```
 
@@ -42,7 +48,21 @@ flowchart LR
    ```
    If `python3 -m venv` reports that `ensurepip` is not available, install `python3-venv` (or `python3-full`)
    with `apt` first. The API key belongs to a Galaxy admin user (*User → Preferences → Manage API Key*).
-2. **Workflows**: *Workflows → Import*, then upload `wes-tertiary-from-vcf.ga` and `wes-tertiary-from-fastq.ga`
+2. **Report tool** (not in the Tool Shed): copy [`tools/wes_clinical_report`](tools/wes_clinical_report) to the
+   server, list it in a local tool config, and let Galaxy show its HTML unsanitised:
+   ```xml
+   <!-- /etc/galaxy/local_tool_conf.xml -->
+   <toolbox tool_path="/srv/galaxy/local_tools">
+       <section id="wes_analysis_local" name="WES analysis">
+           <tool file="wes_clinical_report/wes_clinical_report.xml"/>
+       </section>
+   </toolbox>
+   ```
+   Add that file to `tool_config_file` in `galaxy.yml`, set `sanitize_allowlist_file` to a file containing the
+   line `wes_clinical_report` (or use *Admin → Manage Allowlist*), restart Galaxy, and install the tool's
+   dependencies (Python 3.12, samtools 1.22) from *Admin → Manage Dependencies*. Without the allowlist entry the
+   report still opens, but without its styling.
+3. **Workflows**: *Workflows → Import*, then upload `wes-tertiary-from-vcf.ga` and `wes-tertiary-from-fastq.ga`
    (or paste the raw GitHub URL of each file).
 
 **Galaxy version.** The workflows pin the current wrapper versions (bcftools 1.24, SnpEff 5.4, SnpSift 5.4.0c,
@@ -88,6 +108,10 @@ and VCFs. A naming mismatch does not raise an error. ClinVar/gnomAD annotations 
 | **Target padding (bp)** | Default `50` | Keeps canonical and extended splice-site variants just outside the targets. |
 | **SnpEff database** | Run the **SnpEff download** tool once, e.g. an Ensembl database such as `GRCh38.115` or a RefSeq/MANE one such as `GRCh38.mane.1.2.refseq` | The **SnpEff databases** tool lists the exact names available for SnpEff 5.4. MANE Select databases give clinically conventional NM_ HGVS. SnpEff itself tolerates `chr1` vs `1`. The default Java heap is 8 GB (`GALAXY_MEMORY_MB`). |
 | **ClinVar (VCF)** | `clinvar.vcf.gz` from https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/ | ClinVar uses `1, 2, …, MT`. For a `chr`-named reference, run **bcftools annotate** on it once with *Rename chromosomes* = [`data/ncbi_to_ucsc_chromosomes.tsv`](data/ncbi_to_ucsc_chromosomes.tsv) and output type *compressed BCF*. |
+| **Coding regions (BED)** (v1) | Coding exons of one transcript per gene, gene symbol in column 4 (recipe below) | Per-gene coverage in the report: which clinically relevant genes have gaps. |
+| **Gene-disease validity (GenCC TSV)** (optional) | [GenCC submissions export](https://search.thegencc.org/download) (TSV, CC0) | Diseases and mode of inheritance per gene; decides diagnostic vs carrier vs review. |
+| **Gene constraint (gnomAD TSV)** (optional) | `gnomad.v4.1.constraint_metrics.tsv` from the gnomAD downloads page | LOEUF/pLI for loss-of-function intolerance (PVS1 applicability). |
+| **HPO gene annotations** (optional) | `phenotype_to_genes.txt` from the latest [HPO release](https://github.com/obophenotype/human-phenotype-ontology/releases) | With *Patient phenotype (HPO terms)*, ranks candidates by phenotype match. |
 | **Population allele frequencies (VCF)** | gnomAD exomes (v4.1 recommended) reduced to `INFO/AF` and to the padded targets, as an indexed **BCF** (recipe below) | The full gnomAD VCFs are hundreds of GB. Plain VCF inputs are re-compressed and indexed in every job, while BCF is used directly. Only `INFO/AF` is read; it is stored as `INFO/gnomAD_AF`. |
 
 Recipe for the gnomAD file, run once on any machine with `bcftools` and `bedtools`. Take the per-chromosome
@@ -106,6 +130,15 @@ done
 bcftools concat -Ou gnomad_af.chr*.bcf | bcftools norm -m -any -f GRCh38.fa -Ob -o gnomad.exomes.v4.1.AF.targets.bcf && bcftools index gnomad.exomes.v4.1.AF.targets.bcf
 ```
 Upload the resulting `.bcf` with datatype `bcf`.
+
+Recipe for the coding-region BED (Ensembl canonical transcripts; use the Ensembl release of the SnpEff database).
+For a `chr`-named reference, prefix column 1 with `chr`:
+```bash
+curl -sL https://ftp.ensembl.org/pub/release-115/gtf/homo_sapiens/Homo_sapiens.GRCh38.115.gtf.gz | zcat |
+  awk -F'\t' '$3=="CDS" && $9 ~ /tag "Ensembl_canonical"/ && $9 ~ /gene_biotype "protein_coding"/ {
+    match($9, /gene_name "[^"]+"/); g = substr($9, RSTART+11, RLENGTH-12); print $1"\t"$4-1"\t"$5"\t"g }' |
+  sort -k1,1 -k2,2n -u > canonical_cds.GRCh38.115.bed
+```
 
 The `bcftools norm -m -any -f` step is required for any population or ClinVar file: split multiallelic records and
 left-align/trim indels against the same reference the reads are aligned to. The workflow normalises the calls, and
@@ -144,6 +177,34 @@ The tables show the genotype columns of the first sample (`GEN[0]`); change them
 | `hs_metrics` | ✔ | | Capture QC: on-target rate, fold-80, `PCT_TARGET_BASES_20X` and others |
 | `target_coverage_summary`, `target_coverage_thresholds` | ✔ | | mosdepth summary, and bases covered at 1/10/20/30/50× **per target**, for finding poorly covered exons |
 | `deduplicated_bam`, `raw_vcf` | ✔ | | Alignments (duplicates marked) and unfiltered FreeBayes calls |
+| `clinical_report` | ✔ | ✔ | **Human-readable HTML report** of the medically significant findings (section 4a) |
+| `clinical_findings` | ✔ | ✔ | Every finding of the report as a table: category, gene, variant, genotype, depth, allele fraction, HGVS, gnomAD AF, ClinVar, QC flags, evidence |
+| `runs_of_homozygosity` | ✔ | ✔ | bcftools roh regions |
+| `coding_coverage_thresholds` | ✔ | | Bases covered at 1/10/20/30/50× per coding exon |
+
+## 4a. The clinical report
+
+The report is produced by explicit, versioned rules from public knowledge bases; there is no statistical or
+language model in it, so every statement can be traced to its source (ClinVar record and review status,
+GenCC classification, gnomAD frequency, CPIC allele function). It is **decision support for a qualified
+reviewer**: every finding that may be acted on must be confirmed by an orthogonal method in an accredited
+laboratory.
+
+| Section | Rule |
+|---|---|
+| Sample and data quality | Ts/Tv, het/hom, het allele-fraction distribution (contamination hint), genetic sex from chrX heterozygosity and chrY coverage, target coverage at 10/20/30× |
+| Diagnostic findings | ClinVar pathogenic/likely pathogenic (not conflicting) **and** a genotype that fits the gene's mode of inheritance in GenCC: one allele for dominant genes, hemizygous for X-linked genes in males, two alleles for recessive genes. Genes with both dominant and recessive disorders, X-linked heterozygous females and genes without a GenCC entry go to a *review* table |
+| Candidate variants | Not classified in ClinVar (or VUS/conflicting), gnomAD AF below the cut-off (default 1 %), predicted loss-of-function in a GenCC gene, plus missense/in-frame variants in genes matching the HPO terms. Automated ACMG/AMP evidence codes (PVS1, PM2_supporting, BA1, BS1, PP2, PP4) for triage, inheritance fit (incl. possible compound heterozygotes) and ranking by phenotype match |
+| ACMG SF v3.2 | 81 genes; biallelic only for MUTYH, ATP7B, BTD, GAA, RPE65; HFE p.Cys282Tyr homozygotes only; TTN truncating only. Rare loss-of-function variants not in ClinVar are listed as *review* |
+| Carrier status | One P/LP allele in a recessive gene |
+| Pharmacogenomics | CYP2C19, CYP2C9, VKORC1, CYP4F2, SLCO1B1, DPYD, TPMT, NUDT15, CYP3A5, CYP2B6, UGT1A1 at fixed GRCh38 positions (checked against ClinVar and the reference). A missing variant counts as the reference allele only with ≥ 15 reads at the position (BAM in v1); otherwise the gene is *indeterminate*. CPIC phenotypes, ClinVar drug-response variants (≥ 1 star) |
+| Risk alleles | Factor V Leiden, prothrombin G20210A, HFE p.Cys282Tyr/p.His63Asp, APOE (flagged: disclose only with counselling and consent), ClinVar risk/association variants (≥ 1 star) |
+| Runs of homozygosity | Total length of runs ≥ 1 Mb (consanguinity), runs concentrated on one chromosome (uniparental disomy), homozygous findings inside runs |
+| Coverage | Per-gene coding coverage at 10/20×; clinically relevant genes below 95 % at 20× are listed, because a negative result there is not reliable |
+| Limits | Lists what an exome pipeline cannot detect (CNVs, SVs, repeat expansions, mtDNA, CYP2D6, HLA, pseudogene regions, mosaicism…) |
+
+Each reported variant carries QC flags: low depth, allele imbalance, low QUAL, indel, homopolymer or tandem
+repeat context (from the reference), difficult/polymorphic region (HLA, KIR, mucins), segmental duplication / pseudogene genes. A call is marked **low confidence** when it has a het alt fraction < 0.25, QUAL < 30, an indel in a homopolymer or tandem repeat of ≥ 8, or lies in a paralogous/hypervariable gene; low-confidence findings stay listed, after the confident ones. In the GIAB validation below every false-positive finding was low confidence and no confirmed finding was.
 
 Intermediate datasets are hidden in the history. Use *show hidden* to inspect them.
 
@@ -258,6 +319,112 @@ pathogenic or with conflicting classifications.
 Lessons from the run, reflected in section 2:
 - Fetch inputs into Galaxy by `https://` URLs. The same NCBI files fetched by `ftp://` URL arrived corrupted.
 - SnpEff 5.4 has no `GRCh38.105`; use a name that the **SnpEff databases** tool lists, such as `GRCh38.115`.
+
+### Clinical report on HG001
+
+The same run with the clinical report (26 jobs, all finished). Every non-pharmacogenomic finding in the report
+was checked against the GIAB v4.2.1 truth set for HG001:
+
+| Report finding | Report section | QC flags in the report | GIAB v4.2.1 |
+|---|---|---|---|
+| *PAH* c.1241A>G p.Tyr414Cys het (ClinVar P, expert panel) | Carrier | none | confirmed (0/1) |
+| *TPP1* c.509-1G>A het (ClinVar P) | Carrier | low depth (10×) | confirmed (0/1) |
+| *PLG* c.112A>G p.Lys38Glu het (ClinVar P/LP) | Review: gene with dominant and recessive disorders | none | confirmed (0/1) |
+| *MNS1* c.605delA het (ClinVar LP, 1 star) | Carrier | homopolymer (T×10) | **false positive** (inside benchmark, no variant) |
+| *PRSS1* p.Ala16Val het (ClinVar P/LP, gnomAD AF 0.26) | Review: too common for a penetrant disorder | segmental duplication | outside benchmark |
+| *PIGQ* c.1680delT hom (not in ClinVar) | Candidate (recessive model) | indel | outside benchmark; GIAB has a nearby SNV only |
+| *PRPF3* c.-48-4_-48-3dupTT het | Candidate | low depth, allele balance, homopolymer (T×12) | wrong allele (truth: hom 4-bp insertion) |
+
+All three findings inside the benchmark without a QC flag were confirmed; the false positive and the wrong
+allele carry repeat flags. Pharmacogenomics (read depth from the BAM): CYP2C9 \*1/\*2 (intermediate
+metabolizer), SLCO1B1 c.521TC (decreased function), CYP2C19 \*2 heterozygous (indeterminate: \*17 position not
+covered), CYP4F2, NUDT15, CYP2B6 normal; DPYD, TPMT, VKORC1, CYP3A5 and UGT1A1 indeterminate (a defining position
+below 15 reads or off-target). These agree with the CDC GeT-RM consensus for NA12878 (CYP2C9 \*1/\*2 or \*2/\*61,
+CYP2C19 \*1/\*2, SLCO1B1 \*1/\*15, which carries c.521T>C). Genetic sex: female; runs of homozygosity 18 Mb.
+
+| Step | Wall time | Peak memory |
+|---|--:|--:|
+| Clinical report (HG001, all inputs incl. BAM and reference) | 9 s | 1.3 GB |
+| bcftools roh | 0.4 s | 14 MB |
+| mosdepth over 193,535 coding exons | 41 s | not recorded |
+
+The coverage of this one-lane test (59 % of target bases ≥ 20×) is far below a clinical exome; the report says
+so and lists the 79 ACMG SF genes below 95 % at 20×.
+
+### Validation on recent GIAB exomes (NovaSeq 6000, IDT capture)
+
+Recently sequenced exomes of the GIAB reference samples from
+[PRJNA734598](https://www.ebi.ac.uk/ena/browser/view/PRJNA734598) (Baid et al., 2021; NovaSeq 6000, IDT
+capture, 2×151 bp, about 18.5 M read pairs each), each run through v1 in Galaxy with the IDT target BED of
+[DeepVariant's exome case study](https://storage.googleapis.com/deepvariant/exome-case-study-testdata/idt_capture_novogene.grch38.bed).
+Truth: NIST GIAB v4.2.1 benchmark (an independent, multi-technology consensus) and, for HG001/NA12878, the CDC
+GeT-RM consensus pharmacogenetic genotypes (inter-laboratory testing of Coriell reference DNA).
+
+**Clinical concordance.** The same v2 workflow was also run on each sample's GIAB truth VCF (restricted to the
+IDT targets × benchmark regions, quality filter disabled). The findings of the two reports were then matched
+variant by variant inside those regions with [`tests/compare_findings.py`](tests/compare_findings.py) (CHROM/POS/REF/ALT). A finding "missed"
+is one the truth genotypes support but the sequenced sample's report lacks; an "extra" one is reported from the
+sequenced sample but absent from the truth.
+
+**Coverage, accuracy and cost.** Accuracy is allele-exact after normalisation (`bcftools isec`; rtg/hap.py do
+not run on this aarch64 server, so complex indels are judged more strictly than with haplotype matching).
+Runtime is the sum of the 26 job runtimes; BWA-MEM takes about 61 min per sample, of which roughly 50 min are
+spent building the GRCh38 index inside the job (a cached index removes that). Peak memory per job was not
+recorded by this Galaxy's job metrics.
+
+| Sample (run) | Mean target cov. / ≥20× | Region | SNV recall / precision | Indel recall / precision | Job runtime | Peak memory |
+|---|---|---|--:|--:|--:|--:|
+| HG001 (SRR14724473) | 54.6× / 93.0 % | IDT ∩ benchmark, 35.5 Mb | 0.981 / 0.988 | 0.900 / 0.885 | 1.5 h | not recorded |
+| | | targets fully ≥ 20×, 32.0 Mb | 0.995 / 0.988 | 0.948 / 0.886 | | |
+| HG002 (SRR14724472) | 54.2× / 92.1 % | IDT ∩ benchmark, 36.1 Mb | 0.979 / 0.984 | 0.900 / 0.878 | 1.5 h | not recorded |
+| | | targets fully ≥ 20×, 32.5 Mb | 0.994 / 0.984 | 0.946 / 0.880 | | |
+| HG005 (SRR14724469) | 53.4× / 91.9 % | IDT ∩ benchmark, 35.6 Mb | 0.979 / 0.989 | 0.918 / 0.916 | 1.5 h | not recorded |
+| | | targets fully ≥ 20×, 32.1 Mb | 0.995 / 0.989 | 0.945 / 0.913 | | |
+
+Genotype agreement among matched variants: 99.6–99.7 % for SNVs, 92–94 % for indels. Missed SNVs are mostly
+in targets with stretches below 20×.
+
+**Clinical concordance** (matched / in truth report; extra findings in brackets):
+
+| Finding group | HG001 | HG002 | HG005 |
+|---|---|---|---|
+| ClinVar pathogenic / likely pathogenic | 2/2 (0) | 1/1 (+2) | 4/4 (0) |
+| ACMG SF v3.2 (reportable or review) | 0/0 (0) | 0/0 (0) | 1/1 (0) |
+| Candidate rare loss-of-function | 1/1 (0) | 2/2 (+1) | 3/3 (0) |
+| ClinVar drug response | 26/26 (0) | 24/24 (+1) | 20/20 (0) |
+| ClinVar risk factor / association | 27/27 (0) | 30/30 (0) | 28/28 (0) |
+| Pharmacogenomic genotypes (8 assessable genes + APOE) | all equal | all equal | all equal |
+
+No finding supported by the truth genotypes was missed. All four extra findings, all in HG002 (*MNS1*
+c.605delA, alt fraction 0.17 in a T×10 homopolymer; *CNGA1* p.Glu117\*, alt fraction 0.24, QUAL 20; *PRSS1*
+p.Gly177\* in the PRSS1/PRSS2 segmental duplication; *CYP2D6* c.941G>A drug-response variant, alt fraction 0.16
+in the CYP2D6/CYP2D7 paralog region), are marked **low confidence** by the report (section 4a), so precision of
+the high-confidence findings was 100 % in all three samples. Findings in the samples' reports that the truth
+confirms include *PAH* p.Tyr414Cys and *TPP1* c.509-1G>A (HG001 carrier), *F11* p.Glu135\* (HG002, the
+Ashkenazi factor XI deficiency allele), *BBS5* p.Arg89\* (HG005 carrier) and a rare *RYR2* frameshift (HG005,
+ACMG SF review), and NUDT15 \*1/\*3 (HG005, intermediate metabolizer for thiopurines).
+
+**Pharmacogenomics against the CDC GeT-RM consensus (HG001 = NA12878).** HG002 and HG005 are not GeT-RM samples.
+
+| Gene | GeT-RM consensus | Report (HG001, SRR14724473) | |
+|---|---|---|---|
+| CYP2C9 | \*1/\*2 | \*1/\*2, intermediate metabolizer | agrees |
+| SLCO1B1 | \*1/\*15 (\*15 carries c.521T>C) | c.521TC, decreased function | agrees |
+| CYP3A5 | \*3/\*3 | \*3/\*3, poor metabolizer | agrees |
+| CYP4F2 | \*1/\*1 | \*1/\*1 | agrees |
+| TPMT | \*1/\*1 | \*1/\*1 | agrees |
+| CYP2B6 | \*1/\*1 | c.516GG | agrees |
+| DPYD | \*1/(\*4) (\*4 = normal function) | activity score 2, normal | agrees |
+| CYP2C19 | \*1/\*2 | \*2 heterozygous; indeterminate (\*17 position off-target) | not assessable |
+| VKORC1 | −1639 GA | indeterminate (promoter, off-target) | not assessable |
+| UGT1A1 | \*60/\*28 | indeterminate (\*80 promoter proxy off-target) | not assessable |
+
+Seven genes agree, none disagree, three are reported as not assessable rather than guessed.
+
+**Known systematic artefact.** *PIGQ* c.1680delT is called homozygous in HG001 (both data sets) and HG005. It is
+in neither GIAB truth set nor gnomAD v4, and lies outside the GIAB benchmark next to a common homozygous SNV
+(16:582225 T>C). It is reported as a candidate with high confidence; a laboratory artefact list or the GIAB
+"difficult regions" stratification would remove it (not yet implemented).
 
 ## 8. Scope and limitations
 
