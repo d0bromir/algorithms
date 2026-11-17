@@ -1,4 +1,4 @@
-<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.2.0+galaxy0" profile="23.0">
+<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.3.0+galaxy0" profile="23.0">
     <description>diagnostic, secondary, carrier, pharmacogenomic and risk findings in one human-readable report</description>
     <requirements>
         <requirement type="package" version="3.12">python</requirement>
@@ -35,6 +35,9 @@ python3 '$__tool_directory__/wes_clinical_report.py'
     #end if
     #if $roh:
         --roh '$roh'
+    #end if
+    #if $artefacts:
+        --artefacts '$artefacts'
     #end if
     #if $bam:
         --bam input.bam
@@ -79,6 +82,8 @@ python3 '$__tool_directory__/wes_clinical_report.py'
             </sanitizer>
         </param>
         <param name="roh" type="data" format="tabular" optional="true" label="Runs of homozygosity (bcftools roh)"/>
+        <param name="artefacts" type="data" format="vcf,vcf_bgzip" optional="true" label="Recurrent artefacts of the laboratory (VCF)"
+               help="Alleles called in many of the laboratory's own samples but rare or absent in gnomAD (build_artefact_list.sh in the workflow repository). Matching calls are marked low confidence, not removed."/>
         <param name="bam" type="data" format="bam" optional="true" label="Aligned reads (BAM)"
                help="Read depth at pharmacogenomic and risk-allele positions; without it, absent variants cannot be told apart from missing coverage."/>
         <param name="reference" type="data" format="fasta" optional="true" label="Reference genome (FASTA)"
@@ -111,6 +116,22 @@ python3 '$__tool_directory__/wes_clinical_report.py'
                     <has_text_matching expression="\tcarrier\tPAH\t"/>
                     <has_text_matching expression="\tdiagnostic\tBRCA2\t"/>
                     <has_text_matching expression="\tacmg_sf_reportable\tBRCA2\t"/>
+                </assert_contents>
+            </output>
+        </test>
+        <test expect_num_outputs="2">
+            <param name="vcf" value="annotated.vcf" ftype="vcf"/>
+            <param name="gencc" value="gencc.tsv" ftype="tabular"/>
+            <param name="constraint" value="constraint.tsv" ftype="tabular"/>
+            <param name="artefacts" value="artefacts.vcf" ftype="vcf"/>
+            <output name="report" ftype="html">
+                <assert_contents>
+                    <has_text text="Recurrent-artefact list: 2 alleles"/>
+                </assert_contents>
+            </output>
+            <output name="findings" ftype="tabular">
+                <assert_contents>
+                    <has_text_matching expression="\tcandidate\tGENEX\t.*recurrent artefact: called in 12/40"/>
                 </assert_contents>
             </output>
         </test>

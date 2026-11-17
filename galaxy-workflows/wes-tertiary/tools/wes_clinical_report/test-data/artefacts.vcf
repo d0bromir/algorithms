@@ -1,0 +1,7 @@
+##fileformat=VCFv4.2
+##INFO=<ID=ARTEFACT_N,Number=1,Type=Integer,Description="Samples of the laboratory set with the allele">
+##INFO=<ID=ARTEFACT_HOM,Number=1,Type=Integer,Description="Of them, homozygous">
+##INFO=<ID=ARTEFACT_TOTAL,Number=1,Type=Integer,Description="Samples in the laboratory set">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO
+chr1	1000100	.	C	T	.	.	ARTEFACT_N=12;ARTEFACT_HOM=3;ARTEFACT_TOTAL=40
+1	1000100	.	C	G	.	.	ARTEFACT_N=5;ARTEFACT_HOM=0;ARTEFACT_TOTAL=40
