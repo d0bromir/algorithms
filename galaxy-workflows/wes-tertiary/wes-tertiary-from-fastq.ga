@@ -13,7 +13,7 @@
         "tertiary-analysis"
     ],
     "license": "MIT",
-    "release": "0.3",
+    "release": "0.4",
     "uuid": "e4cd5a16-74be-4629-a676-4542c043ea15",
     "comments": [],
     "steps": {
@@ -349,6 +349,28 @@
         },
         "15": {
             "id": 15,
+            "name": "Missense predictions (AlphaMissense BCF)",
+            "type": "data_input",
+            "label": "Missense predictions (AlphaMissense BCF)",
+            "annotation": "AlphaMissense hg38 predictions as an indexed BCF with INFO/AM_score, built with data/build_alphamissense.sh (CC BY 4.0). Gives the missense PP3/BP4 evidence of the report at the ClinGen-calibrated strengths.",
+            "tool_state": "{\"name\": \"Missense predictions (AlphaMissense BCF)\", \"format\": [\"bcf\", \"vcf_bgzip\"]}",
+            "position": {
+                "top": 2100,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "Missense predictions (AlphaMissense BCF)",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "16": {
+            "id": 16,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/fastqc/fastqc/0.74+galaxy1",
             "type": "tool",
             "label": "fastqc_raw",
@@ -386,8 +408,8 @@
                 }
             }
         },
-        "16": {
-            "id": 16,
+        "17": {
+            "id": 17,
             "name": "__FLATTEN__",
             "type": "tool",
             "label": "flatten_fastqc",
@@ -402,7 +424,7 @@
             "input_connections": {
                 "input": [
                     {
-                        "id": 15,
+                        "id": 16,
                         "output_name": "text_file"
                     }
                 ]
@@ -418,8 +440,8 @@
                 }
             }
         },
-        "17": {
-            "id": 17,
+        "18": {
+            "id": 18,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/fastp/fastp/1.4.0+galaxy0",
             "type": "tool",
             "label": "trimming",
@@ -462,8 +484,8 @@
                 }
             }
         },
-        "18": {
-            "id": 18,
+        "19": {
+            "id": 19,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/bwa/bwa_mem/0.7.19+galaxy2",
             "type": "tool",
             "label": "mapping",
@@ -484,7 +506,7 @@
                 ],
                 "fastq_input|fastq_input1": [
                     {
-                        "id": 17,
+                        "id": 18,
                         "output_name": "output_paired_coll"
                     }
                 ]
@@ -500,8 +522,8 @@
                 }
             }
         },
-        "19": {
-            "id": 19,
+        "20": {
+            "id": 20,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/picard/picard_MarkDuplicates/3.1.1.0",
             "type": "tool",
             "label": "mark_duplicates",
@@ -516,7 +538,7 @@
             "input_connections": {
                 "inputFile": [
                     {
-                        "id": 18,
+                        "id": 19,
                         "output_name": "bam_output"
                     }
                 ]
@@ -544,8 +566,8 @@
                 }
             }
         },
-        "20": {
-            "id": 20,
+        "21": {
+            "id": 21,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/samtools_stats/samtools_stats/2.0.9",
             "type": "tool",
             "label": "alignment_stats",
@@ -560,7 +582,7 @@
             "input_connections": {
                 "input": [
                     {
-                        "id": 19,
+                        "id": 20,
                         "output_name": "outFile"
                     }
                 ]
@@ -576,8 +598,8 @@
                 }
             }
         },
-        "21": {
-            "id": 21,
+        "22": {
+            "id": 22,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/picard/picard_BedToIntervalList/3.1.1.0",
             "type": "tool",
             "label": "target_intervals",
@@ -614,8 +636,8 @@
                 }
             }
         },
-        "22": {
-            "id": 22,
+        "23": {
+            "id": 23,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/picard/picard_CollectHsMetrics/3.1.1",
             "type": "tool",
             "label": "hs_metrics",
@@ -630,19 +652,19 @@
             "input_connections": {
                 "inputFile": [
                     {
-                        "id": 19,
+                        "id": 20,
                         "output_name": "outFile"
                     }
                 ],
                 "baitFile": [
                     {
-                        "id": 21,
+                        "id": 22,
                         "output_name": "outFile"
                     }
                 ],
                 "targetFile": [
                     {
-                        "id": 21,
+                        "id": 22,
                         "output_name": "outFile"
                     }
                 ]
@@ -665,8 +687,8 @@
                 }
             }
         },
-        "23": {
-            "id": 23,
+        "24": {
+            "id": 24,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/mosdepth/mosdepth/0.3.14+galaxy0",
             "type": "tool",
             "label": "target_coverage",
@@ -681,7 +703,7 @@
             "input_connections": {
                 "input_alignment": [
                     {
-                        "id": 19,
+                        "id": 20,
                         "output_name": "outFile"
                     }
                 ],
@@ -736,8 +758,8 @@
                 }
             }
         },
-        "24": {
-            "id": 24,
+        "25": {
+            "id": 25,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/mosdepth/mosdepth/0.3.14+galaxy0",
             "type": "tool",
             "label": "coding_coverage",
@@ -752,7 +774,7 @@
             "input_connections": {
                 "input_alignment": [
                     {
-                        "id": 19,
+                        "id": 20,
                         "output_name": "outFile"
                     }
                 ],
@@ -801,8 +823,8 @@
                 }
             }
         },
-        "25": {
-            "id": 25,
+        "26": {
+            "id": 26,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/freebayes/freebayes/1.3.10+galaxy1",
             "type": "tool",
             "label": "variant_calling",
@@ -817,7 +839,7 @@
             "input_connections": {
                 "reference_source|batchmode|input_bams": [
                     {
-                        "id": 19,
+                        "id": 20,
                         "output_name": "outFile"
                     }
                 ],
@@ -846,8 +868,8 @@
                 }
             }
         },
-        "26": {
-            "id": 26,
+        "27": {
+            "id": 27,
             "type": "subworkflow",
             "label": "tertiary",
             "annotation": "Tertiary analysis of each sample's VCF (embedded workflow \"WES tertiary analysis from VCF (v2)\").",
@@ -859,7 +881,7 @@
             "input_connections": {
                 "Variant calls (VCF)": [
                     {
-                        "id": 25,
+                        "id": 26,
                         "output_name": "output_vcf",
                         "input_subworkflow_step_id": 0
                     }
@@ -955,30 +977,37 @@
                         "input_subworkflow_step_id": 17
                     }
                 ],
+                "Missense predictions (AlphaMissense BCF)": [
+                    {
+                        "id": 15,
+                        "output_name": "output",
+                        "input_subworkflow_step_id": 18
+                    }
+                ],
                 "Aligned reads (BAM)": [
                     {
-                        "id": 19,
+                        "id": 20,
                         "output_name": "outFile",
                         "input_subworkflow_step_id": 13
                     }
                 ],
                 "Per-target coverage (mosdepth thresholds)": [
                     {
-                        "id": 23,
+                        "id": 24,
                         "output_name": "output_thresholds_bed",
                         "input_subworkflow_step_id": 14
                     }
                 ],
                 "Coverage summary (mosdepth)": [
                     {
-                        "id": 23,
+                        "id": 24,
                         "output_name": "output_summary",
                         "input_subworkflow_step_id": 15
                     }
                 ],
                 "Coding-exon coverage (mosdepth thresholds)": [
                     {
-                        "id": 24,
+                        "id": 25,
                         "output_name": "output_thresholds_bed",
                         "input_subworkflow_step_id": 16
                     }
@@ -1022,6 +1051,14 @@
                 {
                     "label": "clinical_findings",
                     "output_name": "clinical_findings"
+                },
+                {
+                    "label": "pharmcat_report",
+                    "output_name": "pharmcat_report"
+                },
+                {
+                    "label": "pharmcat_calls",
+                    "output_name": "pharmcat_calls"
                 }
             ],
             "post_job_actions": {},
@@ -1029,7 +1066,7 @@
                 "name": "WES tertiary analysis from VCF (v2)",
                 "a_galaxy_workflow": "true",
                 "format-version": "0.1",
-                "annotation": "Tertiary analysis of a germline whole exome sequencing (WES) VCF.\n\n1. Normalise the calls against the reference: split multiallelic records, decompose complex alleles (MNVs)\n   into SNVs/indels, left-align indels and drop records whose REF does not match the reference (bcftools norm).\n2. Keep calls inside the exome target regions, padded by a configurable number of bases so that\n   canonical splice sites are retained, and that pass the quality expression (bcftools filter).\n3. Add ClinVar clinical significance (CLNSIG, CLNREVSTAT, CLNDN, CLNSIGCONF, ALLELEID) and the\n   gnomAD v4.1 population frequencies (INFO/gnomAD_AF, grpmax AF, filtering AF FAF95, homozygote count, gnomAD\n   filter and exome/genome discordance) with bcftools annotate.\n4. Predict functional consequences (gene, effect, impact, HGVS c./p., LOF/NMD) with SnpEff.\n5. Prioritise candidates with a SnpSift expression. The default keeps ClinVar (likely) pathogenic\n   variants at any frequency, plus rare (gnomAD AF and grpmax FAF95 < 1% or absent) HIGH/MODERATE impact variants.\n6. Export tab-separated tables of all annotated variants and of the candidates, and variant statistics\n   (bcftools stats, SnpEff summary) for MultiQC.\n7. Runs of homozygosity (bcftools roh, using the population allele frequencies).\n8. Clinical interpretation report (HTML) and findings table: diagnostic ClinVar pathogenic/likely pathogenic\n   findings checked against the gene's mode of inheritance (GenCC), candidate loss-of-function variants with\n   automated ACMG/AMP evidence codes and optional HPO phenotype ranking, ACMG SF v3.3 secondary findings,\n   carrier status, pharmacogenomics (CPIC genes), risk alleles, runs of homozygosity, coverage of clinically\n   relevant genes and the limits of the analysis. The optional inputs (GenCC, gnomAD constraint, HPO, BAM,\n   coverage) refine the report; the FASTQ workflow connects all of them.\n\nMap this workflow over a collection of VCFs to process a batch of samples.\nReference FASTA, target BED, ClinVar and gnomAD must use the same genome build and the same\nchromosome naming (e.g. \"chr1\" vs \"1\") as the VCF.\n",
+                "annotation": "Tertiary analysis of a germline whole exome sequencing (WES) VCF.\n\n1. Normalise the calls against the reference: split multiallelic records, decompose complex alleles (MNVs)\n   into SNVs/indels, left-align indels and drop records whose REF does not match the reference (bcftools norm).\n2. Keep calls inside the exome target regions, padded by a configurable number of bases so that\n   canonical splice sites are retained, and that pass the quality expression (bcftools filter).\n3. Add ClinVar clinical significance (CLNSIG, CLNREVSTAT, CLNDN, CLNSIGCONF, ALLELEID) and the\n   gnomAD v4.1 population frequencies (INFO/gnomAD_AF, grpmax AF, filtering AF FAF95, homozygote count, gnomAD\n   filter and exome/genome discordance) and the AlphaMissense missense score (INFO/AM_score) with bcftools\n   annotate; score the rare variants with SpliceAI (INFO/SpliceAI).\n4. Predict functional consequences (gene, effect, impact, HGVS c./p., LOF/NMD) with SnpEff.\n5. Prioritise candidates with a SnpSift expression. The default keeps ClinVar (likely) pathogenic\n   variants at any frequency, plus rare (gnomAD AF and grpmax FAF95 < 1% or absent) HIGH/MODERATE impact variants.\n6. Export tab-separated tables of all annotated variants and of the candidates, and variant statistics\n   (bcftools stats, SnpEff summary) for MultiQC.\n7. Runs of homozygosity (bcftools roh, using the population allele frequencies).\n8. Clinical interpretation report (HTML) and findings table: diagnostic ClinVar pathogenic/likely pathogenic\n   findings checked against the gene's mode of inheritance (GenCC), candidate loss-of-function variants with\n   automated ACMG/AMP evidence codes and optional HPO phenotype ranking, ACMG SF v3.3 secondary findings,\n   carrier status, pharmacogenomics (CPIC genes, and PharmCAT 3.4.0 diplotypes with its own HTML report), risk alleles, runs of homozygosity, coverage of clinically\n   relevant genes and the limits of the analysis. The optional inputs (GenCC, gnomAD constraint, HPO, BAM,\n   coverage) refine the report; the FASTQ workflow connects all of them.\n\nMap this workflow over a collection of VCFs to process a batch of samples.\nReference FASTA, target BED, ClinVar and gnomAD must use the same genome build and the same\nchromosome naming (e.g. \"chr1\" vs \"1\") as the VCF.\n",
                 "tags": [
                     "WES",
                     "exome",
@@ -1038,7 +1075,7 @@
                     "tertiary-analysis"
                 ],
                 "license": "MIT",
-                "release": "0.3",
+                "release": "0.4",
                 "uuid": "78531b7b-9f58-49a0-8829-d8f09d35d038",
                 "comments": [],
                 "steps": {
@@ -1440,6 +1477,28 @@
                     },
                     "18": {
                         "id": 18,
+                        "name": "Missense predictions (AlphaMissense BCF)",
+                        "type": "data_input",
+                        "label": "Missense predictions (AlphaMissense BCF)",
+                        "annotation": "AlphaMissense hg38 predictions as an indexed BCF with INFO/AM_score, built with data/build_alphamissense.sh (CC BY 4.0). Gives the missense PP3/BP4 evidence of the report at the ClinGen-calibrated strengths.",
+                        "tool_state": "{\"name\": \"Missense predictions (AlphaMissense BCF)\", \"format\": [\"bcf\", \"vcf_bgzip\"]}",
+                        "position": {
+                            "top": 2160,
+                            "left": 0
+                        },
+                        "input_connections": {},
+                        "inputs": [
+                            {
+                                "name": "Missense predictions (AlphaMissense BCF)",
+                                "description": ""
+                            }
+                        ],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {}
+                    },
+                    "19": {
+                        "id": 19,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/samtools_faidx/samtools_faidx/1.22+galaxy1",
                         "type": "tool",
                         "label": "chrom_sizes",
@@ -1470,8 +1529,8 @@
                             }
                         }
                     },
-                    "19": {
-                        "id": 19,
+                    "20": {
+                        "id": 20,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bedtools/bedtools_slopbed/2.31.1+galaxy1",
                         "type": "tool",
                         "label": "pad_targets",
@@ -1492,7 +1551,7 @@
                             ],
                             "genome_file_opts|genome": [
                                 {
-                                    "id": 18,
+                                    "id": 19,
                                     "output_name": "output"
                                 }
                             ],
@@ -1521,8 +1580,8 @@
                             }
                         }
                     },
-                    "20": {
-                        "id": 20,
+                    "21": {
+                        "id": 21,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_norm/bcftools_norm/1.24+galaxy0",
                         "type": "tool",
                         "label": "normalize",
@@ -1566,8 +1625,8 @@
                             }
                         }
                     },
-                    "21": {
-                        "id": 21,
+                    "22": {
+                        "id": 22,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_filter/bcftools_filter/1.24+galaxy0",
                         "type": "tool",
                         "label": "target_filter",
@@ -1582,13 +1641,13 @@
                         "input_connections": {
                             "input_file": [
                                 {
-                                    "id": 20,
+                                    "id": 21,
                                     "output_name": "output_file"
                                 }
                             ],
                             "sec_restrict|regions|regions_file": [
                                 {
-                                    "id": 19,
+                                    "id": 20,
                                     "output_name": "output"
                                 }
                             ],
@@ -1617,8 +1676,8 @@
                             }
                         }
                     },
-                    "22": {
-                        "id": 22,
+                    "23": {
+                        "id": 23,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
                         "type": "tool",
                         "label": "clinvar_annotation",
@@ -1633,7 +1692,7 @@
                         "input_connections": {
                             "input_file": [
                                 {
-                                    "id": 21,
+                                    "id": 22,
                                     "output_name": "output_file"
                                 }
                             ],
@@ -1662,8 +1721,8 @@
                             }
                         }
                     },
-                    "23": {
-                        "id": 23,
+                    "24": {
+                        "id": 24,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
                         "type": "tool",
                         "label": "population_annotation",
@@ -1678,7 +1737,7 @@
                         "input_connections": {
                             "input_file": [
                                 {
-                                    "id": 22,
+                                    "id": 23,
                                     "output_name": "output_file"
                                 }
                             ],
@@ -1707,8 +1766,153 @@
                             }
                         }
                     },
-                    "24": {
-                        "id": 24,
+                    "25": {
+                        "id": 25,
+                        "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
+                        "type": "tool",
+                        "label": "missense_annotation",
+                        "annotation": "Transfer the AlphaMissense pathogenicity score (INFO/AM_score), matched on CHROM/POS/REF/ALT.",
+                        "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"input_file\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"output_type\": \"\\\"v\\\"\", \"sec_annofile\": \"{\\\"annofile\\\": {\\\"__current_case__\\\": 1, \\\"anno_fmt\\\": \\\"vcf\\\", \\\"annotations\\\": {\\\"__class__\\\": \\\"ConnectedValue\\\"}}, \\\"columns\\\": \\\"AM_score\\\", \\\"mark_sites\\\": \\\"\\\", \\\"min_overlap\\\": \\\"\\\", \\\"set_id\\\": \\\"\\\"}\", \"sec_annotate\": \"{\\\"remove\\\": \\\"\\\", \\\"rename_annots\\\": {\\\"__class__\\\": \\\"RuntimeValue\\\"}, \\\"rename_chrs\\\": {\\\"__class__\\\": \\\"RuntimeValue\\\"}}\", \"sec_restrict\": \"{\\\"collapse\\\": null, \\\"exclude\\\": null, \\\"include\\\": null, \\\"invert_samples\\\": false, \\\"invert_samples_file\\\": false, \\\"regions\\\": {\\\"__current_case__\\\": 0, \\\"regions_src\\\": \\\"__none__\\\"}, \\\"samples\\\": \\\"\\\", \\\"samples_file\\\": {\\\"__class__\\\": \\\"RuntimeValue\\\"}}\"}",
+                        "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
+                        "tool_version": "1.24+galaxy0",
+                        "position": {
+                            "top": 160,
+                            "left": 1340
+                        },
+                        "input_connections": {
+                            "input_file": [
+                                {
+                                    "id": 24,
+                                    "output_name": "output_file"
+                                }
+                            ],
+                            "sec_annofile|annofile|annotations": [
+                                {
+                                    "id": 18,
+                                    "output_name": "output"
+                                }
+                            ]
+                        },
+                        "inputs": [],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {
+                            "HideDatasetActionoutput_file": {
+                                "action_type": "HideDatasetAction",
+                                "output_name": "output_file",
+                                "action_arguments": {}
+                            },
+                            "RenameDatasetActionoutput_file": {
+                                "action_type": "RenameDatasetAction",
+                                "output_name": "output_file",
+                                "action_arguments": {
+                                    "newname": "AlphaMissense-annotated variants"
+                                }
+                            }
+                        }
+                    },
+                    "26": {
+                        "id": 26,
+                        "name": "spliceai_score",
+                        "type": "tool",
+                        "label": "splice_prediction",
+                        "annotation": "SpliceAI delta scores (INFO/SpliceAI) for the rare variants (gnomAD AF and FAF95 < 1 % or absent); local tool tools/spliceai_score, install it on the Galaxy server (see README).",
+                        "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"annotation\": \"\\\"grch38\\\"\", \"distance\": \"\\\"50\\\"\", \"input\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mask\": \"\\\"0\\\"\", \"processes\": \"\\\"32\\\"\", \"reference\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"select\": \"\\\"(INFO/gnomAD_AF<0.01 || INFO/gnomAD_AF=\\\\\\\".\\\\\\\") && (INFO/gnomAD_FAF95<0.01 || INFO/gnomAD_FAF95=\\\\\\\".\\\\\\\")\\\"\"}",
+                        "tool_id": "spliceai_score",
+                        "tool_version": "1.3.1+galaxy0",
+                        "position": {
+                            "top": 320,
+                            "left": 1340
+                        },
+                        "input_connections": {
+                            "input": [
+                                {
+                                    "id": 25,
+                                    "output_name": "output_file"
+                                }
+                            ],
+                            "reference": [
+                                {
+                                    "id": 1,
+                                    "output_name": "output"
+                                }
+                            ]
+                        },
+                        "inputs": [],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {
+                            "HideDatasetActionoutput": {
+                                "action_type": "HideDatasetAction",
+                                "output_name": "output",
+                                "action_arguments": {}
+                            },
+                            "RenameDatasetActionoutput": {
+                                "action_type": "RenameDatasetAction",
+                                "output_name": "output",
+                                "action_arguments": {
+                                    "newname": "SpliceAI-annotated variants"
+                                }
+                            }
+                        }
+                    },
+                    "27": {
+                        "id": 27,
+                        "name": "pharmcat_pgx",
+                        "type": "tool",
+                        "label": "pharmacogenomics",
+                        "annotation": "PharmCAT 3.4.0 star-allele diplotypes, phenotypes and CPIC/DPWG/FDA recommendations from the caller's VCF (local tool tools/pharmcat_pgx). Absent positions are not assumed to be reference.",
+                        "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"absent_to_ref\": \"false\", \"input\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"sources\": \"null\"}",
+                        "tool_id": "pharmcat_pgx",
+                        "tool_version": "3.4.0+galaxy0",
+                        "position": {
+                            "top": 480,
+                            "left": 2120
+                        },
+                        "input_connections": {
+                            "input": [
+                                {
+                                    "id": 0,
+                                    "output_name": "output"
+                                }
+                            ]
+                        },
+                        "inputs": [],
+                        "outputs": [],
+                        "workflow_outputs": [
+                            {
+                                "label": "pharmcat_report",
+                                "output_name": "report"
+                            },
+                            {
+                                "label": "pharmcat_calls",
+                                "output_name": "calls"
+                            }
+                        ],
+                        "post_job_actions": {
+                            "RenameDatasetActionreport": {
+                                "action_type": "RenameDatasetAction",
+                                "output_name": "report",
+                                "action_arguments": {
+                                    "newname": "PharmCAT report"
+                                }
+                            },
+                            "HideDatasetActionreport_json": {
+                                "action_type": "HideDatasetAction",
+                                "output_name": "report_json",
+                                "action_arguments": {}
+                            },
+                            "RenameDatasetActioncalls": {
+                                "action_type": "RenameDatasetAction",
+                                "output_name": "calls",
+                                "action_arguments": {
+                                    "newname": "PharmCAT calls"
+                                }
+                            }
+                        }
+                    },
+                    "28": {
+                        "id": 28,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpeff/snpEff/5.4+galaxy0",
                         "type": "tool",
                         "label": "functional_annotation",
@@ -1723,8 +1927,8 @@
                         "input_connections": {
                             "input": [
                                 {
-                                    "id": 23,
-                                    "output_name": "output_file"
+                                    "id": 26,
+                                    "output_name": "output"
                                 }
                             ],
                             "snpDb|snpeff_db": [
@@ -1781,8 +1985,8 @@
                             }
                         }
                     },
-                    "25": {
-                        "id": 25,
+                    "29": {
+                        "id": 29,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_filter/5.4.0c+galaxy1",
                         "type": "tool",
                         "label": "prioritize",
@@ -1797,7 +2001,7 @@
                         "input_connections": {
                             "input": [
                                 {
-                                    "id": 24,
+                                    "id": 28,
                                     "output_name": "snpeff_output"
                                 }
                             ],
@@ -1826,13 +2030,13 @@
                             }
                         }
                     },
-                    "26": {
-                        "id": 26,
+                    "30": {
+                        "id": 30,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1",
                         "type": "tool",
                         "label": "candidate_table",
                         "annotation": "One row per candidate variant (most severe SnpEff effect, ClinVar, gnomAD, genotype).",
-                        "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"empty_text\": \"\\\".\\\"\", \"extract\": \"\\\"CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P LOF NMD gnomAD_AF gnomAD_grpmax_AF gnomAD_FAF95 gnomAD_nhomalt CLNSIG CLNREVSTAT CLNDN\\\"\", \"input\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"one_effect_per_line\": \"false\", \"separator\": \"\\\",\\\"\"}",
+                        "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"empty_text\": \"\\\".\\\"\", \"extract\": \"\\\"CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P LOF NMD gnomAD_AF gnomAD_grpmax_AF gnomAD_FAF95 gnomAD_nhomalt AM_score SpliceAI CLNSIG CLNREVSTAT CLNDN\\\"\", \"input\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"one_effect_per_line\": \"false\", \"separator\": \"\\\",\\\"\"}",
                         "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1",
                         "tool_version": "5.4.0c+galaxy1",
                         "position": {
@@ -1842,7 +2046,7 @@
                         "input_connections": {
                             "input": [
                                 {
-                                    "id": 25,
+                                    "id": 29,
                                     "output_name": "output"
                                 }
                             ]
@@ -1865,13 +2069,13 @@
                             }
                         }
                     },
-                    "27": {
-                        "id": 27,
+                    "31": {
+                        "id": 31,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1",
                         "type": "tool",
                         "label": "annotated_table",
                         "annotation": "One row per on-target variant with the same columns as the candidate table.",
-                        "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"empty_text\": \"\\\".\\\"\", \"extract\": \"\\\"CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P LOF NMD gnomAD_AF gnomAD_grpmax_AF gnomAD_FAF95 gnomAD_nhomalt CLNSIG CLNREVSTAT CLNDN\\\"\", \"input\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"one_effect_per_line\": \"false\", \"separator\": \"\\\",\\\"\"}",
+                        "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"empty_text\": \"\\\".\\\"\", \"extract\": \"\\\"CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P LOF NMD gnomAD_AF gnomAD_grpmax_AF gnomAD_FAF95 gnomAD_nhomalt AM_score SpliceAI CLNSIG CLNREVSTAT CLNDN\\\"\", \"input\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"one_effect_per_line\": \"false\", \"separator\": \"\\\",\\\"\"}",
                         "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1",
                         "tool_version": "5.4.0c+galaxy1",
                         "position": {
@@ -1881,7 +2085,7 @@
                         "input_connections": {
                             "input": [
                                 {
-                                    "id": 24,
+                                    "id": 28,
                                     "output_name": "snpeff_output"
                                 }
                             ]
@@ -1904,8 +2108,8 @@
                             }
                         }
                     },
-                    "28": {
-                        "id": 28,
+                    "32": {
+                        "id": 32,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_stats/bcftools_stats/1.24+galaxy0",
                         "type": "tool",
                         "label": "variant_stats",
@@ -1920,7 +2124,7 @@
                         "input_connections": {
                             "input_file": [
                                 {
-                                    "id": 24,
+                                    "id": 28,
                                     "output_name": "snpeff_output"
                                 }
                             ]
@@ -1943,8 +2147,8 @@
                             }
                         }
                     },
-                    "29": {
-                        "id": 29,
+                    "33": {
+                        "id": 33,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_roh/bcftools_roh/1.24+galaxy1",
                         "type": "tool",
                         "label": "runs_of_homozygosity",
@@ -1959,7 +2163,7 @@
                         "input_connections": {
                             "input_file": [
                                 {
-                                    "id": 24,
+                                    "id": 28,
                                     "output_name": "snpeff_output"
                                 }
                             ]
@@ -1982,15 +2186,15 @@
                             }
                         }
                     },
-                    "30": {
-                        "id": 30,
+                    "34": {
+                        "id": 34,
                         "name": "wes_clinical_report",
                         "type": "tool",
                         "label": "clinical_report",
                         "annotation": "Human-readable clinical interpretation report and findings table (local tool tools/wes_clinical_report; install it on the Galaxy server, see README).",
-                        "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"artefacts\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"constraint\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"coverage_summary\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gencc\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gene_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_genes\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_terms\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"max_af\": \"\\\"0.01\\\"\", \"max_candidates\": \"\\\"60\\\"\", \"min_ref_depth\": \"\\\"15\\\"\", \"reference\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"roh\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"sample_name\": \"\\\"\\\"\", \"target_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\"}",
+                        "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"artefacts\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"constraint\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"coverage_summary\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gencc\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gene_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_genes\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_terms\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"max_af\": \"\\\"0.01\\\"\", \"max_candidates\": \"\\\"60\\\"\", \"min_ref_depth\": \"\\\"15\\\"\", \"pharmcat\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"reference\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"roh\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"sample_name\": \"\\\"\\\"\", \"target_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\"}",
                         "tool_id": "wes_clinical_report",
-                        "tool_version": "0.3.0+galaxy0",
+                        "tool_version": "0.4.0+galaxy0",
                         "position": {
                             "top": 300,
                             "left": 2380
@@ -1998,7 +2202,7 @@
                         "input_connections": {
                             "vcf": [
                                 {
-                                    "id": 24,
+                                    "id": 28,
                                     "output_name": "snpeff_output"
                                 }
                             ],
@@ -2010,8 +2214,14 @@
                             ],
                             "roh": [
                                 {
-                                    "id": 29,
+                                    "id": 33,
                                     "output_name": "output_file"
+                                }
+                            ],
+                            "pharmcat": [
+                                {
+                                    "id": 27,
+                                    "output_name": "calls"
                                 }
                             ],
                             "artefacts": [
@@ -2101,8 +2311,8 @@
                 }
             }
         },
-        "27": {
-            "id": 27,
+        "28": {
+            "id": 28,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/multiqc/multiqc/1.35+galaxy5",
             "type": "tool",
             "label": "multiqc",
@@ -2117,43 +2327,43 @@
             "input_connections": {
                 "results_0|software_cond|output_0|input": [
                     {
-                        "id": 16,
+                        "id": 17,
                         "output_name": "output"
                     }
                 ],
                 "results_1|software_cond|input": [
                     {
-                        "id": 17,
+                        "id": 18,
                         "output_name": "report_json"
                     }
                 ],
                 "results_2|software_cond|output_0|input": [
                     {
-                        "id": 19,
+                        "id": 20,
                         "output_name": "metrics_file"
                     }
                 ],
                 "results_2|software_cond|output_1|input": [
                     {
-                        "id": 22,
+                        "id": 23,
                         "output_name": "outFile"
                     }
                 ],
                 "results_3|software_cond|output_0|type|input": [
                     {
-                        "id": 20,
+                        "id": 21,
                         "output_name": "output"
                     }
                 ],
                 "results_4|software_cond|input": [
                     {
-                        "id": 26,
+                        "id": 27,
                         "output_name": "variant_stats"
                     }
                 ],
                 "results_5|software_cond|input": [
                     {
-                        "id": 26,
+                        "id": 27,
                         "output_name": "snpeff_csv_stats"
                     }
                 ]

@@ -1,0 +1,110 @@
+<tool id="spliceai_score" name="SpliceAI splice-altering prediction" version="1.3.1+galaxy0" profile="23.0">
+    <description>of rare variants in genes, added to the VCF as INFO/SpliceAI</description>
+    <requirements>
+        <requirement type="package" version="1.3.1">spliceai</requirement>
+        <requirement type="package" version="80.9.0">setuptools</requirement>
+        <requirement type="package" version="1.24">bcftools</requirement>
+        <!-- SpliceAI 1.3.1 uses np.fromstring in binary mode, removed in NumPy 2 -->
+        <requirement type="package" version="1.26.4">numpy</requirement>
+    </requirements>
+    <version_command>python -c "import importlib.metadata as m; print('spliceai', m.version('spliceai'))"</version_command>
+    <command detect_errors="exit_code"><![CDATA[
+set -o pipefail &&
+export TF_CPP_MIN_LOG_LEVEL=3 OMP_NUM_THREADS=2 TF_NUM_INTRAOP_THREADS=2 TF_NUM_INTEROP_THREADS=1 &&
+ln -s '$reference' reference.fa &&
+## index once here, not concurrently in every SpliceAI process
+python -c "import pyfaidx; pyfaidx.Fasta('reference.fa')" &&
+## rare variants only: the selection expression is applied before scoring, everything is passed through
+## sites only (no INFO, no samples): the scored records are merged back by CHROM/POS/REF/ALT
+bcftools view --no-version -G -i '$select' '$input' -Ov 2> select.log
+    | bcftools annotate --no-version -x INFO -Ov > selected.vcf &&
+grep '^#' selected.vcf | grep -v '^#CHROM' > header.vcf &&
+cat '$__tool_directory__/spliceai_header.txt' >> header.vcf &&
+grep '^#CHROM' selected.vcf >> header.vcf &&
+{ grep -v '^#' selected.vcf > records.tsv || true; } &&
+n=\$(wc -l < records.tsv) &&
+echo "variants scored: \$n" &&
+jobs=$processes && [ \$jobs -le \$n ] || jobs=\$n &&
+mkdir parts &&
+if [ \$n -gt 0 ]; then
+    split -n r/\$jobs -d -a 3 records.tsv parts/part. &&
+    for p in parts/part.???; do cat header.vcf "\$p" > "\$p.vcf"; rm "\$p"; done &&
+    ## TensorFlow sizes its thread pools to the visible cores: pin each process to two cores
+    ncpu=\$(nproc --all) && i=0 &&
+    for p in parts/*.vcf; do
+        taskset -c \$(( (2 * i) % ncpu )),\$(( (2 * i + 1) % ncpu ))
+            spliceai -I "\$p" -O "\$p.out" -R reference.fa -A $annotation -D $distance -M $mask > "\$p.log" 2>&1 &
+        i=\$((i + 1));
+    done;
+    wait;
+    for p in parts/*.vcf; do
+        if [ "\$(grep -vc '^#' "\$p")" != "\$(grep -vc '^#' "\$p.out" 2> /dev/null)" ]; then
+            echo "SpliceAI failed on \$p:" >&2; tail -20 "\$p.log" >&2; exit 1;
+        fi;
+    done;
+fi &&
+{ cat header.vcf; cat parts/*.vcf.out 2> /dev/null | grep -v '^#' || true; } | bcftools sort -Oz -o scored.vcf.gz 2> /dev/null &&
+bcftools index -t scored.vcf.gz &&
+## annotate -a reads both files through their indexes
+bcftools view --no-version '$input' -Oz -o input.vcf.gz &&
+bcftools index -t input.vcf.gz &&
+bcftools annotate --no-version -a scored.vcf.gz -c INFO/SpliceAI input.vcf.gz -Ov -o '$output'
+    ]]></command>
+    <inputs>
+        <param name="input" type="data" format="vcf,vcf_bgzip" label="Variants (normalised VCF)"/>
+        <param name="reference" type="data" format="fasta" label="Reference genome (FASTA)" help="The FASTA the variants were called against (GRCh38)."/>
+        <param name="annotation" type="select" label="Gene annotation">
+            <option value="grch38" selected="true">GRCh38 (GENCODE, bundled with SpliceAI)</option>
+            <option value="grch37">GRCh37</option>
+        </param>
+        <param name="select" type="text" value="(INFO/gnomAD_AF&lt;0.01 || INFO/gnomAD_AF=&quot;.&quot;) &amp;&amp; (INFO/gnomAD_FAF95&lt;0.01 || INFO/gnomAD_FAF95=&quot;.&quot;)"
+               label="Variants to score (bcftools expression)"
+               help="Scoring takes about 3 s per variant per process; by default only variants with gnomAD frequency below 1 % (or absent) are scored. Variants outside the bundled genes get no score.">
+            <sanitizer invalid_char="">
+                <valid initial="string.printable"><remove value="&apos;"/></valid>
+            </sanitizer>
+        </param>
+        <param name="distance" type="integer" value="50" min="0" max="4999" label="Maximum distance between the variant and a gained or lost splice site (-D)"/>
+        <param name="processes" type="integer" value="32" min="1" max="128" label="Parallel SpliceAI processes"
+               help="Each uses about 2 CPU threads and 0.7 GB of memory. An exome has about 2,500 rare variants in genes; 32 processes score them in about 13 minutes on CPU."/>
+        <param name="mask" type="select" label="Masked scores (-M)" help="Raw scores are what ClinGen calibrated (Walker et al. 2023).">
+            <option value="0" selected="true">raw</option>
+            <option value="1">masked</option>
+        </param>
+    </inputs>
+    <outputs>
+        <data name="output" format="vcf" label="${tool.name} on ${on_string}"/>
+    </outputs>
+    <tests>
+        <test expect_num_outputs="1">
+            <!-- a common variant is not scored but passed through; the SpliceAI header is always added -->
+            <param name="input" value="splice_in.vcf" ftype="vcf"/>
+            <param name="reference" value="tiny.fa" ftype="fasta"/>
+            <output name="output" ftype="vcf">
+                <assert_contents>
+                    <has_text text="##INFO=&lt;ID=SpliceAI"/>
+                    <has_text_matching expression="1\t10\t\.\tC\tT\t50\tPASS\tgnomAD_AF=0\.4;gnomAD_FAF95=0\.38\n"/>
+                </assert_contents>
+            </output>
+        </test>
+    </tests>
+    <help><![CDATA[
+**What it does**
+
+Runs SpliceAI 1.3.1 (Jaganathan et al., Cell 2019) on the variants that pass the selection expression (by default
+those with gnomAD frequency below 1 %) and adds its prediction to every scored record of the full input VCF as
+``INFO/SpliceAI=ALT|GENE|DS_AG|DS_AL|DS_DG|DS_DL|DP_AG|DP_AL|DP_DG|DP_DL``: delta scores (0-1) for acceptor gain/loss
+and donor gain/loss and their positions relative to the variant. Records that were not scored pass through unchanged.
+
+The ClinGen splicing recommendation (Walker et al., AJHG 2023) uses the maximum of the four delta scores: >= 0.2
+supports a splicing effect (PP3), <= 0.1 supports no effect (BP4), both at Supporting strength, outside the
+canonical +/-1,2 splice-site positions.
+
+**Licences**: SpliceAI source code PolyForm Strict 1.0.0 and trained models CC BY-NC 4.0, i.e. non-commercial use.
+Runs on CPU (TensorFlow); the input is split over the job's slots.
+    ]]></help>
+    <citations>
+        <citation type="doi">10.1016/j.cell.2018.12.015</citation>
+        <citation type="doi">10.1016/j.ajhg.2023.06.002</citation>
+    </citations>
+</tool>

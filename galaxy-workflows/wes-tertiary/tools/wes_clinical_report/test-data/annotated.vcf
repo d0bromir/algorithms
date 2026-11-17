@@ -24,6 +24,8 @@
 ##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
 ##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read depth">
 ##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths">
+##INFO=<ID=AM_score,Number=A,Type=Float,Description="AlphaMissense pathogenicity">
+##INFO=<ID=SpliceAI,Number=.,Type=String,Description="SpliceAI ALLELE|SYMBOL|DS_AG|DS_AL|DS_DG|DS_DL|DP_AG|DP_AL|DP_DG|DP_DL">
 #CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	TEST1
 1	1000100	.	C	T	200	PASS	gnomAD_AF=0.00001;ANN=T|stop_gained|HIGH|GENEX|GENEX|transcript|TXX|protein_coding|1/10|c.100C>T|p.Gln34*|||||;NMD=(GENEX|GENEX|1|1.00)	GT:DP:AD	0/1:40:20,20
 1	45331556	.	C	T	200	PASS	CLNSIG=Pathogenic;CLNREVSTAT=criteria_provided,_multiple_submitters,_no_conflicts;CLNDN=MUTYH-associated_polyposis;gnomAD_AF=0.003;ANN=T|missense_variant|MODERATE|MUTYH|MUTYH|transcript|TXM|protein_coding|1/10|c.1187G>A|p.Gly396Asp|||||	GT:DP:AD	0/1:48:25,23
@@ -37,3 +39,5 @@
 17	41000300	.	C	T	200	PASS	CLNSIG=Pathogenic;CLNREVSTAT=criteria_provided,_single_submitter;gnomAD_AF=0.0004;gnomAD_AN=1500000;gnomAD_nhomalt=0;gnomAD_grpmax=afr;gnomAD_grpmax_AF=0.006;gnomAD_FAF95=0.004;gnomAD_FAF95_grp=afr;gnomAD_filter=EXOMES_FILTERED;ANN=T|missense_variant|MODERATE|GENEF|GENEF|transcript|TGENEF|protein_coding|1/10|c.10C>T|p.Arg4Cys|||||	GT:DP:AD	0/1:40:20,20
 17	41000400	.	G	A	200	PASS	gnomAD_AF=0.0005;gnomAD_AN=1500000;gnomAD_nhomalt=6;gnomAD_filter=PASS;ANN=A|stop_gained|HIGH|GENER|GENER|transcript|TGENER|protein_coding|1/10|c.20G>A|p.Trp7*|||||	GT:DP:AD	1/1:30:0,30
 X	153725300	.	G	A	200	PASS	CLNSIG=Pathogenic;CLNREVSTAT=criteria_provided,_multiple_submitters,_no_conflicts;CLNDN=Adrenoleukodystrophy;ANN=A|missense_variant|MODERATE|ABCD1|ABCD1|transcript|TABCD1|protein_coding|1/10|c.796G>A|p.Gly266Arg|||||	GT:DP:AD	0/1:38:19,19
+2	2000100	.	G	A	200	PASS	gnomAD_AF=0.00001;AM_score=0.995;SpliceAI=A|GENEP|0.00|0.01|0.00|0.02|1|2|3|4;ANN=A|missense_variant|MODERATE|GENEP|GENEP|transcript|TXP|protein_coding|2/10|c.200G>A|p.Arg67His|||||	GT:DP:AD	0/1:40:20,20
+2	2000500	.	T	C	200	PASS	SpliceAI=C|GENES|0.71|0.00|0.00|0.00|-12|3|20|1;ANN=C|intron_variant|MODIFIER|GENES|GENES|transcript|TXS|protein_coding|3/9|c.300-25T>C||||||	GT:DP:AD	0/1:40:20,20

@@ -1,6 +1,6 @@
 class: GalaxyWorkflow
 label: WES tertiary analysis from FASTQ (v1)
-release: "0.3"
+release: "0.4"
 license: MIT
 tags:
   - WES
@@ -123,6 +123,13 @@ inputs:
       pipeline) but rare or absent in gnomAD, built with data/build_artefact_list.sh. The report marks matching
       calls low confidence; without it, recurrent false calls (e.g. in GC-rich targets) are not recognised.
     position: {left: 0, top: 1960}
+  "Missense predictions (AlphaMissense BCF)":
+    type: data
+    format: [bcf, vcf_bgzip]
+    doc: >-
+      AlphaMissense hg38 predictions as an indexed BCF with INFO/AM_score, built with data/build_alphamissense.sh
+      (CC BY 4.0). Gives the missense PP3/BP4 evidence of the report at the ClinGen-calibrated strengths.
+    position: {left: 0, top: 2100}
 
 outputs:
   multiqc_report:
@@ -159,6 +166,10 @@ outputs:
     outputSource: tertiary/clinical_report
   clinical_findings:
     outputSource: tertiary/clinical_findings
+  pharmcat_report:
+    outputSource: tertiary/pharmcat_report
+  pharmcat_calls:
+    outputSource: tertiary/pharmcat_calls
 
 steps:
   fastqc_raw:
@@ -431,6 +442,7 @@ steps:
       "HPO gene annotations (phenotype_to_genes.txt)": "HPO gene annotations (phenotype_to_genes.txt)"
       "Patient phenotype (HPO terms)": "Patient phenotype (HPO terms)"
       "Recurrent artefacts (VCF)": "Recurrent artefacts (VCF)"
+      "Missense predictions (AlphaMissense BCF)": "Missense predictions (AlphaMissense BCF)"
       "Aligned reads (BAM)": mark_duplicates/outFile
       "Per-target coverage (mosdepth thresholds)": target_coverage/output_thresholds_bed
       "Coverage summary (mosdepth)": target_coverage/output_summary

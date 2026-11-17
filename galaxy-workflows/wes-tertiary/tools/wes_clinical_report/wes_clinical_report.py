@@ -26,7 +26,7 @@ import re
 import subprocess
 import sys
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 # --------------------------------------------------------------------------------------------- rules
 # ACMG secondary findings v3.3 (ACMG policy statement, Genet Med 2025;27:101454): the 81 genes of v3.2 (Miller et al.,
@@ -210,7 +210,8 @@ class Variant:
     __slots__ = ("chrom", "pos", "ref", "alt", "qual", "filter", "info", "gt", "dp", "ad", "anns", "lof",
                  "zyg", "gene", "effect", "impact", "hgvs_c", "hgvs_p", "feature", "af", "clnsig", "revstat",
                  "clndn", "stars", "rs", "ab", "flags",
-                 "an", "nhomalt", "grpmax", "grpmax_af", "faf", "faf_grp", "gfilter", "gdisc", "artefact")
+                 "an", "nhomalt", "grpmax", "grpmax_af", "faf", "faf_grp", "gfilter", "gdisc", "artefact",
+                 "am", "sai", "sai_gene")
 
     def key(self):
         return f"{self.chrom}:{self.pos}:{self.ref}>{self.alt}"
@@ -305,6 +306,8 @@ def parse_vcf(path, sample_index=0):
                 v.grpmax, v.grpmax_af = gn.get("gnomAD_grpmax"), fnum(gn.get("gnomAD_grpmax_AF"))
                 v.faf, v.faf_grp = fnum(gn.get("gnomAD_FAF95")), gn.get("gnomAD_FAF95_grp")
                 v.gfilter, v.gdisc = gn.get("gnomAD_filter"), fnum(gn.get("gnomAD_discordance_p"))
+                v.am = fnum(str(info["AM_score"]).split(",")[0]) if info.get("AM_score") not in (None, True) else None
+                v.sai, v.sai_gene = spliceai_max(info.get("SpliceAI"), alt)
                 v.clnsig = str(info.get("CLNSIG", "")) if info.get("CLNSIG") not in (None, True, ".") else ""
                 v.revstat = str(info.get("CLNREVSTAT", "")) if info.get("CLNREVSTAT") not in (None, True) else ""
                 v.clndn = str(info.get("CLNDN", "")).replace("_", " ") if info.get("CLNDN") not in (None, True) else ""
@@ -314,6 +317,80 @@ def parse_vcf(path, sample_index=0):
                 v.flags = []
                 variants.append(v)
     return sample, contigs, variants, prefix or ""
+
+
+def spliceai_max(field, alt):
+    """Highest SpliceAI delta score (DS_AG/AL/DG/DL) for this ALT over all its genes, and that gene."""
+    best, gene = None, None
+    if field in (None, True, "."):
+        return best, gene
+    for entry in str(field).split(","):
+        p = entry.split("|")
+        if len(p) < 6 or p[0] != alt:
+            continue
+        ds = [fnum(x) for x in p[2:6]]
+        ds = [x for x in ds if x is not None]
+        if ds and (best is None or max(ds) > best):
+            best, gene = max(ds), p[1]
+    return best, gene
+
+
+# ClinGen-calibrated strengths (Bergquist et al., Genet Med 2025, Table 1) for AlphaMissense; the (+3)/(-3) points
+# intervals are reported at Moderate, as the 2015 combining rules have no level between Moderate and Strong.
+AM_PP3 = ((0.990, "PP3_Strong"), (0.906, "PP3_Moderate"), (0.792, "PP3_Supporting"))
+AM_BP4 = ((0.099, "BP4_Moderate"), (0.169, "BP4_Supporting"))
+CODE_RANK = {"PP3_Supporting": 1, "PP3_Moderate": 2, "PP3_Strong": 3}
+
+
+def am_code(score):
+    if score is None:
+        return None
+    s = round(score, 3)
+    for t, c in AM_PP3:
+        if s >= t:
+            return c
+    for t, c in AM_BP4:
+        if s <= t:
+            return c
+    return None
+
+
+def is_canonical_splice(v, gene):
+    a = ann_for_gene(v, gene) if gene else (v.anns[0] if v.anns else None)
+    return bool(a) and ("splice_acceptor_variant" in a[1] or "splice_donor_variant" in a[1])
+
+
+def predictor_codes(v, gene):
+    """PP3/BP4 from one calibrated missense predictor (AlphaMissense) and SpliceAI (Walker et al. 2023: max delta
+    >= 0.2 PP3, <= 0.1 BP4, Supporting, outside the canonical +/-1,2 positions). The two PP3s are never summed: the
+    stronger one is used. BP4 for a missense variant needs SpliceAI <= 0.1 (or no splice score)."""
+    am = am_code(v.am) if is_missense(v, gene) and v.am is not None else None
+    sp = None
+    if v.sai is not None and not is_canonical_splice(v, gene):
+        sp = "PP3_Supporting" if v.sai >= 0.2 else ("BP4_Supporting" if v.sai <= 0.1 else None)
+    pp3 = [c for c in (am, sp) if c and c.startswith("PP3")]
+    if pp3:
+        return [max(pp3, key=CODE_RANK.get)]
+    if am and am.startswith("BP4") and (v.sai is None or v.sai <= 0.1):
+        return [am]
+    return []
+
+
+def splice_candidate(v, gene, phenotype_match):
+    """Predicted splice-altering outside the canonical sites: SpliceAI >= 0.5 (the developers' recommended cut-off),
+    or >= 0.2 (the ClinGen PP3 cut-off) in a gene matching the patient's phenotype."""
+    if v.sai is None or is_lof(v, gene) or (v.sai_gene and v.sai_gene != gene):
+        return False
+    return v.sai >= (0.2 if phenotype_match else 0.5)
+
+
+def predictor_text(v):
+    parts = []
+    if v.am is not None:
+        parts.append(f"AlphaMissense {v.am:.3f}")
+    if v.sai is not None:
+        parts.append(f"SpliceAI {v.sai:.2f}")
+    return ", ".join(parts)
 
 
 def genes_of(v):
@@ -455,6 +532,24 @@ def load_artefacts(path):
                 if alt not in ("*", "."):
                     out[(norm_chrom(t[0]), int(t[1]), t[3], alt)] = (
                         int(n) if str(n).isdigit() else None, int(total) if str(total).isdigit() else None)
+    return out
+
+
+def load_pharmcat(path):
+    """PharmCAT calls-only TSV (-reporterCallsOnlyTsv): a 'PharmCAT <version>' line, a header, one row per gene."""
+    out = {"version": "", "calls": []}
+    if not path:
+        return out
+    with opener(path) as f:
+        lines = [x.rstrip("\n") for x in f if x.strip()]
+    if lines and lines[0].startswith("PharmCAT"):
+        out["version"] = lines.pop(0).split(" ", 1)[-1].strip()
+    if not lines:
+        return out
+    header = lines[0].split("\t")
+    for line in lines[1:]:
+        t = line.split("\t")
+        out["calls"].append(dict(zip(header, t + [""] * (len(header) - len(t)))))
     return out
 
 
@@ -688,6 +783,8 @@ def acmg_evidence(v, gene, moi, constraint, hpo_hit, max_af):
         z = constraint.get(gene, (None, None, None))[2]
         if z is not None and z > 3.09:
             codes.append("PP2")
+    if not any(c.startswith("PVS1") for c in codes):  # PP3 is not combined with PVS1
+        codes += predictor_codes(v, gene)
     if hpo_hit:
         codes.append("PP4")
     return codes
@@ -982,7 +1079,9 @@ def build(args):
             continue
         for g in genes_of(v)[:3]:
             if g in gencc or g in ACMG_SF:
-                if is_lof(v, g) or (is_missense(v, g) and hpo_match.get(g)):
+                if (is_lof(v, g) or (is_missense(v, g) and hpo_match.get(g))
+                        or (is_missense(v, g) and CODE_RANK.get(am_code(v.am), 0) >= 2)
+                        or splice_candidate(v, g, bool(hpo_match.get(g)))):
                     rare_by_gene[g].append(v)
                 break
     for g, vs in rare_by_gene.items():
@@ -1012,7 +1111,8 @@ def build(args):
             why = "; ".join(reasons)
             ev = acmg_evidence(v, g, moi, constraint, bool(hpo_match.get(g)), args.max_af)
             score = (2 if hpo_match.get(g) else 0) + (2 if consistent else 0) + (1 if lof else 0) + \
-                (1 if "PVS1" in ev else 0) - (1 if v.flags and any("depth" in f or "balance" in f for f in v.flags) else 0)
+                (1 if "PVS1" in ev else 0) + (1 if CODE_RANK.get(next((c for c in ev if c.startswith("PP3")), ""), 0) >= 2 else 0) - \
+                (1 if v.flags and any("depth" in f or "balance" in f for f in v.flags) else 0)
             cands.append((score, v, g, consistent, why, ev))
     cands.sort(key=lambda x: (-x[0], x[2], x[1].pos))
 
@@ -1222,9 +1322,11 @@ def build(args):
     # candidates
     R.h("<h2>3. Candidate variants not classified in ClinVar</h2><p class='small'>Rare (gnomAD frequency &lt; "
         f"{args.max_af:g}) predicted loss-of-function variants in genes with an established disease association "
-        "(GenCC definitive/strong/moderate/supportive)" + (", and rare missense/in-frame variants in genes matching "
+        "(GenCC definitive/strong/moderate/supportive)" + (", rare missense/in-frame variants in genes matching "
                                                           "the patient's phenotype" if hpo_terms else "")
-        + ". Evidence codes are an automated subset of the ACMG/AMP 2015 criteria (PVS1, PM2, BA1, BS1, PP2, PP4) "
+        + ", rare missense variants with AlphaMissense at PP3_Moderate or stronger (>= 0.906) and rare variants "
+        "predicted to alter splicing outside the canonical sites (SpliceAI >= 0.5; >= 0.2 in phenotype-matched genes)"
+        + ". Evidence codes are an automated subset of the ACMG/AMP 2015 criteria (PVS1, PM2, BA1, BS1, PP2, PP3, BP4, PP4) "
         "for triage; they are not a classification. Rows are ranked by phenotype match, inheritance fit and "
         "variant consequence.</p>")
     rows = []
@@ -1235,7 +1337,8 @@ def build(args):
                      esc(a[1].replace("&", " & ")) + (f"<br><span class='small'>LOEUF {loeuf:.2f}</span>" if loeuf is not None else ""),
                      freq_cell(v), disease_cell(g, gencc, hpo_match, hpo_names),
                      ("" if consistent else tag("inheritance not met", "t-grn") + "<br>") + esc(why),
-                     " ".join(tag(c, "t-red" if c.startswith("PVS") else ("t-grn" if c.startswith("B") else "")) for c in ev)])
+                     " ".join(tag(c, "t-red" if c.startswith("PVS") else ("t-grn" if c.startswith("B") else "")) for c in ev)
+                     + (f"<br><span class='small'>{esc(predictor_text(v))}</span>" if predictor_text(v) else "")])
         R.rows.append(("candidate" if consistent else "candidate_inheritance_not_met", v, why + "; " + ",".join(ev)))
     R.table(["Variant", "Genotype", "Consequence", "gnomAD frequency", "Gene-disease (GenCC)", "Inheritance fit", "Evidence"], rows)
     if len(cands) > args.max_candidates:
@@ -1299,6 +1402,23 @@ def build(args):
         R.rows.append(("pgx", None, (gene, dip, ph)))
     R.table(["Gene", "Alleles tested", "Genotype", "Predicted phenotype", "Affected drugs"], rows)
     R.h(f"<p class='small'><b>Not assessed by this exome pipeline:</b> {esc(NOT_ASSESSED_PGX)}.</p>")
+    pharmcat = load_pharmcat(args.pharmcat)
+    if args.pharmcat:
+        R.h(f"<h3>PharmCAT {esc(pharmcat['version'])}</h3><p class='small'>Diplotypes from PharmCAT's named-allele "
+            "matcher (all defining positions of each star allele, including multi-variant haplotypes), with its "
+            "CPIC/DPWG phenotypes; recommendations are in the PharmCAT report. <b>Missing positions</b> were not in the "
+            "VCF (often off-target in an exome): an allele defined there cannot be excluded. Where PharmCAT and the "
+            "table above disagree, the PharmCAT call uses more positions but assumes nothing about missing ones.</p>")
+        rows = []
+        for r in pharmcat["calls"]:
+            ph = r.get("Phenotype", "")
+            kind = "t-grn" if re.match(r"^(Normal|normal)", ph) else ("" if not ph or "no call" in r.get("Source Diplotype", "") else "t-amb")
+            miss = r.get("Missing positions", "")
+            rows.append([f"<b>{esc(r.get('Gene', ''))}</b>", esc(r.get("Source Diplotype", "")),
+                         tag(ph, kind) if ph else "", esc(r.get("Activity Score", "")),
+                         f"<span class='small'>{esc(miss)}</span>" if miss else "none"])
+            R.rows.append(("pgx_pharmcat", None, (r.get("Gene", ""), r.get("Source Diplotype", ""), ph)))
+        R.table(["Gene", "Diplotype (PharmCAT)", "Phenotype", "Activity score", "Missing positions"], rows)
     if clinvar_drug:
         shown = sorted([v for v in clinvar_drug if (v.stars or 0) >= 1], key=lambda v: (-(v.stars or 0), v.gene))
         R.h(f"<h3>ClinVar drug-response variants</h3><p class='small'>{len(shown)} with review status &ge; 1 star shown "
@@ -1414,6 +1534,15 @@ def build(args):
     R.h("<li>Rules: ACMG SF v3.3 gene list and reporting rules (Genet Med 2025;27:101454); automated ACMG/AMP 2015 evidence "
         "subset (Richards et al. 2015; PVS1 after Abou Tayoun et al. 2018, simplified); CPIC allele-function and "
         "phenotype assignments for single-nucleotide alleles.</li>")
+    n_am = sum(1 for v in variants if v.am is not None)
+    n_sai = sum(1 for v in variants if v.sai is not None)
+    R.h("<li>In-silico predictors (one calibrated tool per mechanism, ClinGen SVI): missense PP3/BP4 from AlphaMissense "
+        "(Cheng et al. 2023) at the calibrated strengths of Bergquist et al. 2025 (PP3 Supporting &ge; 0.792, Moderate "
+        "&ge; 0.906, Strong &ge; 0.990; BP4 Supporting &le; 0.169, Moderate &le; 0.099); splicing PP3 (max delta &ge; 0.2) "
+        "and BP4 (&le; 0.1) at Supporting strength from SpliceAI outside the canonical &plusmn;1,2 positions (Walker et al. "
+        "2023). The two PP3s are not summed, PP3 is not combined with PVS1, and missense BP4 needs SpliceAI &le; 0.1. "
+        f"Scores present for this sample: AlphaMissense {n_am}, SpliceAI {n_sai} variants"
+        + ("" if n_am and n_sai else " (a missing predictor gives no PP3/BP4)") + ".</li>")
     R.h("<li><b>Not detected by this pipeline:</b> copy-number variants and exon deletions/duplications, structural "
         "variants, repeat expansions (e.g. FMR1, HTT, C9orf72), mitochondrial DNA variants, deep intronic and most "
         "regulatory variants, low-level mosaicism, methylation/imprinting defects, variants in segmental duplications "
@@ -1430,19 +1559,20 @@ def build(args):
 def write_tsv(R, path, sample):
     with open(path, "w") as f:
         f.write("sample\tcategory\tgene\tchrom\tpos\tref\talt\tgenotype\tdepth\talt_fraction\thgvs_c\thgvs_p\teffect\t"
-                "gnomad_af\tgnomad_grpmax_af\tgnomad_faf95\tgnomad_nhomalt\tclinvar\tclinvar_review\tclinvar_condition\t"
-                "qc_flags\tconfidence\tnote\n")
+                "gnomad_af\tgnomad_grpmax_af\tgnomad_faf95\tgnomad_nhomalt\talphamissense\tspliceai\tclinvar\t"
+                "clinvar_review\tclinvar_condition\tqc_flags\tconfidence\tnote\n")
         for cat, v, note in R.rows:
             if v is None:  # gene-level result: (gene, genotype, phenotype)
                 gene, genotype, pheno = note
-                f.write("\t".join([sample, cat, gene, "", "", "", "", genotype] + [""] * 14 + [pheno]) + "\n")
+                f.write("\t".join([sample, cat, gene, "", "", "", "", genotype] + [""] * 16 + [pheno]) + "\n")
                 continue
             lc = low_confidence(v)
             f.write("\t".join(str(x) for x in (
                 sample, cat, v.gene, v.chrom, v.pos, v.ref, v.alt, v.gt, v.dp if v.dp is not None else "",
                 f"{v.ab:.3f}" if v.ab is not None else "", v.hgvs_c, v.hgvs_p, v.effect, fmt_af(v.af),
                 fmt_af(v.grpmax_af) if v.grpmax_af is not None else "", fmt_af(v.faf) if v.faf is not None else "",
-                int(v.nhomalt) if v.nhomalt is not None else "", v.clnsig,
+                int(v.nhomalt) if v.nhomalt is not None else "",
+                f"{v.am:.3f}" if v.am is not None else "", f"{v.sai:.2f}" if v.sai is not None else "", v.clnsig,
                 v.revstat, v.clndn, ";".join(v.flags), "low: " + ", ".join(lc) if lc else "high",
                 note.replace("\t", " "))) + "\n")
 
@@ -1457,6 +1587,7 @@ def main(argv=None):
     ap.add_argument("--hpo-terms", help="patient HPO terms, comma/space separated (HP:0001250 ...)")
     ap.add_argument("--roh", help="bcftools roh output (RG lines)")
     ap.add_argument("--artefacts", help="recurrent-artefact VCF of the laboratory (data/build_artefact_list.sh)")
+    ap.add_argument("--pharmcat", help="PharmCAT calls-only TSV (pharmcat_pipeline -reporterCallsOnlyTsv)")
     ap.add_argument("--target-coverage", help="mosdepth thresholds BED over the exome targets")
     ap.add_argument("--gene-coverage", help="mosdepth thresholds BED over coding exons named by gene")
     ap.add_argument("--coverage-summary", help="mosdepth summary")

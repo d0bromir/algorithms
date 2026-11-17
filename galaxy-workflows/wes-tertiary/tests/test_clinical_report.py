@@ -107,6 +107,45 @@ def test_artefact_list():
     assert "2 alleles called in many" in html and "1 calls of this sample match it" in html
 
 
+def test_gencc_formats(tmp_path=None):
+    """The GenCC export keyed on sgc_id/version_number (current) and the legacy uuid one parse alike."""
+    new = rep.load_gencc(os.path.join(DATA, "gencc.tsv"))
+    d = tmp_path or tempfile.mkdtemp()
+    legacy = os.path.join(str(d), "gencc_legacy.tsv")
+    with open(os.path.join(DATA, "gencc.tsv")) as f, open(legacy, "w") as g:
+        for i, line in enumerate(f):
+            g.write(("uuid" if i == 0 else "x") + "\t" + line.split("\t", 2)[2])
+    assert new and dict(new) == dict(rep.load_gencc(legacy))
+    assert ("phenylketonuria", "Autosomal recessive", "Definitive", "Test submitter") in new["PAH"]
+
+
+def test_predictor_candidates():
+    rows, html = run_report()
+    p = next(r for r in rows if r["gene"] == "GENEP")
+    assert p["category"] == "candidate" and "PP3_Strong" in p["note"] and p["alphamissense"] == "0.995"
+    s = next(r for r in rows if r["gene"] == "GENES")
+    assert s["category"] == "candidate" and "PP3_Supporting" in s["note"] and s["spliceai"] == "0.71"
+    assert "AlphaMissense 0.995" in html and "Scores present for this sample: AlphaMissense 1, SpliceAI 2" in html
+
+
+def test_predictor_codes():
+    assert [rep.am_code(x) for x in (0.990, 0.989, 0.906, 0.905, 0.792, 0.791, 0.170, 0.169, 0.100, 0.099)] == [
+        "PP3_Strong", "PP3_Moderate", "PP3_Moderate", "PP3_Supporting", "PP3_Supporting", None, None,
+        "BP4_Supporting", "BP4_Supporting", "BP4_Moderate"], "Bergquist 2025 intervals"
+    assert rep.spliceai_max("A|G1|0.1|0.3|0|0|1|2|3|4,T|G1|0.9|0|0|0|1|1|1|1,A|G2|0.05|0|0|0.4|1|1|1|1", "A") == (0.4, "G2")
+
+    def mis(am, sai, effect="missense_variant"):
+        v = rep.Variant()
+        v.anns = [["A", effect, "MODERATE", "G", "G", "transcript", "T", "protein_coding", "1/2", "c.1A>T", "p.X1Y"]]
+        v.am, v.sai = am, sai
+        return rep.predictor_codes(v, "G")
+    assert mis(0.95, 0.3) == ["PP3_Moderate"], "missense and splice PP3 are not summed"
+    assert mis(0.05, 0.5) == ["PP3_Supporting"], "a splice prediction overrides a benign missense score"
+    assert mis(0.05, 0.15) == [], "missense BP4 needs SpliceAI <= 0.1"
+    assert mis(0.05, None) == ["BP4_Moderate"]
+    assert mis(None, 0.9, "splice_donor_variant") == [], "canonical +/-1,2: PVS1 decision tree, not PP3"
+
+
 def test_candidate_evidence_codes():
     rows, _ = run_report()
     note = next(r["note"] for r in rows if r["gene"] == "GENEX")
@@ -118,8 +157,19 @@ def test_pharmacogenomics_vcf_only():
     pgx = {r["gene"]: (r["genotype"], r["note"]) for r in rows if r["category"] == "pgx"}
     assert pgx["CYP2C19"] == ("*2/*2", "Poor metabolizer")
     assert pgx["CYP2C9"][1].startswith("Normal metabolizer")
-    assert all(len(r) == 23 and None not in r.values() for r in rows)
+    assert all(len(r) == 25 and None not in r.values() for r in rows)
     assert "absence of a variant is assumed to be the reference allele" in html
+
+
+def test_pharmcat_calls():
+    rows, html = run_report(["--pharmcat", os.path.join(DATA, "pharmcat.tsv")])
+    pc = {r["gene"]: (r["genotype"], r["note"]) for r in rows if r["category"] == "pgx_pharmcat"}
+    assert pc["CYP2C19"] == ("*1/*2", "Intermediate Metabolizer"), "PharmCAT 3.4.0 on HG001 (GeT-RM: *1/*2)"
+    assert pc["CYP3A5"] == ("*3/*3", "Poor Metabolizer")
+    assert "<h3>PharmCAT 3.4.0</h3>" in html and "Missing positions" in html
+    assert all(len(r) == 25 for r in rows)
+    _, html = run_report()
+    assert "PharmCAT" not in html.split("<h2>6. Pharmacogenomics")[1].split("<h2>7.")[0]
 
 
 def test_hpo_ranking(tmp_path=None):

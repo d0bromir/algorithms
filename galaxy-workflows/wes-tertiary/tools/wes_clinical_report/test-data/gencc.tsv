@@ -1,11 +1,13 @@
-uuid	gene_curie	gene_symbol	disease_curie	disease_title	classification_title	moi_title	submitter_title
-x	HGNC:1	BRCA2	MONDO:1	hereditary breast ovarian cancer syndrome	Definitive	Autosomal dominant	Test submitter
-x	HGNC:1	PAH	MONDO:1	phenylketonuria	Definitive	Autosomal recessive	Test submitter
-x	HGNC:1	MUTYH	MONDO:1	MUTYH-associated polyposis	Definitive	Autosomal recessive	Test submitter
-x	HGNC:1	GENEX	MONDO:1	example dominant syndrome	Definitive	Autosomal dominant	Test submitter
-x	HGNC:1	TP53	MONDO:1	Li-Fraumeni syndrome	Definitive	Autosomal dominant	Test submitter
-x	HGNC:1	GENED	MONDO:1	example dominant disorder D	Definitive	Autosomal dominant	Test submitter
-x	HGNC:1	GENEM	MONDO:1	example dominant disorder M	Definitive	Autosomal dominant	Test submitter
-x	HGNC:1	GENEM	MONDO:1	example recessive disorder M	Definitive	Autosomal recessive	Test submitter
-x	HGNC:1	GENEF	MONDO:1	example dominant disorder F	Definitive	Autosomal dominant	Test submitter
-x	HGNC:1	GENER	MONDO:1	example recessive disorder R	Definitive	Autosomal recessive	Test submitter
+sgc_id	version_number	gene_curie	gene_symbol	disease_curie	disease_title	classification_title	moi_title	submitter_title
+SGC-900001	1	HGNC:1	BRCA2	MONDO:1	hereditary breast ovarian cancer syndrome	Definitive	Autosomal dominant	Test submitter
+SGC-900002	1	HGNC:1	PAH	MONDO:1	phenylketonuria	Definitive	Autosomal recessive	Test submitter
+SGC-900003	1	HGNC:1	MUTYH	MONDO:1	MUTYH-associated polyposis	Definitive	Autosomal recessive	Test submitter
+SGC-900004	1	HGNC:1	GENEX	MONDO:1	example dominant syndrome	Definitive	Autosomal dominant	Test submitter
+SGC-900005	1	HGNC:1	TP53	MONDO:1	Li-Fraumeni syndrome	Definitive	Autosomal dominant	Test submitter
+SGC-900006	1	HGNC:1	GENED	MONDO:1	example dominant disorder D	Definitive	Autosomal dominant	Test submitter
+SGC-900007	1	HGNC:1	GENEM	MONDO:1	example dominant disorder M	Definitive	Autosomal dominant	Test submitter
+SGC-900008	1	HGNC:1	GENEM	MONDO:1	example recessive disorder M	Definitive	Autosomal recessive	Test submitter
+SGC-900009	1	HGNC:1	GENEF	MONDO:1	example dominant disorder F	Definitive	Autosomal dominant	Test submitter
+SGC-900010	1	HGNC:1	GENER	MONDO:1	example recessive disorder R	Definitive	Autosomal recessive	Test submitter
+SGC-900011	1	HGNC:1	GENEP	MONDO:1	example dominant disorder P	Definitive	Autosomal dominant	Test submitter
+SGC-900012	1	HGNC:1	GENES	MONDO:1	example dominant disorder S	Definitive	Autosomal dominant	Test submitter

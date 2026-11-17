@@ -17,7 +17,7 @@ GROUPS = collections.OrderedDict([
     ("ClinVar P/LP (diagnostic, review, carrier, low penetrance)",
      ("diagnostic", "pathogenic_review", "carrier", "low_penetrance")),
     ("ACMG SF (reportable or review)", ("acmg_sf_reportable", "acmg_sf_review", "acmg_sf_not")),
-    ("Candidate rare LoF (not in ClinVar)", ("candidate", "candidate_inheritance_not_met")),
+    ("Candidates not in ClinVar (LoF, missense, splicing)", ("candidate", "candidate_inheritance_not_met")),
     ("ClinVar drug response", ("clinvar_drug_response",)),
     ("ClinVar risk factor / association", ("clinvar_association",)),
     ("Fixed risk alleles (F5, F2, HFE)", ("risk_allele",)),
