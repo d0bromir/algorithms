@@ -1,6 +1,6 @@
 class: GalaxyWorkflow
 label: WES tertiary analysis from VCF (v2)
-release: "0.3"
+release: "0.4"
 license: MIT
 tags:
   - WES
@@ -17,7 +17,8 @@ doc: |
      canonical splice sites are retained, and that pass the quality expression (bcftools filter).
   3. Add ClinVar clinical significance (CLNSIG, CLNREVSTAT, CLNDN, CLNSIGCONF, ALLELEID) and the
      gnomAD v4.1 population frequencies (INFO/gnomAD_AF, grpmax AF, filtering AF FAF95, homozygote count, gnomAD
-     filter and exome/genome discordance) with bcftools annotate.
+     filter and exome/genome discordance) and the AlphaMissense missense score (INFO/AM_score) with bcftools
+     annotate; score the rare variants with SpliceAI (INFO/SpliceAI).
   4. Predict functional consequences (gene, effect, impact, HGVS c./p., LOF/NMD) with SnpEff.
   5. Prioritise candidates with a SnpSift expression. The default keeps ClinVar (likely) pathogenic
      variants at any frequency, plus rare (gnomAD AF and grpmax FAF95 < 1% or absent) HIGH/MODERATE impact variants.
@@ -27,7 +28,7 @@ doc: |
   8. Clinical interpretation report (HTML) and findings table: diagnostic ClinVar pathogenic/likely pathogenic
      findings checked against the gene's mode of inheritance (GenCC), candidate loss-of-function variants with
      automated ACMG/AMP evidence codes and optional HPO phenotype ranking, ACMG SF v3.3 secondary findings,
-     carrier status, pharmacogenomics (CPIC genes), risk alleles, runs of homozygosity, coverage of clinically
+     carrier status, pharmacogenomics (CPIC genes, and PharmCAT 3.4.0 diplotypes with its own HTML report), risk alleles, runs of homozygosity, coverage of clinically
      relevant genes and the limits of the analysis. The optional inputs (GenCC, gnomAD constraint, HPO, BAM,
      coverage) refine the report; the FASTQ workflow connects all of them.
 
@@ -146,6 +147,13 @@ inputs:
       pipeline) but rare or absent in gnomAD, built with data/build_artefact_list.sh. The report marks matching
       calls low confidence; without it, recurrent false calls (e.g. in GC-rich targets) are not recognised.
     position: {left: 0, top: 2040}
+  "Missense predictions (AlphaMissense BCF)":
+    type: data
+    format: [bcf, vcf_bgzip]
+    doc: >-
+      AlphaMissense hg38 predictions as an indexed BCF with INFO/AM_score, built with data/build_alphamissense.sh
+      (CC BY 4.0). Gives the missense PP3/BP4 evidence of the report at the ClinGen-calibrated strengths.
+    position: {left: 0, top: 2160}
 
 outputs:
   annotated_vcf:
@@ -168,6 +176,10 @@ outputs:
     outputSource: clinical_report/report
   clinical_findings:
     outputSource: clinical_report/findings
+  pharmcat_report:
+    outputSource: pharmacogenomics/report
+  pharmcat_calls:
+    outputSource: pharmacogenomics/calls
 
 steps:
   chrom_sizes:
@@ -328,13 +340,79 @@ steps:
     out:
       output_file: {hide: true, rename: "ClinVar+gnomAD-annotated variants"}
 
+  missense_annotation:
+    doc: Transfer the AlphaMissense pathogenicity score (INFO/AM_score), matched on CHROM/POS/REF/ALT.
+    tool_id: toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0
+    tool_version: 1.24+galaxy0
+    position: {left: 1340, top: 160}
+    in:
+      input_file: population_annotation/output_file
+      sec_annofile|annofile|annotations: "Missense predictions (AlphaMissense BCF)"
+    state:
+      sec_annofile:
+        columns: AM_score
+        annofile:
+          anno_fmt: vcf
+        mark_sites: ""
+        min_overlap: ""
+        set_id: ""
+      sec_annotate:
+        remove: ""
+      sec_restrict:
+        include: null
+        exclude: null
+        collapse: null
+        regions:
+          regions_src: __none__
+        samples: ""
+        invert_samples: false
+        invert_samples_file: false
+      output_type: v
+    out:
+      output_file: {hide: true, rename: "AlphaMissense-annotated variants"}
+
+  splice_prediction:
+    doc: >-
+      SpliceAI delta scores (INFO/SpliceAI) for the rare variants (gnomAD AF and FAF95 < 1 % or absent); local tool
+      tools/spliceai_score, install it on the Galaxy server (see README).
+    tool_id: spliceai_score
+    tool_version: 1.3.1+galaxy0
+    position: {left: 1340, top: 320}
+    in:
+      input: missense_annotation/output_file
+      reference: "Reference genome (FASTA)"
+    state:
+      annotation: grch38
+      distance: 50
+      mask: "0"
+      processes: 32
+    out:
+      output: {hide: true, rename: "SpliceAI-annotated variants"}
+
+  pharmacogenomics:
+    doc: >-
+      PharmCAT 3.4.0 star-allele diplotypes, phenotypes and CPIC/DPWG/FDA recommendations from the caller's VCF
+      (local tool tools/pharmcat_pgx). Absent positions are not assumed to be reference.
+    tool_id: pharmcat_pgx
+    tool_version: 3.4.0+galaxy0
+    position: {left: 2120, top: 480}
+    in:
+      input: "Variant calls (VCF)"
+    state:
+      absent_to_ref: false
+      sources: null
+    out:
+      report: {rename: "PharmCAT report"}
+      report_json: {hide: true}
+      calls: {rename: "PharmCAT calls"}
+
   functional_annotation:
     doc: Predict variant effects (gene, consequence, impact, HGVS, LOF/NMD) with SnpEff.
     tool_id: toolshed.g2.bx.psu.edu/repos/iuc/snpeff/snpEff/5.4+galaxy0
     tool_version: 5.4+galaxy0
     position: {left: 1600, top: 0}
     in:
-      input: population_annotation/output_file
+      input: splice_prediction/output
       snpDb|snpeff_db: "SnpEff database"
     state:
       inputFormat: vcf
@@ -389,7 +467,7 @@ steps:
       extract: >-
         CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD
         ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P
-        LOF NMD gnomAD_AF gnomAD_grpmax_AF gnomAD_FAF95 gnomAD_nhomalt CLNSIG CLNREVSTAT CLNDN
+        LOF NMD gnomAD_AF gnomAD_grpmax_AF gnomAD_FAF95 gnomAD_nhomalt AM_score SpliceAI CLNSIG CLNREVSTAT CLNDN
       one_effect_per_line: false
       separator: ","
       empty_text: "."
@@ -407,7 +485,7 @@ steps:
       extract: >-
         CHROM POS ID REF ALT QUAL FILTER GEN[0].GT GEN[0].DP GEN[0].AD
         ANN[0].GENE ANN[0].FEATUREID ANN[0].EFFECT ANN[0].IMPACT ANN[0].HGVS_C ANN[0].HGVS_P
-        LOF NMD gnomAD_AF gnomAD_grpmax_AF gnomAD_FAF95 gnomAD_nhomalt CLNSIG CLNREVSTAT CLNDN
+        LOF NMD gnomAD_AF gnomAD_grpmax_AF gnomAD_FAF95 gnomAD_nhomalt AM_score SpliceAI CLNSIG CLNREVSTAT CLNDN
       one_effect_per_line: false
       separator: ","
       empty_text: "."
@@ -473,12 +551,13 @@ steps:
       Human-readable clinical interpretation report and findings table (local tool tools/wes_clinical_report;
       install it on the Galaxy server, see README).
     tool_id: wes_clinical_report
-    tool_version: 0.3.0+galaxy0
+    tool_version: 0.4.0+galaxy0
     position: {left: 2380, top: 300}
     in:
       vcf: functional_annotation/snpeff_output
       reference: "Reference genome (FASTA)"
       roh: runs_of_homozygosity/output_file
+      pharmcat: pharmacogenomics/calls
       artefacts: "Recurrent artefacts (VCF)"
       gencc: "Gene-disease validity (GenCC TSV)"
       constraint: "Gene constraint (gnomAD TSV)"

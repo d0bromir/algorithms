@@ -1,0 +1,80 @@
+<tool id="pharmcat_pgx" name="PharmCAT pharmacogenomics" version="3.4.0+galaxy0" profile="23.0">
+    <description>star-allele diplotypes, phenotypes and CPIC/DPWG/FDA recommendations from a germline VCF</description>
+    <requirements>
+        <requirement type="package" version="3.4.0">pharmcat3</requirement>
+    </requirements>
+    <version_command>pharmcat_pipeline --version</version_command>
+    <command detect_errors="exit_code"><![CDATA[
+## copied, not linked: pharmcat_pipeline resolves links and recognises a VCF by its file extension
+#if $input.ext == "vcf_bgzip":
+    cp '$input' sample.vcf.bgz &&
+    #set $vcf = "sample.vcf.bgz"
+#else:
+    cp '$input' sample.vcf &&
+    #set $vcf = "sample.vcf"
+#end if
+## PharmCAT downloads its reference into its environment on first use; serialise that between concurrent jobs
+bindir=\$(dirname "\$(command -v pharmcat_pipeline)") &&
+flock "\$bindir/.reference.lock" python -c "import sys, pathlib; from pcat.utilities import download_reference_fasta_and_index as d; p = pathlib.Path(sys.argv[1]); (p / 'reference.fna.bgz.gzi').exists() or d(p)" "\$bindir" &&
+pharmcat_pipeline '$vcf' -o out
+    $absent_to_ref
+    #if $sources:
+        -rs '$sources'
+    #end if
+    -reporterHtml -reporterJson -reporterCallsOnlyTsv
+    -cp \${GALAXY_SLOTS:-1} &&
+mv out/sample.report.html '$report' &&
+mv out/sample.report.json '$report_json' &&
+mv out/sample.report.tsv '$calls'
+    ]]></command>
+    <inputs>
+        <param name="input" type="data" format="vcf,vcf_bgzip" label="Germline variant calls (VCF, GRCh38)"
+               help="One sample, the caller's VCF or the workflow's normalised calls. Chromosomes may be named 1 or chr1."/>
+        <param name="absent_to_ref" type="boolean" truevalue="--absent-to-ref" falsevalue="" checked="false"
+               label="Assume pharmacogenomic positions absent from the VCF are reference (0/0)"
+               help="Only for a whole-genome or gVCF-like call set. In an exome VCF an absent position is often simply not covered (off-target), and this would turn missing data into a reference call."/>
+        <param name="sources" type="select" multiple="true" optional="true" display="checkboxes" label="Guideline sources"
+               help="Default: all (CPIC, DPWG, FDA).">
+            <option value="CPIC">CPIC</option>
+            <option value="DPWG">DPWG</option>
+            <option value="FDA">FDA labels</option>
+        </param>
+    </inputs>
+    <outputs>
+        <data name="report" format="html" label="${tool.name} on ${on_string}: report"/>
+        <data name="report_json" format="json" label="${tool.name} on ${on_string}: report (JSON)"/>
+        <data name="calls" format="tabular" label="${tool.name} on ${on_string}: calls"/>
+    </outputs>
+    <tests>
+        <test expect_num_outputs="3">
+            <param name="input" value="pgx_in.vcf" ftype="vcf"/>
+            <output name="calls" ftype="tabular">
+                <assert_contents>
+                    <has_text text="CYP2C19"/>
+                </assert_contents>
+            </output>
+        </test>
+    </tests>
+    <help><![CDATA[
+**What it does**
+
+Runs PharmCAT 3.4.0 (ClinPGx; Sangkuhl et al. 2020, Li et al. 2025): the VCF preprocessor normalises the calls at
+PharmCAT's pharmacogenomic positions, the named-allele matcher calls star-allele diplotypes for the genes callable
+from a VCF (ABCG2, CACNA1S, CFTR, CYP2B6, CYP2C19, CYP2C9, CYP3A4, CYP3A5, CYP4F2, DPYD, F2, F5, G6PD, IFNL3, NAT2,
+NUDT15, RYR1, SLCO1B1, TPMT, UGT1A1, VKORC1), the phenotyper assigns phenotypes and the reporter lists the CPIC,
+DPWG and FDA-label recommendations.
+
+Outputs: the PharmCAT HTML report, its JSON, and the calls-only TSV (gene, diplotype, phenotype, activity score,
+missing positions), which the exome clinical report shows in its pharmacogenomics section.
+
+**Exomes**: positions outside the capture are absent from the VCF and are reported by PharmCAT as missing; a call
+made with missing positions can hide an allele defined there (e.g. CYP2C19 \*17, UGT1A1 \*28/\*80 promoter). CYP2D6,
+HLA-A/B and MT-RNR1 need outside calls and are not made here. On the first run PharmCAT downloads its GRCh38
+reference (about 0.9 GB) into its conda environment.
+
+PharmCAT is MPL-2.0; its guideline data come from CPIC, DPWG and the FDA via ClinPGx.
+    ]]></help>
+    <citations>
+        <citation type="doi">10.1002/cpt.1568</citation>
+    </citations>
+</tool>

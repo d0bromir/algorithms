@@ -25,10 +25,12 @@ flowchart LR
     vcf[VCF] --> norm[bcftools norm<br/>split multiallelics, atomize complex alleles,<br/>left-align, REF check]
     norm --> filt[bcftools filter<br/>padded exome targets + quality]
     filt --> clin[bcftools annotate<br/>ClinVar] --> gnomad[bcftools annotate<br/>gnomAD v4.1 AF, grpmax, FAF95,<br/>homozygotes as gnomAD_*]
-    gnomad --> eff[SnpEff<br/>consequence, HGVS, LOF/NMD]
+    gnomad --> am[bcftools annotate<br/>AlphaMissense AM_score] --> sai[SpliceAI<br/>rare variants]
+    sai --> eff[SnpEff<br/>consequence, HGVS, LOF/NMD]
     eff --> prio[SnpSift filter<br/>prioritisation] --> ctab[candidate table]
     eff --> atab[annotated table] & bstats[bcftools stats] & roh[bcftools roh]
-    eff & roh --> rep[clinical report<br/>HTML + findings TSV]
+    vcf --> pcat[PharmCAT<br/>diplotypes, CPIC/DPWG report]
+    eff & roh & pcat --> rep[clinical report<br/>HTML + findings TSV]
   end
   fb --> vcf
   md & mos & cds -.-> rep
@@ -48,20 +50,26 @@ flowchart LR
    ```
    If `python3 -m venv` reports that `ensurepip` is not available, install `python3-venv` (or `python3-full`)
    with `apt` first. The API key belongs to a Galaxy admin user (*User → Preferences → Manage API Key*).
-2. **Report tool** (not in the Tool Shed): copy [`tools/wes_clinical_report`](tools/wes_clinical_report) to the
-   server, list it in a local tool config, and let Galaxy show its HTML unsanitised:
+2. **Local tools** (not in the Tool Shed): copy [`tools/wes_clinical_report`](tools/wes_clinical_report),
+   [`tools/spliceai_score`](tools/spliceai_score) and [`tools/pharmcat_pgx`](tools/pharmcat_pgx) to the server,
+   list them in a local tool config, and let Galaxy show the report HTML unsanitised:
    ```xml
    <!-- /etc/galaxy/local_tool_conf.xml -->
    <toolbox tool_path="/srv/galaxy/local_tools">
        <section id="wes_analysis_local" name="WES analysis">
            <tool file="wes_clinical_report/wes_clinical_report.xml"/>
+           <tool file="spliceai_score/spliceai_score.xml"/>
+           <tool file="pharmcat_pgx/pharmcat_pgx.xml"/>
        </section>
    </toolbox>
    ```
    Add that file to `tool_config_file` in `galaxy.yml`, set `sanitize_allowlist_file` to a file containing the
-   line `wes_clinical_report` (or use *Admin → Manage Allowlist*), restart Galaxy, and install the tool's
-   dependencies (Python 3.12, samtools 1.22) from *Admin → Manage Dependencies*. Without the allowlist entry the
-   report still opens, but without its styling.
+   line `wes_clinical_report` (or use *Admin → Manage Allowlist*), restart Galaxy, and install the tools'
+   dependencies from *Admin → Manage Dependencies*: Python 3.12 and samtools 1.22 (report), SpliceAI 1.3.1 with
+   setuptools 80.9.0 and bcftools 1.24 in one environment (TensorFlow 2.19 CPU, about 2 GB; setuptools < 81 is
+   needed because SpliceAI imports `pkg_resources`), PharmCAT 3.4.0 (`pharmcat3`; on its first run it downloads its
+   GRCh38 reference, 0.9 GB, into its environment). Without the allowlist entry the report still opens, but
+   without its styling; the same applies to the PharmCAT report (`pharmcat_pgx`).
 3. **Workflows**: *Workflows → Import*, then upload `wes-tertiary-from-vcf.ga` and `wes-tertiary-from-fastq.ga`
    (or paste the raw GitHub URL of each file).
 
@@ -109,11 +117,12 @@ and VCFs. A naming mismatch does not raise an error. ClinVar/gnomAD annotations 
 | **SnpEff database** | Run the **SnpEff download** tool once, e.g. an Ensembl database such as `GRCh38.115` or a RefSeq/MANE one such as `GRCh38.mane.1.2.refseq` | The **SnpEff databases** tool lists the exact names available for SnpEff 5.4. MANE Select databases give clinically conventional NM_ HGVS. SnpEff itself tolerates `chr1` vs `1`. The default Java heap is 8 GB (`GALAXY_MEMORY_MB`). |
 | **ClinVar (VCF)** | `clinvar.vcf.gz` from https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/ | ClinVar uses `1, 2, …, MT`. For a `chr`-named reference, run **bcftools annotate** on it once with *Rename chromosomes* = [`data/ncbi_to_ucsc_chromosomes.tsv`](data/ncbi_to_ucsc_chromosomes.tsv) and output type *compressed BCF*. |
 | **Coding regions (BED)** (v1) | Coding exons of one transcript per gene, gene symbol in column 4 (recipe below) | Per-gene coverage in the report: which clinically relevant genes have gaps. |
-| **Gene-disease validity (GenCC TSV)** (optional) | [GenCC submissions export](https://search.thegencc.org/download) (TSV, CC0) | Diseases and mode of inheritance per gene; decides diagnostic vs carrier vs review. |
+| **Gene-disease validity (GenCC TSV)** (optional) | [GenCC submissions export](https://search.thegencc.org/download), TSV in the current format (`https://search.thegencc.org/download/action/submissions-export-tsv?format=new`, keyed on `sgc_id`; CC0). The legacy `uuid` format, retired after 30 Sep 2026, is read too | Diseases and mode of inheritance per gene; decides diagnostic vs carrier vs review. |
 | **Gene constraint (gnomAD TSV)** (optional) | `gnomad.v4.1.constraint_metrics.tsv` from the gnomAD downloads page | LOEUF/pLI for loss-of-function intolerance (PVS1 applicability). |
 | **HPO gene annotations** (optional) | `phenotype_to_genes.txt` from the latest [HPO release](https://github.com/obophenotype/human-phenotype-ontology/releases) | With *Patient phenotype (HPO terms)*, ranks candidates by phenotype match. |
 | **Recurrent artefacts (VCF)** (optional) | The laboratory's own list, built with [`data/build_artefact_list.sh`](data/build_artefact_list.sh) from earlier samples (below) | Alleles called in many of the laboratory's samples but rare or absent in gnomAD: systematic errors of the assay. The report marks matching calls low confidence. |
 | **Population allele frequencies (VCF)** | gnomAD v4.1 joint (exome + genome) frequencies reduced to the padded targets, as an indexed **BCF** built with [`data/build_gnomad_extract.sh`](data/build_gnomad_extract.sh) (below) | Transferred fields: `gnomAD_AF`, `_AN`, `_nhomalt` (homozygotes), `_grpmax` / `_grpmax_AF` / `_grpmax_AN` (genetic ancestry group with the highest AF), `_FAF95` / `_FAF95_grp` (highest filtering allele frequency, the statistic of the ACMG BA1/BS1 rules), `_filter` (gnomAD PASS / EXOMES_FILTERED / GENOMES_FILTERED / BOTH_FILTERED) and `_discordance_p` (exome vs genome frequency test). The caller's own `INFO/AF` is untouched. A file without these fields (e.g. an AF-only one) stops the annotation step with "tag not defined". |
+| **Missense predictions (AlphaMissense BCF)** | AlphaMissense hg38 predictions as an indexed **BCF** with `INFO/AM_score`, built with [`data/build_alphamissense.sh`](data/build_alphamissense.sh) (below) | Missense PP3/BP4 at the ClinGen-calibrated strengths. CC BY 4.0. |
 
 The gnomAD file is built once with [`data/build_gnomad_extract.sh`](data/build_gnomad_extract.sh) on any Linux
 machine with `bcftools` (≥ 1.17) and `bedtools`. It reads only the indexed blocks of the public gnomAD v4.1 joint
@@ -131,6 +140,16 @@ parallel readers (about 116 MB/s from the bucket) and produced a BCF of 1.6 GB w
 padding and the gnomAD genomes add many intronic and rare alleles). gnomAD data are CC0. The joint VCF carries no CADD or
 SpliceAI scores, so the extract has no non-commercial terms.
 Upload the resulting `.bcf` with datatype `bcf`.
+
+The AlphaMissense file is built once with [`data/build_alphamissense.sh`](data/build_alphamissense.sh), which
+streams the public 643 MB table (Zenodo record 10813168, CC BY 4.0) into a BCF with Ensembl chromosome names:
+```bash
+build_alphamissense.sh GRCh38.fa alphamissense.hg38.bcf
+```
+It took 3.5 min and 2.1 GB of memory and produced 71.7 M alleles in 466 MB. Upload it with datatype `bcf`.
+SpliceAI needs no data file: its models and GENCODE annotation come with the tool. Its code (PolyForm Strict) and
+models (CC BY-NC 4.0) are for non-commercial use; Illumina's precomputed scores need a BaseSpace account, so the
+workflow scores the rare variants itself.
 
 Recipe for the coding-region BED (Ensembl canonical transcripts; use the Ensembl release of the SnpEff database).
 For a `chr`-named reference, prefix column 1 with `chr`:
@@ -206,10 +225,10 @@ laboratory.
 |---|---|
 | Sample and data quality | Ts/Tv, het/hom, het allele-fraction distribution (contamination hint), genetic sex from chrX heterozygosity and chrY coverage, target coverage at 10/20/30× |
 | Diagnostic findings | ClinVar pathogenic/likely pathogenic (not conflicting) **and** a genotype that fits the gene's mode of inheritance in GenCC: one allele for dominant genes, hemizygous for X-linked genes in males, two alleles for recessive genes. Genes with both dominant and recessive disorders, X-linked heterozygous females and genes without a GenCC entry go to a *review* table |
-| Candidate variants | Not classified in ClinVar (or VUS/conflicting), gnomAD frequency below the cut-off (default 1 %), predicted loss-of-function in a GenCC gene, plus missense/in-frame variants in genes matching the HPO terms. Automated ACMG/AMP evidence codes (PVS1, PM2_supporting, BA1, BS1, PP2, PP4) for triage, inheritance fit (incl. possible compound heterozygotes) and ranking by phenotype match |
+| Candidate variants | Not classified in ClinVar (or VUS/conflicting), gnomAD frequency below the cut-off (default 1 %), in a GenCC gene: predicted loss-of-function; missense with AlphaMissense ≥ 0.906 (PP3_Moderate or stronger); predicted splice-altering outside the canonical sites (SpliceAI ≥ 0.5, or ≥ 0.2 in genes matching the HPO terms); missense/in-frame variants in genes matching the HPO terms. Automated ACMG/AMP evidence codes (PVS1, PM2_supporting, BA1, BS1, PP2, PP3, BP4, PP4) for triage, inheritance fit (incl. possible compound heterozygotes) and ranking by phenotype match |
 | ACMG SF v3.3 | 84 genes (v3.2 plus ABCD1, CYP27A1, PLN; Genet Med 2025;27:101454); biallelic only for MUTYH, ATP7B, BTD, GAA, RPE65, CYP27A1; ABCD1 hemizygous, homozygous or two heterozygous variants (not a single heterozygous variant in a female); HFE p.Cys282Tyr homozygotes only; TTN truncating only. Rare loss-of-function variants not in ClinVar are listed as *review* |
 | Carrier status | One P/LP allele in a recessive gene |
-| Pharmacogenomics | CYP2C19, CYP2C9, VKORC1, CYP4F2, SLCO1B1, DPYD, TPMT, NUDT15, CYP3A5, CYP2B6, UGT1A1 at fixed GRCh38 positions (checked against ClinVar and the reference). A missing variant counts as the reference allele only with ≥ 15 reads at the position (BAM in v1); otherwise the gene is *indeterminate*. CPIC phenotypes, ClinVar drug-response variants (≥ 1 star) |
+| Pharmacogenomics | CYP2C19, CYP2C9, VKORC1, CYP4F2, SLCO1B1, DPYD, TPMT, NUDT15, CYP3A5, CYP2B6, UGT1A1 at fixed GRCh38 positions (checked against ClinVar and the reference). A missing variant counts as the reference allele only with ≥ 15 reads at the position (BAM in v1); otherwise the gene is *indeterminate*. CPIC phenotypes, ClinVar drug-response variants (≥ 1 star). Next to it, the PharmCAT 3.4.0 diplotypes and phenotypes (all defining positions of each star allele, with the positions missing from the VCF listed); PharmCAT's own HTML report carries the CPIC, DPWG and FDA recommendations |
 | Risk alleles | Factor V Leiden, prothrombin G20210A, HFE p.Cys282Tyr/p.His63Asp, APOE (flagged: disclose only with counselling and consent), ClinVar risk/association variants (≥ 1 star) |
 | Runs of homozygosity | Total length of runs ≥ 1 Mb (consanguinity), runs concentrated on one chromosome (uniparental disomy), homozygous findings inside runs |
 | Coverage | Per-gene coding coverage at 10/20×; clinically relevant genes below 95 % at 20× are listed, because a negative result there is not reliable |
@@ -223,6 +242,18 @@ common in one ancestry group from passing as rare, and the overall AF still catc
 Ashkenazi or Finnish groups, which FAF excludes. A homozygous candidate in a recessive gene seen homozygous in two or
 more gnomAD individuals does not count as fitting the inheritance. Frequencies from sites that failed gnomAD's own
 filters, or whose exome and genome frequencies disagree (p < 10⁻⁴), are flagged.
+
+**In-silico predictors.** Following ClinGen SVI, one calibrated tool per mechanism, chosen in advance:
+
+| Evidence | Tool | Rule (strength) |
+|---|---|---|
+| Missense PP3 | AlphaMissense | ≥ 0.792 Supporting, ≥ 0.906 Moderate, ≥ 0.990 Strong (Bergquist et al., Genet Med 2025; the 0.972–0.989 "+3" interval is reported as Moderate) |
+| Missense BP4 | AlphaMissense | ≤ 0.169 Supporting, ≤ 0.099 Moderate, only if SpliceAI ≤ 0.1 or unscored |
+| Splicing PP3 / BP4 | SpliceAI 1.3.1, raw, max delta, ±50 bp | ≥ 0.2 PP3, ≤ 0.1 BP4, Supporting only, outside the canonical ±1,2 positions (those go to PVS1; Walker et al., AJHG 2023) |
+
+The missense and splicing PP3 are never summed (the stronger one is used), and PP3 is not combined with PVS1.
+AlphaMissense's own "likely pathogenic" cut-off (0.564) is inside the calibrated indeterminate range, so it is
+not used. Variant-specific VCEP rules (ClinGen CSpec) override these defaults and are not applied automatically.
 
 Each reported variant carries QC flags: low depth, allele imbalance, low QUAL, indel, homopolymer or tandem
 repeat context (from the reference), difficult/polymorphic region (HLA, KIR, mucins), segmental duplication / pseudogene genes, recurrent artefact of the laboratory. A call is marked **low confidence** when it has a het alt fraction < 0.25, QUAL < 30, an indel in a homopolymer or tandem repeat of ≥ 8, lies in a paralogous/hypervariable gene, or is on the laboratory's recurrent-artefact list; low-confidence findings stay listed, after the confident ones. In the GIAB validation below every false-positive finding was low confidence and no confirmed finding was.
@@ -411,7 +442,7 @@ extra findings in brackets:
 |---|---|---|---|
 | ClinVar pathogenic / likely pathogenic | 2/2 (0) | 1/1 (+2) | 4/4 (0) |
 | ACMG SF v3.3 (reportable or review) | 0/0 (0) | 0/0 (0) | 1/1 (0) |
-| Candidate rare loss-of-function | 1/1 (0) | 1/1 (0) | 3/3 (0) |
+| Candidate rare loss-of-function (report 0.2.0; with the predictors of 0.4.0: 6/6, 5/6, 5/5, below) | 1/1 (0) | 1/1 (0) | 3/3 (0) |
 | ClinVar drug response | 26/26 (0) | 24/24 (+1) | 20/20 (0) |
 | ClinVar risk factor / association | 27/27 (0) | 30/30 (0) | 28/28 (0) |
 | Pharmacogenomic genotypes (8 assessable genes + APOE; first run, with the BAM) | all equal | all equal | all equal |
@@ -481,6 +512,32 @@ Every listed call outside HLA was a false call (57 of 57 in the benchmark region
 calls there). The six real alleles on the list are in *HLA-C* and *HLA-B*, whose alleles gnomAD undercounts; the report
 already marks the HLA genes low confidence. No other finding changed category or confidence. With only two
 samples behind each list this is a lower bound: the list catches more as a laboratory's samples accumulate.
+
+**In-silico predictors and PharmCAT (release 0.4, report 0.4.0).** The VCF workflow was rerun on each sample's
+called VCF (with its leave-one-out artefact list) and on its truth VCF, now with AlphaMissense, SpliceAI and PharmCAT.
+
+| Sample | Candidates (inheritance-consistent), 0.3 → 0.4 | of them via AlphaMissense PP3 ≥ Moderate / SpliceAI PP3 | Candidates in IDT ∩ benchmark: matched / in truth report (extra) | Workflow, 16 jobs (called VCF) | SpliceAI step | PharmCAT step | Peak memory |
+|---|--:|--:|---|--:|--:|--:|---|
+| HG001 | 4 (1) → 15 (4) | 5 / 6 | 6/6 (0) | 20.1 min | 13.9 min (2,464 variants) | 14 s | SpliceAI about 0.7 GB per process × 32; PharmCAT 1.5 GB |
+| HG002 | 8 (3) → 15 (5) | 3 / 3 | 5/6 (0) | 20.1 min | 13.8 min | 28 s | as HG001 |
+| HG005 | 9 (3) → 15 (3) | 2 / 3 | 5/5 (0) | 16.6 min | 10.4 min | 27 s | as HG001 |
+
+The six runs shared the server, so the SpliceAI times are upper bounds; alone, 32 processes scored HG001's 2,464 rare
+variants in 6.2 min. The one candidate missed in HG002 is an 18-bp in-frame duplication in *NBEAL2* that FreeBayes
+did not call, not a report rule. All other findings groups were unchanged (ClinVar P/LP, SF, drug response, risk:
+as above). New candidates include rare missense variants at PP3_Strong (*DNMT3A* in HG002, AlphaMissense 0.993;
+*PKP1* and *PRKRA* in HG005) and splice-region or deep intronic variants with SpliceAI 0.5–0.99 (e.g. *TECPR2*, *GALC*,
+*CLCNKB*). Where AlphaMissense is benign but SpliceAI is high (*CR2*, 0.125 / 0.72) the splice PP3 is used. No
+reported variant met the BP4 conditions, because rare missense variants with AlphaMissense ≤ 0.169 are not
+candidates themselves.
+
+PharmCAT 3.4.0 gave the same diplotype from the sequenced calls as from the GIAB truth VCF for 19 of the 20 genes
+both call in the three samples; for HG001 CYP2C19 the exome call adds \*2/\*38 as an alternative to \*1/\*2 because
+of positions missing from the exome VCF. From the sequenced exome it also calls HG001's UGT1A1 \*28 (promoter
+TA repeat) and CYP4F2, which the truth VCF lacks. Against the GeT-RM consensus for HG001 it agrees for CYP2C19
+(\*1/\*2; the built-in genotyper said *indeterminate*), CYP2C9 (\*1/\*2 among PharmCAT's ambiguous set), SLCO1B1 (\*1/\*15
+among its set), CYP3A5 \*3/\*3 and DPYD (\*4; c.1627A>G is a normal-function variant), and calls UGT1A1 \*1/\*28 where
+GeT-RM has \*60/\*28. For HG005 it calls NUDT15 \*3/\*6, where the built-in table tests only \*3.
 
 ## 8. Scope and limitations
 

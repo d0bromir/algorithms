@@ -1,4 +1,4 @@
-<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.3.0+galaxy0" profile="23.0">
+<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.4.0+galaxy0" profile="23.0">
     <description>diagnostic, secondary, carrier, pharmacogenomic and risk findings in one human-readable report</description>
     <requirements>
         <requirement type="package" version="3.12">python</requirement>
@@ -35,6 +35,9 @@ python3 '$__tool_directory__/wes_clinical_report.py'
     #end if
     #if $roh:
         --roh '$roh'
+    #end if
+    #if $pharmcat:
+        --pharmcat '$pharmcat'
     #end if
     #if $artefacts:
         --artefacts '$artefacts'
@@ -82,6 +85,8 @@ python3 '$__tool_directory__/wes_clinical_report.py'
             </sanitizer>
         </param>
         <param name="roh" type="data" format="tabular" optional="true" label="Runs of homozygosity (bcftools roh)"/>
+        <param name="pharmcat" type="data" format="tabular,tsv,txt" optional="true" label="PharmCAT calls (TSV)"
+               help="Calls-only TSV of the PharmCAT pharmacogenomics tool; shown next to the built-in star-allele genotypes."/>
         <param name="artefacts" type="data" format="vcf,vcf_bgzip" optional="true" label="Recurrent artefacts of the laboratory (VCF)"
                help="Alleles called in many of the laboratory's own samples but rare or absent in gnomAD (build_artefact_list.sh in the workflow repository). Matching calls are marked low confidence, not removed."/>
         <param name="bam" type="data" format="bam" optional="true" label="Aligned reads (BAM)"
@@ -150,11 +155,14 @@ Sections:
 2. Diagnostic findings: ClinVar pathogenic/likely pathogenic variants whose genotype fits the gene's mode of
    inheritance (GenCC); a review table for genes with mixed or unknown inheritance and X-linked heterozygous females.
 3. Candidate variants not classified in ClinVar: rare predicted loss-of-function variants in established disease
-   genes (and rare missense variants in phenotype-matched genes), with automated ACMG/AMP evidence codes for triage.
+   genes, rare missense variants with AlphaMissense at PP3_Moderate or stronger or in phenotype-matched genes, and
+   rare variants predicted by SpliceAI to alter splicing, with automated ACMG/AMP evidence codes for triage
+   (PP3/BP4 at the ClinGen-calibrated strengths when the VCF carries INFO/AM_score and INFO/SpliceAI).
 4. ACMG SF v3.3 secondary findings (84 genes, gene-specific rules).
 5. Carrier status for recessive conditions.
 6. Pharmacogenomics: CPIC genes with single-nucleotide star alleles (CYP2C19, CYP2C9, VKORC1, CYP4F2, SLCO1B1,
-   DPYD, TPMT, NUDT15, CYP3A5, CYP2B6, UGT1A1) and ClinVar drug-response variants.
+   DPYD, TPMT, NUDT15, CYP3A5, CYP2B6, UGT1A1), PharmCAT diplotypes and phenotypes when given, and ClinVar
+   drug-response variants.
 7. Risk alleles (Factor V Leiden, prothrombin G20210A, HFE, APOE) and ClinVar risk/association variants.
 8. Runs of homozygosity (bcftools roh).
 9. Coverage of clinically relevant genes.

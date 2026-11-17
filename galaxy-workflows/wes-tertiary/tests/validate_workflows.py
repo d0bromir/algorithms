@@ -52,7 +52,8 @@ REPOSITORIES = [
 ]
 
 # Local tools shipped in this directory (tool id -> wrapper XML), installed on the server outside the Tool Shed.
-LOCAL_TOOLS = {"wes_clinical_report": os.path.join(HERE, "..", "tools", "wes_clinical_report", "wes_clinical_report.xml")}
+LOCAL_TOOLS = {t: os.path.join(HERE, "..", "tools", t, t + ".xml")
+               for t in ("wes_clinical_report", "spliceai_score", "pharmcat_pgx")}
 
 # Galaxy built-in tools: flat inputs (type, formats, multiple) and outputs.
 BUILTIN_TOOLS = {

@@ -1,0 +1,9 @@
+PharmCAT 3.4.0
+Gene	Source Diplotype	Phenotype	Activity Score	Haplotype 1	Haplotype 1 Function	Haplotype 1 Activity Value	Haplotype 2	Haplotype 2 Function	Haplotype 2 Activity Value	Outside Call	Match Score	Missing positions	Recommendation Lookup Diplotype	Recommendation Lookup Phenotype	Recommendation Lookup Activity Score
+CYP2C9	*1/*2 OR *1/*35 OR *1/*61 OR *1/*92	Intermediate Metabolizer / Intermediate Metabolizer / Intermediate Metabolizer / Indeterminate	1.5 / 1.0 / 1.5 /  							no	2 / 2 / 2 / 2	yes			
+SLCO1B1	*1/*15 OR *1/*45 OR *1/*47 OR *15/*45 OR *45/*45 OR *45/*47	Decreased Function / Decreased Function / Decreased Function / Poor Function / Poor Function / Poor Function								no	4 / 4 / 4 / 4 / 4 / 4	yes			
+UGT1A1	*1/*28 OR *1/*80+*28	Intermediate Metabolizer / Intermediate Metabolizer								no	2 / 2	yes			
+NAT2	no call									no		yes			
+DPYD	c.1601G>A (*4) AND c.1627A>G (*5)									no		yes	c.1601G>A (*4)/c.1627A>G (*5)	Normal Metabolizer	2.0
+CYP2C19	*1/*2	Intermediate Metabolizer		*1	Normal function		*2	No function		no	6	yes	*1/*2	Intermediate Metabolizer	
+CYP3A5	*3/*3	Poor Metabolizer		*3	No function		*3	No function		no	2	yes	*3/*3	Poor Metabolizer	
