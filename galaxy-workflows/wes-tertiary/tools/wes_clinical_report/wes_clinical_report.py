@@ -26,7 +26,7 @@ import re
 import subprocess
 import sys
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 # --------------------------------------------------------------------------------------------- rules
 # ACMG secondary findings v3.3 (ACMG policy statement, Genet Med 2025;27:101454): the 81 genes of v3.2 (Miller et al.,
@@ -210,7 +210,7 @@ class Variant:
     __slots__ = ("chrom", "pos", "ref", "alt", "qual", "filter", "info", "gt", "dp", "ad", "anns", "lof",
                  "zyg", "gene", "effect", "impact", "hgvs_c", "hgvs_p", "feature", "af", "clnsig", "revstat",
                  "clndn", "stars", "rs", "ab", "flags",
-                 "an", "nhomalt", "grpmax", "grpmax_af", "faf", "faf_grp", "gfilter", "gdisc")
+                 "an", "nhomalt", "grpmax", "grpmax_af", "faf", "faf_grp", "gfilter", "gdisc", "artefact")
 
     def key(self):
         return f"{self.chrom}:{self.pos}:{self.ref}>{self.alt}"
@@ -433,6 +433,28 @@ def load_constraint(path):
                    fnum(t[ix[misz]]) if misz else None)
             if g not in out or (rec[0] is not None and out[g][0] is None):
                 out[g] = rec
+    return out
+
+
+def load_artefacts(path):
+    """Recurrent-artefact list (data/build_artefact_list.sh): (chrom, pos, ref, alt) -> (samples with the allele,
+    samples examined). Alleles called in many of the laboratory's own samples but rare or absent in gnomAD."""
+    out = {}
+    if not path:
+        return out
+    with opener(path) as f:
+        for line in f:
+            if line.startswith("#"):
+                continue
+            t = line.rstrip("\n").split("\t")
+            if len(t) < 8:
+                continue
+            info = parse_info(t[7])
+            n, total = info.get("ARTEFACT_N"), info.get("ARTEFACT_TOTAL")
+            for alt in t[4].split(","):
+                if alt not in ("*", "."):
+                    out[(norm_chrom(t[0]), int(t[1]), t[3], alt)] = (
+                        int(n) if str(n).isdigit() else None, int(total) if str(total).isdigit() else None)
     return out
 
 
@@ -726,7 +748,8 @@ def var_cell(v):
 def low_confidence(v):
     """Reasons the call itself is unreliable (validated on GIAB HG001/HG002/HG005: every false-positive finding had
     one of these, no confirmed finding did): het alt fraction < 0.25, QUAL < 30, an indel in a homopolymer or
-    tandem repeat of >= 8, or a paralogous/hypervariable gene."""
+    tandem repeat of >= 8, or a paralogous/hypervariable gene); and an allele on the laboratory's recurrent-artefact
+    list."""
     why = []
     if v.zyg == "het" and v.ab is not None and v.ab < 0.25:
         why.append("alt fraction < 0.25")
@@ -740,6 +763,8 @@ def low_confidence(v):
                 why.append("indel in a repeat")
     if any(f.startswith(("segmental duplication", "difficult/polymorphic", "REF does not match")) for f in v.flags):
         why.append("paralogous / hypervariable region")
+    if any(f.startswith("recurrent artefact") for f in v.flags):
+        why.append("recurrent assay artefact")
     return why
 
 
@@ -875,8 +900,16 @@ def build(args):
     msum = load_mosdepth_summary(args.coverage_summary)
     qc = sample_qc(variants, contigs, msum, target_cov)
     sex = qc["sex"]
+    artefacts = load_artefacts(args.artefacts)
+    n_artefact = 0
     for v in variants:
         v.flags = variant_flags(v)
+        v.artefact = artefacts.get((v.chrom, v.pos, v.ref, v.alt))
+        if v.artefact:
+            n_artefact += 1
+            n, total = v.artefact
+            seen = f"{n}/{total}" if n and total else "several"
+            v.flags.append(f"recurrent artefact: called in {seen} of the laboratory's samples, rare or absent in gnomAD")
     by_pos = {(v.chrom, v.pos, v.alt): v for v in variants}
 
     v_chrom_of_gene = {v.gene: v.chrom for v in variants}
@@ -1371,6 +1404,13 @@ def build(args):
     R.h(f"<li>Gene-disease validity and inheritance: GenCC ({'loaded, ' + str(len(gencc)) + ' genes' if gencc else 'not provided'}); "
         f"gene constraint: gnomAD LOEUF ({'loaded, ' + str(len(constraint)) + ' genes' if constraint else 'not provided'}); "
         f"phenotype: HPO phenotype_to_genes ({'loaded' if args.hpo_genes else 'not provided'}).</li>")
+    if args.artefacts:
+        R.h(f"<li>Recurrent-artefact list: {len(artefacts)} alleles called in many of the laboratory's own samples but "
+            f"rare or absent in gnomAD (systematic errors of the assay); {n_artefact} calls of this sample match it and "
+            "are marked low confidence, not removed.</li>")
+    else:
+        R.h("<li>No recurrent-artefact list was provided: recurrent false calls of the assay (e.g. in GC-rich targets) "
+            "are not recognised.</li>")
     R.h("<li>Rules: ACMG SF v3.3 gene list and reporting rules (Genet Med 2025;27:101454); automated ACMG/AMP 2015 evidence "
         "subset (Richards et al. 2015; PVS1 after Abou Tayoun et al. 2018, simplified); CPIC allele-function and "
         "phenotype assignments for single-nucleotide alleles.</li>")
@@ -1416,6 +1456,7 @@ def main(argv=None):
     ap.add_argument("--hpo-genes", help="HPO phenotype_to_genes.txt")
     ap.add_argument("--hpo-terms", help="patient HPO terms, comma/space separated (HP:0001250 ...)")
     ap.add_argument("--roh", help="bcftools roh output (RG lines)")
+    ap.add_argument("--artefacts", help="recurrent-artefact VCF of the laboratory (data/build_artefact_list.sh)")
     ap.add_argument("--target-coverage", help="mosdepth thresholds BED over the exome targets")
     ap.add_argument("--gene-coverage", help="mosdepth thresholds BED over coding exons named by gene")
     ap.add_argument("--coverage-summary", help="mosdepth summary")

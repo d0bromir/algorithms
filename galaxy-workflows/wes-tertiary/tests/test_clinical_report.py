@@ -94,6 +94,19 @@ def test_mixed_inheritance_homozygous_lof():
         "homozygous LoF in a gene with a recessive disorder fits, even if the gene is LoF-tolerant for dominant disease"
 
 
+def test_artefact_list():
+    rows, html = run_report()
+    g = next(r for r in rows if r["gene"] == "GENEX")
+    assert g["confidence"] == "high" and "recurrent artefact" not in g["qc_flags"]
+    assert "No recurrent-artefact list was provided" in html
+    rows, html = run_report(["--artefacts", os.path.join(DATA, "artefacts.vcf")])
+    g = next(r for r in rows if r["gene"] == "GENEX")
+    assert "recurrent artefact: called in 12/40" in g["qc_flags"], "matched on CHROM (chr prefix ignored)/POS/REF/ALT"
+    assert g["confidence"].startswith("low") and "recurrent assay artefact" in g["confidence"]
+    assert categories(rows, "GENEX") == {"candidate"}, "flagged, not removed"
+    assert "2 alleles called in many" in html and "1 calls of this sample match it" in html
+
+
 def test_candidate_evidence_codes():
     rows, _ = run_report()
     note = next(r["note"] for r in rows if r["gene"] == "GENEX")

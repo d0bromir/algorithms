@@ -112,6 +112,7 @@ and VCFs. A naming mismatch does not raise an error. ClinVar/gnomAD annotations 
 | **Gene-disease validity (GenCC TSV)** (optional) | [GenCC submissions export](https://search.thegencc.org/download) (TSV, CC0) | Diseases and mode of inheritance per gene; decides diagnostic vs carrier vs review. |
 | **Gene constraint (gnomAD TSV)** (optional) | `gnomad.v4.1.constraint_metrics.tsv` from the gnomAD downloads page | LOEUF/pLI for loss-of-function intolerance (PVS1 applicability). |
 | **HPO gene annotations** (optional) | `phenotype_to_genes.txt` from the latest [HPO release](https://github.com/obophenotype/human-phenotype-ontology/releases) | With *Patient phenotype (HPO terms)*, ranks candidates by phenotype match. |
+| **Recurrent artefacts (VCF)** (optional) | The laboratory's own list, built with [`data/build_artefact_list.sh`](data/build_artefact_list.sh) from earlier samples (below) | Alleles called in many of the laboratory's samples but rare or absent in gnomAD: systematic errors of the assay. The report marks matching calls low confidence. |
 | **Population allele frequencies (VCF)** | gnomAD v4.1 joint (exome + genome) frequencies reduced to the padded targets, as an indexed **BCF** built with [`data/build_gnomad_extract.sh`](data/build_gnomad_extract.sh) (below) | Transferred fields: `gnomAD_AF`, `_AN`, `_nhomalt` (homozygotes), `_grpmax` / `_grpmax_AF` / `_grpmax_AN` (genetic ancestry group with the highest AF), `_FAF95` / `_FAF95_grp` (highest filtering allele frequency, the statistic of the ACMG BA1/BS1 rules), `_filter` (gnomAD PASS / EXOMES_FILTERED / GENOMES_FILTERED / BOTH_FILTERED) and `_discordance_p` (exome vs genome frequency test). The caller's own `INFO/AF` is untouched. A file without these fields (e.g. an AF-only one) stops the annotation step with "tag not defined". |
 
 The gnomAD file is built once with [`data/build_gnomad_extract.sh`](data/build_gnomad_extract.sh) on any Linux
@@ -145,7 +146,18 @@ left-align/trim indels against the same reference the reads are aligned to. The 
 annotations are transferred only on an exact `CHROM/POS/REF/ALT` match. If a source keeps multiallelic or padded
 records, common indels look absent and pass the rarity filter. In the HG001 test run, before normalising the
 population file, homozygous deletions with gnomAD AF 0.94 were reported as rare loss-of-function variants.
-Expect the v4.1 extraction to download most of the exome VCFs, because each record carries several KB of INFO.
+
+The recurrent-artefact list is built from the called VCFs of earlier samples sequenced with the same kit, sequencer
+and pipeline (the *Raw variant calls* of the FASTQ workflow), with the gnomAD extract above:
+```bash
+build_artefact_list.sh GRCh38.fa gnomad.v4.1.joint.targets.GRCh38.bcf artefacts.vcf.gz run*/calls.vcf.gz
+```
+Calls are normalised as in the workflow and must pass its default quality filter. An allele is listed when it is
+called in at least 2 samples and in at least 10 % of them (`MIN_SAMPLES`, `MIN_FRACTION`) while its gnomAD AF and
+FAF95 are below 0.1 % (`MAX_GNOMAD`) or absent: a real allele carried by one in ten unrelated people cannot be that
+rare in gnomAD. Use unrelated individuals only; relatives and a cohort from one founder population share real rare
+alleles. Rebuild the list as samples accumulate (three samples took 33 s and 51 MB) and upload it with datatype
+`vcf_bgzip`.
 
 ## 3. Running
 
@@ -213,7 +225,7 @@ more gnomAD individuals does not count as fitting the inheritance. Frequencies f
 filters, or whose exome and genome frequencies disagree (p < 10⁻⁴), are flagged.
 
 Each reported variant carries QC flags: low depth, allele imbalance, low QUAL, indel, homopolymer or tandem
-repeat context (from the reference), difficult/polymorphic region (HLA, KIR, mucins), segmental duplication / pseudogene genes. A call is marked **low confidence** when it has a het alt fraction < 0.25, QUAL < 30, an indel in a homopolymer or tandem repeat of ≥ 8, or lies in a paralogous/hypervariable gene; low-confidence findings stay listed, after the confident ones. In the GIAB validation below every false-positive finding was low confidence and no confirmed finding was.
+repeat context (from the reference), difficult/polymorphic region (HLA, KIR, mucins), segmental duplication / pseudogene genes, recurrent artefact of the laboratory. A call is marked **low confidence** when it has a het alt fraction < 0.25, QUAL < 30, an indel in a homopolymer or tandem repeat of ≥ 8, lies in a paralogous/hypervariable gene, or is on the laboratory's recurrent-artefact list; low-confidence findings stay listed, after the confident ones. In the GIAB validation below every false-positive finding was low confidence and no confirmed finding was.
 
 Intermediate datasets are hidden in the history. Use *show hidden* to inspect them.
 
@@ -449,10 +461,26 @@ and an *HLA-DRB1* allele (v4.1 AF 0.14 %, flagged discordant and difficult regio
 
 Seven genes agree, none disagree, three are reported as not assessable rather than guessed.
 
-**Known systematic artefact.** *PIGQ* c.1680delT is called homozygous in HG001 (both data sets) and HG005. It is
-in neither GIAB truth set nor gnomAD v4, and lies outside the GIAB benchmark next to a common homozygous SNV
-(16:582225 T>C). It is reported as a candidate with high confidence; a laboratory artefact list or the GIAB
-"difficult regions" stratification would remove it (not yet implemented).
+**Recurrent artefacts.** *PIGQ* c.1680delT (16:582232 CT>C) is called homozygous in all three samples at 11–22×
+in a GC-rich target (> 65 % GC). It is in neither GIAB truth set nor gnomAD v4.1 and lies outside the GIAB
+benchmark. Without an artefact list it was reported as a high-confidence candidate. The GIAB difficult-region BEDs
+do not help: only the broad "all difficult regions" union (625 Mb, 20 % of the genome) covers it, and the narrower
+low-mappability/segmental-duplication union also covers confirmed findings (*PLG* p.Lys38Glu, CYP2C19 and UGT2B7
+drug-response alleles), so neither can mark calls low confidence.
+
+The recurrent-artefact list was tested leave-one-out: for each sample, the list was built from the other two
+samples' calls (`MIN_SAMPLES=2`) and given to the VCF workflow with the sample's own calls.
+
+| Sample | List built from | Alleles on the list | Calls of the sample on the list | … inside IDT ∩ benchmark: false / real | Report findings changed | Clinical concordance | Build time, peak memory (3 samples) | Report step |
+|---|---|--:|--:|---|---|---|--:|--:|
+| HG001 | HG002, HG005 | 13,925 | 243 | 20 / 6 | *PIGQ* candidate → low confidence | unchanged, no finding missed | 33 s, 51 MB | 22 s |
+| HG002 | HG001, HG005 | 14,205 | 243 | 21 / 6 | *PIGQ* candidate → low confidence | unchanged, no finding missed | | 21 s |
+| HG005 | HG001, HG002 | 15,263 | 251 | 16 / 6 | *PIGQ* candidate → low confidence | unchanged, no finding missed | | 22 s |
+
+Every listed call outside HLA was a false call (57 of 57 in the benchmark regions, 4–5 % of each sample's false
+calls there). The six real alleles on the list are in *HLA-C* and *HLA-B*, whose alleles gnomAD undercounts; the report
+already marks the HLA genes low confidence. No other finding changed category or confidence. With only two
+samples behind each list this is a lower bound: the list catches more as a laboratory's samples accumulate.
 
 ## 8. Scope and limitations
 

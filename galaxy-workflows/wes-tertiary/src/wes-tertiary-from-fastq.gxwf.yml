@@ -1,6 +1,6 @@
 class: GalaxyWorkflow
 label: WES tertiary analysis from FASTQ (v1)
-release: "0.2"
+release: "0.3"
 license: MIT
 tags:
   - WES
@@ -114,6 +114,15 @@ inputs:
     optional: true
     doc: Comma-separated HPO term ids describing the patient (e.g. HP:0001250, HP:0001263); ranks candidates.
     position: {left: 0, top: 1820}
+  "Recurrent artefacts (VCF)":
+    type: data
+    format: [vcf, vcf_bgzip]
+    optional: true
+    doc: >-
+      Recurrent artefacts of the laboratory: alleles called in many of its own samples (same kit, sequencer and
+      pipeline) but rare or absent in gnomAD, built with data/build_artefact_list.sh. The report marks matching
+      calls low confidence; without it, recurrent false calls (e.g. in GC-rich targets) are not recognised.
+    position: {left: 0, top: 1960}
 
 outputs:
   multiqc_report:
@@ -421,6 +430,7 @@ steps:
       "Gene constraint (gnomAD TSV)": "Gene constraint (gnomAD TSV)"
       "HPO gene annotations (phenotype_to_genes.txt)": "HPO gene annotations (phenotype_to_genes.txt)"
       "Patient phenotype (HPO terms)": "Patient phenotype (HPO terms)"
+      "Recurrent artefacts (VCF)": "Recurrent artefacts (VCF)"
       "Aligned reads (BAM)": mark_duplicates/outFile
       "Per-target coverage (mosdepth thresholds)": target_coverage/output_thresholds_bed
       "Coverage summary (mosdepth)": target_coverage/output_summary

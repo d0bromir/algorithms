@@ -13,7 +13,7 @@
         "tertiary-analysis"
     ],
     "license": "MIT",
-    "release": "0.2",
+    "release": "0.3",
     "uuid": "e4cd5a16-74be-4629-a676-4542c043ea15",
     "comments": [],
     "steps": {
@@ -327,6 +327,28 @@
         },
         "14": {
             "id": 14,
+            "name": "Recurrent artefacts (VCF)",
+            "type": "data_input",
+            "label": "Recurrent artefacts (VCF)",
+            "annotation": "Recurrent artefacts of the laboratory: alleles called in many of its own samples (same kit, sequencer and pipeline) but rare or absent in gnomAD, built with data/build_artefact_list.sh. The report marks matching calls low confidence; without it, recurrent false calls (e.g. in GC-rich targets) are not recognised.",
+            "tool_state": "{\"name\": \"Recurrent artefacts (VCF)\", \"optional\": true, \"format\": [\"vcf\", \"vcf_bgzip\"]}",
+            "position": {
+                "top": 1960,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "Recurrent artefacts (VCF)",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "15": {
+            "id": 15,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/fastqc/fastqc/0.74+galaxy1",
             "type": "tool",
             "label": "fastqc_raw",
@@ -364,8 +386,8 @@
                 }
             }
         },
-        "15": {
-            "id": 15,
+        "16": {
+            "id": 16,
             "name": "__FLATTEN__",
             "type": "tool",
             "label": "flatten_fastqc",
@@ -380,7 +402,7 @@
             "input_connections": {
                 "input": [
                     {
-                        "id": 14,
+                        "id": 15,
                         "output_name": "text_file"
                     }
                 ]
@@ -396,8 +418,8 @@
                 }
             }
         },
-        "16": {
-            "id": 16,
+        "17": {
+            "id": 17,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/fastp/fastp/1.4.0+galaxy0",
             "type": "tool",
             "label": "trimming",
@@ -440,8 +462,8 @@
                 }
             }
         },
-        "17": {
-            "id": 17,
+        "18": {
+            "id": 18,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/bwa/bwa_mem/0.7.19+galaxy2",
             "type": "tool",
             "label": "mapping",
@@ -462,7 +484,7 @@
                 ],
                 "fastq_input|fastq_input1": [
                     {
-                        "id": 16,
+                        "id": 17,
                         "output_name": "output_paired_coll"
                     }
                 ]
@@ -478,8 +500,8 @@
                 }
             }
         },
-        "18": {
-            "id": 18,
+        "19": {
+            "id": 19,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/picard/picard_MarkDuplicates/3.1.1.0",
             "type": "tool",
             "label": "mark_duplicates",
@@ -494,7 +516,7 @@
             "input_connections": {
                 "inputFile": [
                     {
-                        "id": 17,
+                        "id": 18,
                         "output_name": "bam_output"
                     }
                 ]
@@ -522,8 +544,8 @@
                 }
             }
         },
-        "19": {
-            "id": 19,
+        "20": {
+            "id": 20,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/samtools_stats/samtools_stats/2.0.9",
             "type": "tool",
             "label": "alignment_stats",
@@ -538,7 +560,7 @@
             "input_connections": {
                 "input": [
                     {
-                        "id": 18,
+                        "id": 19,
                         "output_name": "outFile"
                     }
                 ]
@@ -554,8 +576,8 @@
                 }
             }
         },
-        "20": {
-            "id": 20,
+        "21": {
+            "id": 21,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/picard/picard_BedToIntervalList/3.1.1.0",
             "type": "tool",
             "label": "target_intervals",
@@ -592,8 +614,8 @@
                 }
             }
         },
-        "21": {
-            "id": 21,
+        "22": {
+            "id": 22,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/picard/picard_CollectHsMetrics/3.1.1",
             "type": "tool",
             "label": "hs_metrics",
@@ -608,19 +630,19 @@
             "input_connections": {
                 "inputFile": [
                     {
-                        "id": 18,
+                        "id": 19,
                         "output_name": "outFile"
                     }
                 ],
                 "baitFile": [
                     {
-                        "id": 20,
+                        "id": 21,
                         "output_name": "outFile"
                     }
                 ],
                 "targetFile": [
                     {
-                        "id": 20,
+                        "id": 21,
                         "output_name": "outFile"
                     }
                 ]
@@ -643,8 +665,8 @@
                 }
             }
         },
-        "22": {
-            "id": 22,
+        "23": {
+            "id": 23,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/mosdepth/mosdepth/0.3.14+galaxy0",
             "type": "tool",
             "label": "target_coverage",
@@ -659,7 +681,7 @@
             "input_connections": {
                 "input_alignment": [
                     {
-                        "id": 18,
+                        "id": 19,
                         "output_name": "outFile"
                     }
                 ],
@@ -714,8 +736,8 @@
                 }
             }
         },
-        "23": {
-            "id": 23,
+        "24": {
+            "id": 24,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/mosdepth/mosdepth/0.3.14+galaxy0",
             "type": "tool",
             "label": "coding_coverage",
@@ -730,7 +752,7 @@
             "input_connections": {
                 "input_alignment": [
                     {
-                        "id": 18,
+                        "id": 19,
                         "output_name": "outFile"
                     }
                 ],
@@ -779,8 +801,8 @@
                 }
             }
         },
-        "24": {
-            "id": 24,
+        "25": {
+            "id": 25,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/freebayes/freebayes/1.3.10+galaxy1",
             "type": "tool",
             "label": "variant_calling",
@@ -795,7 +817,7 @@
             "input_connections": {
                 "reference_source|batchmode|input_bams": [
                     {
-                        "id": 18,
+                        "id": 19,
                         "output_name": "outFile"
                     }
                 ],
@@ -824,8 +846,8 @@
                 }
             }
         },
-        "25": {
-            "id": 25,
+        "26": {
+            "id": 26,
             "type": "subworkflow",
             "label": "tertiary",
             "annotation": "Tertiary analysis of each sample's VCF (embedded workflow \"WES tertiary analysis from VCF (v2)\").",
@@ -837,7 +859,7 @@
             "input_connections": {
                 "Variant calls (VCF)": [
                     {
-                        "id": 24,
+                        "id": 25,
                         "output_name": "output_vcf",
                         "input_subworkflow_step_id": 0
                     }
@@ -926,30 +948,37 @@
                         "input_subworkflow_step_id": 12
                     }
                 ],
+                "Recurrent artefacts (VCF)": [
+                    {
+                        "id": 14,
+                        "output_name": "output",
+                        "input_subworkflow_step_id": 17
+                    }
+                ],
                 "Aligned reads (BAM)": [
                     {
-                        "id": 18,
+                        "id": 19,
                         "output_name": "outFile",
                         "input_subworkflow_step_id": 13
                     }
                 ],
                 "Per-target coverage (mosdepth thresholds)": [
                     {
-                        "id": 22,
+                        "id": 23,
                         "output_name": "output_thresholds_bed",
                         "input_subworkflow_step_id": 14
                     }
                 ],
                 "Coverage summary (mosdepth)": [
                     {
-                        "id": 22,
+                        "id": 23,
                         "output_name": "output_summary",
                         "input_subworkflow_step_id": 15
                     }
                 ],
                 "Coding-exon coverage (mosdepth thresholds)": [
                     {
-                        "id": 23,
+                        "id": 24,
                         "output_name": "output_thresholds_bed",
                         "input_subworkflow_step_id": 16
                     }
@@ -1009,7 +1038,7 @@
                     "tertiary-analysis"
                 ],
                 "license": "MIT",
-                "release": "0.2",
+                "release": "0.3",
                 "uuid": "78531b7b-9f58-49a0-8829-d8f09d35d038",
                 "comments": [],
                 "steps": {
@@ -1389,6 +1418,28 @@
                     },
                     "17": {
                         "id": 17,
+                        "name": "Recurrent artefacts (VCF)",
+                        "type": "data_input",
+                        "label": "Recurrent artefacts (VCF)",
+                        "annotation": "Recurrent artefacts of the laboratory: alleles called in many of its own samples (same kit, sequencer and pipeline) but rare or absent in gnomAD, built with data/build_artefact_list.sh. The report marks matching calls low confidence; without it, recurrent false calls (e.g. in GC-rich targets) are not recognised.",
+                        "tool_state": "{\"name\": \"Recurrent artefacts (VCF)\", \"optional\": true, \"format\": [\"vcf\", \"vcf_bgzip\"]}",
+                        "position": {
+                            "top": 2040,
+                            "left": 0
+                        },
+                        "input_connections": {},
+                        "inputs": [
+                            {
+                                "name": "Recurrent artefacts (VCF)",
+                                "description": ""
+                            }
+                        ],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {}
+                    },
+                    "18": {
+                        "id": 18,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/samtools_faidx/samtools_faidx/1.22+galaxy1",
                         "type": "tool",
                         "label": "chrom_sizes",
@@ -1419,8 +1470,8 @@
                             }
                         }
                     },
-                    "18": {
-                        "id": 18,
+                    "19": {
+                        "id": 19,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bedtools/bedtools_slopbed/2.31.1+galaxy1",
                         "type": "tool",
                         "label": "pad_targets",
@@ -1441,7 +1492,7 @@
                             ],
                             "genome_file_opts|genome": [
                                 {
-                                    "id": 17,
+                                    "id": 18,
                                     "output_name": "output"
                                 }
                             ],
@@ -1470,8 +1521,8 @@
                             }
                         }
                     },
-                    "19": {
-                        "id": 19,
+                    "20": {
+                        "id": 20,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_norm/bcftools_norm/1.24+galaxy0",
                         "type": "tool",
                         "label": "normalize",
@@ -1515,8 +1566,8 @@
                             }
                         }
                     },
-                    "20": {
-                        "id": 20,
+                    "21": {
+                        "id": 21,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_filter/bcftools_filter/1.24+galaxy0",
                         "type": "tool",
                         "label": "target_filter",
@@ -1531,13 +1582,13 @@
                         "input_connections": {
                             "input_file": [
                                 {
-                                    "id": 19,
+                                    "id": 20,
                                     "output_name": "output_file"
                                 }
                             ],
                             "sec_restrict|regions|regions_file": [
                                 {
-                                    "id": 18,
+                                    "id": 19,
                                     "output_name": "output"
                                 }
                             ],
@@ -1566,8 +1617,8 @@
                             }
                         }
                     },
-                    "21": {
-                        "id": 21,
+                    "22": {
+                        "id": 22,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
                         "type": "tool",
                         "label": "clinvar_annotation",
@@ -1582,7 +1633,7 @@
                         "input_connections": {
                             "input_file": [
                                 {
-                                    "id": 20,
+                                    "id": 21,
                                     "output_name": "output_file"
                                 }
                             ],
@@ -1611,8 +1662,8 @@
                             }
                         }
                     },
-                    "22": {
-                        "id": 22,
+                    "23": {
+                        "id": 23,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
                         "type": "tool",
                         "label": "population_annotation",
@@ -1627,7 +1678,7 @@
                         "input_connections": {
                             "input_file": [
                                 {
-                                    "id": 21,
+                                    "id": 22,
                                     "output_name": "output_file"
                                 }
                             ],
@@ -1656,8 +1707,8 @@
                             }
                         }
                     },
-                    "23": {
-                        "id": 23,
+                    "24": {
+                        "id": 24,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpeff/snpEff/5.4+galaxy0",
                         "type": "tool",
                         "label": "functional_annotation",
@@ -1672,7 +1723,7 @@
                         "input_connections": {
                             "input": [
                                 {
-                                    "id": 22,
+                                    "id": 23,
                                     "output_name": "output_file"
                                 }
                             ],
@@ -1730,8 +1781,8 @@
                             }
                         }
                     },
-                    "24": {
-                        "id": 24,
+                    "25": {
+                        "id": 25,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_filter/5.4.0c+galaxy1",
                         "type": "tool",
                         "label": "prioritize",
@@ -1746,7 +1797,7 @@
                         "input_connections": {
                             "input": [
                                 {
-                                    "id": 23,
+                                    "id": 24,
                                     "output_name": "snpeff_output"
                                 }
                             ],
@@ -1775,8 +1826,8 @@
                             }
                         }
                     },
-                    "25": {
-                        "id": 25,
+                    "26": {
+                        "id": 26,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1",
                         "type": "tool",
                         "label": "candidate_table",
@@ -1791,7 +1842,7 @@
                         "input_connections": {
                             "input": [
                                 {
-                                    "id": 24,
+                                    "id": 25,
                                     "output_name": "output"
                                 }
                             ]
@@ -1814,8 +1865,8 @@
                             }
                         }
                     },
-                    "26": {
-                        "id": 26,
+                    "27": {
+                        "id": 27,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1",
                         "type": "tool",
                         "label": "annotated_table",
@@ -1830,7 +1881,7 @@
                         "input_connections": {
                             "input": [
                                 {
-                                    "id": 23,
+                                    "id": 24,
                                     "output_name": "snpeff_output"
                                 }
                             ]
@@ -1853,8 +1904,8 @@
                             }
                         }
                     },
-                    "27": {
-                        "id": 27,
+                    "28": {
+                        "id": 28,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_stats/bcftools_stats/1.24+galaxy0",
                         "type": "tool",
                         "label": "variant_stats",
@@ -1869,7 +1920,7 @@
                         "input_connections": {
                             "input_file": [
                                 {
-                                    "id": 23,
+                                    "id": 24,
                                     "output_name": "snpeff_output"
                                 }
                             ]
@@ -1892,8 +1943,8 @@
                             }
                         }
                     },
-                    "28": {
-                        "id": 28,
+                    "29": {
+                        "id": 29,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_roh/bcftools_roh/1.24+galaxy1",
                         "type": "tool",
                         "label": "runs_of_homozygosity",
@@ -1908,7 +1959,7 @@
                         "input_connections": {
                             "input_file": [
                                 {
-                                    "id": 23,
+                                    "id": 24,
                                     "output_name": "snpeff_output"
                                 }
                             ]
@@ -1931,15 +1982,15 @@
                             }
                         }
                     },
-                    "29": {
-                        "id": 29,
+                    "30": {
+                        "id": 30,
                         "name": "wes_clinical_report",
                         "type": "tool",
                         "label": "clinical_report",
                         "annotation": "Human-readable clinical interpretation report and findings table (local tool tools/wes_clinical_report; install it on the Galaxy server, see README).",
-                        "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"constraint\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"coverage_summary\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gencc\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gene_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_genes\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_terms\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"max_af\": \"\\\"0.01\\\"\", \"max_candidates\": \"\\\"60\\\"\", \"min_ref_depth\": \"\\\"15\\\"\", \"reference\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"roh\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"sample_name\": \"\\\"\\\"\", \"target_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\"}",
+                        "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"artefacts\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"constraint\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"coverage_summary\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gencc\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gene_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_genes\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_terms\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"max_af\": \"\\\"0.01\\\"\", \"max_candidates\": \"\\\"60\\\"\", \"min_ref_depth\": \"\\\"15\\\"\", \"reference\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"roh\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"sample_name\": \"\\\"\\\"\", \"target_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\"}",
                         "tool_id": "wes_clinical_report",
-                        "tool_version": "0.2.0+galaxy0",
+                        "tool_version": "0.3.0+galaxy0",
                         "position": {
                             "top": 300,
                             "left": 2380
@@ -1947,7 +1998,7 @@
                         "input_connections": {
                             "vcf": [
                                 {
-                                    "id": 23,
+                                    "id": 24,
                                     "output_name": "snpeff_output"
                                 }
                             ],
@@ -1959,8 +2010,14 @@
                             ],
                             "roh": [
                                 {
-                                    "id": 28,
+                                    "id": 29,
                                     "output_name": "output_file"
+                                }
+                            ],
+                            "artefacts": [
+                                {
+                                    "id": 17,
+                                    "output_name": "output"
                                 }
                             ],
                             "gencc": [
@@ -2044,8 +2101,8 @@
                 }
             }
         },
-        "26": {
-            "id": 26,
+        "27": {
+            "id": 27,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/multiqc/multiqc/1.35+galaxy5",
             "type": "tool",
             "label": "multiqc",
@@ -2060,43 +2117,43 @@
             "input_connections": {
                 "results_0|software_cond|output_0|input": [
                     {
-                        "id": 15,
+                        "id": 16,
                         "output_name": "output"
                     }
                 ],
                 "results_1|software_cond|input": [
                     {
-                        "id": 16,
+                        "id": 17,
                         "output_name": "report_json"
                     }
                 ],
                 "results_2|software_cond|output_0|input": [
                     {
-                        "id": 18,
+                        "id": 19,
                         "output_name": "metrics_file"
                     }
                 ],
                 "results_2|software_cond|output_1|input": [
                     {
-                        "id": 21,
+                        "id": 22,
                         "output_name": "outFile"
                     }
                 ],
                 "results_3|software_cond|output_0|type|input": [
                     {
-                        "id": 19,
+                        "id": 20,
                         "output_name": "output"
                     }
                 ],
                 "results_4|software_cond|input": [
                     {
-                        "id": 25,
+                        "id": 26,
                         "output_name": "variant_stats"
                     }
                 ],
                 "results_5|software_cond|input": [
                     {
-                        "id": 25,
+                        "id": 26,
                         "output_name": "snpeff_csv_stats"
                     }
                 ]
