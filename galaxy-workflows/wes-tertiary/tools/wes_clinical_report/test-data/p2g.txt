@@ -1,0 +1,8 @@
+hpo_id	hpo_name	ncbi_gene_id	gene_symbol	disease_id
+HP:0001250	Seizure	2	GENEP	OMIM:100001
+HP:0001263	Global developmental delay	2	GENEP	OMIM:100001
+HP:0001250	Seizure	2	GENEP	OMIM:100002
+HP:0001263	Global developmental delay	5053	PAH	OMIM:100003
+HP:0001250	Seizure	9	GENEZ	OMIM:100009
+HP:0001250	Seizure	10	GENEY	OMIM:100010
+HP:0000707	Abnormality of the nervous system	11	GENEW	OMIM:100011

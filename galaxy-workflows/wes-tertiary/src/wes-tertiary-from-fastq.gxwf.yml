@@ -1,6 +1,6 @@
 class: GalaxyWorkflow
 label: WES tertiary analysis from FASTQ (v1)
-release: "0.4"
+release: "0.5"
 license: MIT
 tags:
   - WES
@@ -130,6 +130,31 @@ inputs:
       AlphaMissense hg38 predictions as an indexed BCF with INFO/AM_score, built with data/build_alphamissense.sh
       (CC BY 4.0). Gives the missense PP3/BP4 evidence of the report at the ClinGen-calibrated strengths.
     position: {left: 0, top: 2100}
+  "HPO disease annotations (phenotype.hpoa)":
+    type: data
+    format: [tabular, tsv, txt]
+    optional: true
+    doc: >-
+      HPO release file phenotype.hpoa: disease names, age of onset, clinical course and inheritance; with the
+      patient's HPO terms, the report shows the disease that best explains the phenotype for each gene.
+    position: {left: 0, top: 2240}
+  "Dosage sensitivity (ClinGen TSV)":
+    type: data
+    format: [tabular, tsv, txt]
+    optional: true
+    doc: >-
+      ClinGen gene curation list (https://ftp.clinicalgenome.org/ClinGen_gene_curation_list_GRCh38.tsv):
+      haploinsufficiency and triplosensitivity scores, used to decide whether loss of function is a disease mechanism.
+    position: {left: 0, top: 2380}
+  "ClinVar missense by residue (TSV)":
+    type: data
+    format: [tabular, tsv, txt]
+    optional: true
+    doc: >-
+      Pathogenic and benign ClinVar missense variants by protein residue, built from variant_summary.txt.gz with
+      data/build_clinvar_protein.py: ACMG PS1 (same amino-acid change pathogenic) and PM5 (another pathogenic change
+      at the residue).
+    position: {left: 0, top: 2520}
 
 outputs:
   multiqc_report:
@@ -443,6 +468,9 @@ steps:
       "Patient phenotype (HPO terms)": "Patient phenotype (HPO terms)"
       "Recurrent artefacts (VCF)": "Recurrent artefacts (VCF)"
       "Missense predictions (AlphaMissense BCF)": "Missense predictions (AlphaMissense BCF)"
+      "HPO disease annotations (phenotype.hpoa)": "HPO disease annotations (phenotype.hpoa)"
+      "Dosage sensitivity (ClinGen TSV)": "Dosage sensitivity (ClinGen TSV)"
+      "ClinVar missense by residue (TSV)": "ClinVar missense by residue (TSV)"
       "Aligned reads (BAM)": mark_duplicates/outFile
       "Per-target coverage (mosdepth thresholds)": target_coverage/output_thresholds_bed
       "Coverage summary (mosdepth)": target_coverage/output_summary

@@ -1,4 +1,4 @@
-<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.4.0+galaxy0" profile="23.0">
+<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.5.0+galaxy0" profile="23.0">
     <description>diagnostic, secondary, carrier, pharmacogenomic and risk findings in one human-readable report</description>
     <requirements>
         <requirement type="package" version="3.12">python</requirement>
@@ -32,6 +32,15 @@ python3 '$__tool_directory__/wes_clinical_report.py'
     #end if
     #if $hpo_terms and str($hpo_terms).strip():
         --hpo-terms '$hpo_terms'
+    #end if
+    #if $hpo_annotations:
+        --hpo-annotations '$hpo_annotations'
+    #end if
+    #if $clingen_dosage:
+        --clingen-dosage '$clingen_dosage'
+    #end if
+    #if $clinvar_protein:
+        --clinvar-protein '$clinvar_protein'
     #end if
     #if $roh:
         --roh '$roh'
@@ -84,13 +93,19 @@ python3 '$__tool_directory__/wes_clinical_report.py'
                 <valid initial="string.digits"><add value="H"/><add value="P"/><add value=":"/><add value=","/><add value=" "/></valid>
             </sanitizer>
         </param>
+        <param name="hpo_annotations" type="data" format="tabular,tsv,txt" optional="true" label="HPO disease annotations (phenotype.hpoa)"
+               help="HPO release file: disease names, age of onset, clinical course and inheritance; with patient HPO terms, the disease that best explains the phenotype is shown for each gene."/>
+        <param name="clingen_dosage" type="data" format="tabular,tsv,txt" optional="true" label="ClinGen dosage sensitivity (ClinGen_gene_curation_list_GRCh38.tsv)"
+               help="https://ftp.clinicalgenome.org/: haploinsufficiency and triplosensitivity scores; decide whether loss of function is a disease mechanism (PVS1)."/>
+        <param name="clinvar_protein" type="data" format="tabular,tsv,txt" optional="true" label="ClinVar missense variants by residue (TSV)"
+               help="Built from ClinVar variant_summary.txt.gz with data/build_clinvar_protein.py in the workflow repository: ACMG PS1 (same amino-acid change pathogenic) and PM5 (another pathogenic change at the residue)."/>
         <param name="roh" type="data" format="tabular" optional="true" label="Runs of homozygosity (bcftools roh)"/>
         <param name="pharmcat" type="data" format="tabular,tsv,txt" optional="true" label="PharmCAT calls (TSV)"
                help="Calls-only TSV of the PharmCAT pharmacogenomics tool; shown next to the built-in star-allele genotypes."/>
         <param name="artefacts" type="data" format="vcf,vcf_bgzip" optional="true" label="Recurrent artefacts of the laboratory (VCF)"
                help="Alleles called in many of the laboratory's own samples but rare or absent in gnomAD (build_artefact_list.sh in the workflow repository). Matching calls are marked low confidence, not removed."/>
         <param name="bam" type="data" format="bam" optional="true" label="Aligned reads (BAM)"
-               help="Read depth at pharmacogenomic and risk-allele positions; without it, absent variants cannot be told apart from missing coverage."/>
+               help="Read depth at pharmacogenomic and risk-allele positions (without it, absent variants cannot be told apart from missing coverage), and read-backed phase of two heterozygous variants in a recessive gene."/>
         <param name="reference" type="data" format="fasta" optional="true" label="Reference genome (FASTA)"
                help="Repeat context (homopolymers, tandem repeats) of reported variants."/>
         <param name="target_coverage" type="data" format="bed" optional="true" label="Per-target coverage (mosdepth thresholds BED)"/>
@@ -140,6 +155,27 @@ python3 '$__tool_directory__/wes_clinical_report.py'
                 </assert_contents>
             </output>
         </test>
+        <test expect_num_outputs="2">
+            <param name="vcf" value="annotated.vcf" ftype="vcf"/>
+            <param name="gencc" value="gencc.tsv" ftype="tabular"/>
+            <param name="hpo_genes" value="p2g.txt" ftype="tabular"/>
+            <param name="hpo_terms" value="HP:0001250, HP:0001263"/>
+            <param name="hpo_annotations" value="phenotype.hpoa" ftype="tabular"/>
+            <param name="clingen_dosage" value="clingen_dosage.tsv" ftype="tabular"/>
+            <param name="clinvar_protein" value="clinvar_protein.tsv" ftype="tabular"/>
+            <output name="report" ftype="html">
+                <assert_contents>
+                    <has_text text="best match: &lt;b&gt;Gene P syndrome&lt;/b&gt;"/>
+                    <has_text text="ClinGen haploinsufficiency: sufficient evidence"/>
+                </assert_contents>
+            </output>
+            <output name="findings" ftype="tabular">
+                <assert_contents>
+                    <has_text_matching expression="\tcandidate\tGENEP\t.*PS1,PM5"/>
+                    <has_text_matching expression="\tphenotype_match\tGENEP\t\t\t\t\tOMIM:100001\t"/>
+                </assert_contents>
+            </output>
+        </test>
     </tests>
     <help><![CDATA[
 **What it does**
@@ -155,9 +191,16 @@ Sections:
 2. Diagnostic findings: ClinVar pathogenic/likely pathogenic variants whose genotype fits the gene's mode of
    inheritance (GenCC); a review table for genes with mixed or unknown inheritance and X-linked heterozygous females.
 3. Candidate variants not classified in ClinVar: rare predicted loss-of-function variants in established disease
-   genes, rare missense variants with AlphaMissense at PP3_Moderate or stronger or in phenotype-matched genes, and
-   rare variants predicted by SpliceAI to alter splicing, with automated ACMG/AMP evidence codes for triage
-   (PP3/BP4 at the ClinGen-calibrated strengths when the VCF carries INFO/AM_score and INFO/SpliceAI).
+   genes, rare missense variants with AlphaMissense at PP3_Moderate or stronger, in phenotype-matched genes or at a
+   residue with a pathogenic ClinVar missense variant, and rare variants predicted by SpliceAI to alter splicing,
+   with automated ACMG/AMP evidence codes for triage (PP3/BP4 at the ClinGen-calibrated strengths when the VCF
+   carries INFO/AM_score and INFO/SpliceAI; PS1/PM5 from the ClinVar residue table; PVS1 only where ClinGen dosage,
+   inheritance or constraint shows loss of function to be a disease mechanism). With patient HPO terms, a table of
+   the diseases that best explain the phenotype in the genes with findings.
+
+Gene-disease cells also show GenCC disputed/refuted assertions, ClinGen dosage sensitivity, and (from the HPO
+disease annotations) age of onset, clinical course and inheritance. Two heterozygous variants in a recessive gene
+are phased from the reads when a BAM is given: variants in cis are one allele (carrier, not affected).
 4. ACMG SF v3.3 secondary findings (84 genes, gene-specific rules).
 5. Carrier status for recessive conditions.
 6. Pharmacogenomics: CPIC genes with single-nucleotide star alleles (CYP2C19, CYP2C9, VKORC1, CYP4F2, SLCO1B1,
@@ -174,5 +217,8 @@ Every flagged result must be confirmed by an orthogonal method in an accredited 
         <citation type="doi">10.1016/j.gim.2023.100866</citation>
         <citation type="doi">10.1038/gim.2015.30</citation>
         <citation type="doi">10.1038/s41586-020-2308-7</citation>
+        <citation type="doi">10.1002/humu.23626</citation>
+        <citation type="doi">10.1038/s41436-019-0686-8</citation>
+        <citation type="doi">10.1093/nar/gkad1005</citation>
     </citations>
 </tool>

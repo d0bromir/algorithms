@@ -218,6 +218,111 @@ def test_pgx_rules():
     assert rep.pgx_pheno("CYP2C19", unknown)[0] == "indeterminate"
 
 
+def test_protein_evidence():
+    cvp = rep.load_clinvar_protein(os.path.join(DATA, "clinvar_protein.tsv"))
+    _s, _c, variants, _p = rep.parse_vcf(os.path.join(DATA, "annotated.vcf"))
+    v = next(x for x in variants if x.gene == "GENEP")
+    codes, notes = rep.protein_evidence(v, "GENEP", cvp)
+    assert codes == ["PS1", "PM5"], "p.Arg67His pathogenic by another nucleotide change; p.Arg67Cys pathogenic"
+    assert "p.Arg67Cys" in notes[1] and "VCV000001001" in notes[0]
+    assert any("3 pathogenic, 1 benign" in n for n in notes), "0-star p.Ala68Val is not counted"
+    f = next(x for x in variants if x.gene == "GENEF")
+    assert rep.protein_evidence(f, "GENEF", cvp) == ([], ["ClinVar residue 4 is Gly, not Arg: transcripts numbered differently"])
+    v.sai = 0.3
+    assert rep.protein_evidence(v, "GENEP", cvp)[0] == ["PM5"], "no PS1 if the variant may act through splicing"
+    rows, html = run_report(["--clinvar-protein", os.path.join(DATA, "clinvar_protein.tsv")])
+    note = next(r["note"] for r in rows if r["gene"] == "GENEP")
+    assert "PS1" in note and "PM5" in note and ">PS1</span>" in html and "pathogenic cluster" not in html
+
+
+def test_clingen_dosage():
+    d = rep.load_dosage(os.path.join(DATA, "clingen_dosage.tsv"))
+    assert d == {"GENEX": (40, 0), "BRCA2": (3, 1), "PAH": (30, None)}
+    assert rep.lof_mechanism("BRCA2", {"AD"}, {}, d), "HI 3 without constraint data"
+    assert not rep.lof_mechanism("GENEX", {"AD"}, {"GENEX": (0.2, 1.0, 0.0)}, d), "HI 40 overrides LOEUF"
+    rows, html = run_report()
+    assert "PVS1" in next(r["note"] for r in rows if r["gene"] == "GENEX"), "LOEUF < 0.6 in the test constraint file"
+    rows, html = run_report(["--clingen-dosage", os.path.join(DATA, "clingen_dosage.tsv")])
+    g = next(r for r in rows if r["gene"] == "GENEX")
+    assert g["category"] == "candidate_inheritance_not_met" and "haploinsufficiency unlikely" in g["note"]
+    assert "PVS1" not in g["note"]
+    assert "ClinGen haploinsufficiency: sufficient evidence" in html
+
+
+def test_disputed_gencc(tmp_path=None):
+    d = tmp_path or tempfile.mkdtemp()
+    p = os.path.join(str(d), "gencc.tsv")
+    with open(os.path.join(DATA, "gencc.tsv")) as f, open(p, "w") as out:
+        out.write(f.read())
+        out.write("SGC-9\t1\tHGNC:9\tGENEP\tMONDO:9\tGene P cardiomyopathy\tRefuted Evidence\tAutosomal dominant\tLab X\n")
+    assert rep.load_gencc_disputed(p) == {"GENEP": [("Gene P cardiomyopathy", "Refuted Evidence", "Lab X")]}
+    out = tempfile.mkdtemp()
+    rep.main(["--vcf", os.path.join(DATA, "annotated.vcf"), "--gencc", p, "--html", os.path.join(out, "r.html"),
+              "--tsv", os.path.join(out, "r.tsv")])
+    assert "refuted: Gene P cardiomyopathy (Lab X)" in open(os.path.join(out, "r.html")).read()
+
+
+def test_disease_phenotype_match():
+    terms = {"HP:0001250", "HP:0001263"}
+    ph = rep.load_hpo(os.path.join(DATA, "p2g.txt"), terms)
+    assert ph.gene_terms["GENEP"] == terms and ph.gene_all["PAH"] == {"OMIM:100003"}
+    best = ph.best_diseases("GENEP", 2)
+    assert best[0][1] == "OMIM:100001" and abs(best[0][0] - 1.0) < 1e-9, "both terms explained"
+    assert best[1][1] == "OMIM:100002" and 0 < best[1][0] < 1
+    assert ph.ic["HP:0001263"] > ph.ic["HP:0001250"], "the rarer term carries more information"
+    hpoa = rep.load_hpoa(os.path.join(DATA, "phenotype.hpoa"))
+    assert hpoa["OMIM:100001"] == {"name": "Gene P syndrome", "onset": ["infantile"], "course": [],
+                                   "inheritance": ["AD"], "n_features": 2}
+    rows, html = run_report(["--hpo-genes", os.path.join(DATA, "p2g.txt"), "--hpo-terms", "HP:0001250,HP:0001263",
+                             "--hpo-annotations", os.path.join(DATA, "phenotype.hpoa")])
+    assert "best match: <b>Gene P syndrome</b> (OMIM:100001): 2 of 2 terms, 100% of the phenotype information; " \
+           "onset infantile; AD" in html
+    pm = [r for r in rows if r["category"] == "phenotype_match"]
+    assert pm and pm[0]["gene"] == "GENEP" and pm[0]["genotype"] == "OMIM:100001"
+    assert "Diseases matching the phenotype in genes with a finding" in html
+    _rows, html = run_report(["--hpo-genes", os.path.join(DATA, "p2g.txt"),
+                              "--hpo-annotations", os.path.join(DATA, "phenotype.hpoa")])
+    assert "HPO: Phenylketonuria: onset congenital; AR" in html, "disease features without patient terms"
+
+
+def sam(name, pos, cigar, seq):
+    return "\t".join([name, "99", "1", str(pos), "60", cigar, "=", str(pos + 100), "200", seq, "I" * len(seq)])
+
+
+def test_read_alleles():
+    def var(pos, ref, alt):
+        v = rep.Variant()
+        v.chrom, v.pos, v.ref, v.alt = "1", pos, ref, alt
+        return v
+    snv, dele, ins = var(103, "C", "T"), var(106, "GA", "G"), var(108, "A", "AT")
+    # ref: 101 AAC GTG AAC 109; read with T at 103, deletion of A at 107 and insertion of T after 108
+    r = rep.read_alleles(101, "6M1D1M1I2M", "AATGTGATCC", (snv, dele, ins))
+    assert r == {snv.key(): "alt", dele.key(): "alt", ins.key(): "alt"}
+    r = rep.read_alleles(101, "10M", "AACGTGAACC", (snv, dele, ins))
+    assert r == {snv.key(): "ref", dele.key(): "ref", ins.key(): "ref"}
+    assert rep.read_alleles(104, "5M", "GTGAA", (snv,)) == {snv.key(): None}, "not covered"
+
+
+def test_phase_pair():
+    def var(pos, ref, alt):
+        v = rep.Variant()
+        v.chrom, v.pos, v.ref, v.alt, v.zyg = "1", pos, ref, alt, "het"
+        return v
+    a, b = var(103, "C", "T"), var(110, "G", "A")
+    trans = [sam(f"r{i}", 101, "12M", "AATGTGAACGTT") for i in range(3)] + \
+            [sam(f"s{i}", 101, "12M", "AACGTGAACATT") for i in range(3)]
+    old = rep.run_samtools
+    try:
+        rep.run_samtools = lambda args: "\n".join(trans)
+        assert rep.phase_pair("x.bam", "", a, b) == ("trans", 0, 6)
+        rep.run_samtools = lambda args: "\n".join([sam(f"r{i}", 101, "12M", "AATGTGAACATT") for i in range(5)])
+        assert rep.phase_pair("x.bam", "", a, b)[0] == "cis"
+        assert rep.phase_pair("x.bam", "", a, var(5000, "G", "A"))[0] == "too far apart"
+        assert "in trans" in rep.phase_text(("trans", 0, 6)) and "test the parents" in rep.phase_text(("unclear", 1, 1))
+    finally:
+        rep.run_samtools = old
+
+
 if __name__ == "__main__":
     failed = 0
     for name, fn in sorted(globals().items()):

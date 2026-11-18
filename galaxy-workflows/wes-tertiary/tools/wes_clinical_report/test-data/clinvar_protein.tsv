@@ -1,0 +1,7 @@
+#gene	residue	ref_aa	alt_aa	class	stars	variation_id	chrom	pos	ref	alt	transcript
+GENEP	67	Arg	His	P	2	1001	2	2000101	C	A	NM_000001.1
+GENEP	67	Arg	Cys	P	1	1002	2	2000099	C	T	NM_000001.1
+GENEP	70	Leu	Pro	P	2	1003	2	2000109	T	C	NM_000001.1
+GENEP	64	Gly	Ser	B	2	1004	2	2000090	G	A	NM_000001.1
+GENEP	68	Ala	Val	P	0	1005	2	2000103	C	T	NM_000001.1
+GENEF	4	Gly	Asp	P	2	1006	17	41000301	G	A	NM_000002.1

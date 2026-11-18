@@ -1,6 +1,6 @@
 class: GalaxyWorkflow
 label: WES tertiary analysis from VCF (v2)
-release: "0.4"
+release: "0.5"
 license: MIT
 tags:
   - WES
@@ -154,6 +154,31 @@ inputs:
       AlphaMissense hg38 predictions as an indexed BCF with INFO/AM_score, built with data/build_alphamissense.sh
       (CC BY 4.0). Gives the missense PP3/BP4 evidence of the report at the ClinGen-calibrated strengths.
     position: {left: 0, top: 2160}
+  "HPO disease annotations (phenotype.hpoa)":
+    type: data
+    format: [tabular, tsv, txt]
+    optional: true
+    doc: >-
+      HPO release file phenotype.hpoa: disease names, age of onset, clinical course and inheritance; with the
+      patient's HPO terms, the report shows the disease that best explains the phenotype for each gene.
+    position: {left: 0, top: 2280}
+  "Dosage sensitivity (ClinGen TSV)":
+    type: data
+    format: [tabular, tsv, txt]
+    optional: true
+    doc: >-
+      ClinGen gene curation list (https://ftp.clinicalgenome.org/ClinGen_gene_curation_list_GRCh38.tsv):
+      haploinsufficiency and triplosensitivity scores, used to decide whether loss of function is a disease mechanism.
+    position: {left: 0, top: 2400}
+  "ClinVar missense by residue (TSV)":
+    type: data
+    format: [tabular, tsv, txt]
+    optional: true
+    doc: >-
+      Pathogenic and benign ClinVar missense variants by protein residue, built from variant_summary.txt.gz with
+      data/build_clinvar_protein.py: ACMG PS1 (same amino-acid change pathogenic) and PM5 (another pathogenic change
+      at the residue).
+    position: {left: 0, top: 2520}
 
 outputs:
   annotated_vcf:
@@ -551,7 +576,7 @@ steps:
       Human-readable clinical interpretation report and findings table (local tool tools/wes_clinical_report;
       install it on the Galaxy server, see README).
     tool_id: wes_clinical_report
-    tool_version: 0.4.0+galaxy0
+    tool_version: 0.5.0+galaxy0
     position: {left: 2380, top: 300}
     in:
       vcf: functional_annotation/snpeff_output
@@ -563,6 +588,9 @@ steps:
       constraint: "Gene constraint (gnomAD TSV)"
       hpo_genes: "HPO gene annotations (phenotype_to_genes.txt)"
       hpo_terms: "Patient phenotype (HPO terms)"
+      hpo_annotations: "HPO disease annotations (phenotype.hpoa)"
+      clingen_dosage: "Dosage sensitivity (ClinGen TSV)"
+      clinvar_protein: "ClinVar missense by residue (TSV)"
       bam: "Aligned reads (BAM)"
       target_coverage: "Per-target coverage (mosdepth thresholds)"
       coverage_summary: "Coverage summary (mosdepth)"

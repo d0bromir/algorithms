@@ -11,7 +11,7 @@
         "tertiary-analysis"
     ],
     "license": "MIT",
-    "release": "0.4",
+    "release": "0.5",
     "uuid": "325a3624-2876-419f-9805-0558388e1825",
     "comments": [],
     "steps": {
@@ -435,6 +435,72 @@
         },
         "19": {
             "id": 19,
+            "name": "HPO disease annotations (phenotype.hpoa)",
+            "type": "data_input",
+            "label": "HPO disease annotations (phenotype.hpoa)",
+            "annotation": "HPO release file phenotype.hpoa: disease names, age of onset, clinical course and inheritance; with the patient's HPO terms, the report shows the disease that best explains the phenotype for each gene.",
+            "tool_state": "{\"name\": \"HPO disease annotations (phenotype.hpoa)\", \"optional\": true, \"format\": [\"tabular\", \"tsv\", \"txt\"]}",
+            "position": {
+                "top": 2280,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "HPO disease annotations (phenotype.hpoa)",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "20": {
+            "id": 20,
+            "name": "Dosage sensitivity (ClinGen TSV)",
+            "type": "data_input",
+            "label": "Dosage sensitivity (ClinGen TSV)",
+            "annotation": "ClinGen gene curation list (https://ftp.clinicalgenome.org/ClinGen_gene_curation_list_GRCh38.tsv): haploinsufficiency and triplosensitivity scores, used to decide whether loss of function is a disease mechanism.",
+            "tool_state": "{\"name\": \"Dosage sensitivity (ClinGen TSV)\", \"optional\": true, \"format\": [\"tabular\", \"tsv\", \"txt\"]}",
+            "position": {
+                "top": 2400,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "Dosage sensitivity (ClinGen TSV)",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "21": {
+            "id": 21,
+            "name": "ClinVar missense by residue (TSV)",
+            "type": "data_input",
+            "label": "ClinVar missense by residue (TSV)",
+            "annotation": "Pathogenic and benign ClinVar missense variants by protein residue, built from variant_summary.txt.gz with data/build_clinvar_protein.py: ACMG PS1 (same amino-acid change pathogenic) and PM5 (another pathogenic change at the residue).",
+            "tool_state": "{\"name\": \"ClinVar missense by residue (TSV)\", \"optional\": true, \"format\": [\"tabular\", \"tsv\", \"txt\"]}",
+            "position": {
+                "top": 2520,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "ClinVar missense by residue (TSV)",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "22": {
+            "id": 22,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/samtools_faidx/samtools_faidx/1.22+galaxy1",
             "type": "tool",
             "label": "chrom_sizes",
@@ -465,8 +531,8 @@
                 }
             }
         },
-        "20": {
-            "id": 20,
+        "23": {
+            "id": 23,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bedtools/bedtools_slopbed/2.31.1+galaxy1",
             "type": "tool",
             "label": "pad_targets",
@@ -487,7 +553,7 @@
                 ],
                 "genome_file_opts|genome": [
                     {
-                        "id": 19,
+                        "id": 22,
                         "output_name": "output"
                     }
                 ],
@@ -516,8 +582,8 @@
                 }
             }
         },
-        "21": {
-            "id": 21,
+        "24": {
+            "id": 24,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_norm/bcftools_norm/1.24+galaxy0",
             "type": "tool",
             "label": "normalize",
@@ -561,8 +627,8 @@
                 }
             }
         },
-        "22": {
-            "id": 22,
+        "25": {
+            "id": 25,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_filter/bcftools_filter/1.24+galaxy0",
             "type": "tool",
             "label": "target_filter",
@@ -577,13 +643,13 @@
             "input_connections": {
                 "input_file": [
                     {
-                        "id": 21,
+                        "id": 24,
                         "output_name": "output_file"
                     }
                 ],
                 "sec_restrict|regions|regions_file": [
                     {
-                        "id": 20,
+                        "id": 23,
                         "output_name": "output"
                     }
                 ],
@@ -612,8 +678,8 @@
                 }
             }
         },
-        "23": {
-            "id": 23,
+        "26": {
+            "id": 26,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
             "type": "tool",
             "label": "clinvar_annotation",
@@ -628,7 +694,7 @@
             "input_connections": {
                 "input_file": [
                     {
-                        "id": 22,
+                        "id": 25,
                         "output_name": "output_file"
                     }
                 ],
@@ -657,8 +723,8 @@
                 }
             }
         },
-        "24": {
-            "id": 24,
+        "27": {
+            "id": 27,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
             "type": "tool",
             "label": "population_annotation",
@@ -673,7 +739,7 @@
             "input_connections": {
                 "input_file": [
                     {
-                        "id": 23,
+                        "id": 26,
                         "output_name": "output_file"
                     }
                 ],
@@ -702,8 +768,8 @@
                 }
             }
         },
-        "25": {
-            "id": 25,
+        "28": {
+            "id": 28,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
             "type": "tool",
             "label": "missense_annotation",
@@ -718,7 +784,7 @@
             "input_connections": {
                 "input_file": [
                     {
-                        "id": 24,
+                        "id": 27,
                         "output_name": "output_file"
                     }
                 ],
@@ -747,8 +813,8 @@
                 }
             }
         },
-        "26": {
-            "id": 26,
+        "29": {
+            "id": 29,
             "name": "spliceai_score",
             "type": "tool",
             "label": "splice_prediction",
@@ -763,7 +829,7 @@
             "input_connections": {
                 "input": [
                     {
-                        "id": 25,
+                        "id": 28,
                         "output_name": "output_file"
                     }
                 ],
@@ -792,8 +858,8 @@
                 }
             }
         },
-        "27": {
-            "id": 27,
+        "30": {
+            "id": 30,
             "name": "pharmcat_pgx",
             "type": "tool",
             "label": "pharmacogenomics",
@@ -847,8 +913,8 @@
                 }
             }
         },
-        "28": {
-            "id": 28,
+        "31": {
+            "id": 31,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpeff/snpEff/5.4+galaxy0",
             "type": "tool",
             "label": "functional_annotation",
@@ -863,7 +929,7 @@
             "input_connections": {
                 "input": [
                     {
-                        "id": 26,
+                        "id": 29,
                         "output_name": "output"
                     }
                 ],
@@ -921,8 +987,8 @@
                 }
             }
         },
-        "29": {
-            "id": 29,
+        "32": {
+            "id": 32,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_filter/5.4.0c+galaxy1",
             "type": "tool",
             "label": "prioritize",
@@ -937,7 +1003,7 @@
             "input_connections": {
                 "input": [
                     {
-                        "id": 28,
+                        "id": 31,
                         "output_name": "snpeff_output"
                     }
                 ],
@@ -966,8 +1032,8 @@
                 }
             }
         },
-        "30": {
-            "id": 30,
+        "33": {
+            "id": 33,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1",
             "type": "tool",
             "label": "candidate_table",
@@ -982,7 +1048,7 @@
             "input_connections": {
                 "input": [
                     {
-                        "id": 29,
+                        "id": 32,
                         "output_name": "output"
                     }
                 ]
@@ -1005,8 +1071,8 @@
                 }
             }
         },
-        "31": {
-            "id": 31,
+        "34": {
+            "id": 34,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1",
             "type": "tool",
             "label": "annotated_table",
@@ -1021,7 +1087,7 @@
             "input_connections": {
                 "input": [
                     {
-                        "id": 28,
+                        "id": 31,
                         "output_name": "snpeff_output"
                     }
                 ]
@@ -1044,8 +1110,8 @@
                 }
             }
         },
-        "32": {
-            "id": 32,
+        "35": {
+            "id": 35,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_stats/bcftools_stats/1.24+galaxy0",
             "type": "tool",
             "label": "variant_stats",
@@ -1060,7 +1126,7 @@
             "input_connections": {
                 "input_file": [
                     {
-                        "id": 28,
+                        "id": 31,
                         "output_name": "snpeff_output"
                     }
                 ]
@@ -1083,8 +1149,8 @@
                 }
             }
         },
-        "33": {
-            "id": 33,
+        "36": {
+            "id": 36,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_roh/bcftools_roh/1.24+galaxy1",
             "type": "tool",
             "label": "runs_of_homozygosity",
@@ -1099,7 +1165,7 @@
             "input_connections": {
                 "input_file": [
                     {
-                        "id": 28,
+                        "id": 31,
                         "output_name": "snpeff_output"
                     }
                 ]
@@ -1122,15 +1188,15 @@
                 }
             }
         },
-        "34": {
-            "id": 34,
+        "37": {
+            "id": 37,
             "name": "wes_clinical_report",
             "type": "tool",
             "label": "clinical_report",
             "annotation": "Human-readable clinical interpretation report and findings table (local tool tools/wes_clinical_report; install it on the Galaxy server, see README).",
-            "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"artefacts\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"constraint\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"coverage_summary\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gencc\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gene_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_genes\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_terms\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"max_af\": \"\\\"0.01\\\"\", \"max_candidates\": \"\\\"60\\\"\", \"min_ref_depth\": \"\\\"15\\\"\", \"pharmcat\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"reference\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"roh\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"sample_name\": \"\\\"\\\"\", \"target_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\"}",
+            "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"artefacts\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clingen_dosage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clinvar_protein\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"constraint\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"coverage_summary\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gencc\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gene_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_annotations\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_genes\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_terms\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"max_af\": \"\\\"0.01\\\"\", \"max_candidates\": \"\\\"60\\\"\", \"min_ref_depth\": \"\\\"15\\\"\", \"pharmcat\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"reference\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"roh\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"sample_name\": \"\\\"\\\"\", \"target_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\"}",
             "tool_id": "wes_clinical_report",
-            "tool_version": "0.4.0+galaxy0",
+            "tool_version": "0.5.0+galaxy0",
             "position": {
                 "top": 300,
                 "left": 2380
@@ -1138,7 +1204,7 @@
             "input_connections": {
                 "vcf": [
                     {
-                        "id": 28,
+                        "id": 31,
                         "output_name": "snpeff_output"
                     }
                 ],
@@ -1150,13 +1216,13 @@
                 ],
                 "roh": [
                     {
-                        "id": 33,
+                        "id": 36,
                         "output_name": "output_file"
                     }
                 ],
                 "pharmcat": [
                     {
-                        "id": 27,
+                        "id": 30,
                         "output_name": "calls"
                     }
                 ],
@@ -1187,6 +1253,24 @@
                 "hpo_terms": [
                     {
                         "id": 12,
+                        "output_name": "output"
+                    }
+                ],
+                "hpo_annotations": [
+                    {
+                        "id": 19,
+                        "output_name": "output"
+                    }
+                ],
+                "clingen_dosage": [
+                    {
+                        "id": 20,
+                        "output_name": "output"
+                    }
+                ],
+                "clinvar_protein": [
+                    {
+                        "id": 21,
                         "output_name": "output"
                     }
                 ],
