@@ -323,6 +323,102 @@ def test_phase_pair():
         rep.run_samtools = old
 
 
+def test_decompose():
+    assert rep.decompose(100, "TCC", "TTC") == [(101, "C", "T")], "MNP split into SNVs"
+    assert rep.decompose(100, "ACGT", "AGGA") == [(101, "C", "G"), (103, "T", "A")]
+    assert rep.decompose(100, "ACCT", "ACT") == [(100, "AC", "A")], "suffix then prefix trimmed, anchor kept"
+    assert rep.decompose(100, "G", "GA") == [(100, "G", "GA")]
+    p = rep.load_parent_vcf(os.path.join(DATA, "mother.vcf"))
+    assert p[("1", 5000006, "C", "T")][0] == "het" and p[("1", 5000000, "ACGTAAC", "G")][0] == "het", "1/2 split"
+
+
+def trio_report(extra=()):
+    return run_report(["--mother-vcf", os.path.join(DATA, "mother.vcf"), "--father-vcf", os.path.join(DATA, "father.vcf"),
+                       "--hpo-genes", os.path.join(DATA, "p2g.txt"), "--hpo-terms", "HP:0001250,HP:0001263", *extra])
+
+
+def test_trio_origin():
+    rows, html = trio_report(["--affected-parents", "none"])
+    x = next(r for r in rows if r["gene"] == "GENEX")
+    assert x["category"] == "candidate_inheritance_not_met" and "inherited from the unaffected father" in x["note"]
+    assert "inherited from the mother" in next(r["note"] for r in rows if r["gene"] == "PAH")
+    assert "inherited from the father" in next(r["note"] for r in rows if r["gene"] == "MUTYH")
+    p = next(r for r in rows if r["gene"] == "GENEP" and r["category"].startswith("candidate"))
+    assert "possible de novo" in p["note"] and "PM6_Supporting" in p["note"], "no parental reads: assumed de novo"
+    assert any(r["category"] == "de_novo_possible" and r["gene"] == "GENEP" for r in rows)
+    assert "De novo variants (trio)" in html and "Too few common sites" in html
+    rows, _ = trio_report(["--affected-parents", "father"])
+    x = next(r for r in rows if r["gene"] == "GENEX")
+    assert x["category"] == "candidate" and "inherited from the affected father" in x["note"]
+    rows, html = run_report(["--father-vcf", os.path.join(DATA, "father.vcf")])
+    assert "Only one parent given" in html and not any(r["category"].startswith("de_novo") for r in rows)
+
+
+def test_trio_denovo_cluster():
+    """three parent-absent changes within 10 bp (reads of a paralogous copy): possibly de novo, no de novo points"""
+    out = tempfile.mkdtemp()
+    vcf = os.path.join(out, "cluster.vcf")
+    with open(os.path.join(DATA, "annotated.vcf")) as f, open(vcf, "w") as w:
+        for line in f:
+            w.write(line)
+            if line.startswith("2\t2000100\t"):
+                for pos, ref, alt in ((2000104, "C", "T"), (2000108, "G", "T")):
+                    t = line.split("\t")
+                    t[1], t[3], t[4] = str(pos), ref, alt
+                    t[7] = t[7].replace("p.Arg67His", f"p.Gly{pos - 2000100 + 67}Val").replace("SpliceAI=A|", f"SpliceAI={alt}|")
+                    t[7] = t[7].replace("ANN=A|", f"ANN={alt}|")
+                    w.write("\t".join(t))
+                t = line.split("\t")  # a heterozygous call without reference reads (other allele: another variant)
+                t[1], t[9] = "3000100", "0/1:40:0,40\n"
+                w.write("\t".join(t))
+    html, tsv = os.path.join(out, "r.html"), os.path.join(out, "r.tsv")
+    rep.main(["--vcf", vcf, "--gencc", os.path.join(DATA, "gencc.tsv"), "--constraint", os.path.join(DATA, "constraint.tsv"),
+              "--mother-vcf", os.path.join(DATA, "mother.vcf"), "--father-vcf", os.path.join(DATA, "father.vcf"),
+              "--hpo-genes", os.path.join(DATA, "p2g.txt"), "--hpo-terms", "HP:0001250,HP:0001263",
+              "--affected-parents", "none", "--html", html, "--tsv", tsv])
+    rows = list(csv.DictReader(open(tsv), delimiter="\t"))
+    dn = [r for r in rows if r["category"].startswith("de_novo") and r["gene"] == "GENEP"]
+    assert len(dn) == 4 and all(r["category"] == "de_novo_possible" for r in dn)
+    assert sum("paralogous copy" in r["note"] for r in dn) == 3
+    assert "no reference reads" in next(r["note"] for r in dn if r["pos"] == "3000100")
+    assert not any("PM6" in r["note"] or "PS2" in r["note"] for r in rows if r["gene"] == "GENEP")
+    assert "4 listed variants lie in a cluster" in open(html).read()
+    s = [rep.Variant() for _ in range(4)]
+    for v, p in zip(s, (100, 104, 108, 200)):
+        v.chrom, v.pos = "1", p
+    assert rep.denovo_clusters(s) == s[:3] and rep.denovo_clusters(s[:2] + s[3:]) == []
+    m = rep.Variant()
+    m.zyg, m.dp, m.ab = "het", 120, 0.267
+    assert rep.mosaic_p(m) < 1e-3, "32 of 120 reads: below a heterozygote"
+    m.dp, m.ab = 40, 0.35
+    assert rep.mosaic_p(m) > 1e-3, "14 of 40 reads: consistent with a heterozygote"
+
+
+def test_trio_reads_and_phase():
+    def var(chrom, pos, ref, alt, zyg="het"):
+        v = rep.Variant()
+        v.chrom, v.pos, v.ref, v.alt, v.zyg = chrom, pos, ref, alt, zyg
+        return v
+    t = rep.Trio(os.path.join(DATA, "mother.vcf"), os.path.join(DATA, "father.vcf"), "m.bam", "f.bam")
+    counts = {("mother", "2:2000100:G>A"): (0, 30), ("father", "2:2000100:G>A"): (1, 25),
+              ("mother", "3:5:G>A"): (0, 8), ("father", "3:5:G>A"): (0, 30),
+              ("mother", "3:6:G>A"): (6, 20), ("father", "3:6:G>A"): (0, 30)}
+    t.counts = lambda who, v: counts.get((who, v.key()))
+    assert t.origin(var("2", 2000100, "G", "A"), "female")[0] == "de novo", "parents' reads: 0 and 1 alt"
+    assert t.origin(var("3", 5, "G", "A"), "female")[0] == "possible de novo", "mother has too few reads"
+    assert t.origin(var("3", 6, "G", "A"), "female")[0] == "maternal", "mother's reads carry it, not called"
+    assert t.origin(var("1", 1000100, "C", "T", "hom"), "female")[0] == "unknown"
+    m, f = var("12", 102840474, "T", "C"), var("1", 1000100, "C", "T")
+    m.gene = f.gene = "G"
+    assert rep.trio_phase(t, m, f, "female") == "trans", "one from each parent"
+    m2 = var("1", 45331556, "C", "T")
+    assert rep.trio_phase(t, f, m2, "female") == "cis", "both paternal"
+    assert rep.de_novo_codes("de novo", True, True) == ["PS2_Moderate"]
+    assert rep.de_novo_codes("de novo", True, True, parentage_ok=False) == []
+    assert rep.de_novo_codes("possible de novo", True, True) == ["PM6_Supporting"]
+    assert rep.de_novo_codes("de novo", False, True) == [] and rep.de_novo_codes("de novo", True, False) == []
+
+
 if __name__ == "__main__":
     failed = 0
     for name, fn in sorted(globals().items()):

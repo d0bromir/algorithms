@@ -1,6 +1,6 @@
 class: GalaxyWorkflow
 label: WES tertiary analysis from VCF (v2)
-release: "0.5"
+release: "0.6"
 license: MIT
 tags:
   - WES
@@ -179,6 +179,41 @@ inputs:
       data/build_clinvar_protein.py: ACMG PS1 (same amino-acid change pathogenic) and PM5 (another pathogenic change
       at the residue).
     position: {left: 0, top: 2520}
+  "Mother: variant calls (VCF)":
+    type: data
+    format: [vcf, vcf_bgzip]
+    optional: true
+    doc: >-
+      The mother's calls on the same reference, e.g. the Raw variant calls of the FASTQ workflow run on her reads.
+      With both parents the report adds de novo variants, the parental origin of every finding, compound
+      heterozygotes phased by origin and a parentage check.
+    position: {left: 0, top: 2640}
+  "Father: variant calls (VCF)":
+    type: data
+    format: [vcf, vcf_bgzip]
+    optional: true
+    doc: The father's calls on the same reference.
+    position: {left: 0, top: 2760}
+  "Mother: aligned reads (BAM)":
+    type: data
+    format: [bam]
+    optional: true
+    doc: The mother's BAM; confirms a de novo variant by her reference reads, and finds alleles her calls missed.
+    position: {left: 0, top: 2880}
+  "Father: aligned reads (BAM)":
+    type: data
+    format: [bam]
+    optional: true
+    doc: The father's BAM.
+    position: {left: 0, top: 3000}
+  "Affected parents":
+    type: string
+    default: unknown
+    restrictions: [unknown, none, mother, father, both]
+    doc: >-
+      Whether a parent has the proband's condition (unknown, none, mother, father, both). A dominant candidate
+      inherited from an unaffected parent does not count as fitting the inheritance.
+    position: {left: 0, top: 3120}
 
 outputs:
   annotated_vcf:
@@ -576,7 +611,7 @@ steps:
       Human-readable clinical interpretation report and findings table (local tool tools/wes_clinical_report;
       install it on the Galaxy server, see README).
     tool_id: wes_clinical_report
-    tool_version: 0.5.0+galaxy0
+    tool_version: 0.6.0+galaxy0
     position: {left: 2380, top: 300}
     in:
       vcf: functional_annotation/snpeff_output
@@ -591,6 +626,11 @@ steps:
       hpo_annotations: "HPO disease annotations (phenotype.hpoa)"
       clingen_dosage: "Dosage sensitivity (ClinGen TSV)"
       clinvar_protein: "ClinVar missense by residue (TSV)"
+      mother_vcf: "Mother: variant calls (VCF)"
+      father_vcf: "Father: variant calls (VCF)"
+      mother_bam: "Mother: aligned reads (BAM)"
+      father_bam: "Father: aligned reads (BAM)"
+      affected_parents: "Affected parents"
       bam: "Aligned reads (BAM)"
       target_coverage: "Per-target coverage (mosdepth thresholds)"
       coverage_summary: "Coverage summary (mosdepth)"
