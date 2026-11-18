@@ -119,7 +119,10 @@ and VCFs. A naming mismatch does not raise an error. ClinVar/gnomAD annotations 
 | **Coding regions (BED)** (v1) | Coding exons of one transcript per gene, gene symbol in column 4 (recipe below) | Per-gene coverage in the report: which clinically relevant genes have gaps. |
 | **Gene-disease validity (GenCC TSV)** (optional) | [GenCC submissions export](https://search.thegencc.org/download), TSV in the current format (`https://search.thegencc.org/download/action/submissions-export-tsv?format=new`, keyed on `sgc_id`; CC0). The legacy `uuid` format, retired after 30 Sep 2026, is read too | Diseases and mode of inheritance per gene; decides diagnostic vs carrier vs review. |
 | **Gene constraint (gnomAD TSV)** (optional) | `gnomad.v4.1.constraint_metrics.tsv` from the gnomAD downloads page | LOEUF/pLI for loss-of-function intolerance (PVS1 applicability). |
-| **HPO gene annotations** (optional) | `phenotype_to_genes.txt` from the latest [HPO release](https://github.com/obophenotype/human-phenotype-ontology/releases) | With *Patient phenotype (HPO terms)*, ranks candidates by phenotype match. |
+| **HPO gene annotations** (optional) | `phenotype_to_genes.txt` from the latest [HPO release](https://github.com/obophenotype/human-phenotype-ontology/releases) | With *Patient phenotype (HPO terms)*, ranks candidates by phenotype match, and gives each term's information content for the disease-level match. |
+| **HPO disease annotations (phenotype.hpoa)** (optional) | `phenotype.hpoa` from the same HPO release (35 MB) | Disease names, age of onset, clinical course and inheritance next to each gene; with HPO terms, the disease that best explains the phenotype. |
+| **Dosage sensitivity (ClinGen TSV)** (optional) | [`ClinGen_gene_curation_list_GRCh38.tsv`](https://ftp.clinicalgenome.org/ClinGen_gene_curation_list_GRCh38.tsv) (250 kB) | Haploinsufficiency/triplosensitivity scores: decides whether loss of function is a disease mechanism (PVS1, LoF candidates in dominant genes). |
+| **ClinVar missense by residue (TSV)** (optional) | Built from ClinVar's `variant_summary.txt.gz` with [`data/build_clinvar_protein.py`](data/build_clinvar_protein.py) (below; 4 MB) | ACMG PS1 (same amino-acid change pathogenic) and PM5 (another pathogenic missense at the residue); rare missense variants with either become candidates. |
 | **Recurrent artefacts (VCF)** (optional) | The laboratory's own list, built with [`data/build_artefact_list.sh`](data/build_artefact_list.sh) from earlier samples (below) | Alleles called in many of the laboratory's samples but rare or absent in gnomAD: systematic errors of the assay. The report marks matching calls low confidence. |
 | **Population allele frequencies (VCF)** | gnomAD v4.1 joint (exome + genome) frequencies reduced to the padded targets, as an indexed **BCF** built with [`data/build_gnomad_extract.sh`](data/build_gnomad_extract.sh) (below) | Transferred fields: `gnomAD_AF`, `_AN`, `_nhomalt` (homozygotes), `_grpmax` / `_grpmax_AF` / `_grpmax_AN` (genetic ancestry group with the highest AF), `_FAF95` / `_FAF95_grp` (highest filtering allele frequency, the statistic of the ACMG BA1/BS1 rules), `_filter` (gnomAD PASS / EXOMES_FILTERED / GENOMES_FILTERED / BOTH_FILTERED) and `_discordance_p` (exome vs genome frequency test). The caller's own `INFO/AF` is untouched. A file without these fields (e.g. an AF-only one) stops the annotation step with "tag not defined". |
 | **Missense predictions (AlphaMissense BCF)** | AlphaMissense hg38 predictions as an indexed **BCF** with `INFO/AM_score`, built with [`data/build_alphamissense.sh`](data/build_alphamissense.sh) (below) | Missense PP3/BP4 at the ClinGen-calibrated strengths. CC BY 4.0. |
@@ -165,6 +168,16 @@ left-align/trim indels against the same reference the reads are aligned to. The 
 annotations are transferred only on an exact `CHROM/POS/REF/ALT` match. If a source keeps multiallelic or padded
 records, common indels look absent and pass the rarity filter. In the HG001 test run, before normalising the
 population file, homozygous deletions with gnomAD AF 0.94 were reported as rare loss-of-function variants.
+
+The ClinVar residue table is built from the same ClinVar release as the ClinVar VCF (ClinVar is public domain):
+```bash
+curl -sLO https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/variant_summary.txt.gz
+python3 data/build_clinvar_protein.py variant_summary.txt.gz clinvar_protein.tsv.gz
+```
+It keeps the GRCh38 single-nucleotide missense variants classified pathogenic/likely pathogenic or benign/likely
+benign (219,540 in the November 2026 release, 49 s, 4.3 MB) with their residue on ClinVar's RefSeq transcript. Upload
+it with datatype `tabular`. The HPO and ClinGen files are used as downloaded (HPO: free with attribution; ClinGen:
+free to use with attribution).
 
 The recurrent-artefact list is built from the called VCFs of earlier samples sequenced with the same kit, sequencer
 and pipeline (the *Raw variant calls* of the FASTQ workflow), with the gnomAD extract above:
@@ -225,9 +238,11 @@ laboratory.
 |---|---|
 | Sample and data quality | Ts/Tv, het/hom, het allele-fraction distribution (contamination hint), genetic sex from chrX heterozygosity and chrY coverage, target coverage at 10/20/30× |
 | Diagnostic findings | ClinVar pathogenic/likely pathogenic (not conflicting) **and** a genotype that fits the gene's mode of inheritance in GenCC: one allele for dominant genes, hemizygous for X-linked genes in males, two alleles for recessive genes. Genes with both dominant and recessive disorders, X-linked heterozygous females and genes without a GenCC entry go to a *review* table |
-| Candidate variants | Not classified in ClinVar (or VUS/conflicting), gnomAD frequency below the cut-off (default 1 %), in a GenCC gene: predicted loss-of-function; missense with AlphaMissense ≥ 0.906 (PP3_Moderate or stronger); predicted splice-altering outside the canonical sites (SpliceAI ≥ 0.5, or ≥ 0.2 in genes matching the HPO terms); missense/in-frame variants in genes matching the HPO terms. Automated ACMG/AMP evidence codes (PVS1, PM2_supporting, BA1, BS1, PP2, PP3, BP4, PP4) for triage, inheritance fit (incl. possible compound heterozygotes) and ranking by phenotype match |
+| Candidate variants | Not classified in ClinVar (or VUS/conflicting), gnomAD frequency below the cut-off (default 1 %), in a GenCC gene: predicted loss-of-function; missense with AlphaMissense ≥ 0.906 (PP3_Moderate or stronger); missense at a residue with a pathogenic ClinVar missense variant (PS1/PM5); predicted splice-altering outside the canonical sites (SpliceAI ≥ 0.5, or ≥ 0.2 in genes matching the HPO terms); missense/in-frame variants in genes matching the HPO terms. Automated ACMG/AMP evidence codes (PVS1, PS1, PM2_supporting, PM5, BA1, BS1, PP2, PP3, BP4, PP4) for triage, inheritance fit (incl. compound heterozygotes, phased from the reads where possible) and ranking by phenotype match, disease-level phenotype match and evidence |
+| Phenotype match by disease | With HPO terms: for every gene with a finding, the HPO-annotated disease that explains the largest share of the patient's terms, each term weighted by its information content; which terms it explains and which it does not, with the disease's onset, course and inheritance |
+| Gene knowledge | Next to every gene: GenCC diseases, GenCC disputed/refuted/no-known-relationship assertions, ClinGen haploinsufficiency and triplosensitivity, and (HPO) onset, course and inheritance of its diseases |
 | ACMG SF v3.3 | 84 genes (v3.2 plus ABCD1, CYP27A1, PLN; Genet Med 2025;27:101454); biallelic only for MUTYH, ATP7B, BTD, GAA, RPE65, CYP27A1; ABCD1 hemizygous, homozygous or two heterozygous variants (not a single heterozygous variant in a female); HFE p.Cys282Tyr homozygotes only; TTN truncating only. Rare loss-of-function variants not in ClinVar are listed as *review* |
-| Carrier status | One P/LP allele in a recessive gene |
+| Carrier status | One P/LP allele in a recessive gene; two P/LP variants shown by the reads to be in cis count as one allele |
 | Pharmacogenomics | CYP2C19, CYP2C9, VKORC1, CYP4F2, SLCO1B1, DPYD, TPMT, NUDT15, CYP3A5, CYP2B6, UGT1A1 at fixed GRCh38 positions (checked against ClinVar and the reference). A missing variant counts as the reference allele only with ≥ 15 reads at the position (BAM in v1); otherwise the gene is *indeterminate*. CPIC phenotypes, ClinVar drug-response variants (≥ 1 star). Next to it, the PharmCAT 3.4.0 diplotypes and phenotypes (all defining positions of each star allele, with the positions missing from the VCF listed); PharmCAT's own HTML report carries the CPIC, DPWG and FDA recommendations |
 | Risk alleles | Factor V Leiden, prothrombin G20210A, HFE p.Cys282Tyr/p.His63Asp, APOE (flagged: disclose only with counselling and consent), ClinVar risk/association variants (≥ 1 star) |
 | Runs of homozygosity | Total length of runs ≥ 1 Mb (consanguinity), runs concentrated on one chromosome (uniparental disomy), homozygous findings inside runs |
@@ -250,6 +265,24 @@ filters, or whose exome and genome frequencies disagree (p < 10⁻⁴), are flag
 | Missense PP3 | AlphaMissense | ≥ 0.792 Supporting, ≥ 0.906 Moderate, ≥ 0.990 Strong (Bergquist et al., Genet Med 2025; the 0.972–0.989 "+3" interval is reported as Moderate) |
 | Missense BP4 | AlphaMissense | ≤ 0.169 Supporting, ≤ 0.099 Moderate, only if SpliceAI ≤ 0.1 or unscored |
 | Splicing PP3 / BP4 | SpliceAI 1.3.1, raw, max delta, ±50 bp | ≥ 0.2 PP3, ≤ 0.1 BP4, Supporting only, outside the canonical ±1,2 positions (those go to PVS1; Walker et al., AJHG 2023) |
+
+**Other automated evidence.**
+
+| Evidence | Source | Rule |
+|---|---|---|
+| PVS1 (applicability) | GenCC, ClinGen dosage, gnomAD LOEUF | Loss of function is a disease mechanism if the gene is recessive or X-linked, has ClinGen haploinsufficiency score 3 or 2, or has LOEUF < 0.6 unless ClinGen scores haploinsufficiency unlikely (40) (Abou Tayoun et al. 2018; Riggs et al. 2020) |
+| PS1 | ClinVar residue table | Same amino-acid change, by a different nucleotide change, pathogenic/likely pathogenic with ≥ 1 star, and SpliceAI < 0.2 for this variant |
+| PM5 | ClinVar residue table | A different missense change at the same residue pathogenic/likely pathogenic with ≥ 1 star |
+| (shown, not scored) | ClinVar residue table | Pathogenic and benign missense variants within ±5 residues; the same change classified benign |
+
+Residues are compared only where the reference amino acid of SnpEff's transcript and ClinVar's RefSeq transcript
+agree (98.7 % of HG001's missense variants at a ClinVar residue). A gene-specific PM1 hotspot needs a VCEP
+definition, so the ClinVar density is only displayed.
+
+**Read-backed phase.** With the BAM, two heterozygous variants in a recessive gene are phased from the reads or read
+pairs that cover both (within 1 kb, MAPQ ≥ 20, duplicates excluded, ≥ 4 informative reads with ≥ 90 % agreeing).
+Variants in *cis* are one allele: the patient is a carrier, not affected. Otherwise the phase is reported as unknown
+and parental testing decides.
 
 The missense and splicing PP3 are never summed (the stronger one is used), and PP3 is not combined with PVS1.
 AlphaMissense's own "likely pathogenic" cut-off (0.564) is inside the calibrated indeterminate range, so it is
@@ -538,6 +571,58 @@ TA repeat) and CYP4F2, which the truth VCF lacks. Against the GeT-RM consensus f
 (\*1/\*2; the built-in genotyper said *indeterminate*), CYP2C9 (\*1/\*2 among PharmCAT's ambiguous set), SLCO1B1 (\*1/\*15
 among its set), CYP3A5 \*3/\*3 and DPYD (\*4; c.1627A>G is a normal-function variant), and calls UGT1A1 \*1/\*28 where
 GeT-RM has \*60/\*28. For HG005 it calls NUDT15 \*3/\*6, where the built-in table tests only \*3.
+
+**Clinical knowledge (report 0.5.0).** ClinGen dosage sensitivity, the ClinVar residue table (PS1/PM5), HPO
+disease annotations and read-backed phase were added. On the three GIAB exomes (rerun of the report on each sample's
+release-0.4 annotated VCF, and the full VCF workflow for HG001) every finding kept its category, evidence codes and
+confidence: these healthy individuals carry no rare missense variant at a pathogenic ClinVar residue and no pair of
+variants in a recessive gene, and no PVS1 changed. The workflow run gave the same findings as the standalone report.
+The additions were therefore measured where they act:
+
+*Candidate ranking (spike-in).* One ClinVar pathogenic missense variant (≥ 2 stars, SNV) of a dominant disease gene
+was inserted into the HG001 exome as an unclassified variant (no ClinVar fields, absent from gnomAD), with phenotype
+terms of an HPO-annotated disease of that gene, 300 cases with one gene each. For PS1/PM5 the variant's own ClinVar
+entry was left out. Rank of the inserted variant among all candidates:
+
+| Phenotype given | Report | Rank 1 | Top 5 | Top 10 | Median rank | Time per report (median) | Peak memory |
+|---|---|--:|--:|--:|--:|--:|--:|
+| 5 disease terms + 1 random term | 0.4.0 | 32/300 | 182/300 | 272/300 | 4.5 | 3.4 s | 0.42 GiB |
+| | 0.5.0 without ClinVar residues | 110/300 | 299/300 | 299/300 | 2 | 4.4 s | 0.43 GiB |
+| | 0.5.0 | **162/300** | **299/300** | **299/300** | **1** | 5.6 s | 0.55 GiB |
+| 3 disease terms + 3 random terms | 0.4.0 | 45/300 | 206/300 | 284/300 | 4 | 3.1 s | |
+| | 0.5.0 without ClinVar residues | 56/300 | 215/300 | 286/300 | 3 | 4.1 s | |
+| | 0.5.0 | **110/300** | **244/300** | **291/300** | **2** | 5.1 s | |
+
+The inserted variant got PM5 in 110 and 116 of the 300 cases and PS1 in 8 and 19. The reports ran on the rare and
+ClinVar-annotated part of the HG001 VCF, 16 in parallel; peak memory was measured on one case (the same for both
+phenotype settings), most of the 0.5.0 increase being the ClinVar residue table. Disease-level matching helps most when the phenotype is precise; ClinVar residue evidence helps
+regardless of the phenotype.
+
+*PS1/PM5 specificity (ClinVar, leave-one-out).* Each GRCh38 missense SNV with ≥ 2 stars tested against all other
+ClinVar entries (≥ 1 star) at its residue:
+
+| ClinVar classification | Variants | PS1 | PM5 | PS1 or PM5 | Time, memory (build of the table) |
+|---|--:|--:|--:|--:|---|
+| Pathogenic / likely pathogenic | 26,023 | 1,269 (4.9 %) | 14,193 (54.5 %) | 14,650 (56.3 %) | 49 s, < 0.1 GiB |
+| Benign / likely benign | 41,609 | 1 (0.0 %) | 126 (0.3 %) | 127 (0.3 %) | |
+
+*Read-backed phase (HG002).* Every pair of heterozygous calls within 1 kb in the HG002 exome
+(SRR14724472, realigned with BWA-MEM) whose phase the assembly-based GIAB v5.0q truth gives, 3,000 pairs sampled:
+
+| Distance between the variants | Pairs | Phased (cis or trans) | Wrong phase | Time per pair | Peak memory |
+|---|--:|--:|--:|--:|--:|
+| ≤ 150 bp | 1,271 | 95.2 % | 0 | 29 ms | 1.09 GiB (the whole check, mostly the VCF) |
+| 151–400 bp | 781 | 73.5 % | 0 | | |
+| 401–1,000 bp | 948 | 0.9 % | 0 | | |
+| SNV pairs / pairs with an indel | 2,629 / 371 | 62.6 % / 39.6 % | 0 / 0 | | |
+| **All** | **3,000** | **59.8 % (1,793)** | **0** | | |
+
+All 1,793 phase calls agreed with the truth (1,444 cis, 349 trans); the rest were reported as unknown. Beyond the
+read-pair span (about 400 bp for this library) phase stays unknown, so most compound heterozygotes in different
+exons still need parental testing.
+
+*Full report on HG001* (all inputs, BAM and reference, median of 3 runs on 4 cores): 0.4.0 7.3 s and 1.09 GiB, 0.5.0
+9.2 s and 1.22 GiB.
 
 ## 8. Scope and limitations
 

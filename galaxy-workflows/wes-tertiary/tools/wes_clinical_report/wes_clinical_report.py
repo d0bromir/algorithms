@@ -9,10 +9,13 @@ inputs; nothing is inferred by a statistical or language model. The report is de
 qualified reviewer (clinical geneticist / laboratory scientist), not a diagnosis.
 
 Sections: sample QC and sex check; diagnostic findings (ClinVar P/LP with inheritance-consistent
-genotype); candidate variants not classified in ClinVar (rare predicted loss-of-function, and rare
-missense in phenotype-matched genes) with automated ACMG/AMP evidence codes; ACMG SF v3.3 secondary
-findings; carrier status; pharmacogenomics (CPIC genes, single-nucleotide star alleles); risk alleles
-and other ClinVar associations; runs of homozygosity; coverage of clinically relevant genes; limits.
+genotype, compound heterozygotes phased from the reads where possible); candidate variants not classified in
+ClinVar (rare predicted loss-of-function, rare missense at pathogenic ClinVar residues, with high AlphaMissense
+scores or in phenotype-matched genes, predicted splice-altering) with automated ACMG/AMP evidence codes and the
+diseases that best explain the patient's phenotype; ACMG SF v3.3 secondary findings; carrier status;
+pharmacogenomics (CPIC genes, single-nucleotide star alleles, PharmCAT); risk alleles and other ClinVar
+associations; runs of homozygosity; coverage of clinically relevant genes; limits. Gene cells carry GenCC,
+ClinGen dosage sensitivity and HPO disease features (onset, course, inheritance).
 
 Standard library only (Python >= 3.8).
 """
@@ -26,7 +29,7 @@ import re
 import subprocess
 import sys
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 
 # --------------------------------------------------------------------------------------------- rules
 # ACMG secondary findings v3.3 (ACMG policy statement, Genet Med 2025;27:101454): the 81 genes of v3.2 (Miller et al.,
@@ -553,23 +556,313 @@ def load_pharmcat(path):
     return out
 
 
+class Phenotype:
+    """The patient's HPO terms matched against genes and diseases.
+
+    gene_terms: gene -> matched patient terms; names: term -> name; ic: patient term -> information content
+    (-ln of the fraction of annotated diseases that have the term or a descendant); disease_terms: disease ->
+    matched patient terms; gene_diseases: gene -> diseases linked to it that match at least one term."""
+
+    def __init__(self):
+        self.gene_terms = collections.defaultdict(set)
+        self.names = {}
+        self.ic = {}
+        self.disease_terms = collections.defaultdict(set)
+        self.gene_diseases = collections.defaultdict(set)
+        self.gene_all = collections.defaultdict(set)  # gene -> every disease linked to it
+        self.terms = set()
+
+    def score(self, disease):
+        """Fraction of the patient's phenotype information explained by the disease (0-1)."""
+        tot = sum(self.ic.get(t, 0.0) for t in self.terms)
+        if not tot:
+            return 0.0
+        return sum(self.ic.get(t, 0.0) for t in self.disease_terms.get(disease, ())) / tot
+
+    def best_diseases(self, gene, limit=2):
+        ds = sorted(self.gene_diseases.get(gene, ()), key=lambda d: (-self.score(d), d))
+        return [(self.score(d), d, sorted(self.disease_terms[d])) for d in ds[:limit]]
+
+
 def load_hpo(path, terms):
-    """For the patient's HPO terms: gene -> set of matched (term id, term name). Uses the propagated
-    phenotype_to_genes.txt, so a general term matches genes annotated to any of its descendants."""
-    match = collections.defaultdict(set)
-    names = {}
-    if not path or not terms:
-        return match, names
+    """Match the patient's HPO terms with the propagated phenotype_to_genes.txt (a general term matches genes and
+    diseases annotated to any of its descendants). Columns: hpo_id, hpo_name, ncbi_gene_id, gene_symbol[, disease_id]."""
+    ph = Phenotype()
+    ph.terms = set(terms)
+    if not path:
+        return ph
+    term_diseases = collections.defaultdict(set)
+    all_diseases = set()
     with opener(path) as f:
         f.readline()
         for line in f:
             t = line.rstrip("\n").split("\t")
             if len(t) < 4:
                 continue
-            names.setdefault(t[0], t[1])
+            ph.names.setdefault(t[0], t[1])
+            d = t[4] if len(t) > 4 and t[4] else None
+            if d:
+                all_diseases.add(d)
+                ph.gene_all[t[3]].add(d)
             if t[0] in terms:
-                match[t[3]].add(t[0])
-    return match, names
+                ph.gene_terms[t[3]].add(t[0])
+                if d:
+                    term_diseases[t[0]].add(d)
+                    ph.disease_terms[d].add(t[0])
+                    ph.gene_diseases[t[3]].add(d)
+    n = len(all_diseases)
+    for term in terms:
+        k = len(term_diseases.get(term, ()))
+        ph.ic[term] = math.log(n / k) if n and k else 0.0
+    return ph
+
+
+# HPO clinical-course terms (aspect C) and inheritance terms (aspect I) used in phenotype.hpoa.
+HPO_ONSET = {"HP:0030674": "antenatal", "HP:0011460": "embryonal", "HP:0011461": "fetal", "HP:0034199": "first trimester",
+             "HP:0034198": "second trimester", "HP:0034197": "third trimester", "HP:0003577": "congenital",
+             "HP:0003623": "neonatal", "HP:0003593": "infantile", "HP:0011463": "childhood", "HP:0003621": "juvenile",
+             "HP:0011462": "young adult", "HP:0025708": "early young adult", "HP:0025709": "intermediate young adult",
+             "HP:0025710": "late young adult", "HP:0003581": "adult", "HP:0003596": "middle age", "HP:0003584": "late"}
+HPO_COURSE = {"HP:0003676": "progressive", "HP:0003677": "slowly progressive", "HP:0003811": "neonatal death",
+              "HP:0001522": "death in infancy", "HP:0003819": "death in childhood", "HP:0003826": "stillbirth"}
+HPO_INHERITANCE = {"HP:0000006": "AD", "HP:0000007": "AR", "HP:0001417": "XL", "HP:0001419": "XLR",
+                   "HP:0001423": "XLD", "HP:0001427": "mitochondrial", "HP:0001450": "Y-linked",
+                   "HP:0001426": "multifactorial", "HP:0010982": "polygenic", "HP:0010984": "digenic",
+                   "HP:0001442": "somatic mosaicism", "HP:0003745": "sporadic"}
+
+
+def load_hpoa(path):
+    """HPO disease annotations (phenotype.hpoa): disease -> {name, onset, course, inheritance, n_features}."""
+    out = {}
+    if not path:
+        return out
+    with opener(path) as f:
+        ix = None
+        for line in f:
+            if line.startswith("#"):
+                continue
+            t = line.rstrip("\n").split("\t")
+            if ix is None:
+                ix = {h: i for i, h in enumerate(t)}
+                if "database_id" not in ix:
+                    raise SystemExit("phenotype.hpoa lacks the database_id column")
+                continue
+            if len(t) < len(ix) - 1:
+                continue
+            d = out.setdefault(t[ix["database_id"]], {"name": t[ix["disease_name"]], "onset": [], "course": [],
+                                                      "inheritance": [], "n_features": 0})
+            hp, aspect = t[ix["hpo_id"]], t[ix["aspect"]]
+            if t[ix["qualifier"]] == "NOT":
+                continue
+            if aspect == "P":
+                d["n_features"] += 1
+            elif aspect == "C" and hp in HPO_ONSET and HPO_ONSET[hp] not in d["onset"]:
+                d["onset"].append(HPO_ONSET[hp])
+            elif aspect == "C" and hp in HPO_COURSE and HPO_COURSE[hp] not in d["course"]:
+                d["course"].append(HPO_COURSE[hp])
+            elif aspect == "I" and hp in HPO_INHERITANCE and HPO_INHERITANCE[hp] not in d["inheritance"]:
+                d["inheritance"].append(HPO_INHERITANCE[hp])
+    return out
+
+
+def load_gencc_disputed(path):
+    """gene -> [(disease, classification, submitter)] for Disputed/Refuted/No Known Disease Relationship assertions."""
+    out = collections.defaultdict(list)
+    if not path:
+        return out
+    with opener(path) as f:
+        header = f.readline().rstrip("\n").split("\t")
+        ix = {h.strip('"'): i for i, h in enumerate(header)}
+        for line in f:
+            t = [x.strip('"') for x in line.rstrip("\n").split("\t")]
+            if len(t) < len(header) - 3:
+                continue
+            cls = t[ix["classification_title"]]
+            if cls in ("Disputed Evidence", "Refuted Evidence", "No Known Disease Relationship"):
+                out[t[ix["gene_symbol"]]].append((t[ix["disease_title"]], cls, t[ix["submitter_title"]]))
+    return out
+
+
+# ClinGen dosage sensitivity scores (Riggs et al. 2020).
+DOSAGE_TEXT = {3: "sufficient evidence", 2: "some evidence", 1: "little evidence", 0: "no evidence",
+               30: "autosomal recessive gene", 40: "dosage sensitivity unlikely"}
+
+
+def load_dosage(path):
+    """ClinGen gene curation list (ClinGen_gene_curation_list_GRCh38.tsv): gene -> (HI score, TS score)."""
+    out = {}
+    if not path:
+        return out
+    with opener(path) as f:
+        ix = None
+        for line in f:
+            t = line.rstrip("\n").split("\t")
+            if line.startswith("#Gene Symbol") or (ix is None and t[0] == "Gene Symbol"):
+                ix = {h.lstrip("#"): i for i, h in enumerate(t)}
+                continue
+            if line.startswith("#") or ix is None or len(t) < len(ix) - 5:
+                continue
+            hi = t[ix["Haploinsufficiency Score"]]
+            ts = t[ix["Triplosensitivity Score"]]
+            out[t[ix["Gene Symbol"]]] = (int(hi) if hi.lstrip("-").isdigit() else None,
+                                         int(ts) if ts.lstrip("-").isdigit() else None)
+    return out
+
+
+def load_clinvar_protein(path):
+    """Protein-level ClinVar table (data/build_clinvar_protein.py): (gene, residue) -> [(ref_aa, alt_aa, class, stars,
+    variation_id, chrom, pos, ref, alt)], class P (pathogenic/likely pathogenic) or B (benign/likely benign)."""
+    out = collections.defaultdict(list)
+    if not path:
+        return out
+    with opener(path) as f:
+        for line in f:
+            if line.startswith("#"):
+                continue
+            t = line.rstrip("\n").split("\t")
+            if len(t) < 11 or not t[1].isdigit():
+                continue
+            out[(t[0], int(t[1]))].append((t[2], t[3], t[4], int(t[5]) if t[5].isdigit() else 0, t[6],
+                                           norm_chrom(t[7]), int(t[8]) if t[8].isdigit() else 0, t[9], t[10]))
+    return out
+
+
+PROTEIN_CHANGE = re.compile(r"^p\.([A-Z][a-z]{2})(\d+)([A-Z][a-z]{2})$")
+
+
+def protein_evidence(v, gene, cvp, window=5):
+    """ACMG PS1 / PM5 from ClinVar missense variants at the same residue, and the ClinVar missense density around it.
+
+    PS1: the same amino-acid change, by a different nucleotide change, is pathogenic/likely pathogenic (>= 1 star) and
+    neither variant is predicted to affect splicing (SpliceAI < 0.2 for this one). PM5: a different missense change at
+    the same residue is pathogenic/likely pathogenic (>= 1 star). Residues are compared only where the reference amino
+    acid matches, i.e. where SnpEff's transcript and ClinVar's RefSeq transcript are numbered alike.
+    Returns (codes, notes)."""
+    if not cvp or not is_missense(v, gene):
+        return [], []
+    a = ann_for_gene(v, gene)
+    m = PROTEIN_CHANGE.match(a[10]) if a and len(a) > 10 else None
+    if not m:
+        return [], []
+    ref_aa, res, alt_aa = m.group(1), int(m.group(2)), m.group(3)
+    here = cvp.get((gene, res), [])
+    if here and not any(x[0] == ref_aa for x in here):
+        return [], [f"ClinVar residue {res} is {here[0][0]}, not {ref_aa}: transcripts numbered differently"]
+    codes, notes = [], []
+    same = [x for x in here if x[1] == alt_aa and x[2] == "P" and x[3] >= 1 and (x[5], x[6], x[7], x[8]) != (v.chrom, v.pos, v.ref, v.alt)]
+    if same and (v.sai is None or v.sai < 0.2):
+        codes.append("PS1")
+        notes.append(f"same change p.{ref_aa}{res}{alt_aa} pathogenic in ClinVar (VCV{int(same[0][4]):09d})")
+    other = sorted({x[1] for x in here if x[1] != alt_aa and x[2] == "P" and x[3] >= 1})
+    if other:
+        codes.append("PM5")
+        notes.append(f"other pathogenic missense at residue {res}: " + ", ".join(f"p.{ref_aa}{res}{x}" for x in other))
+    benign_same = [x for x in here if x[1] == alt_aa and x[2] == "B" and x[3] >= 1]
+    if benign_same:
+        notes.append(f"same amino-acid change benign in ClinVar (VCV{int(benign_same[0][4]):09d})")
+    n_p = n_b = 0
+    for r in range(res - window, res + window + 1):
+        for x in cvp.get((gene, r), []):
+            if x[3] >= 1:
+                n_p += x[2] == "P"
+                n_b += x[2] == "B"
+    if n_p >= 3:
+        notes.append(f"ClinVar missense within {window} residues: {n_p} pathogenic, {n_b} benign"
+                     + (" (pathogenic cluster)" if n_b == 0 else ""))
+    return codes, notes
+
+
+# ----------------------------------------------------------------------------------- read-backed phase
+CIGAR = re.compile(r"(\d+)([MIDNSHP=X])")
+
+
+def read_alleles(start, cigar, seq, variants):
+    """For one aligned read: variant key -> 'alt' / 'ref' / None (not covered or unclear). SNVs are read from the
+    aligned base; indels from an insertion/deletion of the right length right after the VCF anchor base."""
+    aligned = {}   # ref pos -> read base
+    ins = {}       # ref pos of the base before the insertion -> inserted length
+    dels = {}      # first deleted ref pos -> deleted length
+    rpos, qpos = start, 0
+    for n, op in CIGAR.findall(cigar):
+        n = int(n)
+        if op in "M=X":
+            for i in range(n):
+                aligned[rpos + i] = seq[qpos + i]
+            rpos += n
+            qpos += n
+        elif op == "I":
+            ins[rpos - 1] = n
+            qpos += n
+        elif op in "DN":
+            dels[rpos] = n
+            rpos += n
+        elif op == "S":
+            qpos += n
+    out = {}
+    for v in variants:
+        if len(v.ref) == 1 and len(v.alt) == 1:
+            b = aligned.get(v.pos)
+            out[v.key()] = None if b is None else ("alt" if b == v.alt else ("ref" if b == v.ref else None))
+            continue
+        span = range(v.pos, v.pos + max(len(v.ref), 2))
+        if not all(p in aligned or p in dels or any(d <= p < d + dels[d] for d in dels) for p in span):
+            out[v.key()] = None
+            continue
+        if len(v.ref) > len(v.alt):
+            hit = dels.get(v.pos + 1) == len(v.ref) - len(v.alt)
+        else:
+            hit = ins.get(v.pos) == len(v.alt) - len(v.ref)
+        clean = not any(v.pos <= p <= v.pos + len(v.ref) for p in list(ins) + list(dels))
+        out[v.key()] = "alt" if hit else ("ref" if clean else None)
+    return out
+
+
+def phase_pair(bam, prefix, v1, v2, max_distance=1000):
+    """Read-backed phase of two heterozygous variants: ('trans'|'cis'|'unclear'|'too far apart', reads cis, reads trans).
+    A read or read pair that covers both positions supports cis (alt-alt or ref-ref) or trans (alt-ref or ref-alt)."""
+    if v1.chrom != v2.chrom or abs(v1.pos - v2.pos) > max_distance:
+        return "too far apart", 0, 0
+    lo, hi = sorted((v1.pos, v2.pos))
+    try:
+        sam = run_samtools(["view", "-F", "3852", "-q", "20", bam, f"{prefix}{v1.chrom}:{lo}-{hi + 1}"])
+    except (Exception, SystemExit):
+        return "unclear", 0, 0
+    per = collections.defaultdict(dict)
+    for line in sam.splitlines():
+        t = line.split("\t")
+        if len(t) < 10 or t[5] == "*":
+            continue
+        for k, s in read_alleles(int(t[3]), t[5], t[9], (v1, v2)).items():
+            if s is None:
+                continue
+            if per[t[0]].get(k, s) != s:
+                per[t[0]][k] = "conflict"
+            else:
+                per[t[0]][k] = s
+    cis = trans = 0
+    for d in per.values():
+        a, b = d.get(v1.key()), d.get(v2.key())
+        if a in ("alt", "ref") and b in ("alt", "ref"):
+            if a == b:
+                cis += 1
+            else:
+                trans += 1
+    if cis + trans >= 4 and trans >= 0.9 * (cis + trans):
+        return "trans", cis, trans
+    if cis + trans >= 4 and cis >= 0.9 * (cis + trans):
+        return "cis", cis, trans
+    return "unclear", cis, trans
+
+
+def phase_text(ph):
+    state, cis, trans = ph
+    if state == "trans":
+        return f"in trans (read-backed: {trans} of {cis + trans} read pairs)"
+    if state == "cis":
+        return f"in cis on the same allele (read-backed: {cis} of {cis + trans} read pairs)"
+    if state == "too far apart":
+        return "phase unknown (too far apart for read-backed phasing; test the parents)"
+    return f"phase unknown (read-backed phasing unclear: {cis} cis, {trans} trans read pairs; test the parents)"
 
 
 def load_roh(path):
@@ -763,11 +1056,20 @@ def variant_flags(v):
     return f + gnomad_caveats(v)
 
 
-def acmg_evidence(v, gene, moi, constraint, hpo_hit, max_af):
+def lof_mechanism(gene, moi, constraint, dosage):
+    """Is loss of function a known disease mechanism? Recessive or X-linked inheritance, ClinGen haploinsufficiency
+    score 3 or 2, or a LoF-intolerant gene (LOEUF < 0.6) unless ClinGen scores haploinsufficiency as unlikely (40)."""
+    hi = dosage.get(gene, (None, None))[0]
+    if "AR" in moi or "XL" in moi or hi in (2, 3):
+        return True
+    loeuf = constraint.get(gene, (None, None, None))[0]
+    return hi != 40 and loeuf is not None and loeuf < 0.6
+
+
+def acmg_evidence(v, gene, moi, constraint, hpo_hit, max_af, dosage=None, protein_codes=()):
     """Automated subset of ACMG/AMP 2015 evidence codes (provisional; for triage, not classification)."""
     codes = []
-    loeuf = constraint.get(gene, (None, None, None))[0]
-    if is_lof(v, gene) and ("AR" in moi or "XL" in moi or (loeuf is not None and loeuf < 0.6)):
+    if is_lof(v, gene) and lof_mechanism(gene, moi, constraint, dosage or {}):
         ann = ann_for_gene(v, gene)
         nmd = "NMD" in v.info
         codes.append("PVS1" if (nmd or "splice" in ann[1] or "start_lost" in ann[1] or "exon_loss" in ann[1]
@@ -779,6 +1081,7 @@ def acmg_evidence(v, gene, moi, constraint, hpo_hit, max_af):
         codes.append("BA1")
     elif p is not None and p > max_af:
         codes.append("BS1")
+    codes += list(protein_codes)
     if is_missense(v, gene):
         z = constraint.get(gene, (None, None, None))[2]
         if z is not None and z > 3.09:
@@ -900,8 +1203,31 @@ def clinvar_cell(v):
     return s
 
 
-def disease_cell(gene, gencc, hpo_match, hpo_names):
-    entries = gencc.get(gene, [])
+class Knowledge:
+    """Gene- and disease-level knowledge bases given to the report."""
+
+    def __init__(self, gencc=None, disputed=None, pheno=None, hpoa=None, dosage=None):
+        self.gencc = gencc or {}
+        self.disputed = disputed or {}
+        self.pheno = pheno or Phenotype()
+        self.hpoa = hpoa or {}
+        self.dosage = dosage or {}
+
+
+def disease_features(d, info):
+    bits = []
+    if info.get("onset"):
+        order = list(HPO_ONSET.values())
+        bits.append("onset " + "/".join(sorted(info["onset"], key=order.index)[:3]))
+    if info.get("inheritance"):
+        bits.append(", ".join(info["inheritance"]))
+    if info.get("course"):
+        bits.append(", ".join(info["course"][:2]))
+    return "; ".join(bits)
+
+
+def disease_cell(gene, K, phenotype=True):
+    entries = K.gencc.get(gene, [])
     s = ""
     if entries:
         ds, n = gene_diseases(entries)
@@ -909,9 +1235,33 @@ def disease_cell(gene, gencc, hpo_match, hpo_names):
         if n > len(ds):
             s += f"<br><span class='small'>+{n - len(ds)} more</span>"
     else:
-        s = '<span class="small">no established gene-disease association in GenCC</span>' if gencc else ""
-    if hpo_match.get(gene):
-        s += "<br>" + "".join(tag(f"phenotype match: {hpo_names.get(t, t)}", "t-blu") for t in sorted(hpo_match[gene]))
+        s = '<span class="small">no established gene-disease association in GenCC</span>' if K.gencc else ""
+    for d, cls, sub in K.disputed.get(gene, [])[:2]:
+        s += "<br>" + tag(f"{cls.replace(' Evidence', '').lower()}: {d} ({sub})", "t-amb")
+    hi, ts = K.dosage.get(gene, (None, None))
+    dz = []
+    if hi in (1, 2, 3, 30, 40):
+        dz.append(f"haploinsufficiency: {DOSAGE_TEXT[hi]}")
+    if ts in (2, 3):
+        dz.append(f"triplosensitivity: {DOSAGE_TEXT[ts]}")
+    if dz:
+        s += f"<br><span class='small'>ClinGen {esc('; '.join(dz))}</span>"
+    P = K.pheno
+    if phenotype and P.gene_terms.get(gene):
+        s += "<br>" + "".join(tag(f"phenotype match: {P.names.get(t, t)}", "t-blu") for t in sorted(P.gene_terms[gene]))
+        for sc, d, terms in P.best_diseases(gene, 1):
+            info = K.hpoa.get(d, {})
+            s += (f"<br><span class='small'>best match: <b>{esc(info.get('name', d))}</b> ({esc(d)}): "
+                  f"{len(terms)} of {len(P.terms)} terms, {sc:.0%} of the phenotype information"
+                  + (f"; {esc(disease_features(d, info))}" if disease_features(d, info) else "") + "</span>")
+    elif K.hpoa and P.gene_all.get(gene):
+        feats = []
+        for d in sorted(P.gene_all[gene], key=lambda d: -K.hpoa.get(d, {}).get("n_features", 0))[:2]:
+            info = K.hpoa.get(d)
+            if info and disease_features(d, info):
+                feats.append(f"{info['name']}: {disease_features(d, info)}")
+        if feats:
+            s += "<br><span class='small'>HPO: " + esc(" | ".join(feats)) + "</span>"
     return s
 
 
@@ -990,7 +1340,12 @@ def build(args):
     constraint = load_constraint(args.constraint)
     hpo_terms = {t.strip().upper() for t in re.split(r"[,;\s]+", args.hpo_terms or "") if t.strip()}
     hpo_terms = {t if t.startswith("HP:") else "HP:" + t for t in hpo_terms if re.match(r"(HP:)?\d{7}$", t)}
-    hpo_match, hpo_names = load_hpo(args.hpo_genes, hpo_terms)
+    pheno = load_hpo(args.hpo_genes, hpo_terms)
+    hpo_match, hpo_names = pheno.gene_terms, pheno.names
+    hpoa = load_hpoa(args.hpo_annotations)
+    dosage = load_dosage(args.clingen_dosage)
+    cvp = load_clinvar_protein(args.clinvar_protein)
+    K = Knowledge(gencc, load_gencc_disputed(args.gencc), pheno, hpoa, dosage)
     roh = load_roh(args.roh)
     target_cov = load_thresholds(args.target_coverage)
     gene_cov_rows = load_thresholds(args.gene_coverage)
@@ -1011,6 +1366,35 @@ def build(args):
 
     v_chrom_of_gene = {v.gene: v.chrom for v in variants}
 
+    phase_cache = {}
+
+    def phase(a, b):
+        """Read-backed phase of two heterozygous variants, or None without aligned reads."""
+        if not args.bam or a.zyg != "het" or b.zyg != "het":
+            return None
+        k = tuple(sorted((a.key(), b.key())))
+        if k not in phase_cache:
+            phase_cache[k] = phase_pair(args.bam, prefix, a, b)
+        return phase_cache[k]
+
+    def second_allele(v, others):
+        """(may a second allele be in trans?, text). others: the other qualifying variants in the gene."""
+        others = [x for x in others if x is not v]
+        if not others:
+            return False, ""
+        if v.zyg == "hom" or any(x.zyg == "hom" for x in others):
+            return True, ""
+        phases = [(x, phase(v, x)) for x in others]
+        trans = [(x, p) for x, p in phases if p and p[0] == "trans"]
+        if trans:
+            x, p = trans[0]
+            return True, f"with {x.hgvs_p or x.hgvs_c} {phase_text(p)}"
+        if all(p and p[0] == "cis" for _x, p in phases):
+            x, p = phases[0]
+            return False, f"with {x.hgvs_p or x.hgvs_c} {phase_text(p)}: one allele only"
+        p = next((p for _x, p in phases if p), None)
+        return True, phase_text(p) if p else "phase unknown"
+
     def moi_of(g):
         m = gene_moi(gencc.get(g, []))
         if not m and g in ACMG_SF:
@@ -1028,6 +1412,7 @@ def build(args):
     # ---------------------------------------------------------------- diagnostic (ClinVar P/LP)
     plp = [v for v in variants if is_plp(v)]
     diag, carrier, lowpen, review = [], [], [], []
+    carrier_note = {}
     by_gene_plp = collections.defaultdict(list)
     for v in plp:
         by_gene_plp[v.gene].append(v)
@@ -1035,9 +1420,11 @@ def build(args):
         g = v.gene
         moi = moi_of(g)
         nonpar_x = v.chrom == "X" and not any(a <= v.pos <= b for a, b in PAR_GRCH38)
-        biallelic = v.zyg == "hom" or len(by_gene_plp[g]) >= 2
+        second, phase_note = second_allele(v, by_gene_plp[g])
+        biallelic = v.zyg == "hom" or second
         two = ("homozygous" if v.zyg == "hom" else
-               "two P/LP alleles in this gene (possible compound heterozygote, phase unknown)")
+               "two P/LP alleles in this gene (possible compound heterozygote" + (f", {phase_note}" if phase_note else "")
+               + ")")
         if v.zyg == "hom" and v.nhomalt and v.nhomalt >= 2:
             two += (f" ({int(v.nhomalt)} homozygotes in gnomAD: the condition is probably mild, late-onset or of "
                     "reduced penetrance)")
@@ -1055,6 +1442,8 @@ def build(args):
                 diag.append((v, "autosomal recessive: " + two))
             else:
                 carrier.append(v)
+                if phase_note:
+                    carrier_note[v.key()] = phase_note
         elif "XL" in moi and nonpar_x:
             if sex == "male" or v.zyg == "hom":
                 diag.append((v, "X-linked: " + ("hemizygous" if sex == "male" else "homozygous")))
@@ -1081,7 +1470,8 @@ def build(args):
             if g in gencc or g in ACMG_SF:
                 if (is_lof(v, g) or (is_missense(v, g) and hpo_match.get(g))
                         or (is_missense(v, g) and CODE_RANK.get(am_code(v.am), 0) >= 2)
-                        or splice_candidate(v, g, bool(hpo_match.get(g)))):
+                        or splice_candidate(v, g, bool(hpo_match.get(g)))
+                        or protein_evidence(v, g, cvp)[0]):
                     rare_by_gene[g].append(v)
                 break
     for g, vs in rare_by_gene.items():
@@ -1091,29 +1481,39 @@ def build(args):
             lof = is_lof(v, g)
             reasons, consistent = [], False
             if "AR" in moi:  # recessive model: two alleles needed
-                ok = v.zyg == "hom" or len(vs) + len(by_gene_plp.get(g, [])) >= 2
+                others = [x for x in vs + by_gene_plp.get(g, []) if x is not v]
+                ok, ph_note = second_allele(v, others)
+                ok = v.zyg == "hom" or ok
                 hom_pop = v.zyg == "hom" and (v.nhomalt or 0) >= 2
                 consistent |= ok and not hom_pop
                 reasons.append("recessive: " + (f"homozygous, but {int(v.nhomalt)} homozygotes in gnomAD" if hom_pop else
                                                 "homozygous" if v.zyg == "hom" else
-                                                "second rare allele in the gene (phase unknown)" if ok else
+                                                f"second rare allele in the gene ({ph_note})" if ok else
+                                                f"second rare allele {ph_note}" if others else
                                                 "single heterozygous allele (carrier at most)"))
             if not moi or {"AD", "XL", "MT"} & moi:  # dominant / X-linked model: one rare allele
                 strict = freq(v) is None or freq(v) < 1e-4
-                tolerant = lof and loeuf is not None and loeuf >= 0.6 and "XL" not in moi
+                hi = dosage.get(g, (None, None))[0]
+                tolerant = lof and "XL" not in moi and hi not in (2, 3) and (
+                    hi == 40 or (loeuf is not None and loeuf >= 0.6))
                 consistent |= strict and not tolerant
                 r = ("dominant/X-linked" if moi else "inheritance unknown")
                 if not strict:
                     r += ": too frequent for a dominant disorder"
                 elif tolerant:
-                    r += f": LoF-tolerant gene (LOEUF {loeuf:.2f})"
+                    r += (": ClinGen: haploinsufficiency unlikely" if dosage.get(g, (None,))[0] == 40
+                          else f": LoF-tolerant gene (LOEUF {loeuf:.2f})")
                 reasons.append(r)
             why = "; ".join(reasons)
-            ev = acmg_evidence(v, g, moi, constraint, bool(hpo_match.get(g)), args.max_af)
-            score = (2 if hpo_match.get(g) else 0) + (2 if consistent else 0) + (1 if lof else 0) + \
-                (1 if "PVS1" in ev else 0) + (1 if CODE_RANK.get(next((c for c in ev if c.startswith("PP3")), ""), 0) >= 2 else 0) - \
+            pcodes, pnotes = protein_evidence(v, g, cvp)
+            ev = acmg_evidence(v, g, moi, constraint, bool(hpo_match.get(g)), args.max_af, dosage, pcodes)
+            best = pheno.best_diseases(g, 1)
+            score = (2 if hpo_match.get(g) else 0) + (1 if best and best[0][0] >= 0.5 else 0) + \
+                (2 if consistent else 0) + (1 if lof else 0) + \
+                (1 if "PVS1" in ev else 0) + (1 if CODE_RANK.get(next((c for c in ev if c.startswith("PP3")), ""), 0) >= 2 else 0) + \
+                (2 if "PS1" in ev else (1 if "PM5" in ev else 0)) - \
                 (1 if v.flags and any("depth" in f or "balance" in f for f in v.flags) else 0)
-            cands.append((score, v, g, consistent, why, ev))
+            cands.append((score, v, g, consistent, why, ev, pnotes))
     cands.sort(key=lambda x: (-x[0], x[2], x[1].pos))
 
     # ---------------------------------------------------------------- ACMG SF
@@ -1301,7 +1701,7 @@ def build(args):
         "clinical picture.</p>")
     R.table(["Variant", "Genotype", "ClinVar", "gnomAD frequency", "Gene-disease (GenCC)", "Interpretation"],
             [[var_cell(v), call_cell(v, sex), clinvar_cell(v), freq_cell(v),
-              disease_cell(v.gene, gencc, hpo_match, hpo_names), esc(why)] for v, why in diag])
+              disease_cell(v.gene, K), esc(why)] for v, why in diag])
     for v, why in diag:
         R.rows.append(("diagnostic", v, why))
     R.h("<h3>Pathogenic variants whose relevance depends on the condition (review)</h3><p class='small'>Genes with "
@@ -1309,7 +1709,7 @@ def build(args):
         "established disease association in GenCC.</p>")
     R.table(["Variant", "Genotype", "ClinVar", "gnomAD frequency", "Gene-disease (GenCC)", "Why review"],
             [[var_cell(v), call_cell(v, sex), clinvar_cell(v), freq_cell(v),
-              disease_cell(v.gene, gencc, hpo_match, hpo_names), esc(why)] for v, why in review])
+              disease_cell(v.gene, K), esc(why)] for v, why in review])
     for v, why in review:
         R.rows.append(("pathogenic_review", v, why))
     if lowpen:
@@ -1326,25 +1726,58 @@ def build(args):
                                                           "the patient's phenotype" if hpo_terms else "")
         + ", rare missense variants with AlphaMissense at PP3_Moderate or stronger (>= 0.906) and rare variants "
         "predicted to alter splicing outside the canonical sites (SpliceAI >= 0.5; >= 0.2 in phenotype-matched genes)"
-        + ". Evidence codes are an automated subset of the ACMG/AMP 2015 criteria (PVS1, PM2, BA1, BS1, PP2, PP3, BP4, PP4) "
-        "for triage; they are not a classification. Rows are ranked by phenotype match, inheritance fit and "
-        "variant consequence.</p>")
+        + (" and rare missense variants at a residue where ClinVar has a pathogenic missense variant (PS1/PM5)" if cvp else "")
+        + ". Evidence codes are an automated subset of the ACMG/AMP 2015 criteria (PVS1, PS1, PM2, PM5, BA1, BS1, PP2, "
+        "PP3, BP4, PP4) for triage; they are not a classification. Rows are ranked by phenotype match, inheritance fit "
+        "and variant consequence.</p>")
     rows = []
-    for score, v, g, consistent, why, ev in cands[:args.max_candidates]:
+    for score, v, g, consistent, why, ev, pnotes in cands[:args.max_candidates]:
         a = ann_for_gene(v, g) or v.anns[0]
         loeuf = constraint.get(g, (None, None, None))[0]
         rows.append([var_cell(v).replace(f"<b>{esc(v.gene)}</b>", f"<b>{esc(g)}</b>"), call_cell(v, sex),
                      esc(a[1].replace("&", " & ")) + (f"<br><span class='small'>LOEUF {loeuf:.2f}</span>" if loeuf is not None else ""),
-                     freq_cell(v), disease_cell(g, gencc, hpo_match, hpo_names),
+                     freq_cell(v), disease_cell(g, K),
                      ("" if consistent else tag("inheritance not met", "t-grn") + "<br>") + esc(why),
-                     " ".join(tag(c, "t-red" if c.startswith("PVS") else ("t-grn" if c.startswith("B") else "")) for c in ev)
-                     + (f"<br><span class='small'>{esc(predictor_text(v))}</span>" if predictor_text(v) else "")])
-        R.rows.append(("candidate" if consistent else "candidate_inheritance_not_met", v, why + "; " + ",".join(ev)))
+                     " ".join(tag(c, "t-red" if c.startswith(("PVS", "PS")) else ("t-grn" if c.startswith("B") else "")) for c in ev)
+                     + (f"<br><span class='small'>{esc(predictor_text(v))}</span>" if predictor_text(v) else "")
+                     + "".join(f"<br><span class='small'>{esc(n)}</span>" for n in pnotes)])
+        R.rows.append(("candidate" if consistent else "candidate_inheritance_not_met", v,
+                       "; ".join([why, ",".join(ev)] + pnotes)))
     R.table(["Variant", "Genotype", "Consequence", "gnomAD frequency", "Gene-disease (GenCC)", "Inheritance fit", "Evidence"], rows)
     if len(cands) > args.max_candidates:
         R.h(f"<p class='small'>{len(cands) - args.max_candidates} more candidates in the TSV output.</p>")
-        for score, v, g, consistent, why, ev in cands[args.max_candidates:]:
-            R.rows.append(("candidate" if consistent else "candidate_inheritance_not_met", v, why + "; " + ",".join(ev)))
+        for score, v, g, consistent, why, ev, pnotes in cands[args.max_candidates:]:
+            R.rows.append(("candidate" if consistent else "candidate_inheritance_not_met", v,
+                           "; ".join([why, ",".join(ev)] + pnotes)))
+
+    # phenotype match by disease
+    if hpo_terms and pheno.disease_terms:
+        R.h("<h3>Diseases matching the phenotype in genes with a finding</h3><p class='small'>For every gene with a "
+            "diagnostic, review or candidate variant: the linked disease (HPO annotations) that explains the largest share "
+            "of the patient's phenotype, weighting each term by its information content (rare features count more than "
+            "common ones). Terms the disease does not explain argue against it, or for a second diagnosis.</p>")
+        fgenes = collections.OrderedDict()
+        for v, _w in diag + review:
+            fgenes.setdefault(v.gene, []).append(v)
+        for c in cands:
+            fgenes.setdefault(c[2], []).append(c[1])
+        rows = []
+        for g, vs in fgenes.items():
+            for sc, d, terms in pheno.best_diseases(g, 1):
+                if sc <= 0:
+                    continue
+                info = hpoa.get(d, {})
+                miss = sorted(pheno.terms - set(terms))
+                rows.append((sc, [f"<b>{esc(info.get('name', d))}</b><br><span class='small'>{esc(d)}"
+                                  + (f"; {esc(disease_features(d, info))}" if disease_features(d, info) else "") + "</span>",
+                                  f"<b>{esc(g)}</b><br><span class='small'>"
+                                  + esc(", ".join(dict.fromkeys(x.hgvs_p or x.hgvs_c for x in vs))) + "</span>",
+                                  f"{sc:.0%}", esc(", ".join(f"{t} {hpo_names.get(t, '')}" for t in terms)),
+                                  esc(", ".join(f"{t} {hpo_names.get(t, '')}" for t in miss)) or "none"]))
+                R.rows.append(("phenotype_match", None, (g, d, f"{sc:.2f} {info.get('name', '')}")))
+        rows.sort(key=lambda r: -r[0])
+        R.table(["Disease", "Gene and variants", "Phenotype explained", "Patient terms explained", "Not explained"],
+                [r[1] for r in rows[:30]])
 
     # ACMG SF
     R.h(f"<h2>4. Secondary findings: {ACMG_SF_VERSION} ({len(ACMG_SF)} genes)</h2><p class='small'>Medically "
@@ -1374,10 +1807,11 @@ def build(args):
         "allele in a gene associated with autosomal recessive disease. Carriers are usually unaffected; the result "
         "matters for reproductive risk if a partner carries a pathogenic variant in the same gene.</p>")
     R.table(["Variant", "Genotype", "ClinVar", "gnomAD frequency", "Condition (GenCC)"],
-            [[var_cell(v), call_cell(v, sex), clinvar_cell(v), freq_cell(v), disease_cell(v.gene, gencc, {}, {})]
+            [[var_cell(v), call_cell(v, sex) + (f"<br>{tag(carrier_note[v.key()], 't-blu')}" if v.key() in carrier_note else ""),
+              clinvar_cell(v), freq_cell(v), disease_cell(v.gene, K, phenotype=False)]
              for v in carrier])
     for v in carrier:
-        R.rows.append(("carrier", v, ""))
+        R.rows.append(("carrier", v, carrier_note.get(v.key(), "")))
 
     # PGx
     R.h("<h2>6. Pharmacogenomics</h2><p class='small'>Single-nucleotide star alleles of CPIC genes, read at fixed "
@@ -1521,9 +1955,31 @@ def build(args):
         "(dominant) or 0.1% (recessive). Frequencies from gnomAD sites that failed gnomAD's own filters or whose exome "
         "and genome frequencies disagree are flagged. A variant absent from gnomAD is not proof of rarity where gnomAD "
         "coverage is low.</li>")
-    R.h(f"<li>Gene-disease validity and inheritance: GenCC ({'loaded, ' + str(len(gencc)) + ' genes' if gencc else 'not provided'}); "
+    R.h(f"<li>Gene-disease validity and inheritance: GenCC ({'loaded, ' + str(len(gencc)) + ' genes' if gencc else 'not provided'}"
+        f"{'; disputed, refuted and no-known-relationship assertions are shown next to the gene' if K.disputed else ''}); "
         f"gene constraint: gnomAD LOEUF ({'loaded, ' + str(len(constraint)) + ' genes' if constraint else 'not provided'}); "
-        f"phenotype: HPO phenotype_to_genes ({'loaded' if args.hpo_genes else 'not provided'}).</li>")
+        f"dosage sensitivity: ClinGen ({'loaded, ' + str(len(dosage)) + ' genes' if dosage else 'not provided'}); "
+        f"phenotype: HPO phenotype_to_genes ({'loaded' if args.hpo_genes else 'not provided'}) and disease annotations "
+        f"({'loaded, ' + str(len(hpoa)) + ' diseases' if hpoa else 'not provided'}).</li>")
+    R.h("<li>Loss of function counts as a disease mechanism (PVS1, and a LoF candidate in a dominant gene) for recessive "
+        "or X-linked genes, ClinGen haploinsufficiency score 3 or 2, or LOEUF &lt; 0.6 unless ClinGen scores "
+        "haploinsufficiency as unlikely (Abou Tayoun et al. 2018; Riggs et al. 2020).</li>")
+    if cvp:
+        R.h(f"<li>Protein-level ClinVar evidence ({len(cvp):,} residues with pathogenic or benign missense variants, "
+            "&ge; 1 star): PS1 when the same amino-acid change by a different nucleotide change is pathogenic and "
+            "SpliceAI is below 0.2; PM5 when another missense change at the residue is pathogenic. Residues are compared "
+            "only where the reference amino acid agrees between SnpEff's and ClinVar's transcripts. The density of "
+            "pathogenic and benign missense variants within 5 residues is shown for orientation, not scored "
+            "(a PM1 hotspot needs a gene-specific definition).</li>")
+    if args.bam:
+        R.h("<li>Two heterozygous variants in a recessive gene are phased from the reads where a read or read pair "
+            "covers both (within 1 kb; MAPQ &ge; 20; &ge; 4 informative reads, &ge; 90% agreeing). Variants in cis "
+            "are one allele: the patient is then a carrier, not affected. Otherwise the phase stays unknown and parental "
+            "testing decides.</li>")
+    if hpo_terms and pheno.disease_terms:
+        R.h("<li>Disease-level phenotype match: for each gene, the linked HPO-annotated disease that explains the largest "
+            "share of the patient's terms, each weighted by its information content (-ln of the fraction of diseases "
+            "annotated with the term or a descendant). A match of &ge; 50% adds one rank point to a candidate.</li>")
     if args.artefacts:
         R.h(f"<li>Recurrent-artefact list: {len(artefacts)} alleles called in many of the laboratory's own samples but "
             f"rare or absent in gnomAD (systematic errors of the assay); {n_artefact} calls of this sample match it and "
@@ -1585,6 +2041,9 @@ def main(argv=None):
     ap.add_argument("--constraint", help="gnomAD gene constraint TSV")
     ap.add_argument("--hpo-genes", help="HPO phenotype_to_genes.txt")
     ap.add_argument("--hpo-terms", help="patient HPO terms, comma/space separated (HP:0001250 ...)")
+    ap.add_argument("--hpo-annotations", help="HPO disease annotations (phenotype.hpoa): disease names, onset, course")
+    ap.add_argument("--clingen-dosage", help="ClinGen gene curation list (ClinGen_gene_curation_list_GRCh38.tsv)")
+    ap.add_argument("--clinvar-protein", help="protein-level ClinVar table (data/build_clinvar_protein.py): PS1/PM5")
     ap.add_argument("--roh", help="bcftools roh output (RG lines)")
     ap.add_argument("--artefacts", help="recurrent-artefact VCF of the laboratory (data/build_artefact_list.sh)")
     ap.add_argument("--pharmcat", help="PharmCAT calls-only TSV (pharmcat_pipeline -reporterCallsOnlyTsv)")

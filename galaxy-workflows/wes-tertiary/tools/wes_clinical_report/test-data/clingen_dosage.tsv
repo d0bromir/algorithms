@@ -1,0 +1,5 @@
+#ClinGen Gene Curation Results
+#Gene Symbol	Gene ID	cytoBand	Genomic Location	Haploinsufficiency Score	Haploinsufficiency Description	Haploinsufficiency PMID1	Triplosensitivity Score	Triplosensitivity Description	Date Last Evaluated
+GENEX	1	1p36	chr1:1-2	40	Dosage sensitivity unlikely		0	No evidence available	2020-01-01
+BRCA2	675	13q13.1	chr13:1-2	3	Sufficient evidence for dosage pathogenicity		1	Little evidence for dosage pathogenicity	2020-01-01
+PAH	5053	12q23.2	chr12:1-2	30	Gene associated with autosomal recessive phenotype		Not yet evaluated		2020-01-01
