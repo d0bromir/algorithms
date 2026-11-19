@@ -39,6 +39,33 @@ flowchart LR
 
 ## 1. Install the tools and import the workflows
 
+**Quick install.** [`install.sh`](install.sh) runs every step of this section and section 2 on the Galaxy server.
+It installs the command-line programs, the Tool Shed and local tools with their dependencies, and the workflows.
+It also downloads and builds the reference and knowledge files and uploads them into a history:
+```bash
+./install.sh check
+```
+```bash
+./install.sh all --regions kit.bed
+```
+| Stage | What it does |
+|---|---|
+| `check` | Reports what is installed and what is missing; changes nothing |
+| `system` | Installs bcftools, bedtools, samtools, tabix, curl, gawk and python3-venv with apt (`--conda`: into a conda environment instead) |
+| `venv` | Creates a Python environment with Ephemeris and BioBlend (`$VENV`, default `~/wes-venv`) |
+| `tools` | Installs the [`tools.yml`](tools.yml) repositories with Ephemeris; already-installed repositories are skipped |
+| `local-tools` | Copies the three local tools to the local tool directory and checks `local_tool_conf.xml`, `galaxy.yml` and the HTML allowlist. Then Galaxy installs the tools' Conda dependencies |
+| `workflows` | Imports both `.ga` files; with `--update`, adds a new version to workflows already present |
+| `data` | Downloads and builds the section 2 files into `--data-dir`, with a `MANIFEST.tsv` (source, date, size) |
+| `upload` | Uploads the `MANIFEST.tsv` files into a new history and runs *SnpEff download* there |
+
+- **API key:** read from `$GALAXY_API_KEY` or `~/.galaxy_admin_key`, and passed to the Python helper ([`install/galaxy_setup.py`](install/galaxy_setup.py)) in its environment, not on a command line.
+- **Galaxy configuration:** changed only with `--configure`, which writes a missing `local_tool_conf.xml` and adds the report tools to the allowlist. Otherwise the script prints what to add, since Galaxy servers managed by Ansible should change it in their templates.
+- **gnomAD extract:** built only with `--regions` (the capture kit BEDs), because it reads about 2 hours from the gnomAD bucket. The capture kit BED itself is the laboratory's own and is not downloaded.
+- **Re-running:** every stage can be run again; what is already in place is left alone. On the test server (November 2026 releases), the `data` stage without gnomAD took 16 min, most of it the Ensembl FASTA at 1.5 MB/s. It wrote 3.8 GB, with a peak memory of 2.1 GB (the AlphaMissense build).
+
+The manual steps follow.
+
 1. **Tools**: as a Galaxy admin, install the repositories listed in [`tools.yml`](tools.yml). You can use
    *Admin → Install and Uninstall*, or [Ephemeris](https://ephemeris.readthedocs.io). Install Ephemeris into a
    virtual environment; Debian/Ubuntu refuse a system-wide `pip install` with "externally-managed-environment":
