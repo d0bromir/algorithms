@@ -1,4 +1,4 @@
-<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.5.0+galaxy0" profile="23.0">
+<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.6.0+galaxy0" profile="23.0">
     <description>diagnostic, secondary, carrier, pharmacogenomic and risk findings in one human-readable report</description>
     <requirements>
         <requirement type="package" version="3.12">python</requirement>
@@ -9,6 +9,14 @@
 #if $bam:
     ln -s '$bam' input.bam &&
     ln -s '${bam.metadata.bam_index}' input.bam.bai &&
+#end if
+#if $mother_bam:
+    ln -s '$mother_bam' mother.bam &&
+    ln -s '${mother_bam.metadata.bam_index}' mother.bam.bai &&
+#end if
+#if $father_bam:
+    ln -s '$father_bam' father.bam &&
+    ln -s '${father_bam.metadata.bam_index}' father.bam.bai &&
 #end if
 #if $reference:
     ln -s '$reference' reference.fa &&
@@ -42,6 +50,19 @@ python3 '$__tool_directory__/wes_clinical_report.py'
     #if $clinvar_protein:
         --clinvar-protein '$clinvar_protein'
     #end if
+    #if $mother_vcf:
+        --mother-vcf '$mother_vcf'
+    #end if
+    #if $father_vcf:
+        --father-vcf '$father_vcf'
+    #end if
+    #if $mother_bam:
+        --mother-bam mother.bam
+    #end if
+    #if $father_bam:
+        --father-bam father.bam
+    #end if
+    --affected-parents '$affected_parents'
     #if $roh:
         --roh '$roh'
     #end if
@@ -99,6 +120,19 @@ python3 '$__tool_directory__/wes_clinical_report.py'
                help="https://ftp.clinicalgenome.org/: haploinsufficiency and triplosensitivity scores; decide whether loss of function is a disease mechanism (PVS1)."/>
         <param name="clinvar_protein" type="data" format="tabular,tsv,txt" optional="true" label="ClinVar missense variants by residue (TSV)"
                help="Built from ClinVar variant_summary.txt.gz with data/build_clinvar_protein.py in the workflow repository: ACMG PS1 (same amino-acid change pathogenic) and PM5 (another pathogenic change at the residue)."/>
+        <param name="mother_vcf" type="data" format="vcf,vcf_bgzip" optional="true" label="Mother: variant calls (VCF)"
+               help="The mother's calls on the same reference (raw or filtered; multi-allelic and complex records are split). With both parents: de novo variants, parental origin of every finding, compound heterozygotes phased by origin, parentage check."/>
+        <param name="father_vcf" type="data" format="vcf,vcf_bgzip" optional="true" label="Father: variant calls (VCF)"/>
+        <param name="mother_bam" type="data" format="bam" optional="true" label="Mother: aligned reads (BAM)"
+               help="Reads at the proband's variants that the mother's calls lack: confirms de novo status (reference reads) or finds missed calls."/>
+        <param name="father_bam" type="data" format="bam" optional="true" label="Father: aligned reads (BAM)"/>
+        <param name="affected_parents" type="select" label="Affected parents" help="Whether a parent has the proband's condition: a dominant candidate inherited from an unaffected parent does not count as fitting the inheritance.">
+            <option value="unknown" selected="true">unknown</option>
+            <option value="none">neither parent</option>
+            <option value="mother">mother</option>
+            <option value="father">father</option>
+            <option value="both">both parents</option>
+        </param>
         <param name="roh" type="data" format="tabular" optional="true" label="Runs of homozygosity (bcftools roh)"/>
         <param name="pharmcat" type="data" format="tabular,tsv,txt" optional="true" label="PharmCAT calls (TSV)"
                help="Calls-only TSV of the PharmCAT pharmacogenomics tool; shown next to the built-in star-allele genotypes."/>
@@ -176,6 +210,25 @@ python3 '$__tool_directory__/wes_clinical_report.py'
                 </assert_contents>
             </output>
         </test>
+        <test expect_num_outputs="2">
+            <param name="vcf" value="annotated.vcf" ftype="vcf"/>
+            <param name="gencc" value="gencc.tsv" ftype="tabular"/>
+            <param name="constraint" value="constraint.tsv" ftype="tabular"/>
+            <param name="mother_vcf" value="mother.vcf" ftype="vcf"/>
+            <param name="father_vcf" value="father.vcf" ftype="vcf"/>
+            <param name="affected_parents" value="none"/>
+            <output name="report" ftype="html">
+                <assert_contents>
+                    <has_text text="De novo variants (trio)"/>
+                </assert_contents>
+            </output>
+            <output name="findings" ftype="tabular">
+                <assert_contents>
+                    <has_text_matching expression="\tcandidate_inheritance_not_met\tGENEX\t.*inherited from the unaffected father"/>
+                    <has_text_matching expression="\tde_novo_possible\tGENEP\t"/>
+                </assert_contents>
+            </output>
+        </test>
     </tests>
     <help><![CDATA[
 **What it does**
@@ -201,6 +254,14 @@ Sections:
 Gene-disease cells also show GenCC disputed/refuted assertions, ClinGen dosage sensitivity, and (from the HPO
 disease annotations) age of onset, clinical course and inheritance. Two heterozygous variants in a recessive gene
 are phased from the reads when a BAM is given: variants in cis are one allele (carrier, not affected).
+
+With the parents' calls (and optionally their BAMs) the report becomes a trio analysis: de novo variants (PS2/PM6
+by the ClinGen SVI points, withheld if the parentage check fails), the parental origin of every finding, compound
+heterozygotes phased by origin, and dominant candidates inherited from a parent marked unaffected. Clusters of 3 or
+more parent-absent changes within 10 bp (paralogous reads) and heterozygous calls without reference reads (repeat or
+complex loci) stay *possibly de novo* without de novo points; a confirmed de novo variant with an alt fraction well
+below 0.5 is noted as possibly mosaic.
+
 4. ACMG SF v3.3 secondary findings (84 genes, gene-specific rules).
 5. Carrier status for recessive conditions.
 6. Pharmacogenomics: CPIC genes with single-nucleotide star alleles (CYP2C19, CYP2C9, VKORC1, CYP4F2, SLCO1B1,

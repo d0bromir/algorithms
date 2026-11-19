@@ -13,7 +13,7 @@
         "tertiary-analysis"
     ],
     "license": "MIT",
-    "release": "0.5",
+    "release": "0.6",
     "uuid": "e4cd5a16-74be-4629-a676-4542c043ea15",
     "comments": [],
     "steps": {
@@ -437,6 +437,116 @@
         },
         "19": {
             "id": 19,
+            "name": "Mother: variant calls (VCF)",
+            "type": "data_input",
+            "label": "Mother: variant calls (VCF)",
+            "annotation": "The mother's calls on the same reference, e.g. the Raw variant calls of the FASTQ workflow run on her reads. With both parents the report adds de novo variants, the parental origin of every finding, compound heterozygotes phased by origin and a parentage check.",
+            "tool_state": "{\"name\": \"Mother: variant calls (VCF)\", \"optional\": true, \"format\": [\"vcf\", \"vcf_bgzip\"]}",
+            "position": {
+                "top": 2660,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "Mother: variant calls (VCF)",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "20": {
+            "id": 20,
+            "name": "Father: variant calls (VCF)",
+            "type": "data_input",
+            "label": "Father: variant calls (VCF)",
+            "annotation": "The father's calls on the same reference.",
+            "tool_state": "{\"name\": \"Father: variant calls (VCF)\", \"optional\": true, \"format\": [\"vcf\", \"vcf_bgzip\"]}",
+            "position": {
+                "top": 2800,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "Father: variant calls (VCF)",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "21": {
+            "id": 21,
+            "name": "Mother: aligned reads (BAM)",
+            "type": "data_input",
+            "label": "Mother: aligned reads (BAM)",
+            "annotation": "The mother's BAM; confirms a de novo variant by her reference reads, and finds alleles her calls missed.",
+            "tool_state": "{\"name\": \"Mother: aligned reads (BAM)\", \"optional\": true, \"format\": [\"bam\"]}",
+            "position": {
+                "top": 2940,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "Mother: aligned reads (BAM)",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "22": {
+            "id": 22,
+            "name": "Father: aligned reads (BAM)",
+            "type": "data_input",
+            "label": "Father: aligned reads (BAM)",
+            "annotation": "The father's BAM.",
+            "tool_state": "{\"name\": \"Father: aligned reads (BAM)\", \"optional\": true, \"format\": [\"bam\"]}",
+            "position": {
+                "top": 3080,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "Father: aligned reads (BAM)",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "23": {
+            "id": 23,
+            "name": "Affected parents",
+            "type": "parameter_input",
+            "label": "Affected parents",
+            "annotation": "Whether a parent has the proband's condition (unknown, none, mother, father, both). A dominant candidate inherited from an unaffected parent does not count as fitting the inheritance.",
+            "tool_state": "{\"name\": \"Affected parents\", \"parameter_type\": \"text\", \"default\": \"unknown\", \"restrictions\": [\"unknown\", \"none\", \"mother\", \"father\", \"both\"]}",
+            "position": {
+                "top": 3220,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "Affected parents",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "24": {
+            "id": 24,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/fastqc/fastqc/0.74+galaxy1",
             "type": "tool",
             "label": "fastqc_raw",
@@ -474,8 +584,8 @@
                 }
             }
         },
-        "20": {
-            "id": 20,
+        "25": {
+            "id": 25,
             "name": "__FLATTEN__",
             "type": "tool",
             "label": "flatten_fastqc",
@@ -490,7 +600,7 @@
             "input_connections": {
                 "input": [
                     {
-                        "id": 19,
+                        "id": 24,
                         "output_name": "text_file"
                     }
                 ]
@@ -506,8 +616,8 @@
                 }
             }
         },
-        "21": {
-            "id": 21,
+        "26": {
+            "id": 26,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/fastp/fastp/1.4.0+galaxy0",
             "type": "tool",
             "label": "trimming",
@@ -550,8 +660,8 @@
                 }
             }
         },
-        "22": {
-            "id": 22,
+        "27": {
+            "id": 27,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/bwa/bwa_mem/0.7.19+galaxy2",
             "type": "tool",
             "label": "mapping",
@@ -572,7 +682,7 @@
                 ],
                 "fastq_input|fastq_input1": [
                     {
-                        "id": 21,
+                        "id": 26,
                         "output_name": "output_paired_coll"
                     }
                 ]
@@ -588,8 +698,8 @@
                 }
             }
         },
-        "23": {
-            "id": 23,
+        "28": {
+            "id": 28,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/picard/picard_MarkDuplicates/3.1.1.0",
             "type": "tool",
             "label": "mark_duplicates",
@@ -604,7 +714,7 @@
             "input_connections": {
                 "inputFile": [
                     {
-                        "id": 22,
+                        "id": 27,
                         "output_name": "bam_output"
                     }
                 ]
@@ -632,8 +742,8 @@
                 }
             }
         },
-        "24": {
-            "id": 24,
+        "29": {
+            "id": 29,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/samtools_stats/samtools_stats/2.0.9",
             "type": "tool",
             "label": "alignment_stats",
@@ -648,7 +758,7 @@
             "input_connections": {
                 "input": [
                     {
-                        "id": 23,
+                        "id": 28,
                         "output_name": "outFile"
                     }
                 ]
@@ -664,8 +774,8 @@
                 }
             }
         },
-        "25": {
-            "id": 25,
+        "30": {
+            "id": 30,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/picard/picard_BedToIntervalList/3.1.1.0",
             "type": "tool",
             "label": "target_intervals",
@@ -702,8 +812,8 @@
                 }
             }
         },
-        "26": {
-            "id": 26,
+        "31": {
+            "id": 31,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/picard/picard_CollectHsMetrics/3.1.1",
             "type": "tool",
             "label": "hs_metrics",
@@ -718,19 +828,19 @@
             "input_connections": {
                 "inputFile": [
                     {
-                        "id": 23,
+                        "id": 28,
                         "output_name": "outFile"
                     }
                 ],
                 "baitFile": [
                     {
-                        "id": 25,
+                        "id": 30,
                         "output_name": "outFile"
                     }
                 ],
                 "targetFile": [
                     {
-                        "id": 25,
+                        "id": 30,
                         "output_name": "outFile"
                     }
                 ]
@@ -753,8 +863,8 @@
                 }
             }
         },
-        "27": {
-            "id": 27,
+        "32": {
+            "id": 32,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/mosdepth/mosdepth/0.3.14+galaxy0",
             "type": "tool",
             "label": "target_coverage",
@@ -769,7 +879,7 @@
             "input_connections": {
                 "input_alignment": [
                     {
-                        "id": 23,
+                        "id": 28,
                         "output_name": "outFile"
                     }
                 ],
@@ -824,8 +934,8 @@
                 }
             }
         },
-        "28": {
-            "id": 28,
+        "33": {
+            "id": 33,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/mosdepth/mosdepth/0.3.14+galaxy0",
             "type": "tool",
             "label": "coding_coverage",
@@ -840,7 +950,7 @@
             "input_connections": {
                 "input_alignment": [
                     {
-                        "id": 23,
+                        "id": 28,
                         "output_name": "outFile"
                     }
                 ],
@@ -889,8 +999,8 @@
                 }
             }
         },
-        "29": {
-            "id": 29,
+        "34": {
+            "id": 34,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/freebayes/freebayes/1.3.10+galaxy1",
             "type": "tool",
             "label": "variant_calling",
@@ -905,7 +1015,7 @@
             "input_connections": {
                 "reference_source|batchmode|input_bams": [
                     {
-                        "id": 23,
+                        "id": 28,
                         "output_name": "outFile"
                     }
                 ],
@@ -934,8 +1044,8 @@
                 }
             }
         },
-        "30": {
-            "id": 30,
+        "35": {
+            "id": 35,
             "type": "subworkflow",
             "label": "tertiary",
             "annotation": "Tertiary analysis of each sample's VCF (embedded workflow \"WES tertiary analysis from VCF (v2)\").",
@@ -947,7 +1057,7 @@
             "input_connections": {
                 "Variant calls (VCF)": [
                     {
-                        "id": 29,
+                        "id": 34,
                         "output_name": "output_vcf",
                         "input_subworkflow_step_id": 0
                     }
@@ -1071,30 +1181,65 @@
                         "input_subworkflow_step_id": 21
                     }
                 ],
-                "Aligned reads (BAM)": [
+                "Mother: variant calls (VCF)": [
+                    {
+                        "id": 19,
+                        "output_name": "output",
+                        "input_subworkflow_step_id": 22
+                    }
+                ],
+                "Father: variant calls (VCF)": [
+                    {
+                        "id": 20,
+                        "output_name": "output",
+                        "input_subworkflow_step_id": 23
+                    }
+                ],
+                "Mother: aligned reads (BAM)": [
+                    {
+                        "id": 21,
+                        "output_name": "output",
+                        "input_subworkflow_step_id": 24
+                    }
+                ],
+                "Father: aligned reads (BAM)": [
+                    {
+                        "id": 22,
+                        "output_name": "output",
+                        "input_subworkflow_step_id": 25
+                    }
+                ],
+                "Affected parents": [
                     {
                         "id": 23,
+                        "output_name": "output",
+                        "input_subworkflow_step_id": 26
+                    }
+                ],
+                "Aligned reads (BAM)": [
+                    {
+                        "id": 28,
                         "output_name": "outFile",
                         "input_subworkflow_step_id": 13
                     }
                 ],
                 "Per-target coverage (mosdepth thresholds)": [
                     {
-                        "id": 27,
+                        "id": 32,
                         "output_name": "output_thresholds_bed",
                         "input_subworkflow_step_id": 14
                     }
                 ],
                 "Coverage summary (mosdepth)": [
                     {
-                        "id": 27,
+                        "id": 32,
                         "output_name": "output_summary",
                         "input_subworkflow_step_id": 15
                     }
                 ],
                 "Coding-exon coverage (mosdepth thresholds)": [
                     {
-                        "id": 28,
+                        "id": 33,
                         "output_name": "output_thresholds_bed",
                         "input_subworkflow_step_id": 16
                     }
@@ -1162,7 +1307,7 @@
                     "tertiary-analysis"
                 ],
                 "license": "MIT",
-                "release": "0.5",
+                "release": "0.6",
                 "uuid": "78531b7b-9f58-49a0-8829-d8f09d35d038",
                 "comments": [],
                 "steps": {
@@ -1652,6 +1797,116 @@
                     },
                     "22": {
                         "id": 22,
+                        "name": "Mother: variant calls (VCF)",
+                        "type": "data_input",
+                        "label": "Mother: variant calls (VCF)",
+                        "annotation": "The mother's calls on the same reference, e.g. the Raw variant calls of the FASTQ workflow run on her reads. With both parents the report adds de novo variants, the parental origin of every finding, compound heterozygotes phased by origin and a parentage check.",
+                        "tool_state": "{\"name\": \"Mother: variant calls (VCF)\", \"optional\": true, \"format\": [\"vcf\", \"vcf_bgzip\"]}",
+                        "position": {
+                            "top": 2640,
+                            "left": 0
+                        },
+                        "input_connections": {},
+                        "inputs": [
+                            {
+                                "name": "Mother: variant calls (VCF)",
+                                "description": ""
+                            }
+                        ],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {}
+                    },
+                    "23": {
+                        "id": 23,
+                        "name": "Father: variant calls (VCF)",
+                        "type": "data_input",
+                        "label": "Father: variant calls (VCF)",
+                        "annotation": "The father's calls on the same reference.",
+                        "tool_state": "{\"name\": \"Father: variant calls (VCF)\", \"optional\": true, \"format\": [\"vcf\", \"vcf_bgzip\"]}",
+                        "position": {
+                            "top": 2760,
+                            "left": 0
+                        },
+                        "input_connections": {},
+                        "inputs": [
+                            {
+                                "name": "Father: variant calls (VCF)",
+                                "description": ""
+                            }
+                        ],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {}
+                    },
+                    "24": {
+                        "id": 24,
+                        "name": "Mother: aligned reads (BAM)",
+                        "type": "data_input",
+                        "label": "Mother: aligned reads (BAM)",
+                        "annotation": "The mother's BAM; confirms a de novo variant by her reference reads, and finds alleles her calls missed.",
+                        "tool_state": "{\"name\": \"Mother: aligned reads (BAM)\", \"optional\": true, \"format\": [\"bam\"]}",
+                        "position": {
+                            "top": 2880,
+                            "left": 0
+                        },
+                        "input_connections": {},
+                        "inputs": [
+                            {
+                                "name": "Mother: aligned reads (BAM)",
+                                "description": ""
+                            }
+                        ],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {}
+                    },
+                    "25": {
+                        "id": 25,
+                        "name": "Father: aligned reads (BAM)",
+                        "type": "data_input",
+                        "label": "Father: aligned reads (BAM)",
+                        "annotation": "The father's BAM.",
+                        "tool_state": "{\"name\": \"Father: aligned reads (BAM)\", \"optional\": true, \"format\": [\"bam\"]}",
+                        "position": {
+                            "top": 3000,
+                            "left": 0
+                        },
+                        "input_connections": {},
+                        "inputs": [
+                            {
+                                "name": "Father: aligned reads (BAM)",
+                                "description": ""
+                            }
+                        ],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {}
+                    },
+                    "26": {
+                        "id": 26,
+                        "name": "Affected parents",
+                        "type": "parameter_input",
+                        "label": "Affected parents",
+                        "annotation": "Whether a parent has the proband's condition (unknown, none, mother, father, both). A dominant candidate inherited from an unaffected parent does not count as fitting the inheritance.",
+                        "tool_state": "{\"name\": \"Affected parents\", \"parameter_type\": \"text\", \"default\": \"unknown\", \"restrictions\": [\"unknown\", \"none\", \"mother\", \"father\", \"both\"]}",
+                        "position": {
+                            "top": 3120,
+                            "left": 0
+                        },
+                        "input_connections": {},
+                        "inputs": [
+                            {
+                                "name": "Affected parents",
+                                "description": ""
+                            }
+                        ],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {}
+                    },
+                    "27": {
+                        "id": 27,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/samtools_faidx/samtools_faidx/1.22+galaxy1",
                         "type": "tool",
                         "label": "chrom_sizes",
@@ -1682,8 +1937,8 @@
                             }
                         }
                     },
-                    "23": {
-                        "id": 23,
+                    "28": {
+                        "id": 28,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bedtools/bedtools_slopbed/2.31.1+galaxy1",
                         "type": "tool",
                         "label": "pad_targets",
@@ -1704,7 +1959,7 @@
                             ],
                             "genome_file_opts|genome": [
                                 {
-                                    "id": 22,
+                                    "id": 27,
                                     "output_name": "output"
                                 }
                             ],
@@ -1733,8 +1988,8 @@
                             }
                         }
                     },
-                    "24": {
-                        "id": 24,
+                    "29": {
+                        "id": 29,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_norm/bcftools_norm/1.24+galaxy0",
                         "type": "tool",
                         "label": "normalize",
@@ -1778,8 +2033,8 @@
                             }
                         }
                     },
-                    "25": {
-                        "id": 25,
+                    "30": {
+                        "id": 30,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_filter/bcftools_filter/1.24+galaxy0",
                         "type": "tool",
                         "label": "target_filter",
@@ -1794,13 +2049,13 @@
                         "input_connections": {
                             "input_file": [
                                 {
-                                    "id": 24,
+                                    "id": 29,
                                     "output_name": "output_file"
                                 }
                             ],
                             "sec_restrict|regions|regions_file": [
                                 {
-                                    "id": 23,
+                                    "id": 28,
                                     "output_name": "output"
                                 }
                             ],
@@ -1829,8 +2084,8 @@
                             }
                         }
                     },
-                    "26": {
-                        "id": 26,
+                    "31": {
+                        "id": 31,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
                         "type": "tool",
                         "label": "clinvar_annotation",
@@ -1845,7 +2100,7 @@
                         "input_connections": {
                             "input_file": [
                                 {
-                                    "id": 25,
+                                    "id": 30,
                                     "output_name": "output_file"
                                 }
                             ],
@@ -1874,8 +2129,8 @@
                             }
                         }
                     },
-                    "27": {
-                        "id": 27,
+                    "32": {
+                        "id": 32,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
                         "type": "tool",
                         "label": "population_annotation",
@@ -1890,7 +2145,7 @@
                         "input_connections": {
                             "input_file": [
                                 {
-                                    "id": 26,
+                                    "id": 31,
                                     "output_name": "output_file"
                                 }
                             ],
@@ -1919,8 +2174,8 @@
                             }
                         }
                     },
-                    "28": {
-                        "id": 28,
+                    "33": {
+                        "id": 33,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
                         "type": "tool",
                         "label": "missense_annotation",
@@ -1935,7 +2190,7 @@
                         "input_connections": {
                             "input_file": [
                                 {
-                                    "id": 27,
+                                    "id": 32,
                                     "output_name": "output_file"
                                 }
                             ],
@@ -1964,8 +2219,8 @@
                             }
                         }
                     },
-                    "29": {
-                        "id": 29,
+                    "34": {
+                        "id": 34,
                         "name": "spliceai_score",
                         "type": "tool",
                         "label": "splice_prediction",
@@ -1980,7 +2235,7 @@
                         "input_connections": {
                             "input": [
                                 {
-                                    "id": 28,
+                                    "id": 33,
                                     "output_name": "output_file"
                                 }
                             ],
@@ -2009,8 +2264,8 @@
                             }
                         }
                     },
-                    "30": {
-                        "id": 30,
+                    "35": {
+                        "id": 35,
                         "name": "pharmcat_pgx",
                         "type": "tool",
                         "label": "pharmacogenomics",
@@ -2064,8 +2319,8 @@
                             }
                         }
                     },
-                    "31": {
-                        "id": 31,
+                    "36": {
+                        "id": 36,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpeff/snpEff/5.4+galaxy0",
                         "type": "tool",
                         "label": "functional_annotation",
@@ -2080,7 +2335,7 @@
                         "input_connections": {
                             "input": [
                                 {
-                                    "id": 29,
+                                    "id": 34,
                                     "output_name": "output"
                                 }
                             ],
@@ -2138,8 +2393,8 @@
                             }
                         }
                     },
-                    "32": {
-                        "id": 32,
+                    "37": {
+                        "id": 37,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_filter/5.4.0c+galaxy1",
                         "type": "tool",
                         "label": "prioritize",
@@ -2154,7 +2409,7 @@
                         "input_connections": {
                             "input": [
                                 {
-                                    "id": 31,
+                                    "id": 36,
                                     "output_name": "snpeff_output"
                                 }
                             ],
@@ -2183,8 +2438,8 @@
                             }
                         }
                     },
-                    "33": {
-                        "id": 33,
+                    "38": {
+                        "id": 38,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1",
                         "type": "tool",
                         "label": "candidate_table",
@@ -2199,7 +2454,7 @@
                         "input_connections": {
                             "input": [
                                 {
-                                    "id": 32,
+                                    "id": 37,
                                     "output_name": "output"
                                 }
                             ]
@@ -2222,8 +2477,8 @@
                             }
                         }
                     },
-                    "34": {
-                        "id": 34,
+                    "39": {
+                        "id": 39,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1",
                         "type": "tool",
                         "label": "annotated_table",
@@ -2238,7 +2493,7 @@
                         "input_connections": {
                             "input": [
                                 {
-                                    "id": 31,
+                                    "id": 36,
                                     "output_name": "snpeff_output"
                                 }
                             ]
@@ -2261,8 +2516,8 @@
                             }
                         }
                     },
-                    "35": {
-                        "id": 35,
+                    "40": {
+                        "id": 40,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_stats/bcftools_stats/1.24+galaxy0",
                         "type": "tool",
                         "label": "variant_stats",
@@ -2277,7 +2532,7 @@
                         "input_connections": {
                             "input_file": [
                                 {
-                                    "id": 31,
+                                    "id": 36,
                                     "output_name": "snpeff_output"
                                 }
                             ]
@@ -2300,8 +2555,8 @@
                             }
                         }
                     },
-                    "36": {
-                        "id": 36,
+                    "41": {
+                        "id": 41,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_roh/bcftools_roh/1.24+galaxy1",
                         "type": "tool",
                         "label": "runs_of_homozygosity",
@@ -2316,7 +2571,7 @@
                         "input_connections": {
                             "input_file": [
                                 {
-                                    "id": 31,
+                                    "id": 36,
                                     "output_name": "snpeff_output"
                                 }
                             ]
@@ -2339,15 +2594,15 @@
                             }
                         }
                     },
-                    "37": {
-                        "id": 37,
+                    "42": {
+                        "id": 42,
                         "name": "wes_clinical_report",
                         "type": "tool",
                         "label": "clinical_report",
                         "annotation": "Human-readable clinical interpretation report and findings table (local tool tools/wes_clinical_report; install it on the Galaxy server, see README).",
-                        "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"artefacts\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clingen_dosage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clinvar_protein\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"constraint\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"coverage_summary\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gencc\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gene_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_annotations\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_genes\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_terms\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"max_af\": \"\\\"0.01\\\"\", \"max_candidates\": \"\\\"60\\\"\", \"min_ref_depth\": \"\\\"15\\\"\", \"pharmcat\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"reference\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"roh\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"sample_name\": \"\\\"\\\"\", \"target_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\"}",
+                        "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"affected_parents\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"artefacts\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clingen_dosage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clinvar_protein\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"constraint\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"coverage_summary\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"father_bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"father_vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gencc\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gene_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_annotations\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_genes\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_terms\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"max_af\": \"\\\"0.01\\\"\", \"max_candidates\": \"\\\"60\\\"\", \"min_ref_depth\": \"\\\"15\\\"\", \"mother_bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mother_vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"pharmcat\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"reference\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"roh\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"sample_name\": \"\\\"\\\"\", \"target_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\"}",
                         "tool_id": "wes_clinical_report",
-                        "tool_version": "0.5.0+galaxy0",
+                        "tool_version": "0.6.0+galaxy0",
                         "position": {
                             "top": 300,
                             "left": 2380
@@ -2355,7 +2610,7 @@
                         "input_connections": {
                             "vcf": [
                                 {
-                                    "id": 31,
+                                    "id": 36,
                                     "output_name": "snpeff_output"
                                 }
                             ],
@@ -2367,13 +2622,13 @@
                             ],
                             "roh": [
                                 {
-                                    "id": 36,
+                                    "id": 41,
                                     "output_name": "output_file"
                                 }
                             ],
                             "pharmcat": [
                                 {
-                                    "id": 30,
+                                    "id": 35,
                                     "output_name": "calls"
                                 }
                             ],
@@ -2422,6 +2677,36 @@
                             "clinvar_protein": [
                                 {
                                     "id": 21,
+                                    "output_name": "output"
+                                }
+                            ],
+                            "mother_vcf": [
+                                {
+                                    "id": 22,
+                                    "output_name": "output"
+                                }
+                            ],
+                            "father_vcf": [
+                                {
+                                    "id": 23,
+                                    "output_name": "output"
+                                }
+                            ],
+                            "mother_bam": [
+                                {
+                                    "id": 24,
+                                    "output_name": "output"
+                                }
+                            ],
+                            "father_bam": [
+                                {
+                                    "id": 25,
+                                    "output_name": "output"
+                                }
+                            ],
+                            "affected_parents": [
+                                {
+                                    "id": 26,
                                     "output_name": "output"
                                 }
                             ],
@@ -2482,8 +2767,8 @@
                 }
             }
         },
-        "31": {
-            "id": 31,
+        "36": {
+            "id": 36,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/multiqc/multiqc/1.35+galaxy5",
             "type": "tool",
             "label": "multiqc",
@@ -2498,43 +2783,43 @@
             "input_connections": {
                 "results_0|software_cond|output_0|input": [
                     {
-                        "id": 20,
+                        "id": 25,
                         "output_name": "output"
                     }
                 ],
                 "results_1|software_cond|input": [
                     {
-                        "id": 21,
+                        "id": 26,
                         "output_name": "report_json"
                     }
                 ],
                 "results_2|software_cond|output_0|input": [
                     {
-                        "id": 23,
+                        "id": 28,
                         "output_name": "metrics_file"
                     }
                 ],
                 "results_2|software_cond|output_1|input": [
                     {
-                        "id": 26,
+                        "id": 31,
                         "output_name": "outFile"
                     }
                 ],
                 "results_3|software_cond|output_0|type|input": [
                     {
-                        "id": 24,
+                        "id": 29,
                         "output_name": "output"
                     }
                 ],
                 "results_4|software_cond|input": [
                     {
-                        "id": 30,
+                        "id": 35,
                         "output_name": "variant_stats"
                     }
                 ],
                 "results_5|software_cond|input": [
                     {
-                        "id": 30,
+                        "id": 35,
                         "output_name": "snpeff_csv_stats"
                     }
                 ]

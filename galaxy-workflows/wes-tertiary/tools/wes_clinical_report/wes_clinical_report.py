@@ -29,7 +29,7 @@ import re
 import subprocess
 import sys
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 
 # --------------------------------------------------------------------------------------------- rules
 # ACMG secondary findings v3.3 (ACMG policy statement, Genet Med 2025;27:101454): the 81 genes of v3.2 (Miller et al.,
@@ -1332,6 +1332,229 @@ def pgx_pheno(gene, alle):
     return "", ""
 
 
+# ----------------------------------------------------------------------------------------------- trio
+def decompose(pos, ref, alt):
+    """Minimal representation(s) of one ALT, matching the workflow's bcftools norm --atomize where no reference is
+    needed: common suffix and prefix trimmed (keeping one anchor base for indels), MNPs split into SNVs."""
+    while len(ref) > 1 and len(alt) > 1 and ref[-1] == alt[-1]:
+        ref, alt = ref[:-1], alt[:-1]
+    while len(ref) > 1 and len(alt) > 1 and ref[0] == alt[0]:
+        ref, alt, pos = ref[1:], alt[1:], pos + 1
+    if len(ref) == len(alt):
+        return [(pos + i, r, a) for i, (r, a) in enumerate(zip(ref, alt)) if r != a]
+    return [(pos, ref, alt)]
+
+
+def load_parent_vcf(path):
+    """A parent's calls (any single-sample VCF, raw or filtered): (chrom, pos, ref, alt) -> (zygosity, depth, alt
+    fraction, QUAL). Multi-allelic and complex records are split and trimmed like the workflow's normalisation."""
+    out = {}
+    if not path:
+        return out
+    with opener(path) as f:
+        for line in f:
+            if line[0] == "#":
+                continue
+            t = line.rstrip("\n").split("\t")
+            if len(t) < 10:
+                continue
+            sd = dict(zip(t[8].split(":"), t[9].split(":")))
+            gt = re.split(r"[/|]", sd.get("GT", "./."))
+            ad = [int(x) if x.isdigit() else 0 for x in sd.get("AD", "").split(",")] if sd.get("AD", ".") not in (".", "") else []
+            dp = int(sd["DP"]) if sd.get("DP", ".").isdigit() else (sum(ad) if ad else None)
+            for ai, alt in enumerate(t[4].split(","), start=1):
+                n = sum(1 for a in gt if a == str(ai))
+                if n == 0 or alt in ("*", ".", "<*>", "<NON_REF>"):
+                    continue
+                zyg = "hom" if n >= 2 or len(gt) == 1 else "het"
+                ab = ad[ai] / sum(ad) if ad and len(ad) > ai and sum(ad) else None
+                for p, r, a in decompose(int(t[1]), t[3], alt):
+                    k = (norm_chrom(t[0]), p, r, a)
+                    if k not in out or out[k][0] == "het":
+                        out[k] = (zyg, dp, ab, fnum(t[5]))
+    return out
+
+
+def allele_counts(bam, prefix, v):
+    """Reads (MAPQ >= 20, duplicates excluded) carrying the ALT and the REF allele of a variant."""
+    try:
+        sam = run_samtools(["view", "-F", "3844", "-q", "20", bam,
+                            f"{prefix}{v.chrom}:{v.pos}-{v.pos + max(len(v.ref), 2)}"])
+    except (Exception, SystemExit):
+        return None
+    alt = ref = 0
+    for line in sam.splitlines():
+        t = line.split("\t")
+        if len(t) < 10 or t[5] == "*":
+            continue
+        s = read_alleles(int(t[3]), t[5], t[9], (v,))[v.key()]
+        alt += s == "alt"
+        ref += s == "ref"
+    return alt, ref
+
+
+class Trio:
+    """Parental genotypes for the proband's variants (one or both parents; VCF and optionally BAM)."""
+
+    MIN_READS = 15
+
+    def __init__(self, mother_vcf=None, father_vcf=None, mother_bam=None, father_bam=None, prefix="",
+                 affected="unknown"):
+        self.vcf = {"mother": load_parent_vcf(mother_vcf) if mother_vcf else None,
+                    "father": load_parent_vcf(father_vcf) if father_vcf else None}
+        self.bam = {"mother": mother_bam, "father": father_bam}
+        self.prefix = prefix
+        self.affected = affected
+        self._counts = {}
+        self.qc = {}
+        self.parentage_ok = True
+        self.parentage_checked = False
+
+    def has(self, who):
+        return self.vcf[who] is not None or bool(self.bam[who])
+
+    def present(self):
+        return [w for w in ("mother", "father") if self.has(w)]
+
+    def counts(self, who, v):
+        k = (who, v.key())
+        if k not in self._counts:
+            self._counts[k] = allele_counts(self.bam[who], self.prefix, v) if self.bam[who] else None
+        return self._counts[k]
+
+    def status(self, who, v, use_reads=True):
+        """(state, text): state het | hom | present (reads carry it, not called) | ref (reads) | low (too few reads) |
+        absent (not called, coverage unknown) | None (no data for this parent)."""
+        if not self.has(who):
+            return None, ""
+        call = self.vcf[who].get((v.chrom, v.pos, v.ref, v.alt)) if self.vcf[who] is not None else None
+        if call:
+            zyg, dp, ab, _q = call
+            return zyg, f"{zyg}" + (f" (DP {dp}" + (f", alt {ab:.2f}" if ab is not None else "") + ")" if dp else "")
+        c = self.counts(who, v) if use_reads else None
+        if c:
+            alt, ref = c
+            n = alt + ref
+            if alt >= 2 and alt >= 0.1 * n:
+                return "present", f"not called, but {alt} of {n} reads carry it"
+            if n < self.MIN_READS:
+                return "low", f"not called, only {n} reads"
+            return "ref", f"reference, {n} reads" + (f" ({alt} alt read)" if alt else "")
+        return "absent", "not called (coverage unknown)"
+
+    def origin(self, v, sex, use_reads=True):
+        """(label, text) for a proband variant. Labels: maternal, paternal, both, de novo, possible de novo,
+        one parent only, unknown."""
+        st = {w: self.status(w, v, use_reads) for w in ("mother", "father")}
+        carry = {w for w, (s, _t) in st.items() if s in ("het", "hom", "present")}
+        txt = "; ".join(f"{w}: {t}" for w, (s, t) in st.items() if s)
+        chrx = v.chrom == "X" and not any(a <= v.pos <= b for a, b in PAR_GRCH38)
+        if chrx and sex == "male":  # hemizygous: from the mother
+            s = st["mother"][0]
+            if "mother" in carry:
+                return "maternal", txt
+            if s == "ref":
+                return "de novo", txt
+            return ("possible de novo" if s == "absent" else "unknown"), txt
+        if v.zyg == "hom":
+            if carry == {"mother", "father"}:
+                return "both", txt
+            refs = {w for w, (s, _t) in st.items() if s == "ref"}
+            if carry and refs:
+                return "one parent only", txt
+            return "unknown", txt  # a homozygote needs both parents' alleles: one carrier alone says nothing
+        if carry == {"mother", "father"}:
+            return "both", txt
+        if carry == {"mother"}:
+            return "maternal", txt
+        if carry == {"father"}:
+            return "paternal", txt
+        states = {s for s, _t in st.values()}
+        if len(self.present()) == 2 and states == {"ref"}:
+            return "de novo", txt
+        if len(self.present()) == 2 and states <= {"ref", "absent", "low"}:
+            return "possible de novo", txt
+        return "unknown", txt
+
+    def check(self, variants):
+        """Parentage / sample-identity check on common autosomal SNVs (gnomAD AF >= 5 %, QUAL >= 30, DP >= 20): the
+        share of the proband's homozygous sites where each parent carries the allele, and of heterozygous sites where
+        at least one parent does. Calls only (no reads), so missed parental calls lower the rates slightly."""
+        hom = {"mother": [0, 0], "father": [0, 0]}
+        het = [0, 0]
+        for v in variants:
+            if v.chrom in ("X", "Y", "MT") or len(v.ref) != 1 or len(v.alt) != 1:
+                continue
+            if (v.af or 0) < 0.05 or (v.qual or 0) < 30 or (v.dp or 0) < 20:
+                continue
+            k = (v.chrom, v.pos, v.ref, v.alt)
+            has = {w: self.vcf[w] is not None and k in self.vcf[w] for w in ("mother", "father")}
+            if v.zyg == "hom":
+                for w in ("mother", "father"):
+                    if self.vcf[w] is not None:
+                        hom[w][0] += has[w]
+                        hom[w][1] += 1
+            elif all(self.vcf[w] is not None for w in ("mother", "father")):
+                het[0] += has["mother"] or has["father"]
+                het[1] += 1
+        self.qc = {w: (hom[w][0] / hom[w][1] if hom[w][1] else None, hom[w][1]) for w in ("mother", "father")}
+        self.qc["het"] = (het[0] / het[1] if het[1] else None, het[1])
+        rates = [r for r, n in self.qc.values() if r is not None and n >= 100]
+        self.parentage_checked = bool(rates)
+        self.parentage_ok = not rates or min(rates) >= 0.9
+        return self.qc
+
+
+def trio_phase(trio, a, b, sex):
+    """Phase of two heterozygous proband variants from the parents: 'trans', 'cis' or None."""
+    if trio is None or a.zyg != "het" or b.zyg != "het":
+        return None
+    oa, ob = trio.origin(a, sex)[0], trio.origin(b, sex)[0]
+    if {oa, ob} == {"maternal", "paternal"}:
+        return "trans"
+    if oa == ob and oa in ("maternal", "paternal"):
+        return "cis"
+    return None
+
+
+def de_novo_codes(o, pheno_match, pheno_given, parentage_ok=True):
+    """ClinGen SVI de novo points for one proband: confirmed de novo with a phenotype consistent with the gene = 1 point
+    (PS2_Moderate); assumed de novo = 0.5 (PM6_Supporting). Without phenotype terms the strength cannot be judged."""
+    if not pheno_given or not pheno_match or not parentage_ok:
+        return []
+    return ["PS2_Moderate"] if o == "de novo" else (["PM6_Supporting"] if o == "possible de novo" else [])
+
+
+CLUSTER_TEXT = "3 or more parent-absent changes within 10 bp, typical of reads from a paralogous copy"
+NOREF_TEXT = ("no reference reads in a heterozygous call: the other allele is another variant at this locus (a "
+              "repeat or complex site the parents' calls may write differently)")
+
+
+def mosaic_p(v):
+    """One-sided binomial P(alt reads <= observed | heterozygous, 50 %) for a heterozygous call, or None."""
+    if v.zyg != "het" or v.ab is None or not v.dp:
+        return None
+    n, k = int(v.dp), int(round(v.ab * v.dp))
+    return sum(math.comb(n, i) for i in range(k + 1)) / 2 ** n
+
+
+def denovo_clusters(screened, span=10, n=3):
+    """Variants of the de novo screen (position-sorted) with >= n distinct positions within +/- span bp."""
+    out = []
+    for i, v in enumerate(screened):
+        near = {w.pos for w in screened[max(0, i - 2 * n):i + 2 * n + 1] if w.chrom == v.chrom and abs(w.pos - v.pos) <= span}
+        if len(near) >= n:
+            out.append(v)
+    return out
+
+
+ORIGIN_TEXT = {"maternal": "inherited from the mother", "paternal": "inherited from the father",
+               "both": "both parents carry it", "de novo": "de novo (absent from both parents' reads)",
+               "possible de novo": "possibly de novo (not called in either parent; reads missing, too few or not conclusive)",
+               "one parent only": "only one parent carries it: deletion of the other allele or uniparental disomy",
+               "unknown": "parental origin unknown"}
+
+
 def build(args):
     sample, contigs, variants, prefix = parse_vcf(args.vcf)
     sample = args.sample_name or sample or "sample"
@@ -1352,6 +1575,59 @@ def build(args):
     msum = load_mosdepth_summary(args.coverage_summary)
     qc = sample_qc(variants, contigs, msum, target_cov)
     sex = qc["sex"]
+    trio = None
+    if args.mother_vcf or args.father_vcf or args.mother_bam or args.father_bam:
+        trio = Trio(args.mother_vcf, args.father_vcf, args.mother_bam, args.father_bam, prefix, args.affected_parents)
+        if trio.vcf["mother"] is not None or trio.vcf["father"] is not None:
+            trio.check(variants)
+
+    doubt = {}  # id -> why a parent-absent variant is not taken as de novo (filled after the artefact flags)
+
+    def origin(v):
+        if not trio:
+            return None, ""
+        o, txt = trio.origin(v, sex)
+        if id(v) in doubt and o in ("de novo", "possible de novo"):
+            return "possible de novo", doubt[id(v)] + "; " + txt
+        return o, txt
+
+    def dn_codes(v, o, g):
+        if not trio or id(v) in doubt:
+            return []
+        return de_novo_codes(o, bool(hpo_match.get(g)), bool(hpo_terms), trio.parentage_ok)
+
+    def unaffected(who):
+        return args.affected_parents == "none" or (args.affected_parents in ("mother", "father")
+                                                   and args.affected_parents != who)
+
+    def affected(who):
+        return args.affected_parents in (who, "both")
+
+    def origin_note(v, dominant):
+        """Text on the parental origin of a finding, judged against the parents' affection status."""
+        o, _t = origin(v)
+        if not o:
+            return ""
+        who = {"maternal": "mother", "paternal": "father"}.get(o)
+        txt = ORIGIN_TEXT[o]
+        if who and dominant and unaffected(who):
+            txt += (f" (reported unaffected): reduced penetrance or variable expressivity, a milder phenotype in the "
+                    f"{who}, or not the cause")
+        elif who and affected(who):
+            txt += " (affected): segregates with the condition in this meiosis"
+        return txt
+
+    def gt_cell(v):
+        s = call_cell(v, sex)
+        if trio:
+            o, txt = origin(v)
+            kind = "t-red" if o == "de novo" else ("t-amb" if o in ("possible de novo", "one parent only") else "t-blu")
+            s += "<br>" + tag(ORIGIN_TEXT[o], kind) + (f"<br><span class='small'>{esc(txt)}</span>" if txt else "")
+        return s
+
+    def with_origin(v, note, dominant=False):
+        t = origin_note(v, dominant)
+        return f"{note}; {t}" if t and note else (t or note)
     artefacts = load_artefacts(args.artefacts)
     n_artefact = 0
     for v in variants:
@@ -1363,6 +1639,25 @@ def build(args):
             seen = f"{n}/{total}" if n and total else "several"
             v.flags.append(f"recurrent artefact: called in {seen} of the laboratory's samples, rare or absent in gnomAD")
     by_pos = {(v.chrom, v.pos, v.alt): v for v in variants}
+
+    # de novo screen (trio): good-quality rare variants absent from both parents' calls; >= 3 of them within 10 bp are
+    # reads of a paralogous copy (or a CNV) mapped here, not a de novo event (de novo multinucleotide variants are
+    # almost always 1-2 bp), so they lose the de novo label
+    screened = []
+    if trio and len(trio.present()) == 2:
+        for v in variants:
+            hemi = v.chrom == "X" and sex == "male" and not any(a <= v.pos <= b for a, b in PAR_GRCH38)
+            if v.chrom in ("Y", "MT") or (v.zyg != "het" and not hemi):
+                continue
+            if (freq(v) is not None and freq(v) >= 1e-4) or (v.qual or 0) < 30 or (v.dp or 0) < 20 or v.artefact:
+                continue
+            if v.zyg == "het" and v.ab is not None and v.ab < 0.25:
+                continue
+            if trio.origin(v, sex, use_reads=False)[0] == "possible de novo":
+                screened.append(v)
+    doubt.update((id(v), CLUSTER_TEXT) for v in denovo_clusters(screened))
+    doubt.update((id(v), NOREF_TEXT) for v in screened if v.zyg == "het" and v.ab is not None and v.ab >= 0.9
+                 and id(v) not in doubt)
 
     v_chrom_of_gene = {v.gene: v.chrom for v in variants}
 
@@ -1384,6 +1679,13 @@ def build(args):
             return False, ""
         if v.zyg == "hom" or any(x.zyg == "hom" for x in others):
             return True, ""
+        tp = [(x, trio_phase(trio, v, x, sex)) for x in others]
+        if any(p == "trans" for _x, p in tp):
+            x = next(x for x, p in tp if p == "trans")
+            return True, f"with {x.hgvs_p or x.hgvs_c} in trans (one inherited from each parent)"
+        if all(p == "cis" for _x, p in tp):
+            x = tp[0][0]
+            return False, f"with {x.hgvs_p or x.hgvs_c} in cis (both inherited from the same parent): one allele only"
         phases = [(x, phase(v, x)) for x in others]
         trans = [(x, p) for x, p in phases if p and p[0] == "trans"]
         if trans:
@@ -1491,30 +1793,73 @@ def build(args):
                                                 f"second rare allele in the gene ({ph_note})" if ok else
                                                 f"second rare allele {ph_note}" if others else
                                                 "single heterozygous allele (carrier at most)"))
+                if trio and v.zyg == "hom":
+                    o = origin(v)[0]
+                    if o == "both":
+                        reasons[-1] += ", both parents heterozygous carriers"
+                    elif o == "one parent only":
+                        reasons[-1] += f", but {ORIGIN_TEXT[o]}"
             if not moi or {"AD", "XL", "MT"} & moi:  # dominant / X-linked model: one rare allele
                 strict = freq(v) is None or freq(v) < 1e-4
                 hi = dosage.get(g, (None, None))[0]
                 tolerant = lof and "XL" not in moi and hi not in (2, 3) and (
                     hi == 40 or (loeuf is not None and loeuf >= 0.6))
-                consistent |= strict and not tolerant
+                o = origin(v)[0] if trio else None
+                who = {"maternal": "mother", "paternal": "father"}.get(o)
+                from_unaffected = bool(who) and unaffected(who) and not (v.chrom == "X" and sex == "male")
+                consistent |= strict and not tolerant and not from_unaffected
                 r = ("dominant/X-linked" if moi else "inheritance unknown")
                 if not strict:
                     r += ": too frequent for a dominant disorder"
                 elif tolerant:
                     r += (": ClinGen: haploinsufficiency unlikely" if dosage.get(g, (None,))[0] == 40
                           else f": LoF-tolerant gene (LOEUF {loeuf:.2f})")
+                elif from_unaffected:
+                    r += f": inherited from the unaffected {who}"
+                elif o in ("de novo", "possible de novo"):
+                    r += f": {o}"
+                elif who and affected(who):
+                    r += f": inherited from the affected {who}"
                 reasons.append(r)
             why = "; ".join(reasons)
             pcodes, pnotes = protein_evidence(v, g, cvp)
+            o = origin(v)[0] if trio else None
+            pcodes = pcodes + dn_codes(v, o, g)
+            if id(v) in doubt:
+                o = None  # no de novo score
             ev = acmg_evidence(v, g, moi, constraint, bool(hpo_match.get(g)), args.max_af, dosage, pcodes)
             best = pheno.best_diseases(g, 1)
             score = (2 if hpo_match.get(g) else 0) + (1 if best and best[0][0] >= 0.5 else 0) + \
                 (2 if consistent else 0) + (1 if lof else 0) + \
                 (1 if "PVS1" in ev else 0) + (1 if CODE_RANK.get(next((c for c in ev if c.startswith("PP3")), ""), 0) >= 2 else 0) + \
-                (2 if "PS1" in ev else (1 if "PM5" in ev else 0)) - \
+                (2 if "PS1" in ev else (1 if "PM5" in ev else 0)) + \
+                (3 if o == "de novo" and (not moi or {"AD", "XL"} & moi) else (1 if o == "possible de novo" else 0)) - \
                 (1 if v.flags and any("depth" in f or "balance" in f for f in v.flags) else 0)
             cands.append((score, v, g, consistent, why, ev, pnotes))
     cands.sort(key=lambda x: (-x[0], x[2], x[1].pos))
+
+    # ---------------------------------------------------------------- de novo variants (trio)
+    denovo, n_denovo_any, n_denovo_cluster = [], len(screened), 0
+    for v in screened:
+        if not (v.impact in ("HIGH", "MODERATE") or (v.sai or 0) >= 0.2):
+            continue
+        o, txt = origin(v)
+        if o not in ("de novo", "possible de novo"):
+            continue
+        clustered = id(v) in doubt
+        mp = mosaic_p(v)
+        if not clustered and mp is not None and mp < 1e-3:
+            txt = (f"alt fraction {v.ab:.2f} of {v.dp} reads, below a heterozygote's 0.5 (p = {mp:.0e}): possibly "
+                   "post-zygotic (mosaic), or acquired in blood or cell culture; " + txt)
+        n_denovo_cluster += clustered
+        g = next((x for x in genes_of(v)[:3] if x in gencc), v.gene)
+        moi = moi_of(g)
+        pc, pn = protein_evidence(v, g, cvp)
+        ev = acmg_evidence(v, g, moi, constraint, bool(hpo_match.get(g)), args.max_af, dosage, pc + dn_codes(v, o, g))
+        rank = -10 if clustered else (2 if o == "de novo" else 0) + (
+            2 if g in gencc and (not moi or {"AD", "XL"} & moi) else (1 if g in gencc else 0)) +             (2 if hpo_match.get(g) else 0) + (1 if v.impact == "HIGH" else 0)
+        denovo.append((rank, v, g, o, txt, ev, pn))
+    denovo.sort(key=lambda x: (-x[0], x[2], x[1].pos))
 
     # ---------------------------------------------------------------- ACMG SF
     sf = []
@@ -1594,7 +1939,7 @@ def build(args):
     # ---------------------------------------------------------------- sequence context of reported variants
     if args.reference:
         shown = {v.key(): v for v in [x[0] for x in diag] + [x[0] for x in review] + carrier + lowpen
-                 + [c[1] for c in cands] + [x[0] for x in sf]}
+                 + [c[1] for c in cands] + [x[0] for x in sf] + [d[1] for d in denovo]}
         ctx = reference_contexts(args.reference, prefix, list(shown.values()))
         for k, v in shown.items():
             if k in ctx:
@@ -1610,6 +1955,7 @@ def build(args):
     carrier, lowpen = conf_sorted(carrier), conf_sorted(lowpen)
     sf = conf_sorted(sf, key=lambda x: x[0])
     cands = conf_sorted(cands, key=lambda x: x[1])
+    denovo = conf_sorted(denovo, key=lambda x: x[1])
 
     def short(v, gene=True):
         txt = f"{v.gene} {v.hgvs_p or v.hgvs_c}" if gene else v.gene
@@ -1661,6 +2007,13 @@ def build(args):
         big = [s for s in roh if s[3] >= 1_000_000]
         R.h(f"<li><b>Runs of homozygosity</b>: {len(big)} segments &ge; 1 Mb, total {sum(s[3] for s in big) / 1e6:.1f} Mb</li>")
     R.h(f"<li><b>Sex (genetic)</b>: {esc(sex)}</li>")
+    if trio:
+        conf = sum(1 for d in denovo if d[3] == "de novo")
+        R.h(f"<li><b>Trio</b> ({' and '.join(trio.present())} given; affected parents: {esc(args.affected_parents)}): "
+            + (f"<b>{conf}</b> de novo and {len(denovo) - conf} possibly de novo protein-altering variants"
+               + (": " + ", ".join(short(d[1]) for d in denovo[:6]) if denovo else "")
+               if len(trio.present()) == 2 else "one parent only, no de novo analysis")
+            + ("" if trio.parentage_ok or not trio.qc else "; <b>parentage check failed</b>") + "</li>")
     if hpo_terms:
         R.h(f"<li><b>Phenotype</b>: {', '.join(esc(t + ' ' + hpo_names.get(t, '(unknown term)')) for t in sorted(hpo_terms))}; "
             f"{len(hpo_match)} genes associated</li>")
@@ -1683,6 +2036,21 @@ def build(args):
         if qc.get(k) is not None:
             R.h(f"<li>{esc(label)}: <b>{f.format(qc[k])}</b></li>")
     R.h(f"<li>Genetic sex: <b>{esc(sex)}</b></li></ul>")
+    if trio and trio.qc:
+        parts = []
+        for w in ("mother", "father"):
+            r, n = trio.qc[w]
+            if r is not None:
+                parts.append(f"{w} carries the allele at {r:.1%} of {n:,} common homozygous sites")
+        r, n = trio.qc["het"]
+        if r is not None:
+            parts.append(f"a parent carries it at {r:.1%} of {n:,} common heterozygous sites")
+        R.h("<p>Trio check (common SNVs, parents' calls): " + esc("; ".join(parts)) + "."
+            + ("" if trio.parentage_checked else " Too few common sites (&lt; 100) to check parentage.") + "</p>")
+        if not trio.parentage_ok:
+            R.h("<div class='box alert'>The parents' genotypes do not fit the proband's (expected &ge; 90%, usually "
+                "&ge; 97%): sample mix-up, non-paternity/non-maternity or a parental sample of poor quality. De novo "
+                "status is not used as evidence (no PS2).</div>")
     warn = []
     if qc.get("tstv") is not None and not (2.3 <= qc["tstv"] <= 3.5):
         warn.append("Ts/Tv outside the usual exome range: check for false positives or off-target calls.")
@@ -1700,22 +2068,23 @@ def build(args):
         "genes, two alleles in recessive genes. Whether a finding explains the patient's condition depends on the "
         "clinical picture.</p>")
     R.table(["Variant", "Genotype", "ClinVar", "gnomAD frequency", "Gene-disease (GenCC)", "Interpretation"],
-            [[var_cell(v), call_cell(v, sex), clinvar_cell(v), freq_cell(v),
-              disease_cell(v.gene, K), esc(why)] for v, why in diag])
+            [[var_cell(v), gt_cell(v), clinvar_cell(v), freq_cell(v),
+              disease_cell(v.gene, K), esc(with_origin(v, why, "autosomal dominant" in why or "X-linked" in why))]
+             for v, why in diag])
     for v, why in diag:
-        R.rows.append(("diagnostic", v, why))
+        R.rows.append(("diagnostic", v, with_origin(v, why, "autosomal dominant" in why or "X-linked" in why)))
     R.h("<h3>Pathogenic variants whose relevance depends on the condition (review)</h3><p class='small'>Genes with "
         "both dominant and recessive disorders, X-linked genes in heterozygous females, and genes without an "
         "established disease association in GenCC.</p>")
     R.table(["Variant", "Genotype", "ClinVar", "gnomAD frequency", "Gene-disease (GenCC)", "Why review"],
-            [[var_cell(v), call_cell(v, sex), clinvar_cell(v), freq_cell(v),
-              disease_cell(v.gene, K), esc(why)] for v, why in review])
+            [[var_cell(v), gt_cell(v), clinvar_cell(v), freq_cell(v),
+              disease_cell(v.gene, K), esc(with_origin(v, why))] for v, why in review])
     for v, why in review:
-        R.rows.append(("pathogenic_review", v, why))
+        R.rows.append(("pathogenic_review", v, with_origin(v, why)))
     if lowpen:
         R.h("<h3>Low-penetrance pathogenic alleles</h3>")
         R.table(["Variant", "Genotype", "ClinVar", "gnomAD frequency"],
-                [[var_cell(v), call_cell(v, sex), clinvar_cell(v), freq_cell(v)] for v in lowpen])
+                [[var_cell(v), gt_cell(v), clinvar_cell(v), freq_cell(v)] for v in lowpen])
         for v in lowpen:
             R.rows.append(("low_penetrance", v, ""))
 
@@ -1734,7 +2103,7 @@ def build(args):
     for score, v, g, consistent, why, ev, pnotes in cands[:args.max_candidates]:
         a = ann_for_gene(v, g) or v.anns[0]
         loeuf = constraint.get(g, (None, None, None))[0]
-        rows.append([var_cell(v).replace(f"<b>{esc(v.gene)}</b>", f"<b>{esc(g)}</b>"), call_cell(v, sex),
+        rows.append([var_cell(v).replace(f"<b>{esc(v.gene)}</b>", f"<b>{esc(g)}</b>"), gt_cell(v),
                      esc(a[1].replace("&", " & ")) + (f"<br><span class='small'>LOEUF {loeuf:.2f}</span>" if loeuf is not None else ""),
                      freq_cell(v), disease_cell(g, K),
                      ("" if consistent else tag("inheritance not met", "t-grn") + "<br>") + esc(why),
@@ -1742,13 +2111,13 @@ def build(args):
                      + (f"<br><span class='small'>{esc(predictor_text(v))}</span>" if predictor_text(v) else "")
                      + "".join(f"<br><span class='small'>{esc(n)}</span>" for n in pnotes)])
         R.rows.append(("candidate" if consistent else "candidate_inheritance_not_met", v,
-                       "; ".join([why, ",".join(ev)] + pnotes)))
+                       with_origin(v, "; ".join([why, ",".join(ev)] + pnotes))))
     R.table(["Variant", "Genotype", "Consequence", "gnomAD frequency", "Gene-disease (GenCC)", "Inheritance fit", "Evidence"], rows)
     if len(cands) > args.max_candidates:
         R.h(f"<p class='small'>{len(cands) - args.max_candidates} more candidates in the TSV output.</p>")
         for score, v, g, consistent, why, ev, pnotes in cands[args.max_candidates:]:
             R.rows.append(("candidate" if consistent else "candidate_inheritance_not_met", v,
-                           "; ".join([why, ",".join(ev)] + pnotes)))
+                           with_origin(v, "; ".join([why, ",".join(ev)] + pnotes))))
 
     # phenotype match by disease
     if hpo_terms and pheno.disease_terms:
@@ -1779,6 +2148,45 @@ def build(args):
         R.table(["Disease", "Gene and variants", "Phenotype explained", "Patient terms explained", "Not explained"],
                 [r[1] for r in rows[:30]])
 
+    # de novo variants
+    if trio:
+        R.h("<h3>De novo variants (trio)</h3>")
+        if not trio.parentage_ok:
+            R.h("<div class='box alert'><b>Parentage check failed</b> (section 1): the parents' genotypes do not fit "
+                "the proband's, so most variants below are inherited from the biological parents, not de novo. Confirm "
+                "the sample identities before using this table; no de novo evidence (PS2/PM6) is applied.</div>")
+        if len(trio.present()) < 2:
+            R.h("<p class='none'>Only one parent given: de novo variants cannot be identified.</p>")
+        else:
+            R.h("<p class='small'>Rare (gnomAD &lt; 0.01 %), protein-altering or predicted splice-altering variants of "
+                "good quality (QUAL &ge; 30, depth &ge; 20, alt fraction &ge; 0.25) that neither parent's calls contain"
+                + (", checked in the parents' reads: <b>de novo</b> when both parents have &ge; 15 reads and at most one "
+                   "alt read, <b>possibly de novo</b> when a parent's reads are missing or too few"
+                   if trio.bam["mother"] and trio.bam["father"] else
+                   "; without the parents' reads, absence from their calls may be missing coverage (<b>possibly de "
+                   "novo</b>)")
+                + f". {n_denovo_any} variants of any consequence passed the quality and frequency filters and are absent "
+                "from both parents' calls (an exome usually has 1-3 true coding de novo variants; many more point to "
+                "missed parental calls or a sample problem). PS2 (confirmed de novo) is applied at Moderate strength "
+                "when the gene matches the phenotype (ClinGen SVI de novo points), PM6_Supporting for a possible de "
+                "novo variant in a phenotype-matched gene."
+                + (f" {n_denovo_cluster} listed variants lie in a cluster of 3 or more parent-absent changes within "
+                   "10 bp (the pattern of reads from a paralogous copy) or have no reference reads in a heterozygous "
+                   "call (a repeat or complex locus the parents' calls may write differently): they are listed last, "
+                   "as possibly de novo, without de novo points." if n_denovo_cluster else "") + "</p>")
+            rows = []
+            for rank, v, g, o, txt, ev, pn in denovo:
+                a = ann_for_gene(v, g) or (v.anns[0] if v.anns else [""] * 11)
+                rows.append([var_cell(v).replace(f"<b>{esc(v.gene)}</b>", f"<b>{esc(g)}</b>"), call_cell(v, sex),
+                             esc(a[1].replace("&", " & ")), freq_cell(v), disease_cell(g, K),
+                             tag(ORIGIN_TEXT[o], "t-red" if o == "de novo" else "t-amb") + f"<br><span class='small'>{esc(txt)}</span>",
+                             " ".join(tag(c, "t-red" if c.startswith(("PVS", "PS")) else ("t-grn" if c.startswith("B") else ""))
+                                      for c in ev) + "".join(f"<br><span class='small'>{esc(n)}</span>" for n in pn)])
+                R.rows.append(("de_novo" if o == "de novo" else "de_novo_possible", v,
+                               "; ".join([ORIGIN_TEXT[o], txt, ",".join(ev)] + pn)))
+            R.table(["Variant", "Genotype", "Consequence", "gnomAD frequency", "Gene-disease (GenCC)", "Parents",
+                     "Evidence"], rows)
+
     # ACMG SF
     R.h(f"<h2>4. Secondary findings: {ACMG_SF_VERSION} ({len(ACMG_SF)} genes)</h2><p class='small'>Medically "
         "actionable genes that the ACMG recommends reporting regardless of the indication for testing, if the patient "
@@ -1787,10 +2195,10 @@ def build(args):
         "p.Cys282Tyr homozygotes only; TTN truncating variants only.</p>")
     if sf:
         R.table(["Variant", "Genotype", "ClinVar", "gnomAD frequency", "Category", "Status"],
-                [[var_cell(v), call_cell(v, sex), clinvar_cell(v), freq_cell(v), esc(ACMG_SF_CATEGORY.get(g, "")),
+                [[var_cell(v), gt_cell(v), clinvar_cell(v), freq_cell(v), esc(ACMG_SF_CATEGORY.get(g, "")),
                   tag(st, "t-red" if st == "reportable" else "t-amb") + "<br>" + esc(note)] for v, g, st, note in sf])
         for v, g, st, note in sf:
-            R.rows.append(("acmg_sf_" + st.split()[0], v, note))
+            R.rows.append(("acmg_sf_" + st.split()[0], v, with_origin(v, note)))
     else:
         R.h("<div class='box ok'>No reportable secondary findings: no ClinVar pathogenic/likely pathogenic variants "
             f"and no rare predicted loss-of-function variants in the {len(ACMG_SF)} {ACMG_SF_VERSION} genes.</div>")
@@ -1807,11 +2215,11 @@ def build(args):
         "allele in a gene associated with autosomal recessive disease. Carriers are usually unaffected; the result "
         "matters for reproductive risk if a partner carries a pathogenic variant in the same gene.</p>")
     R.table(["Variant", "Genotype", "ClinVar", "gnomAD frequency", "Condition (GenCC)"],
-            [[var_cell(v), call_cell(v, sex) + (f"<br>{tag(carrier_note[v.key()], 't-blu')}" if v.key() in carrier_note else ""),
+            [[var_cell(v), gt_cell(v) + (f"<br>{tag(carrier_note[v.key()], 't-blu')}" if v.key() in carrier_note else ""),
               clinvar_cell(v), freq_cell(v), disease_cell(v.gene, K, phenotype=False)]
              for v in carrier])
     for v in carrier:
-        R.rows.append(("carrier", v, carrier_note.get(v.key(), "")))
+        R.rows.append(("carrier", v, with_origin(v, carrier_note.get(v.key(), ""))))
 
     # PGx
     R.h("<h2>6. Pharmacogenomics</h2><p class='small'>Single-nucleotide star alleles of CPIC genes, read at fixed "
@@ -1999,6 +2407,16 @@ def build(args):
         "2023). The two PP3s are not summed, PP3 is not combined with PVS1, and missense BP4 needs SpliceAI &le; 0.1. "
         f"Scores present for this sample: AlphaMissense {n_am}, SpliceAI {n_sai} variants"
         + ("" if n_am and n_sai else " (a missing predictor gives no PP3/BP4)") + ".</li>")
+    if trio:
+        R.h("<li>Trio: parental genotypes from the parents' calls (multi-allelic and complex records split and trimmed "
+            "to match the proband's normalised alleles)" + (" and, where a parent has no call, from the parent's reads "
+                                                             "(MAPQ &ge; 20, duplicates excluded)"
+                                                             if trio.bam["mother"] or trio.bam["father"] else "")
+            + ". Compound heterozygotes are phased by parental origin first, then from the reads. A dominant finding "
+            "inherited from a parent reported unaffected is kept but marked (reduced penetrance or not causal); such "
+            "a candidate does not count as fitting the inheritance. De novo evidence follows the ClinGen SVI "
+            "recommendation (confirmed de novo, phenotype consistent with the gene: PS2_Moderate; assumed: "
+            "PM6_Supporting) and is withheld when the parentage check fails.</li>")
     R.h("<li><b>Not detected by this pipeline:</b> copy-number variants and exon deletions/duplications, structural "
         "variants, repeat expansions (e.g. FMR1, HTT, C9orf72), mitochondrial DNA variants, deep intronic and most "
         "regulatory variants, low-level mosaicism, methylation/imprinting defects, variants in segmental duplications "
@@ -2044,6 +2462,12 @@ def main(argv=None):
     ap.add_argument("--hpo-annotations", help="HPO disease annotations (phenotype.hpoa): disease names, onset, course")
     ap.add_argument("--clingen-dosage", help="ClinGen gene curation list (ClinGen_gene_curation_list_GRCh38.tsv)")
     ap.add_argument("--clinvar-protein", help="protein-level ClinVar table (data/build_clinvar_protein.py): PS1/PM5")
+    ap.add_argument("--mother-vcf", help="the mother's variant calls (any single-sample VCF of the same build)")
+    ap.add_argument("--father-vcf", help="the father's variant calls")
+    ap.add_argument("--mother-bam", help="the mother's indexed BAM: reads at variants absent from her calls")
+    ap.add_argument("--father-bam", help="the father's indexed BAM")
+    ap.add_argument("--affected-parents", choices=("unknown", "none", "mother", "father", "both"), default="unknown",
+                    help="which parents have the proband's condition")
     ap.add_argument("--roh", help="bcftools roh output (RG lines)")
     ap.add_argument("--artefacts", help="recurrent-artefact VCF of the laboratory (data/build_artefact_list.sh)")
     ap.add_argument("--pharmcat", help="PharmCAT calls-only TSV (pharmcat_pipeline -reporterCallsOnlyTsv)")

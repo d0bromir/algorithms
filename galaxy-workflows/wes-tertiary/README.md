@@ -123,6 +123,9 @@ and VCFs. A naming mismatch does not raise an error. ClinVar/gnomAD annotations 
 | **HPO disease annotations (phenotype.hpoa)** (optional) | `phenotype.hpoa` from the same HPO release (35 MB) | Disease names, age of onset, clinical course and inheritance next to each gene; with HPO terms, the disease that best explains the phenotype. |
 | **Dosage sensitivity (ClinGen TSV)** (optional) | [`ClinGen_gene_curation_list_GRCh38.tsv`](https://ftp.clinicalgenome.org/ClinGen_gene_curation_list_GRCh38.tsv) (250 kB) | Haploinsufficiency/triplosensitivity scores: decides whether loss of function is a disease mechanism (PVS1, LoF candidates in dominant genes). |
 | **ClinVar missense by residue (TSV)** (optional) | Built from ClinVar's `variant_summary.txt.gz` with [`data/build_clinvar_protein.py`](data/build_clinvar_protein.py) (below; 4 MB) | ACMG PS1 (same amino-acid change pathogenic) and PM5 (another pathogenic missense at the residue); rare missense variants with either become candidates. |
+| **Mother / Father: variant calls (VCF)** (optional) | Each parent's calls on the same reference, e.g. the *Raw variant calls* (or *Normalised variants*) of the FASTQ workflow run on the parent's reads | Trio analysis (section 4a): de novo variants, parental origin of every finding, compound heterozygotes phased by origin, parentage check. Raw (unfiltered) calls are best: a parental call missing because of a filter would look like a de novo variant. |
+| **Mother / Father: aligned reads (BAM)** (optional) | The parents' *Aligned reads (duplicates marked)* | Reads at the proband's variants that a parent's calls lack: a de novo variant is *confirmed* only when both parents have ≥ 15 reads and at most one alt read. |
+| **Affected parents** | `unknown` (default), `none`, `mother`, `father` or `both` | A dominant candidate inherited from a parent marked unaffected does not count as fitting the inheritance; one inherited from an affected parent is marked as segregating. |
 | **Recurrent artefacts (VCF)** (optional) | The laboratory's own list, built with [`data/build_artefact_list.sh`](data/build_artefact_list.sh) from earlier samples (below) | Alleles called in many of the laboratory's samples but rare or absent in gnomAD: systematic errors of the assay. The report marks matching calls low confidence. |
 | **Population allele frequencies (VCF)** | gnomAD v4.1 joint (exome + genome) frequencies reduced to the padded targets, as an indexed **BCF** built with [`data/build_gnomad_extract.sh`](data/build_gnomad_extract.sh) (below) | Transferred fields: `gnomAD_AF`, `_AN`, `_nhomalt` (homozygotes), `_grpmax` / `_grpmax_AF` / `_grpmax_AN` (genetic ancestry group with the highest AF), `_FAF95` / `_FAF95_grp` (highest filtering allele frequency, the statistic of the ACMG BA1/BS1 rules), `_filter` (gnomAD PASS / EXOMES_FILTERED / GENOMES_FILTERED / BOTH_FILTERED) and `_discordance_p` (exome vs genome frequency test). The caller's own `INFO/AF` is untouched. A file without these fields (e.g. an AF-only one) stops the annotation step with "tag not defined". |
 | **Missense predictions (AlphaMissense BCF)** | AlphaMissense hg38 predictions as an indexed **BCF** with `INFO/AM_score`, built with [`data/build_alphamissense.sh`](data/build_alphamissense.sh) (below) | Missense PP3/BP4 at the ClinGen-calibrated strengths. CC BY 4.0. |
@@ -200,6 +203,10 @@ strips trailing characters from that set while removing `.gz`/`.fastq` suffixes,
 `Patient_`. One sample is simply a list with one pair. Samples are processed independently, and the result
 collections are keyed by sample.
 
+**Trios.** Run the FASTQ workflow on the parents' reads too (or call them with any caller), then run v2 on the
+proband's VCF with the parents' *Raw variant calls* (or *Normalised variants*) and *Aligned reads (duplicates marked)* as the *Mother/Father* inputs and set *Affected
+parents*. The FASTQ workflow passes the same inputs to its embedded v2 run.
+
 **v2 (VCF).** Select a VCF/BCF, or select a list collection of VCFs to process a batch. Multi-sample VCFs work.
 The tables show the genotype columns of the first sample (`GEN[0]`); change them to `GEN[*]` for all samples.
 
@@ -242,7 +249,8 @@ laboratory.
 | Phenotype match by disease | With HPO terms: for every gene with a finding, the HPO-annotated disease that explains the largest share of the patient's terms, each term weighted by its information content; which terms it explains and which it does not, with the disease's onset, course and inheritance |
 | Gene knowledge | Next to every gene: GenCC diseases, GenCC disputed/refuted/no-known-relationship assertions, ClinGen haploinsufficiency and triplosensitivity, and (HPO) onset, course and inheritance of its diseases |
 | ACMG SF v3.3 | 84 genes (v3.2 plus ABCD1, CYP27A1, PLN; Genet Med 2025;27:101454); biallelic only for MUTYH, ATP7B, BTD, GAA, RPE65, CYP27A1; ABCD1 hemizygous, homozygous or two heterozygous variants (not a single heterozygous variant in a female); HFE p.Cys282Tyr homozygotes only; TTN truncating only. Rare loss-of-function variants not in ClinVar are listed as *review* |
-| Carrier status | One P/LP allele in a recessive gene; two P/LP variants shown by the reads to be in cis count as one allele |
+| Carrier status | One P/LP allele in a recessive gene; two P/LP variants shown by the parents or the reads to be in cis count as one allele |
+| Trio (with the parents' calls) | Parental origin of every finding (inherited from the mother or father, both parents, de novo, possibly de novo, only one parent for a homozygote); compound heterozygotes phased by origin first, then from the reads; a dominant candidate inherited from a parent marked unaffected does not fit the inheritance; a **de novo table**: rare (gnomAD < 0.01 %) protein-altering or splice-altering variants of good quality absent from both parents' calls, confirmed in both parents' reads (≥ 15 reads, ≤ 1 alt read) or marked *possibly de novo*; three or more parent-absent changes within 10 bp (reads of a paralogous copy) and heterozygous calls without reference reads (repeat or complex loci the parents' calls write differently) stay *possibly de novo* without de novo points; a confirmed de novo variant with an alt fraction well below 0.5 (binomial p < 0.001) is noted as possibly post-zygotic (mosaic); PS2_Moderate (confirmed) / PM6_Supporting (assumed) in phenotype-matched genes after the ClinGen SVI de novo points; a **parentage check** on common SNVs (each parent must carry the proband's homozygous alleles), which withholds PS2/PM6 and puts a warning over the de novo table when it fails |
 | Pharmacogenomics | CYP2C19, CYP2C9, VKORC1, CYP4F2, SLCO1B1, DPYD, TPMT, NUDT15, CYP3A5, CYP2B6, UGT1A1 at fixed GRCh38 positions (checked against ClinVar and the reference). A missing variant counts as the reference allele only with ≥ 15 reads at the position (BAM in v1); otherwise the gene is *indeterminate*. CPIC phenotypes, ClinVar drug-response variants (≥ 1 star). Next to it, the PharmCAT 3.4.0 diplotypes and phenotypes (all defining positions of each star allele, with the positions missing from the VCF listed); PharmCAT's own HTML report carries the CPIC, DPWG and FDA recommendations |
 | Risk alleles | Factor V Leiden, prothrombin G20210A, HFE p.Cys282Tyr/p.His63Asp, APOE (flagged: disclose only with counselling and consent), ClinVar risk/association variants (≥ 1 star) |
 | Runs of homozygosity | Total length of runs ≥ 1 Mb (consanguinity), runs concentrated on one chromosome (uniparental disomy), homozygous findings inside runs |
@@ -624,8 +632,73 @@ exons still need parental testing.
 *Full report on HG001* (all inputs, BAM and reference, median of 3 runs on 4 cores): 0.4.0 7.3 s and 1.09 GiB, 0.5.0
 9.2 s and 1.22 GiB.
 
+
+### Trio analysis (report 0.6.0, GIAB trios)
+
+The parents' IDT exomes from the same NovaSeq 6000 study (HG003 SRR14724471, HG004 SRR14724470, HG006
+SRR14724468, HG007 SRR14724467, NA12891 SRR14724466, NA12892 SRR14724464) were run through the FASTQ workflow; the
+report was given the proband's release-0.4 annotated VCF, the parents' *Normalised variants* and *Aligned reads
+(duplicates marked)*, and *Affected parents* `none`. Parental origin and de novo status were scored against the
+GIAB v4.2.1 truth of all three members (HG002's parents with the `noinconsistent` benchmark regions); the
+Utah/CEPH parents of HG001 have no GIAB truth.
+
+*Parentage check* (common SNVs, gnomAD AF ≥ 5 %: share of the proband's homozygous sites where the parent carries
+the allele, and of its heterozygous sites where at least one parent does; fails below 0.9):
+
+| Proband | Mother given | Father given | Mother | Father | Het sites | Result | Time | Memory |
+|---|---|---|--:|--:|--:|---|--:|--:|
+| HG002 | HG004 | HG003 | 0.999 | 0.999 | 0.999 | pass | 8 s | in the report |
+| HG005 | HG007 | HG006 | 0.999 | 0.999 | 0.998 | pass | 8 s | |
+| HG001 | NA12892 | NA12891 | 0.999 | 0.998 | 0.998 | pass | 8 s | |
+| HG002 | HG006 (unrelated) | NA12892 (unrelated) | 0.815 | 0.851 | 0.756 | **fail** | 8 s | |
+| HG001 | HG006 (unrelated) | NA12892 (the true mother) | 0.805 | 0.999 | 0.835 | **fail** | 8 s | |
+
+16,000–17,500 homozygous and 21,000–25,000 heterozygous sites per proband. With the swapped parents the report
+listed 87 "de novo" variants under a parentage warning and applied no PS2/PM6.
+
+*Parental origin* of the proband's true heterozygous autosomal calls inside all three benchmarks (rare = gnomAD
+< 1 %, checked in the parents' reads; common variants from the parents' calls only):
+
+| Proband | Variants | Origin assigned | Wrong origin | Truth de novo labelled de novo | Time (rare, with reads) | Memory |
+|---|--:|--:|--:|--:|--:|--:|
+| HG002, rare | 954 | 954 (100 %) | 1 (0.10 %) | 13 / 13 | 26 s | in the report |
+| HG002, all | 15,598 | 15,592 | 29 (0.19 %) | 13 / 13 | | |
+| HG005, rare | 1,738 | 1,738 (100 %) | 1 (0.06 %) | 1 / 1 | 44 s | |
+| HG005, all | 14,486 | 14,485 | 16 (0.11 %) | 1 / 1 | | |
+
+The wrong origins are mostly "both" for a variant only one parent carries, or a single parent for one both carry
+(a parental call present in one family member's call set and not the other's); 7 inherited common variants
+missed in a parent's calls (6 in HG002, 1 in HG005) came out as *possibly de novo*. For HG001 the 1,288 rare true heterozygous calls were
+assigned maternal 599, paternal 551, both 133 and de novo 5.
+
+*De novo table* (protein- or splice-altering variants; each row checked in the truth of all three members):
+
+| Proband | Truth de novo in the benchmarks | Listed as confirmed de novo | of which true | Listed as possibly de novo | Report time | Memory |
+|---|--:|--:|--:|--:|--:|--:|
+| HG002 | 13 (11 protein-altering) | 11 | **11** | 2 (no reference reads: TBP CAG repeat, NAALADL2; both outside the benchmarks) | 10.3 s | 1.23 GiB |
+| HG005 | 1 (RYR2 frameshift) | 1 | **1** | 6 (two clusters of 3 changes in ANKRD36 / ANKRD36C, outside the benchmarks) | 10.4 s | 1.23 GiB |
+| HG001 | no parental truth | 12 | 11 outside HG001's benchmark, 1 inside and absent from its truth | 7 (6 ANKRD36 / ANKRD36C cluster changes) | 11.0 s | 1.24 GiB |
+| Without parents | | | | | 5.7–5.9 s | 1.09 GiB |
+
+Every confirmed row in HG002 and HG005 was a true de novo variant, and the true de novo variants not listed were a
+synonymous change and a non-coding splice-region change. Before the paralogue-cluster and no-reference rules seven
+of these eight artefacts were listed as confirmed de novo. HG002's 13 coding-region de novo variants are more than the
+1–2 germline variants expected per exome; DNMT3A p.Cys911Tyr at an alt fraction of 0.27 (marked possibly
+mosaic) is the kind acquired in blood or cell culture. HG001's confirmed rows have alt fractions of 0.26–0.38
+(4 marked possibly mosaic); without parental truth they cannot be told apart from variants acquired by the cell
+line and missing from the GIAB truth. Times are the whole report (GenCC only, 4 cores) including the parents'
+read checks.
+
+*End-to-end run in Galaxy:* the VCF workflow (release 0.6) on HG005 with both parents' calls and reads gave the
+same de novo result (RYR2 confirmed from 27 and 44 reference reads, the ANKRD36 cluster as possibly de novo) and
+passed the parentage check at 99.9 %.
+
 ## 8. Scope and limitations
 
-Germline SNVs and short indels in the exome targets only. Not covered: CNV/SV calling, mitochondrial variants,
-inheritance/trio analysis, ACMG/AMP classification and phenotype (HPO) ranking. The candidate table supports
-expert review; it is not a diagnosis. This is a research workflow, not a validated clinical pipeline.
+Germline SNVs and short indels in the exome targets only. Not covered: CNV/SV calling, mitochondrial variants
+and repeat expansions. The ACMG/AMP evidence codes are an automated subset for triage, not a classification, and
+the HPO ranking depends on the terms given. Trio analysis needs the parents' calls on the same reference and
+works on the variants the proband's caller found; de novo status at repeats, segmental duplications and other
+loci where calls are written differently stays *possibly de novo*, and a parent's low-level mosaicism (a single
+alt read among ≥ 15) is read as reference. The reports support expert review; they are not a diagnosis. This is a research workflow,
+not a validated clinical pipeline.
