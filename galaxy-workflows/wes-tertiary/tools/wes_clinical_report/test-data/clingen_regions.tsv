@@ -1,0 +1,4 @@
+#ClinGen Region Curation Results
+#ISCA ID	ISCA Region Name	cytoBand	Genomic Location	Haploinsufficiency Score	Haploinsufficiency Description	Triplosensitivity Score
+ISCA-1	1p36 population region	1p36.33	chr1:500-9000	40	Dosage sensitivity unlikely	40
+ISCA-2	13q13 test region	13q13.1	chr13:32300000-32410000	3	Sufficient evidence	1

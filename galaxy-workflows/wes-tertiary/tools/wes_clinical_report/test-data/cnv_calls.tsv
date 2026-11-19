@@ -1,0 +1,7 @@
+##wes_cnv 0.1.0; panel 6 samples
+#sample	chrom	start	end	length_bp	type	copy_number	normal_copies	targets	mean_ratio	log10_bf	segdup_fraction	panel_carriers	confidence	genes
+S	13	32315000	32400000	85000	DEL	1	2	27	0.5	40.0	0.0	0	high	BRCA2:27/27
+S	12	102860000	102900000	40000	DEL	1	2	3	0.48	9.0	0.0	0	high	PAH:3/13
+S	1	1000	5000	4000	DEL	1	2	4	0.5	8.0	0.0	0	high	GENEX:2/9
+S	22	22100000	22200000	100000	DEL	1	2	6	0.5	12.0	0.0	0	high	IGLL5:1/1
+S	16	74410535	74412246	1711	DEL	1	2	4	0.52	7.0	0.9	0	low: segmental duplication	CLEC18B:2/4

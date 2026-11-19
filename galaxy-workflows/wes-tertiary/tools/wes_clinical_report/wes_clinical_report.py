@@ -24,12 +24,13 @@ import collections
 import datetime
 import gzip
 import html
+import json
 import math
 import re
 import subprocess
 import sys
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 
 # --------------------------------------------------------------------------------------------- rules
 # ACMG secondary findings v3.3 (ACMG policy statement, Genet Med 2025;27:101454): the 81 genes of v3.2 (Miller et al.,
@@ -1555,6 +1556,217 @@ ORIGIN_TEXT = {"maternal": "inherited from the mother", "paternal": "inherited f
                "unknown": "parental origin unknown"}
 
 
+# ---- copy-number variants (wes_cnv calls from exome read depth)
+# immunoglobulin and T-cell receptor loci (GRCh38): somatic V(D)J rearrangement in lymphocytes deletes parts of them,
+# so blood- or cell-line-derived DNA can show deletions there that are not germline
+SOMATIC_REARRANGING = [("14", 105_586_437, 106_879_844, "IGH"), ("2", 88_857_361, 90_235_368, "IGK"),
+                       ("22", 22_026_076, 22_922_913, "IGL"), ("14", 21_621_904, 22_552_132, "TRA/TRD"),
+                       ("7", 142_299_011, 142_813_287, "TRB"), ("7", 38_240_024, 38_368_055, "TRG")]
+ANEUPLOIDY_NAMES = {"21": "Down syndrome", "18": "Edwards syndrome", "13": "Patau syndrome", "XXY": "Klinefelter syndrome",
+                    "X": "Turner syndrome (45,X) or a mosaic", "XXX": "triple X syndrome", "XYY": "47,XYY",
+                    "XXYY": "48,XXYY"}
+CNV_CLASSES = [(0.99, "pathogenic"), (0.90, "likely pathogenic"), (-0.89, "uncertain significance"),
+               (-0.98, "likely benign"), (-99, "benign")]
+
+
+def load_cnv(path):
+    """wes_cnv calls TSV -> (calls, status). status is None when analysed, else the reason it was not."""
+    if not path:
+        return [], None
+    calls, status, cols = [], None, None
+    with opener(path) as f:
+        for line in f:
+            if line.startswith("##"):
+                if "not analysed" in line:
+                    status = line.split("; ", 1)[1].strip()
+                continue
+            t = line.rstrip("\n").split("\t")
+            if line.startswith("#"):
+                cols = [x.lstrip("#") for x in t]
+                continue
+            if not cols or len(t) < len(cols) - 1:
+                continue
+            c = dict(zip(cols, t + [""] * (len(cols) - len(t))))
+            for k in ("start", "end", "length_bp", "copy_number", "normal_copies", "targets", "panel_carriers"):
+                c[k] = int(c[k])
+            for k in ("mean_ratio", "log10_bf", "segdup_fraction"):
+                c[k] = float(c[k])
+            c["chrom"] = norm_chrom(c["chrom"])
+            c["gene_exons"] = []
+            for g in filter(None, c.get("genes", "").split(",")):
+                name, _, frac = g.rpartition(":")
+                k, _, n = frac.partition("/")
+                if name and k.isdigit() and n.isdigit():
+                    c["gene_exons"].append((name, int(k), int(n)))
+                else:
+                    c["gene_exons"].append((g, 0, 0))
+            calls.append(c)
+    return calls, status
+
+
+def load_cnv_summary(path):
+    if not path:
+        return {}
+    try:
+        return json.load(opener(path))
+    except (OSError, ValueError):
+        return {}
+
+
+def load_clingen_regions(path):
+    """ClinGen region curation list (ClinGen_region_curation_list_GRCh38.tsv): recurrent CNV regions with their
+    haploinsufficiency and triplosensitivity scores, including population regions scored 40 (dosage sensitivity
+    unlikely)."""
+    out = []
+    if not path:
+        return out
+    with opener(path) as f:
+        ix = None
+        for line in f:
+            t = line.rstrip("\n").split("\t")
+            if line.startswith("#ISCA ID") or (ix is None and t[0] == "ISCA ID"):
+                ix = {h.lstrip("#"): i for i, h in enumerate(t)}
+                continue
+            if line.startswith("#") or ix is None or len(t) < 5:
+                continue
+            m = re.match(r"(?:chr)?(\w+):(\d+)-(\d+)", t[ix["Genomic Location"]].replace(",", "").strip())
+            if not m:
+                continue
+
+            def score(col):
+                x = t[ix[col]].strip() if col in ix and ix[col] < len(t) else ""
+                return int(x) if x.lstrip("-").isdigit() else None
+            out.append({"id": t[ix["ISCA ID"]], "name": t[ix["ISCA Region Name"]], "cyto": t[ix.get("cytoBand", 2)],
+                        "chrom": norm_chrom(m.group(1)), "start": int(m.group(2)), "end": int(m.group(3)),
+                        "hi": score("Haploinsufficiency Score"), "ts": score("Triplosensitivity Score")})
+    return out
+
+
+def cnv_class(total):
+    for thr, name in CNV_CLASSES:
+        if total >= thr:
+            return name
+    return "benign"
+
+
+def cnv_loc(c):
+    size = c["length_bp"]
+    sz = f"{size / 1e6:.2f} Mb" if size >= 1e6 else (f"{size / 1e3:.1f} kb" if size >= 1e3 else f"{size} bp")
+    return f"{c['chrom']}:{c['start'] + 1:,}-{c['end']:,} ({sz})"
+
+
+def load_cnv_targets(path):
+    """wes_cnv per-target TSV -> {chrom: [(start, end, ratio, call_copy), ...]} for the targets used."""
+    out = collections.defaultdict(list)
+    if not path:
+        return None
+    with opener(path) as f:
+        head = f.readline().rstrip("\n").split("\t")
+        ix = {h: i for i, h in enumerate(head)}
+        if "ratio" not in ix:
+            return None
+        for line in f:
+            t = line.rstrip("\n").split("\t")
+            if t[ix["used"]] != "1" or t[ix["ratio"]] == "NA":
+                continue
+            cc = t[ix["call_copy"]]
+            out[norm_chrom(t[0])].append((int(t[1]), int(t[2]), float(t[ix["ratio"]]),
+                                          int(cc) if cc.lstrip("-").isdigit() else None))
+    for c in out:
+        out[c].sort()
+    return out if out else None
+
+
+def cnv_parent_depth(c, targets):
+    """A parent's read depth over the targets of the child's CNV: 'present', 'absent' or 'unclear', with the mean
+    ratio. Present: the parent's own call covers half of the targets, the mean ratio moves the same way by >= 0.25,
+    or >= 2 consecutive targets each move the same way by >= 0.2 (a parent's CNV can be shorter than the child's
+    call); absent: >= 3 targets, no such run and the mean ratio within 0.15 of normal."""
+    rows = [t for t in targets.get(c["chrom"], ()) if t[0] < c["end"] and c["start"] < t[1]]
+    if not rows:
+        return "unclear", None
+    r = sum(x[2] for x in rows) / len(rows)
+    loss = c["type"] == "DEL"
+    same = sum(1 for x in rows if x[3] is not None and ((x[3] < 2) if loss else (x[3] > 2)))
+    if c["chrom"] == "X":  # copy numbers differ between the sexes on X; the ratios are on one scale: use them only
+        same = 0
+    run = best = 0
+    for x in rows:
+        run = run + 1 if ((x[2] <= 0.8) if loss else (x[2] >= 1.2)) else 0
+        best = max(best, run)
+    shift = (r <= 0.75) if loss else (r >= 1.25)
+    if same >= 0.5 * len(rows) or shift or best >= 2:
+        return "present", r
+    if len(rows) >= 3 and abs(r - 1) < 0.15:
+        return "absent", r
+    return "unclear", r
+
+
+def cnv_parent_status(c, parents):
+    """parents: {'mother': per-target ratios or None, ...} -> {parent: (status, ratio)} for the parents given."""
+    return {w: cnv_parent_depth(c, t) for w, t in parents.items() if t is not None}
+
+
+def cnv_evidence(c, K, constraint, regions, origin):
+    """ACMG/ClinGen CNV points (Riggs et al., Genet Med 2020), the subset that exome read depth can support.
+    origin: 'de novo', 'inherited (unaffected)', 'inherited (affected)', other or None. Returns (codes, notes):
+    codes = [(code, points, text)]."""
+    loss = c["type"] == "DEL"
+    codes, notes = [], []
+    key = "hi" if loss else "ts"
+    for r in regions:
+        if r["chrom"] != c["chrom"] or r["end"] <= c["start"] or c["end"] <= r["start"]:
+            continue
+        ov = (min(r["end"], c["end"]) - max(r["start"], c["start"])) / max(r["end"] - r["start"], 1)
+        sc = r[key]
+        if sc == 3 and ov >= 0.8:
+            codes.append(("2A", 1.0, f"covers the established {'haploinsufficient' if loss else 'triplosensitive'} "
+                                     f"region {r['name']} ({r['cyto']})"))
+        elif sc in (3, 2) and ov > 0:
+            notes.append(f"overlaps {max(ov, 0.01):.0%} of the ClinGen region {r['name']} ({r['cyto']}; "
+                         f"{'HI' if loss else 'TS'} score {sc}): breakpoints decide, review")
+        elif sc == 40 and r["start"] <= c["start"] and c["end"] <= r["end"]:
+            codes.append(("2F", -1.0, f"inside the ClinGen benign population region {r['name']} "
+                                      "(dosage sensitivity unlikely)"))
+    names = [g for g, _, _ in c["gene_exons"]]
+    if not any(code == "2A" for code, _, _ in codes):
+        for g, k, n in c["gene_exons"]:
+            hi, ts = K.dosage.get(g, (None, None))
+            sc = hi if loss else ts
+            whole = n and k >= n
+            if sc == 3 and whole:
+                codes.append(("2A", 1.0, f"all {n} coding exons of {g}, established "
+                                         f"{'haploinsufficient' if loss else 'triplosensitive'} gene (ClinGen 3)"))
+                break
+            if loss and sc == 3 and k:
+                codes.append(("2E", 0.45, f"{k} of {n} coding exons of {g} (ClinGen haploinsufficient): an intragenic "
+                                          "deletion; strength 0.45 applied, the exons and reading frame decide (PVS1)"))
+                break
+            if not loss and k and not whole and hi == 3:
+                codes.append(("2I", 0.45, f"intragenic duplication of {k} of {n} exons of {g} (ClinGen haploinsufficient):"
+                                          " a tandem duplication can disrupt the gene; position and orientation unknown"))
+                break
+        else:
+            if loss and any((constraint.get(g, (None,))[0] or 9) < 0.35 for g in names):
+                g = min(names, key=lambda g: constraint.get(g, (9,))[0] or 9)
+                codes.append(("2H", 0.15, f"{g} is loss-of-function intolerant (gnomAD LOEUF "
+                                          f"{constraint[g][0]:.2f})"))
+    n_genes = len(names)
+    lim = (25, 35) if loss else (35, 50)
+    if n_genes >= lim[1]:
+        codes.append(("3C", 0.9, f"{n_genes} protein-coding genes"))
+    elif n_genes >= lim[0]:
+        codes.append(("3B", 0.45, f"{n_genes} protein-coding genes"))
+    if origin == "de novo":
+        codes.append(("5A", 0.45 if any(K.pheno.gene_terms.get(g) for g in names) else 0.15,
+                      "de novo (absent from both parents' read depth); points depend on the phenotype match"))
+    elif origin == "inherited (unaffected)":
+        codes.append(("5B", -0.3, "inherited from a parent reported unaffected"))
+    elif origin == "inherited (affected)":
+        notes.append("inherited from an affected parent: segregates with the condition (5D needs more family members)")
+    return codes, notes
+
+
 def build(args):
     sample, contigs, variants, prefix = parse_vcf(args.vcf)
     sample = args.sample_name or sample or "sample"
@@ -1961,6 +2173,89 @@ def build(args):
         txt = f"{v.gene} {v.hgvs_p or v.hgvs_c}" if gene else v.gene
         return esc(txt) + (" <i>(low confidence)</i>" if low_confidence(v) else "")
 
+    # ---------------------------------------------------------------- copy-number variants
+    cnv_calls, cnv_status = load_cnv(args.cnv_calls)
+    cnv_summ = load_cnv_summary(args.cnv_summary)
+    cnv_regions = load_clingen_regions(args.clingen_regions)
+    cnv_parents = {"mother": load_cnv_targets(args.mother_cnv), "father": load_cnv_targets(args.father_cnv)}
+    small_by_gene = collections.defaultdict(list)  # P/LP and candidate small variants per gene (compound het)
+    for v, _w in diag + review:
+        small_by_gene[v.gene].append(v)
+    for v in carrier:
+        small_by_gene[v.gene].append(v)
+    for _s, v, g, *_r in cands:
+        small_by_gene[g].append(v)
+    cnv_rows = []  # (rank, call, codes, notes, total, class, fit, origin)
+    for c in cnv_calls:
+        loss, cn, normal = c["type"] == "DEL", c["copy_number"], c["normal_copies"]
+        par = cnv_parent_status(c, cnv_parents)
+        c["parents"] = par
+        origin_c = None
+        if par:
+            present = [w for w, (st, _r) in par.items() if st == "present"]
+            if present:
+                origin_c = ("inherited (unaffected)" if all(unaffected(w) for w in present) else
+                            ("inherited (affected)" if any(affected(w) for w in present) else "inherited"))
+            elif len(par) == 2 and all(st == "absent" for st, _r in par.values()):
+                # de novo CNVs are rare: a weak call absent from both parents is more often noise than a new event
+                if c["log10_bf"] < 10 or c["targets"] < 5:
+                    origin_c = "absent from both parents (weak call: review)"
+                elif trio and not trio.parentage_ok:
+                    origin_c = "absent from both parents (parentage failed)"
+                else:
+                    origin_c = "de novo"
+            elif any(st == "unclear" for st, _r in par.values()):
+                origin_c = "unclear in a parent"
+            else:
+                origin_c = "absent from the parent given"
+        codes, notes = cnv_evidence(c, K, constraint, cnv_regions, origin_c)
+        for ch, s_, e_, locus in SOMATIC_REARRANGING:
+            if c["chrom"] == ch and c["start"] < e_ and s_ < c["end"]:
+                notes.append(f"{locus} locus: deletions here arise somatically by V(D)J rearrangement in lymphocytes "
+                             "and cell lines; not evidence of a germline CNV")
+                c["confidence"] = (c["confidence"] + ", " if c["confidence"] != "high" else "low: ") + f"{locus} locus"
+        total = round(sum(p for _, p, _ in codes), 2)
+        fit = []  # clinical fit with the genes' inheritance
+        for g, k, n in c["gene_exons"]:
+            moi = gene_moi(K.gencc.get(g, []))
+            if not moi:
+                continue
+            hemi_x = c["chrom"] == "X" and normal == 1
+            if loss and cn == 0 and ("AR" in moi or (hemi_x and "XL" in moi)):
+                fit.append(f"{g}: {'hemizygous' if hemi_x else 'homozygous'} loss of {k}/{n} exons in a "
+                           f"{'recessive' if 'AR' in moi else 'X-linked'} gene")
+            elif loss and cn == 1 and "AD" in moi and lof_mechanism(g, moi, constraint, K.dosage):
+                fit.append(f"{g}: heterozygous loss in a dominant gene where loss of function causes disease")
+            elif loss and cn == 1 and "AR" in moi:
+                other = list({id(v): v for v in small_by_gene.get(g, [])}.values())
+                inside_hom = [v for v in other if v.chrom == c["chrom"] and c["start"] < v.pos <= c["end"] and v.zyg == "hom"]
+                if inside_hom:
+                    fit.append(f"{g}: {', '.join(short(v) for v in inside_hom)} appears homozygous inside the "
+                               "heterozygous deletion, so it is hemizygous: in trans with the deletion (compound "
+                               "heterozygous)")
+                elif other:
+                    fit.append(f"{g}: heterozygous deletion plus {', '.join(short(v) for v in other[:3])}: possible "
+                               "compound heterozygote (phase unknown; parents' testing decides)")
+                else:
+                    fit.append(f"{g}: heterozygous deletion in a recessive gene: carrier")
+            elif not loss and "AD" in moi and K.dosage.get(g, (None, None))[1] in (2, 3):
+                fit.append(f"{g}: duplication of a triplosensitive dominant gene")
+        cls = cnv_class(total)
+        rank = (c["confidence"] != "high", -total, -len(fit), -c["log10_bf"])
+        cnv_rows.append((rank, c, codes, notes, total, cls, fit, origin_c))
+    cnv_rows.sort(key=lambda x: x[0])
+    cnv_high = [x for x in cnv_rows if x[1]["confidence"] == "high"]
+    cnv_report = [x for x in cnv_high if x[5] in ("pathogenic", "likely pathogenic") or x[6]]
+    cnv_sex = cnv_summ.get("sex_complement")
+    cnv_aneu = cnv_summ.get("aneuploidy", [])
+
+    def aneu_name(text):
+        m = re.match(r"chromosome (\w+): gain of a whole copy", text)
+        if m and m.group(1) in ANEUPLOIDY_NAMES:
+            return ANEUPLOIDY_NAMES[m.group(1)]
+        m = re.match(r"sex chromosomes (\w+)", text)
+        return ANEUPLOIDY_NAMES.get(m.group(1), "") if m else ""
+
     # ---------------------------------------------------------------- coverage of clinically relevant genes
     gene_cov = collections.defaultdict(lambda: [0, 0, 0])
     for c, s, e, name, th in gene_cov_rows:
@@ -2006,7 +2301,21 @@ def build(args):
     if roh:
         big = [s for s in roh if s[3] >= 1_000_000]
         R.h(f"<li><b>Runs of homozygosity</b>: {len(big)} segments &ge; 1 Mb, total {sum(s[3] for s in big) / 1e6:.1f} Mb</li>")
-    R.h(f"<li><b>Sex (genetic)</b>: {esc(sex)}</li>")
+    R.h(f"<li><b>Sex (genetic)</b>: {esc(sex)}" + (f"; sex chromosomes from read depth: {esc(cnv_sex)}" if cnv_sex else "")
+        + "</li>")
+    if args.cnv_calls:
+        if cnv_status:
+            R.h(f"<li><b>Copy-number variants</b>: {esc(cnv_status)}</li>")
+        else:
+            pl = [x for x in cnv_report if x[5] in ("pathogenic", "likely pathogenic")]
+            R.h(f"<li><b>Copy-number variants</b> (exome read depth): <b>{len(cnv_report)}</b> of clinical interest "
+                f"({len(pl)} pathogenic/likely pathogenic by CNV points)"
+                + (": " + ", ".join(f"{x[1]['type']} {esc(','.join(g for g, _, _ in x[1]['gene_exons'][:3]))}"
+                                    for x in cnv_report[:5]) if cnv_report else "")
+                + f"; {len(cnv_high)} high-confidence and {len(cnv_calls) - len(cnv_high)} low-confidence calls in all</li>")
+        if cnv_aneu:
+            R.h("<li><b>Chromosome dosage</b>: <b>" + "; ".join(esc(a + (f" ({aneu_name(a)})" if aneu_name(a) else ""))
+                                                      for a in cnv_aneu) + "</b></li>")
     if trio:
         conf = sum(1 for d in denovo if d[3] == "de novo")
         R.h(f"<li><b>Trio</b> ({' and '.join(trio.present())} given; affected parents: {esc(args.affected_parents)}): "
@@ -2058,7 +2367,7 @@ def build(args):
         warn.append("Many heterozygous calls with low alt fraction: possible sample contamination or mosaicism.")
     if qc.get("pct_20X") is not None and qc["pct_20X"] < 90:
         warn.append(f"Only {qc['pct_20X']:.0f}% of target bases reach 20x (clinical exomes usually require >= 90-95%): "
-                    "absence of findings is not reliable in poorly covered genes (see section 9).")
+                    "absence of findings is not reliable in poorly covered genes (see section 10).")
     if warn:
         R.h("<div class='box warn'>" + "<br>".join(esc(w) for w in warn) + "</div>")
 
@@ -2187,8 +2496,94 @@ def build(args):
             R.table(["Variant", "Genotype", "Consequence", "gnomAD frequency", "Gene-disease (GenCC)", "Parents",
                      "Evidence"], rows)
 
+    # copy-number variants and chromosome dosage
+    R.h("<h2>4. Copy-number variants and chromosome dosage</h2>")
+    if not args.cnv_calls:
+        R.h("<p class='none'>Not analysed: no copy-number calls given (the FASTQ workflow calls them from the "
+            "targets' read depth against a panel of at least 3 other samples of the same kit).</p>")
+    elif cnv_status:
+        R.h(f"<p class='none'>{esc(cnv_status[:1].upper() + cnv_status[1:])}.</p>")
+    else:
+        sm = cnv_summ
+        R.h("<p class='small'>Deletions and duplications called from the read depth of the capture targets against a "
+            f"panel of {len(sm.get('panel', []))} samples of the same kit"
+            + (f" ({esc(', '.join(sm.get('panel', [])))})" if sm.get("panel") else "")
+            + f"; {sm.get('targets_used', '?'):,} targets used, ratio noise (robust SD) {sm.get('ratio_sd_autosomes', 0):.3f}. "
+            "A call is <b>high confidence</b> with at least 3 targets, mostly outside segmental duplications, not seen "
+            "in the panel and log10 Bayes factor &ge; 5. In validation at 50x mean target depth with a 6-sample panel, "
+            "heterozygous deletions of 5 or more targets were found 83 % of the time (10 targets: all), of 3 targets "
+            "28 %; single-exon deletions are not reliably detected. A negative result does not exclude a CNV. "
+            "CNV points: the ACMG/ClinGen CNV scoring (Riggs et al., Genet Med 2020) for the evidence read depth and "
+            "ClinGen dosage can give (sections 2, 3 and 5); &ge; 0.99 pathogenic, 0.90-0.98 likely pathogenic. "
+            "Confirm by an orthogonal method (MLPA, qPCR, chromosomal microarray) before clinical use.</p>")
+        dos = sm.get("chromosome_dosage", {})
+        if cnv_aneu:
+            R.h("<div class='box alert'><b>Chromosome dosage</b>: " + "<br>".join(
+                esc(a) + (f" &rarr; <b>{esc(aneu_name(a))}</b>" if aneu_name(a) else "") for a in cnv_aneu)
+                + "<br><span class='small'>From exome read depth: confirm by karyotype or chromosomal microarray. A "
+                  "partial change can be mosaicism or a large CNV.</span></div>")
+        elif dos:
+            lo, hi = min(dos.values()), max(dos.values())
+            R.h(f"<p>Chromosome dosage: no whole-chromosome gain or loss (median ratio per chromosome {lo:.2f}-{hi:.2f}); "
+                f"sex chromosomes {esc(cnv_sex or '?')}.</p>")
+        if cnv_sex and sex in ("male", "female") and cnv_sex in ("XX", "XY") and \
+                (cnv_sex == "XY") != (sex == "male"):
+            R.h(f"<div class='box warn'>Read depth gives {esc(cnv_sex)} but chrX heterozygosity gives {esc(sex)}: "
+                "check for a sample swap or contamination.</div>")
+
+        def cnv_row(x):
+            _r, c, codes, notes, total, cls, fit, origin_c = x
+            genes = c["gene_exons"]
+            gtxt = ", ".join(f"<b>{esc(g)}</b> <span class='small'>{k}/{n}</span>" for g, k, n in genes[:12])
+            if len(genes) > 12:
+                gtxt += f" <span class='small'>+{len(genes) - 12} more</span>"
+            dz = [g for g, _, _ in genes if K.gencc.get(g) or K.dosage.get(g, (None, None)) != (None, None)]
+            know = "<br>".join(f"<b>{esc(g)}</b>: {disease_cell(g, K)}" for g in dz[:3])
+            if len(dz) > 3:
+                know += f"<br><span class='small'>+{len(dz) - 3} more genes with disease or dosage data</span>"
+            kind = "t-red" if c["type"] == "DEL" else "t-blu"
+            cell = (tag(f"{c['type']} copy number {c['copy_number']}", kind) + f"<br>{esc(cnv_loc(c))}<br>"
+                    f"<span class='small'>{c['targets']} targets, ratio {c['mean_ratio']:.2f}, log10 BF "
+                    f"{c['log10_bf']:.0f}</span>")
+            if c["confidence"] != "high":
+                cell += "<br>" + tag(c["confidence"], "t-amb")
+            ev = " ".join(tag(f"{code} {p:+.2f}", "t-red" if p > 0 else "t-grn") for code, p, _ in codes)
+            ev += "".join(f"<br><span class='small'>{code}: {esc(t)}</span>" for code, _, t in codes)
+            ev += "".join(f"<br><span class='small'>{esc(n)}</span>" for n in notes)
+            klass = tag(f"{cls} ({total:+.2f})", "t-red" if total >= 0.9 else ("t-grn" if total <= -0.9 else ""))
+            par = (tag(origin_c, "t-red" if origin_c == "de novo" else "t-blu") if origin_c else
+                   "<span class='small'>parents not given</span>")
+            for w, (st, r) in (c.get("parents") or {}).items():
+                par += f"<br><span class='small'>{w}: {st}" + (f" (ratio {r:.2f})" if r is not None else "") + "</span>"
+            return [cell, gtxt or "<span class='small'>no coding exons</span>", know, "<br>".join(fit) or "",
+                    par, klass + "<br>" + ev]
+        hdr = ["CNV", "Genes (coding exons in the CNV / of the gene)", "Gene-disease, dosage", "Clinical fit",
+               "Parents", "CNV points"]
+        R.h(f"<h3>CNVs of clinical interest ({len(cnv_report)})</h3><p class='small'>High-confidence calls that are "
+            "pathogenic/likely pathogenic by CNV points or fit the inheritance of a disease gene.</p>")
+        R.table(hdr, [cnv_row(x) for x in cnv_report])
+        other_high = [x for x in cnv_high if x not in cnv_report]
+        R.h(f"<h3>Other high-confidence CNVs ({len(other_high)})</h3>")
+        R.table(hdr, [cnv_row(x) for x in other_high[:40]])
+        low_dz = [x for x in cnv_rows if x[1]["confidence"] != "high"
+                  and any(K.gencc.get(g) for g, _, _ in x[1]["gene_exons"])]
+        R.h(f"<h3>Low-confidence calls in disease genes ({len(low_dz)} of {len(cnv_rows) - len(cnv_high)} "
+            "low-confidence calls)</h3><p class='small'>Segmental duplications, polymorphic regions seen in the panel, "
+            "1-2 targets or weak evidence: often artefacts or common CNVs. Listed for review, not as findings.</p>")
+        R.table(hdr, [cnv_row(x) for x in low_dz[:30]])
+        for x in cnv_rows:
+            _r, c, codes, notes, total, cls, fit, origin_c = x
+            cat = ("cnv_" + cls.replace(" ", "_") if x in cnv_report else
+                   ("cnv_high_confidence" if c["confidence"] == "high" else "cnv_low_confidence"))
+            note = "; ".join([cnv_loc(c), f"{cls} ({total:+.2f}): " + ",".join(f"{k} {p:+.2f}" for k, p, _ in codes),
+                              c["confidence"]] + [re.sub("<[^>]+>", "", f) for f in fit] + notes
+                             + ([origin_c] if origin_c else []))
+            R.rows.append((cat, None, (",".join(g for g, _, _ in c["gene_exons"][:20]),
+                                         f"{c['type']} CN{c['copy_number']}", note,
+                                         (c["chrom"], c["start"] + 1, c["end"]))))
+
     # ACMG SF
-    R.h(f"<h2>4. Secondary findings: {ACMG_SF_VERSION} ({len(ACMG_SF)} genes)</h2><p class='small'>Medically "
+    R.h(f"<h2>5. Secondary findings: {ACMG_SF_VERSION} ({len(ACMG_SF)} genes)</h2><p class='small'>Medically "
         "actionable genes that the ACMG recommends reporting regardless of the indication for testing, if the patient "
         "has opted in. Gene-specific rules applied: biallelic only for MUTYH, ATP7B, BTD, GAA, RPE65, CYP27A1; ABCD1 "
         "hemizygous, homozygous or two heterozygous variants (not a single heterozygous variant in a female); HFE "
@@ -2211,7 +2606,7 @@ def build(args):
                 + "</div>")
 
     # carriers
-    R.h("<h2>5. Carrier status for recessive conditions</h2><p class='small'>One pathogenic/likely pathogenic "
+    R.h("<h2>6. Carrier status for recessive conditions</h2><p class='small'>One pathogenic/likely pathogenic "
         "allele in a gene associated with autosomal recessive disease. Carriers are usually unaffected; the result "
         "matters for reproductive risk if a partner carries a pathogenic variant in the same gene.</p>")
     R.table(["Variant", "Genotype", "ClinVar", "gnomAD frequency", "Condition (GenCC)"],
@@ -2222,7 +2617,7 @@ def build(args):
         R.rows.append(("carrier", v, with_origin(v, carrier_note.get(v.key(), ""))))
 
     # PGx
-    R.h("<h2>6. Pharmacogenomics</h2><p class='small'>Single-nucleotide star alleles of CPIC genes, read at fixed "
+    R.h("<h2>7. Pharmacogenomics</h2><p class='small'>Single-nucleotide star alleles of CPIC genes, read at fixed "
         "GRCh38 positions. "
         + (f"Absence of a variant is read as the reference (*1) allele only where the aligned reads cover the position "
            f"with &ge; {args.min_ref_depth} reads (MAPQ &ge; 20, base quality &ge; 20)" if depth_at else
@@ -2270,7 +2665,7 @@ def build(args):
             R.rows.append(("clinvar_drug_response", v, ""))
 
     # risk alleles
-    R.h("<h2>7. Risk alleles and other associations</h2>")
+    R.h("<h2>8. Risk alleles and other associations</h2>")
     rows = []
     e4 = e2 = None
     for gene, name, rs, n, v, cov, text in risk:
@@ -2308,7 +2703,7 @@ def build(args):
             R.rows.append(("clinvar_association", v, ""))
 
     # ROH
-    R.h("<h2>8. Runs of homozygosity</h2>")
+    R.h("<h2>9. Runs of homozygosity</h2>")
     if roh:
         big = sorted([s for s in roh if s[3] >= 1_000_000], key=lambda s: -s[3])
         total = sum(s[3] for s in big)
@@ -2334,7 +2729,7 @@ def build(args):
         R.h("<p class='none'>Not computed (no bcftools roh output given).</p>")
 
     # coverage
-    R.h("<h2>9. Coverage of clinically relevant genes</h2>")
+    R.h("<h2>10. Coverage of clinically relevant genes</h2>")
     if gene_cov:
         rel = set(ACMG_SF) | set(pgx) | set(g for g in hpo_match) | {v.gene for v, _ in diag}
         rows = []
@@ -2354,7 +2749,7 @@ def build(args):
             "cannot be distinguished from missing coverage.</p>")
 
     # methods & limits
-    R.h("<h2>10. Methods, data sources and limitations</h2><ul>")
+    R.h("<h2>11. Methods, data sources and limitations</h2><ul>")
     R.h("<li>Variant annotation: SnpEff (consequence, HGVS), ClinVar (clinical significance and review status), "
         "gnomAD (population allele frequency) as provided to the workflow.</li>")
     R.h("<li>Frequency rules use the higher of the overall gnomAD allele frequency and the highest filtering allele "
@@ -2417,8 +2812,16 @@ def build(args):
             "a candidate does not count as fitting the inheritance. De novo evidence follows the ClinGen SVI "
             "recommendation (confirmed de novo, phenotype consistent with the gene: PS2_Moderate; assumed: "
             "PM6_Supporting) and is withheld when the parentage check fails.</li>")
-    R.h("<li><b>Not detected by this pipeline:</b> copy-number variants and exon deletions/duplications, structural "
-        "variants, repeat expansions (e.g. FMR1, HTT, C9orf72), mitochondrial DNA variants, deep intronic and most "
+    if args.cnv_calls and not cnv_status:
+        R.h("<li>Copy-number variants (section 4): wes_cnv read-depth calls (GC- and length-corrected target depth "
+            "against a same-kit panel, one principal component of the panel removed, Student-t hidden Markov model). "
+            f"ClinGen dosage regions: {'loaded, ' + str(len(cnv_regions)) + ' regions' if cnv_regions else 'not provided'}."
+            " Small (1-2 exon) and heterozygous single-exon CNVs, balanced rearrangements, CNVs in segmental "
+            "duplications and the breakpoints of any CNV are beyond exome read depth.</li>")
+    R.h("<li><b>Not detected by this pipeline:</b> "
+        + ("single- and two-exon copy-number changes (CNVs of several exons: section 4), "
+           if args.cnv_calls and not cnv_status else "copy-number variants and exon deletions/duplications, ")
+        + "structural variants, repeat expansions (e.g. FMR1, HTT, C9orf72), mitochondrial DNA variants, deep intronic and most "
         "regulatory variants, low-level mosaicism, methylation/imprinting defects, variants in segmental duplications "
         "and pseudogene regions (e.g. SMN1/SMN2, CYP21A2, PMS2 exons 11-15, GBA1), and genes or exons with low coverage. "
         "A negative report does not exclude a genetic diagnosis.</li>")
@@ -2436,6 +2839,12 @@ def write_tsv(R, path, sample):
                 "gnomad_af\tgnomad_grpmax_af\tgnomad_faf95\tgnomad_nhomalt\talphamissense\tspliceai\tclinvar\t"
                 "clinvar_review\tclinvar_condition\tqc_flags\tconfidence\tnote\n")
         for cat, v, note in R.rows:
+            if v is None and len(note) == 4:  # CNV: (genes, type and copy number, note, (chrom, start, end))
+                genes, genotype, txt, (chrom, start, end) = note
+                f.write("\t".join([sample, cat, genes, chrom, str(start), "", f"<{genotype.split()[0]}>", genotype]
+                                  + [""] * 15 + [txt.split("; ")[2] if txt.count("; ") >= 2 else "",
+                                                 txt.replace("\t", " ") + f"; end {end}"]) + "\n")
+                continue
             if v is None:  # gene-level result: (gene, genotype, phenotype)
                 gene, genotype, pheno = note
                 f.write("\t".join([sample, cat, gene, "", "", "", "", genotype] + [""] * 16 + [pheno]) + "\n")
@@ -2468,6 +2877,12 @@ def main(argv=None):
     ap.add_argument("--father-bam", help="the father's indexed BAM")
     ap.add_argument("--affected-parents", choices=("unknown", "none", "mother", "father", "both"), default="unknown",
                     help="which parents have the proband's condition")
+    ap.add_argument("--cnv-calls", help="copy-number calls of the sample (wes_cnv calls TSV)")
+    ap.add_argument("--cnv-summary", help="wes_cnv summary JSON: panel, noise, chromosome dosage, sex chromosomes")
+    ap.add_argument("--clingen-regions", help="ClinGen region curation list (ClinGen_region_curation_list_GRCh38.tsv)")
+    ap.add_argument("--mother-cnv", help="the mother's wes_cnv per-target ratios (--targets output): her read depth "
+                                         "at the proband's CNVs, inherited or de novo")
+    ap.add_argument("--father-cnv", help="the father's wes_cnv per-target ratios")
     ap.add_argument("--roh", help="bcftools roh output (RG lines)")
     ap.add_argument("--artefacts", help="recurrent-artefact VCF of the laboratory (data/build_artefact_list.sh)")
     ap.add_argument("--pharmcat", help="PharmCAT calls-only TSV (pharmcat_pipeline -reporterCallsOnlyTsv)")

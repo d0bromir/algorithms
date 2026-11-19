@@ -1,0 +1,1 @@
+{"status": "analysed", "panel": ["A", "B", "C", "D", "E", "F"], "targets_used": 190000, "ratio_sd_autosomes": 0.16, "sex_complement": "XY", "chromosome_dosage": {"21": 1.48, "1": 1.0}, "aneuploidy": ["chromosome 21: gain of a whole copy (trisomy), median ratio 1.48"]}

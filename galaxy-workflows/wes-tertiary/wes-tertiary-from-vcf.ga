@@ -2,7 +2,7 @@
     "name": "WES tertiary analysis from VCF (v2)",
     "a_galaxy_workflow": "true",
     "format-version": "0.1",
-    "annotation": "Tertiary analysis of a germline whole exome sequencing (WES) VCF.\n\n1. Normalise the calls against the reference: split multiallelic records, decompose complex alleles (MNVs)\n   into SNVs/indels, left-align indels and drop records whose REF does not match the reference (bcftools norm).\n2. Keep calls inside the exome target regions, padded by a configurable number of bases so that\n   canonical splice sites are retained, and that pass the quality expression (bcftools filter).\n3. Add ClinVar clinical significance (CLNSIG, CLNREVSTAT, CLNDN, CLNSIGCONF, ALLELEID) and the\n   gnomAD v4.1 population frequencies (INFO/gnomAD_AF, grpmax AF, filtering AF FAF95, homozygote count, gnomAD\n   filter and exome/genome discordance) and the AlphaMissense missense score (INFO/AM_score) with bcftools\n   annotate; score the rare variants with SpliceAI (INFO/SpliceAI).\n4. Predict functional consequences (gene, effect, impact, HGVS c./p., LOF/NMD) with SnpEff.\n5. Prioritise candidates with a SnpSift expression. The default keeps ClinVar (likely) pathogenic\n   variants at any frequency, plus rare (gnomAD AF and grpmax FAF95 < 1% or absent) HIGH/MODERATE impact variants.\n6. Export tab-separated tables of all annotated variants and of the candidates, and variant statistics\n   (bcftools stats, SnpEff summary) for MultiQC.\n7. Runs of homozygosity (bcftools roh, using the population allele frequencies).\n8. Clinical interpretation report (HTML) and findings table: diagnostic ClinVar pathogenic/likely pathogenic\n   findings checked against the gene's mode of inheritance (GenCC), candidate loss-of-function variants with\n   automated ACMG/AMP evidence codes and optional HPO phenotype ranking, ACMG SF v3.3 secondary findings,\n   carrier status, pharmacogenomics (CPIC genes, and PharmCAT 3.4.0 diplotypes with its own HTML report), risk alleles, runs of homozygosity, coverage of clinically\n   relevant genes and the limits of the analysis. The optional inputs (GenCC, gnomAD constraint, HPO, BAM,\n   coverage) refine the report; the FASTQ workflow connects all of them.\n\nMap this workflow over a collection of VCFs to process a batch of samples.\nReference FASTA, target BED, ClinVar and gnomAD must use the same genome build and the same\nchromosome naming (e.g. \"chr1\" vs \"1\") as the VCF.\n",
+    "annotation": "Tertiary analysis of a germline whole exome sequencing (WES) VCF.\n\n1. Normalise the calls against the reference: split multiallelic records, decompose complex alleles (MNVs)\n   into SNVs/indels, left-align indels and drop records whose REF does not match the reference (bcftools norm).\n2. Keep calls inside the exome target regions, padded by a configurable number of bases so that\n   canonical splice sites are retained, and that pass the quality expression (bcftools filter).\n3. Add ClinVar clinical significance (CLNSIG, CLNREVSTAT, CLNDN, CLNSIGCONF, ALLELEID) and the\n   gnomAD v4.1 population frequencies (INFO/gnomAD_AF, grpmax AF, filtering AF FAF95, homozygote count, gnomAD\n   filter and exome/genome discordance) and the AlphaMissense missense score (INFO/AM_score) with bcftools\n   annotate; score the rare variants with SpliceAI (INFO/SpliceAI).\n4. Predict functional consequences (gene, effect, impact, HGVS c./p., LOF/NMD) with SnpEff.\n5. Prioritise candidates with a SnpSift expression. The default keeps ClinVar (likely) pathogenic\n   variants at any frequency, plus rare (gnomAD AF and grpmax FAF95 < 1% or absent) HIGH/MODERATE impact variants.\n6. Export tab-separated tables of all annotated variants and of the candidates, and variant statistics\n   (bcftools stats, SnpEff summary) for MultiQC.\n7. Runs of homozygosity (bcftools roh, using the population allele frequencies).\n8. Clinical interpretation report (HTML) and findings table: diagnostic ClinVar pathogenic/likely pathogenic\n   findings checked against the gene's mode of inheritance (GenCC), candidate loss-of-function variants with\n   automated ACMG/AMP evidence codes and optional HPO phenotype ranking, ACMG SF v3.3 secondary findings,\n   copy-number variants with ClinGen dosage and CNV points (when the CNV calls are given),\n   carrier status, pharmacogenomics (CPIC genes, and PharmCAT 3.4.0 diplotypes with its own HTML report), risk alleles, runs of homozygosity, coverage of clinically\n   relevant genes and the limits of the analysis. The optional inputs (GenCC, gnomAD constraint, HPO, BAM,\n   coverage) refine the report; the FASTQ workflow connects all of them.\n\nMap this workflow over a collection of VCFs to process a batch of samples.\nReference FASTA, target BED, ClinVar and gnomAD must use the same genome build and the same\nchromosome naming (e.g. \"chr1\" vs \"1\") as the VCF.\n",
     "tags": [
         "WES",
         "exome",
@@ -11,7 +11,7 @@
         "tertiary-analysis"
     ],
     "license": "MIT",
-    "release": "0.6",
+    "release": "0.7",
     "uuid": "325a3624-2876-419f-9805-0558388e1825",
     "comments": [],
     "steps": {
@@ -611,6 +611,116 @@
         },
         "27": {
             "id": 27,
+            "name": "Copy-number calls (wes_cnv TSV)",
+            "type": "data_input",
+            "label": "Copy-number calls (wes_cnv TSV)",
+            "annotation": "Deletions and duplications of the sample from the Exome CNV calls tool (the FASTQ workflow connects them): the report interprets them with ClinGen dosage, the ACMG/ClinGen CNV points and the genes' inheritance.",
+            "tool_state": "{\"name\": \"Copy-number calls (wes_cnv TSV)\", \"optional\": true, \"format\": [\"tabular\"]}",
+            "position": {
+                "top": 3240,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "Copy-number calls (wes_cnv TSV)",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "28": {
+            "id": 28,
+            "name": "Copy-number summary (wes_cnv JSON)",
+            "type": "data_input",
+            "label": "Copy-number summary (wes_cnv JSON)",
+            "annotation": "Panel, noise, chromosome dosage (trisomy, monosomy) and sex chromosomes from read depth.",
+            "tool_state": "{\"name\": \"Copy-number summary (wes_cnv JSON)\", \"optional\": true, \"format\": [\"json\", \"txt\"]}",
+            "position": {
+                "top": 3360,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "Copy-number summary (wes_cnv JSON)",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "29": {
+            "id": 29,
+            "name": "ClinGen dosage regions (TSV)",
+            "type": "data_input",
+            "label": "ClinGen dosage regions (TSV)",
+            "annotation": "ClinGen region curation list (https://ftp.clinicalgenome.org/ClinGen_region_curation_list_GRCh38.tsv): recurrent CNV regions (e.g. 22q11.2) and population regions where dosage sensitivity is unlikely.",
+            "tool_state": "{\"name\": \"ClinGen dosage regions (TSV)\", \"optional\": true, \"format\": [\"tabular\", \"tsv\", \"txt\"]}",
+            "position": {
+                "top": 3480,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "ClinGen dosage regions (TSV)",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "30": {
+            "id": 30,
+            "name": "Mother: CNV per-target ratios",
+            "type": "data_input",
+            "label": "Mother: CNV per-target ratios",
+            "annotation": "The mother's per-target ratios from the Exome CNV calls tool; tells inherited from de novo CNVs.",
+            "tool_state": "{\"name\": \"Mother: CNV per-target ratios\", \"optional\": true, \"format\": [\"tabular\"]}",
+            "position": {
+                "top": 3600,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "Mother: CNV per-target ratios",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "31": {
+            "id": 31,
+            "name": "Father: CNV per-target ratios",
+            "type": "data_input",
+            "label": "Father: CNV per-target ratios",
+            "annotation": "The father's per-target ratios from the Exome CNV calls tool.",
+            "tool_state": "{\"name\": \"Father: CNV per-target ratios\", \"optional\": true, \"format\": [\"tabular\"]}",
+            "position": {
+                "top": 3720,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "Father: CNV per-target ratios",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "32": {
+            "id": 32,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/samtools_faidx/samtools_faidx/1.22+galaxy1",
             "type": "tool",
             "label": "chrom_sizes",
@@ -641,8 +751,8 @@
                 }
             }
         },
-        "28": {
-            "id": 28,
+        "33": {
+            "id": 33,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bedtools/bedtools_slopbed/2.31.1+galaxy1",
             "type": "tool",
             "label": "pad_targets",
@@ -663,7 +773,7 @@
                 ],
                 "genome_file_opts|genome": [
                     {
-                        "id": 27,
+                        "id": 32,
                         "output_name": "output"
                     }
                 ],
@@ -692,8 +802,8 @@
                 }
             }
         },
-        "29": {
-            "id": 29,
+        "34": {
+            "id": 34,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_norm/bcftools_norm/1.24+galaxy0",
             "type": "tool",
             "label": "normalize",
@@ -737,8 +847,8 @@
                 }
             }
         },
-        "30": {
-            "id": 30,
+        "35": {
+            "id": 35,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_filter/bcftools_filter/1.24+galaxy0",
             "type": "tool",
             "label": "target_filter",
@@ -753,13 +863,13 @@
             "input_connections": {
                 "input_file": [
                     {
-                        "id": 29,
+                        "id": 34,
                         "output_name": "output_file"
                     }
                 ],
                 "sec_restrict|regions|regions_file": [
                     {
-                        "id": 28,
+                        "id": 33,
                         "output_name": "output"
                     }
                 ],
@@ -788,8 +898,8 @@
                 }
             }
         },
-        "31": {
-            "id": 31,
+        "36": {
+            "id": 36,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
             "type": "tool",
             "label": "clinvar_annotation",
@@ -804,7 +914,7 @@
             "input_connections": {
                 "input_file": [
                     {
-                        "id": 30,
+                        "id": 35,
                         "output_name": "output_file"
                     }
                 ],
@@ -833,8 +943,8 @@
                 }
             }
         },
-        "32": {
-            "id": 32,
+        "37": {
+            "id": 37,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
             "type": "tool",
             "label": "population_annotation",
@@ -849,7 +959,7 @@
             "input_connections": {
                 "input_file": [
                     {
-                        "id": 31,
+                        "id": 36,
                         "output_name": "output_file"
                     }
                 ],
@@ -878,8 +988,8 @@
                 }
             }
         },
-        "33": {
-            "id": 33,
+        "38": {
+            "id": 38,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
             "type": "tool",
             "label": "missense_annotation",
@@ -894,7 +1004,7 @@
             "input_connections": {
                 "input_file": [
                     {
-                        "id": 32,
+                        "id": 37,
                         "output_name": "output_file"
                     }
                 ],
@@ -923,8 +1033,8 @@
                 }
             }
         },
-        "34": {
-            "id": 34,
+        "39": {
+            "id": 39,
             "name": "spliceai_score",
             "type": "tool",
             "label": "splice_prediction",
@@ -939,7 +1049,7 @@
             "input_connections": {
                 "input": [
                     {
-                        "id": 33,
+                        "id": 38,
                         "output_name": "output_file"
                     }
                 ],
@@ -968,8 +1078,8 @@
                 }
             }
         },
-        "35": {
-            "id": 35,
+        "40": {
+            "id": 40,
             "name": "pharmcat_pgx",
             "type": "tool",
             "label": "pharmacogenomics",
@@ -1023,8 +1133,8 @@
                 }
             }
         },
-        "36": {
-            "id": 36,
+        "41": {
+            "id": 41,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpeff/snpEff/5.4+galaxy0",
             "type": "tool",
             "label": "functional_annotation",
@@ -1039,7 +1149,7 @@
             "input_connections": {
                 "input": [
                     {
-                        "id": 34,
+                        "id": 39,
                         "output_name": "output"
                     }
                 ],
@@ -1097,8 +1207,8 @@
                 }
             }
         },
-        "37": {
-            "id": 37,
+        "42": {
+            "id": 42,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_filter/5.4.0c+galaxy1",
             "type": "tool",
             "label": "prioritize",
@@ -1113,7 +1223,7 @@
             "input_connections": {
                 "input": [
                     {
-                        "id": 36,
+                        "id": 41,
                         "output_name": "snpeff_output"
                     }
                 ],
@@ -1142,8 +1252,8 @@
                 }
             }
         },
-        "38": {
-            "id": 38,
+        "43": {
+            "id": 43,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1",
             "type": "tool",
             "label": "candidate_table",
@@ -1158,7 +1268,7 @@
             "input_connections": {
                 "input": [
                     {
-                        "id": 37,
+                        "id": 42,
                         "output_name": "output"
                     }
                 ]
@@ -1181,8 +1291,8 @@
                 }
             }
         },
-        "39": {
-            "id": 39,
+        "44": {
+            "id": 44,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1",
             "type": "tool",
             "label": "annotated_table",
@@ -1197,7 +1307,7 @@
             "input_connections": {
                 "input": [
                     {
-                        "id": 36,
+                        "id": 41,
                         "output_name": "snpeff_output"
                     }
                 ]
@@ -1220,8 +1330,8 @@
                 }
             }
         },
-        "40": {
-            "id": 40,
+        "45": {
+            "id": 45,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_stats/bcftools_stats/1.24+galaxy0",
             "type": "tool",
             "label": "variant_stats",
@@ -1236,7 +1346,7 @@
             "input_connections": {
                 "input_file": [
                     {
-                        "id": 36,
+                        "id": 41,
                         "output_name": "snpeff_output"
                     }
                 ]
@@ -1259,8 +1369,8 @@
                 }
             }
         },
-        "41": {
-            "id": 41,
+        "46": {
+            "id": 46,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_roh/bcftools_roh/1.24+galaxy1",
             "type": "tool",
             "label": "runs_of_homozygosity",
@@ -1275,7 +1385,7 @@
             "input_connections": {
                 "input_file": [
                     {
-                        "id": 36,
+                        "id": 41,
                         "output_name": "snpeff_output"
                     }
                 ]
@@ -1298,15 +1408,15 @@
                 }
             }
         },
-        "42": {
-            "id": 42,
+        "47": {
+            "id": 47,
             "name": "wes_clinical_report",
             "type": "tool",
             "label": "clinical_report",
             "annotation": "Human-readable clinical interpretation report and findings table (local tool tools/wes_clinical_report; install it on the Galaxy server, see README).",
-            "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"affected_parents\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"artefacts\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clingen_dosage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clinvar_protein\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"constraint\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"coverage_summary\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"father_bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"father_vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gencc\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gene_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_annotations\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_genes\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_terms\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"max_af\": \"\\\"0.01\\\"\", \"max_candidates\": \"\\\"60\\\"\", \"min_ref_depth\": \"\\\"15\\\"\", \"mother_bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mother_vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"pharmcat\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"reference\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"roh\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"sample_name\": \"\\\"\\\"\", \"target_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\"}",
+            "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"affected_parents\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"artefacts\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clingen_dosage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clingen_regions\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clinvar_protein\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"cnv_calls\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"cnv_summary\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"constraint\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"coverage_summary\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"father_bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"father_cnv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"father_vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gencc\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gene_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_annotations\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_genes\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_terms\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"max_af\": \"\\\"0.01\\\"\", \"max_candidates\": \"\\\"60\\\"\", \"min_ref_depth\": \"\\\"15\\\"\", \"mother_bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mother_cnv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mother_vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"pharmcat\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"reference\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"roh\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"sample_name\": \"\\\"\\\"\", \"target_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\"}",
             "tool_id": "wes_clinical_report",
-            "tool_version": "0.6.0+galaxy0",
+            "tool_version": "0.7.0+galaxy0",
             "position": {
                 "top": 300,
                 "left": 2380
@@ -1314,7 +1424,7 @@
             "input_connections": {
                 "vcf": [
                     {
-                        "id": 36,
+                        "id": 41,
                         "output_name": "snpeff_output"
                     }
                 ],
@@ -1326,13 +1436,13 @@
                 ],
                 "roh": [
                     {
-                        "id": 41,
+                        "id": 46,
                         "output_name": "output_file"
                     }
                 ],
                 "pharmcat": [
                     {
-                        "id": 35,
+                        "id": 40,
                         "output_name": "calls"
                     }
                 ],
@@ -1435,6 +1545,36 @@
                 "gene_coverage": [
                     {
                         "id": 16,
+                        "output_name": "output"
+                    }
+                ],
+                "cnv_calls": [
+                    {
+                        "id": 27,
+                        "output_name": "output"
+                    }
+                ],
+                "cnv_summary": [
+                    {
+                        "id": 28,
+                        "output_name": "output"
+                    }
+                ],
+                "clingen_regions": [
+                    {
+                        "id": 29,
+                        "output_name": "output"
+                    }
+                ],
+                "mother_cnv": [
+                    {
+                        "id": 30,
+                        "output_name": "output"
+                    }
+                ],
+                "father_cnv": [
+                    {
+                        "id": 31,
                         "output_name": "output"
                     }
                 ]
