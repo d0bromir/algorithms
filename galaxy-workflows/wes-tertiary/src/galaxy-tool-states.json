@@ -40,6 +40,38 @@
     },
     "tool_version": "2.0.9"
   },
+  "WES tertiary analysis from FASTQ (v1)/cnv_calling": {
+    "tool_id": "wes_cnv",
+    "tool_state": {
+      "__page__": 0,
+      "__rerun_remap_job_id__": null,
+      "advanced": {
+        "min_bf": "3.0",
+        "min_depth": "20.0",
+        "p_cnv": "0.0001",
+        "pcs": "1"
+      },
+      "extra_panel": {
+        "__class__": "ConnectedValue"
+      },
+      "genes": {
+        "__class__": "ConnectedValue"
+      },
+      "panel": {
+        "__class__": "ConnectedValue"
+      },
+      "reference": {
+        "__class__": "ConnectedValue"
+      },
+      "sample": {
+        "__class__": "ConnectedValue"
+      },
+      "segdups": {
+        "__class__": "ConnectedValue"
+      }
+    },
+    "tool_version": "0.1.0+galaxy0"
+  },
   "WES tertiary analysis from FASTQ (v1)/coding_coverage": {
     "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/mosdepth/mosdepth/0.3.14+galaxy0",
     "tool_state": {
@@ -422,7 +454,16 @@
       "clingen_dosage": {
         "__class__": "ConnectedValue"
       },
+      "clingen_regions": {
+        "__class__": "ConnectedValue"
+      },
       "clinvar_protein": {
+        "__class__": "ConnectedValue"
+      },
+      "cnv_calls": {
+        "__class__": "ConnectedValue"
+      },
+      "cnv_summary": {
         "__class__": "ConnectedValue"
       },
       "constraint": {
@@ -432,6 +473,9 @@
         "__class__": "ConnectedValue"
       },
       "father_bam": {
+        "__class__": "ConnectedValue"
+      },
+      "father_cnv": {
         "__class__": "ConnectedValue"
       },
       "father_vcf": {
@@ -458,6 +502,9 @@
       "mother_bam": {
         "__class__": "ConnectedValue"
       },
+      "mother_cnv": {
+        "__class__": "ConnectedValue"
+      },
       "mother_vcf": {
         "__class__": "ConnectedValue"
       },
@@ -478,7 +525,7 @@
         "__class__": "ConnectedValue"
       }
     },
-    "tool_version": "0.6.0+galaxy0"
+    "tool_version": "0.7.0+galaxy0"
   },
   "WES tertiary analysis from FASTQ (v1)/tertiary/clinvar_annotation": {
     "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
@@ -1148,7 +1195,16 @@
       "clingen_dosage": {
         "__class__": "ConnectedValue"
       },
+      "clingen_regions": {
+        "__class__": "ConnectedValue"
+      },
       "clinvar_protein": {
+        "__class__": "ConnectedValue"
+      },
+      "cnv_calls": {
+        "__class__": "ConnectedValue"
+      },
+      "cnv_summary": {
         "__class__": "ConnectedValue"
       },
       "constraint": {
@@ -1158,6 +1214,9 @@
         "__class__": "ConnectedValue"
       },
       "father_bam": {
+        "__class__": "ConnectedValue"
+      },
+      "father_cnv": {
         "__class__": "ConnectedValue"
       },
       "father_vcf": {
@@ -1184,6 +1243,9 @@
       "mother_bam": {
         "__class__": "ConnectedValue"
       },
+      "mother_cnv": {
+        "__class__": "ConnectedValue"
+      },
       "mother_vcf": {
         "__class__": "ConnectedValue"
       },
@@ -1204,7 +1266,7 @@
         "__class__": "ConnectedValue"
       }
     },
-    "tool_version": "0.6.0+galaxy0"
+    "tool_version": "0.7.0+galaxy0"
   },
   "WES tertiary analysis from VCF (v2)/clinvar_annotation": {
     "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",

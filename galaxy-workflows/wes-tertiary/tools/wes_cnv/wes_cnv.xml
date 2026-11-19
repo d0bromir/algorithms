@@ -1,0 +1,139 @@
+<tool id="wes_cnv" name="Exome CNV calls" version="0.1.0+galaxy0" profile="23.0">
+    <description>deletions, duplications and chromosome dosage from target read depth against a same-kit panel</description>
+    <requirements>
+        <requirement type="package" version="3.12">python</requirement>
+        <requirement type="package" version="2.2.6">numpy</requirement>
+        <requirement type="package" version="1.22">samtools</requirement>
+    </requirements>
+    <version_command>python3 '$__tool_directory__/wes_cnv.py' --version</version_command>
+    <command detect_errors="exit_code"><![CDATA[
+#if $reference:
+    ln -s '$reference' reference.fa &&
+    samtools faidx reference.fa &&
+#end if
+python3 '$__tool_directory__/wes_cnv.py'
+    --sample '$sample'
+    --sample-name '$sample.element_identifier'
+    #set $all_panel = list($panel) + (list($extra_panel) if $extra_panel else [])
+    --panel
+    #for $p in $all_panel:
+        '$p'
+    #end for
+    --panel-names
+    #for $p in $all_panel:
+        '$p.element_identifier'
+    #end for
+    #if $reference:
+        --reference reference.fa
+    #end if
+    #if $genes:
+        --genes '$genes'
+    #end if
+    #if $segdups:
+        --segdups '$segdups'
+    #end if
+    --min-depth $advanced.min_depth
+    --p-cnv $advanced.p_cnv
+    --min-bf $advanced.min_bf
+    --pcs $advanced.pcs
+    --calls '$calls'
+    --targets '$targets'
+    --summary '$summary'
+    ]]></command>
+    <inputs>
+        <param name="sample" type="data" format="bed,tabular" label="Per-target mean depth of the sample (mosdepth regions BED)"
+               help="The *regions* output of mosdepth over the capture targets (chrom, start, end, [name,] mean depth); in the FASTQ workflow, the per-target coverage step."/>
+        <param name="panel" type="data" format="bed,tabular" multiple="true" label="Panel: per-target mean depth of other samples"
+               help="The same mosdepth output of at least 3 other samples of the same capture kit, sequencer and pipeline (unrelated, if possible). A collection of all samples of a run works: the sample itself is dropped by its name. More samples and samples from the same batch give better calls; with fewer than 3 the result is empty and says why."/>
+        <param name="extra_panel" type="data" format="bed,tabular" multiple="true" optional="true" label="Additional panel samples"
+               help="Per-target depth of earlier samples of the same kit (e.g. a stored reference collection), added to the panel above."/>
+        <param name="reference" type="data" format="fasta" optional="true" label="Reference genome (FASTA)"
+               help="GC content of each target, for the GC correction (recommended)."/>
+        <param name="genes" type="data" format="bed" optional="true" label="Coding exons (BED, gene symbol in column 4)"
+               help="The coding-region BED of the workflows: the genes and exons each CNV covers."/>
+        <param name="segdups" type="data" format="bed" optional="true" label="Segmental duplications (BED)"
+               help="E.g. GIAB GRCh38_segdups.bed.gz: calls with most targets inside are marked low confidence."/>
+        <section name="advanced" title="Advanced" expanded="false">
+            <param name="min_depth" type="float" value="20" min="1" label="Minimum panel depth of a target"/>
+            <param name="p_cnv" type="float" value="0.0001" min="1e-8" max="0.1" label="Probability that a CNV starts at a target"
+                   help="Higher finds more small CNVs and more false ones."/>
+            <param name="min_bf" type="float" value="3" min="0" label="Minimum log10 Bayes factor of a reported call"/>
+            <param name="pcs" type="integer" value="1" min="0" max="5" label="Principal components of the panel removed (batch effects)"/>
+        </section>
+    </inputs>
+    <outputs>
+        <data name="calls" format="tabular" label="${tool.name} on ${on_string}: calls"/>
+        <data name="targets" format="tabular" label="${tool.name} on ${on_string}: per-target ratios"/>
+        <data name="summary" format="json" label="${tool.name} on ${on_string}: summary"/>
+    </outputs>
+    <tests>
+        <test expect_num_outputs="3">
+            <param name="sample" value="sample.bed" ftype="bed"/>
+            <param name="panel" value="panel1.bed,panel2.bed,panel3.bed" ftype="bed"/>
+            <param name="genes" value="genes.bed" ftype="bed"/>
+            <section name="advanced">
+                <param name="min_depth" value="10"/>
+            </section>
+            <output name="calls" ftype="tabular">
+                <assert_contents>
+                    <has_text_matching expression="\t2\t3100000\t\d+\t\d+\tDEL\t1\t2\t"/>
+                    <has_text_matching expression="\tDUP\t3\t2\t.*\thigh\tGENEB:1/1"/>
+                </assert_contents>
+            </output>
+            <output name="summary" ftype="json">
+                <assert_contents>
+                    <has_text text="&quot;sex_complement&quot;: &quot;XY&quot;"/>
+                </assert_contents>
+            </output>
+        </test>
+        <test expect_num_outputs="3">
+            <param name="sample" value="sample.bed" ftype="bed"/>
+            <param name="panel" value="panel1.bed,panel2.bed" ftype="bed"/>
+            <output name="calls" ftype="tabular">
+                <assert_contents>
+                    <has_text text="not analysed: 2 panel samples"/>
+                </assert_contents>
+            </output>
+        </test>
+    </tests>
+    <help><![CDATA[
+**What it does**
+
+Calls deletions and duplications of one or more exons from the read depth of the capture targets, by comparing
+the sample with a panel of samples of the same kit (read-depth CNV calling, as in ExomeDepth, XHMM or CoNIFER):
+
+1. Each sample's target depths are divided by its median autosomal depth and corrected for GC content (1 % bins,
+   from the reference) and target length; X is brought to a two-copy scale by each sample's X copy number, so
+   female and male panel samples serve both sexes.
+2. The panel's main axis of variation (library or sequencing batch) is projected out of every sample.
+3. Each target's ratio to the panel median has an error from read sampling plus the panel's spread there (shrunk
+   towards the typical spread), calibrated per sample.
+4. A hidden Markov model (copy number 0-4; 0-2 on a male X; Student-t emissions, so single outlying targets carry
+   little weight) gives the calls, each with a log10 Bayes factor against the normal copy number.
+
+**Outputs**
+
+*Calls*: one row per CNV: position, DEL/DUP, copy number, targets, mean ratio, log10 Bayes factor, the fraction of
+targets in segmental duplications, panel samples showing the same change (common CNVs or systematic artefacts),
+confidence, and the genes as GENE:k/n (k of the gene's n coding exons). **high** confidence: >= 3 targets, mostly
+outside segmental duplications, not seen in the panel, log10 BF >= 5.
+
+*Per-target ratios*: for plots, and as the parents' input of the clinical report (their read depth at the
+proband's CNVs).
+
+*Summary* (JSON): panel, noise, chromosome dosage per chromosome (trisomy, monosomy, mosaic gain/loss) and the
+sex-chromosome complement (XX, XY, XXY, X, XXX, XYY; chrY from the 75th percentile of its targets' depth).
+
+**Performance** (GIAB exomes, IDT, NovaSeq 6000, 50x median target depth, 6-sample panel): heterozygous deletions
+of 5 targets were found in 83 % of simulations, 10 targets in all, 3 targets in 28 %, single targets almost
+never; homozygous deletions of 2 targets in 75 %; duplications of 5 targets in 74 %. Against the HG002 GIAB v5.0q
+structural-variant benchmark, all 3 high-confidence deletions were true, and in three GIAB trios all 12 high-confidence CNVs were inherited or unclear in a parent (none called de novo). Deeper sequencing and larger,
+batch-matched panels find smaller CNVs.
+
+Calls are for research and decision support; confirm by MLPA, qPCR or chromosomal microarray.
+    ]]></help>
+    <citations>
+        <citation type="doi">10.1093/bioinformatics/bts526</citation>
+        <citation type="doi">10.1016/j.ajhg.2012.08.005</citation>
+    </citations>
+</tool>

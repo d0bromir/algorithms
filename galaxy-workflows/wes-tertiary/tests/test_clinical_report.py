@@ -169,7 +169,7 @@ def test_pharmcat_calls():
     assert "<h3>PharmCAT 3.4.0</h3>" in html and "Missing positions" in html
     assert all(len(r) == 25 for r in rows)
     _, html = run_report()
-    assert "PharmCAT" not in html.split("<h2>6. Pharmacogenomics")[1].split("<h2>7.")[0]
+    assert "PharmCAT" not in html.split("<h2>7. Pharmacogenomics")[1].split("<h2>8.")[0]
 
 
 def test_hpo_ranking(tmp_path=None):
@@ -430,3 +430,80 @@ if __name__ == "__main__":
                 failed += 1
                 print(f"FAIL {name}: {e}")
     sys.exit(1 if failed else 0)
+
+
+def _cnv_inputs(d):
+    """Synthetic wes_cnv outputs: calls, summary, ClinGen regions and both parents' per-target ratios."""
+    cols = ["sample", "chrom", "start", "end", "length_bp", "type", "copy_number", "normal_copies", "targets",
+            "mean_ratio", "log10_bf", "segdup_fraction", "panel_carriers", "confidence", "genes"]
+    calls = [
+        ("13", 32315000, 32400000, "DEL", 1, 27, 0.5, 40.0, 0.0, 0, "high", "BRCA2:27/27"),  # whole HI-3 gene
+        ("12", 102860000, 102900000, "DEL", 1, 3, 0.48, 9.0, 0.0, 0, "high", "PAH:3/13"),  # + PAH P het: comp. het?
+        ("1", 1000, 5000, "DEL", 1, 4, 0.5, 8.0, 0.0, 0, "high", "GENEX:2/9"),  # inside a benign population region
+        ("22", 22100000, 22200000, "DEL", 1, 6, 0.5, 12.0, 0.0, 0, "high", "IGLL5:1/1"),  # IGL locus
+        ("16", 74410535, 74412246, "DEL", 1, 4, 0.52, 7.0, 0.9, 0, "low: segmental duplication", "CLEC18B:2/4"),
+    ]
+    p = os.path.join(d, "calls.tsv")
+    with open(p, "w") as f:
+        f.write("##wes_cnv 0.1.0; panel 6 samples\n#" + "\t".join(cols) + "\n")
+        for c, s, e, t, cn, n, r, bf, sdf, pc, conf, genes in calls:
+            f.write("\t".join(map(str, ["S", c, s, e, e - s, t, cn, 2, n, r, bf, sdf, pc, conf, genes])) + "\n")
+    js = os.path.join(d, "summary.json")
+    with open(js, "w") as f:
+        f.write('{"status": "analysed", "panel": ["A", "B", "C", "D", "E", "F"], "targets_used": 190000, '
+                '"ratio_sd_autosomes": 0.16, "sex_complement": "XY", "chromosome_dosage": {"21": 1.48, "1": 1.0}, '
+                '"aneuploidy": ["chromosome 21: gain of a whole copy (trisomy), median ratio 1.48"]}')
+    reg = os.path.join(d, "regions.tsv")
+    with open(reg, "w") as f:
+        f.write("#ClinGen Region Curation Results\n#ISCA ID\tISCA Region Name\tcytoBand\tGenomic Location\t"
+                "Haploinsufficiency Score\tHaploinsufficiency Description\tTriplosensitivity Score\n")
+        f.write("ISCA-1\t1p36 population region\t1p36.33\tchr1:500-9000\t40\tDosage sensitivity unlikely\t40\n")
+        f.write("ISCA-2\t13q13 test region\t13q13.1\tchr13:32300000-32410000\t3\tSufficient evidence\t1\n")
+    parents = []
+    for who, r_brca2 in (("mother", 1.01), ("father", 0.98)):
+        t = os.path.join(d, f"{who}.targets.tsv")
+        with open(t, "w") as f:
+            f.write("chrom\tstart\tend\tdepth\tpanel_depth\tratio\tsd\tused\tcall_copy\tgc\n")
+            for i in range(27):  # BRCA2: normal in both parents -> de novo
+                s = 32315000 + i * 3000
+                f.write(f"13\t{s}\t{s + 150}\t50\t50\t{r_brca2}\t0.1\t1\t2\t0.4\n")
+            for i in range(3):  # PAH: the mother carries the deletion
+                s = 102860000 + i * 10000
+                f.write(f"12\t{s}\t{s + 150}\t50\t50\t{0.5 if who == 'mother' else 1.0}\t0.1\t1\t"
+                        f"{1 if who == 'mother' else 2}\t0.4\n")
+        parents += [f"--{who}-cnv", t]
+    return ["--cnv-calls", p, "--cnv-summary", js, "--clingen-regions", reg,
+            "--clingen-dosage", os.path.join(DATA, "clingen_dosage.tsv"), *parents, "--affected-parents", "none"]
+
+
+def test_cnv_interpretation():
+    d = tempfile.mkdtemp()
+    rows, html = run_report(_cnv_inputs(d))
+    cnv = {r["gene"]: r for r in rows if r["category"].startswith("cnv")}
+    b = cnv["BRCA2"]
+    assert b["category"] == "cnv_pathogenic" and b["chrom"] == "13" and b["alt"] == "<DEL>", b
+    assert "2A +1.00" in b["note"] and "5A" in b["note"] and "de novo" in b["note"], "whole HI-3 gene/region, de novo"
+    assert "heterozygous loss in a dominant gene" in b["note"]
+    p = cnv["PAH"]
+    assert "possible compound heterozygote" in p["note"] and "inherited (unaffected)" in p["note"] \
+        and "5B -0.30" in p["note"], "PAH deletion from the mother plus a pathogenic PAH variant"
+    assert "2F -1.00" in cnv["GENEX"]["note"] and cnv["GENEX"]["category"] == "cnv_high_confidence", \
+        "inside a ClinGen population region: benign evidence, not of interest"
+    assert cnv["IGLL5"]["confidence"].startswith("low") and "IGL locus" in cnv["IGLL5"]["note"]
+    assert cnv["CLEC18B"]["category"] == "cnv_low_confidence"
+    assert "<h2>4. Copy-number variants and chromosome dosage</h2>" in html
+    assert "Down syndrome" in html and "Chromosome dosage</b>: <b>chromosome 21" in html
+    assert "<h2>5. Secondary findings" in html and "<h2>11. Methods" in html
+
+
+def test_cnv_not_analysed():
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "calls.tsv")
+    with open(p, "w") as f:
+        f.write("##wes_cnv 0.1.0; not analysed: 1 panel samples other than S (at least 3 of the same kit are needed)\n"
+                "#sample\tchrom\tstart\tend\n")
+    rows, html = run_report(["--cnv-calls", p])
+    assert not [r for r in rows if r["category"].startswith("cnv")]
+    assert "Not analysed: not analysed: 1 panel samples" not in html and "at least 3 of the same kit" in html
+    rows, html = run_report()
+    assert "no copy-number calls given" in html

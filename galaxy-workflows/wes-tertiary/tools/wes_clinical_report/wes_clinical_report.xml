@@ -1,4 +1,4 @@
-<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.6.0+galaxy0" profile="23.0">
+<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.7.0+galaxy0" profile="23.0">
     <description>diagnostic, secondary, carrier, pharmacogenomic and risk findings in one human-readable report</description>
     <requirements>
         <requirement type="package" version="3.12">python</requirement>
@@ -63,6 +63,21 @@ python3 '$__tool_directory__/wes_clinical_report.py'
         --father-bam father.bam
     #end if
     --affected-parents '$affected_parents'
+    #if $cnv_calls:
+        --cnv-calls '$cnv_calls'
+    #end if
+    #if $cnv_summary:
+        --cnv-summary '$cnv_summary'
+    #end if
+    #if $clingen_regions:
+        --clingen-regions '$clingen_regions'
+    #end if
+    #if $mother_cnv:
+        --mother-cnv '$mother_cnv'
+    #end if
+    #if $father_cnv:
+        --father-cnv '$father_cnv'
+    #end if
     #if $roh:
         --roh '$roh'
     #end if
@@ -133,6 +148,15 @@ python3 '$__tool_directory__/wes_clinical_report.py'
             <option value="father">father</option>
             <option value="both">both parents</option>
         </param>
+        <param name="cnv_calls" type="data" format="tabular" optional="true" label="Copy-number calls (wes_cnv calls TSV)"
+               help="Deletions and duplications from the targets' read depth (Exome CNV calls tool): genes, ClinGen dosage, ACMG/ClinGen CNV points, inheritance fit, compound heterozygotes with small variants."/>
+        <param name="cnv_summary" type="data" format="json,txt" optional="true" label="Copy-number summary (wes_cnv JSON)"
+               help="Panel, noise, chromosome dosage (trisomy, monosomy) and sex chromosomes from read depth."/>
+        <param name="clingen_regions" type="data" format="tabular,tsv,txt" optional="true" label="ClinGen dosage regions (ClinGen_region_curation_list_GRCh38.tsv)"
+               help="https://ftp.clinicalgenome.org/: recurrent CNV regions (e.g. 22q11.2) and population regions where dosage sensitivity is unlikely."/>
+        <param name="mother_cnv" type="data" format="tabular" optional="true" label="Mother: CNV per-target ratios (wes_cnv)"
+               help="The mother's read-depth ratios at the proband's CNVs: inherited or de novo."/>
+        <param name="father_cnv" type="data" format="tabular" optional="true" label="Father: CNV per-target ratios (wes_cnv)"/>
         <param name="roh" type="data" format="tabular" optional="true" label="Runs of homozygosity (bcftools roh)"/>
         <param name="pharmcat" type="data" format="tabular,tsv,txt" optional="true" label="PharmCAT calls (TSV)"
                help="Calls-only TSV of the PharmCAT pharmacogenomics tool; shown next to the built-in star-allele genotypes."/>
@@ -229,6 +253,30 @@ python3 '$__tool_directory__/wes_clinical_report.py'
                 </assert_contents>
             </output>
         </test>
+        <test expect_num_outputs="2">
+            <param name="vcf" value="annotated.vcf" ftype="vcf"/>
+            <param name="gencc" value="gencc.tsv" ftype="tabular"/>
+            <param name="constraint" value="constraint.tsv" ftype="tabular"/>
+            <param name="clingen_dosage" value="clingen_dosage.tsv" ftype="tabular"/>
+            <param name="cnv_calls" value="cnv_calls.tsv" ftype="tabular"/>
+            <param name="cnv_summary" value="cnv_summary.json" ftype="json"/>
+            <param name="clingen_regions" value="clingen_regions.tsv" ftype="tabular"/>
+            <param name="mother_cnv" value="mother_cnv.tsv" ftype="tabular"/>
+            <param name="father_cnv" value="father_cnv.tsv" ftype="tabular"/>
+            <param name="affected_parents" value="none"/>
+            <output name="report" ftype="html">
+                <assert_contents>
+                    <has_text text="4. Copy-number variants and chromosome dosage"/>
+                    <has_text text="Down syndrome"/>
+                </assert_contents>
+            </output>
+            <output name="findings" ftype="tabular">
+                <assert_contents>
+                    <has_text_matching expression="\tcnv_pathogenic\tBRCA2\t13\t32315001\t\t&lt;DEL&gt;\t"/>
+                    <has_text_matching expression="\tPAH\t.*possible compound heterozygote"/>
+                </assert_contents>
+            </output>
+        </test>
     </tests>
     <help><![CDATA[
 **What it does**
@@ -262,15 +310,24 @@ more parent-absent changes within 10 bp (paralogous reads) and heterozygous call
 complex loci) stay *possibly de novo* without de novo points; a confirmed de novo variant with an alt fraction well
 below 0.5 is noted as possibly mosaic.
 
-4. ACMG SF v3.3 secondary findings (84 genes, gene-specific rules).
-5. Carrier status for recessive conditions.
-6. Pharmacogenomics: CPIC genes with single-nucleotide star alleles (CYP2C19, CYP2C9, VKORC1, CYP4F2, SLCO1B1,
+4. Copy-number variants and chromosome dosage (with the *Exome CNV calls* outputs): CNVs of clinical interest
+   with their genes, ClinGen dosage and the ACMG/ClinGen CNV points that read depth supports (2A whole established
+   haploinsufficient/triplosensitive gene or ClinGen region, 2E intragenic deletion, 2F inside a ClinGen benign
+   population region, 2H/2I, 3 gene count, 5A de novo, 5B inherited from an unaffected parent); the inheritance fit
+   (heterozygous loss of a dominant loss-of-function gene, homozygous or hemizygous loss in a recessive or X-linked
+   gene, a deletion plus a small variant in a recessive gene: compound heterozygote, hemizygous when the variant
+   lies inside the deletion and looks homozygous); the parents' read depth at each CNV; immunoglobulin/T-cell
+   receptor loci flagged (somatic rearrangement); whole-chromosome gains and losses and the sex-chromosome
+   complement (trisomy 21/18/13, XXY, 45,X, XXX, XYY).
+5. ACMG SF v3.3 secondary findings (84 genes, gene-specific rules).
+6. Carrier status for recessive conditions.
+7. Pharmacogenomics: CPIC genes with single-nucleotide star alleles (CYP2C19, CYP2C9, VKORC1, CYP4F2, SLCO1B1,
    DPYD, TPMT, NUDT15, CYP3A5, CYP2B6, UGT1A1), PharmCAT diplotypes and phenotypes when given, and ClinVar
    drug-response variants.
-7. Risk alleles (Factor V Leiden, prothrombin G20210A, HFE, APOE) and ClinVar risk/association variants.
-8. Runs of homozygosity (bcftools roh).
-9. Coverage of clinically relevant genes.
-10. Methods and limitations.
+8. Risk alleles (Factor V Leiden, prothrombin G20210A, HFE, APOE) and ClinVar risk/association variants.
+9. Runs of homozygosity (bcftools roh).
+10. Coverage of clinically relevant genes.
+11. Methods and limitations.
 
 Every flagged result must be confirmed by an orthogonal method in an accredited laboratory before clinical use.
     ]]></help>

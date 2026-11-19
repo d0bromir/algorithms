@@ -1,6 +1,6 @@
 class: GalaxyWorkflow
 label: WES tertiary analysis from FASTQ (v1)
-release: "0.6"
+release: "0.7"
 license: MIT
 tags:
   - WES
@@ -21,7 +21,9 @@ doc: |
   3. Exome capture QC: Picard CollectHsMetrics (on-target rate, fold-80, % target bases >= 20x), per-target
      coverage with mosdepth (bases at 1/10/20/30/50x per target, for gap analysis) and per-gene coverage of the
      coding exons (mosdepth over the coding-region BED).
-  4. Germline variant calling with FreeBayes (standard input filters: MAPQ >= 30, BQ >= 20).
+  4. Germline variant calling with FreeBayes (standard input filters: MAPQ >= 30, BQ >= 20), and copy-number calls
+     (deletions, duplications, chromosome dosage) from each sample's target read depth against the other samples of
+     the run and an optional reference panel of the same kit (needs at least 3 other samples).
   5. Tertiary analysis, the embedded "WES tertiary analysis from VCF (v2)" workflow: normalisation, restriction
      to the padded targets, quality filtering, ClinVar + gnomAD + SnpEff annotation, prioritisation and tables,
      runs of homozygosity, and the clinical interpretation report (diagnostic, candidate, ACMG secondary,
@@ -190,6 +192,44 @@ inputs:
       Whether a parent has the proband's condition (unknown, none, mother, father, both). A dominant candidate
       inherited from an unaffected parent does not count as fitting the inheritance.
     position: {left: 0, top: 3220}
+  "CNV reference panel (per-target depth)":
+    type: collection
+    collection_type: list
+    format: [bed, tabular]
+    optional: true
+    doc: >-
+      Per-target mean depth (the "Per-target mean depth (mosdepth)" output) of earlier samples of the same kit,
+      sequencer and pipeline. CNVs are called against the other samples of this run plus these; at least 3 are
+      needed, more give better calls.
+    position: {left: 0, top: 3360}
+  "Segmental duplications (BED)":
+    type: data
+    format: [bed]
+    optional: true
+    doc: >-
+      Segmental duplications of the reference (GIAB GRCh38_segdups.bed.gz, see README): CNV calls mostly inside them
+      are marked low confidence.
+    position: {left: 0, top: 3500}
+  "ClinGen dosage regions (TSV)":
+    type: data
+    format: [tabular, tsv, txt]
+    optional: true
+    doc: >-
+      ClinGen region curation list (https://ftp.clinicalgenome.org/ClinGen_region_curation_list_GRCh38.tsv):
+      recurrent CNV regions (e.g. 22q11.2) and population regions where dosage sensitivity is unlikely.
+    position: {left: 0, top: 3640}
+  "Mother: CNV per-target ratios":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: The mother's "CNV per-target ratios" from this workflow run on her reads; tells inherited from de novo CNVs.
+    position: {left: 0, top: 3780}
+  "Father: CNV per-target ratios":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: The father's "CNV per-target ratios".
+    position: {left: 0, top: 3920}
 
 outputs:
   multiqc_report:
@@ -204,6 +244,14 @@ outputs:
     outputSource: target_coverage/output_summary
   target_coverage_thresholds:
     outputSource: target_coverage/output_thresholds_bed
+  target_mean_depth:
+    outputSource: target_coverage/output_regions_bed
+  cnv_calls:
+    outputSource: cnv_calling/calls
+  cnv_targets:
+    outputSource: cnv_calling/targets
+  cnv_summary:
+    outputSource: cnv_calling/summary
   raw_vcf:
     outputSource: variant_calling/output_vcf
   annotated_vcf:
@@ -424,7 +472,32 @@ steps:
       output_thresholds_bed: {rename: "Per-target coverage thresholds (mosdepth)"}
       output_global_dist: {hide: true}
       output_region_dist: {hide: true}
-      output_regions_bed: {hide: true}
+      output_regions_bed: {rename: "Per-target mean depth (mosdepth)"}
+
+  cnv_calling:
+    doc: >-
+      Copy-number calls of each sample from its targets' read depth against the other samples of this run (and the
+      optional reference panel) of the same kit (local tool tools/wes_cnv; at least 3 other samples are needed).
+    tool_id: wes_cnv
+    tool_version: 0.1.0+galaxy0
+    position: {left: 1340, top: 520}
+    in:
+      sample: target_coverage/output_regions_bed
+      panel: target_coverage/output_regions_bed
+      extra_panel: "CNV reference panel (per-target depth)"
+      reference: "Reference genome (FASTA)"
+      genes: "Coding regions (BED)"
+      segdups: "Segmental duplications (BED)"
+    state:
+      advanced:
+        min_depth: 20.0
+        p_cnv: 0.0001
+        min_bf: 3.0
+        pcs: 1
+    out:
+      calls: {rename: "CNV calls"}
+      targets: {rename: "CNV per-target ratios"}
+      summary: {rename: "CNV summary"}
 
   coding_coverage:
     doc: Coverage of the coding exons, per exon with the gene name (bases at 1/10/20/30/50x), for per-gene coverage.
@@ -515,6 +588,11 @@ steps:
       "Per-target coverage (mosdepth thresholds)": target_coverage/output_thresholds_bed
       "Coverage summary (mosdepth)": target_coverage/output_summary
       "Coding-exon coverage (mosdepth thresholds)": coding_coverage/output_thresholds_bed
+      "Copy-number calls (wes_cnv TSV)": cnv_calling/calls
+      "Copy-number summary (wes_cnv JSON)": cnv_calling/summary
+      "ClinGen dosage regions (TSV)": "ClinGen dosage regions (TSV)"
+      "Mother: CNV per-target ratios": "Mother: CNV per-target ratios"
+      "Father: CNV per-target ratios": "Father: CNV per-target ratios"
 
   multiqc:
     doc: One QC report for all samples.

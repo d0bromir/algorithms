@@ -1,6 +1,6 @@
 class: GalaxyWorkflow
 label: WES tertiary analysis from VCF (v2)
-release: "0.6"
+release: "0.7"
 license: MIT
 tags:
   - WES
@@ -28,6 +28,7 @@ doc: |
   8. Clinical interpretation report (HTML) and findings table: diagnostic ClinVar pathogenic/likely pathogenic
      findings checked against the gene's mode of inheritance (GenCC), candidate loss-of-function variants with
      automated ACMG/AMP evidence codes and optional HPO phenotype ranking, ACMG SF v3.3 secondary findings,
+     copy-number variants with ClinGen dosage and CNV points (when the CNV calls are given),
      carrier status, pharmacogenomics (CPIC genes, and PharmCAT 3.4.0 diplotypes with its own HTML report), risk alleles, runs of homozygosity, coverage of clinically
      relevant genes and the limits of the analysis. The optional inputs (GenCC, gnomAD constraint, HPO, BAM,
      coverage) refine the report; the FASTQ workflow connects all of them.
@@ -214,6 +215,40 @@ inputs:
       Whether a parent has the proband's condition (unknown, none, mother, father, both). A dominant candidate
       inherited from an unaffected parent does not count as fitting the inheritance.
     position: {left: 0, top: 3120}
+  "Copy-number calls (wes_cnv TSV)":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: >-
+      Deletions and duplications of the sample from the Exome CNV calls tool (the FASTQ workflow connects them):
+      the report interprets them with ClinGen dosage, the ACMG/ClinGen CNV points and the genes' inheritance.
+    position: {left: 0, top: 3240}
+  "Copy-number summary (wes_cnv JSON)":
+    type: data
+    format: [json, txt]
+    optional: true
+    doc: Panel, noise, chromosome dosage (trisomy, monosomy) and sex chromosomes from read depth.
+    position: {left: 0, top: 3360}
+  "ClinGen dosage regions (TSV)":
+    type: data
+    format: [tabular, tsv, txt]
+    optional: true
+    doc: >-
+      ClinGen region curation list (https://ftp.clinicalgenome.org/ClinGen_region_curation_list_GRCh38.tsv):
+      recurrent CNV regions (e.g. 22q11.2) and population regions where dosage sensitivity is unlikely.
+    position: {left: 0, top: 3480}
+  "Mother: CNV per-target ratios":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: The mother's per-target ratios from the Exome CNV calls tool; tells inherited from de novo CNVs.
+    position: {left: 0, top: 3600}
+  "Father: CNV per-target ratios":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: The father's per-target ratios from the Exome CNV calls tool.
+    position: {left: 0, top: 3720}
 
 outputs:
   annotated_vcf:
@@ -611,7 +646,7 @@ steps:
       Human-readable clinical interpretation report and findings table (local tool tools/wes_clinical_report;
       install it on the Galaxy server, see README).
     tool_id: wes_clinical_report
-    tool_version: 0.6.0+galaxy0
+    tool_version: 0.7.0+galaxy0
     position: {left: 2380, top: 300}
     in:
       vcf: functional_annotation/snpeff_output
@@ -635,6 +670,11 @@ steps:
       target_coverage: "Per-target coverage (mosdepth thresholds)"
       coverage_summary: "Coverage summary (mosdepth)"
       gene_coverage: "Coding-exon coverage (mosdepth thresholds)"
+      cnv_calls: "Copy-number calls (wes_cnv TSV)"
+      cnv_summary: "Copy-number summary (wes_cnv JSON)"
+      clingen_regions: "ClinGen dosage regions (TSV)"
+      mother_cnv: "Mother: CNV per-target ratios"
+      father_cnv: "Father: CNV per-target ratios"
     state:
       max_af: 0.01
       min_ref_depth: 15

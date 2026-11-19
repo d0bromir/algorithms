@@ -54,7 +54,7 @@ CONFIGURE=0
 DRY=0
 VENV="${VENV:-$HOME/wes-venv}"
 PREFIX="${PREFIX:-$HOME/wes-env}"
-LOCAL_TOOL_IDS=(wes_clinical_report spliceai_score pharmcat_pgx)
+LOCAL_TOOL_IDS=(wes_clinical_report spliceai_score pharmcat_pgx wes_cnv)
 
 die() { echo "install.sh: $*" >&2; exit 1; }
 say() { printf '\n== %s\n' "$*"; }
@@ -187,7 +187,7 @@ stage_local_tools() {
             else echo "  ADD to $conf:  <tool file=\"$t/$t.xml\"/>"; todo=1; fi
         done
     elif ((! CONFIGURE)); then
-        echo "  MISSING $conf (re-run with --configure to write it, listing the three tools)"; todo=1
+        echo "  MISSING $conf (re-run with --configure to write it, listing the local tools)"; todo=1
     else
         echo "  writing $conf"
         local tmp; tmp="$(mktemp)"
@@ -290,6 +290,14 @@ stage_data() {
     manifest phenotype.hpoa tabular "$HPO/ (${hpo_v:-release unknown})"
     fetch https://ftp.clinicalgenome.org/ClinGen_gene_curation_list_GRCh38.tsv ClinGen_gene_curation_list_GRCh38.tsv
     manifest ClinGen_gene_curation_list_GRCh38.tsv tabular "https://ftp.clinicalgenome.org/"
+    fetch https://ftp.clinicalgenome.org/ClinGen_region_curation_list_GRCh38.tsv ClinGen_region_curation_list_GRCh38.tsv
+    manifest ClinGen_region_curation_list_GRCh38.tsv tabular "https://ftp.clinicalgenome.org/ (recurrent CNV and population regions)"
+    local GS=https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/genome-stratifications/v3.6/GRCh38@all
+    if [[ ! -s GRCh38_segdups.bed ]]; then  # Ensembl names, like the reference
+        fetch "$GS/SegmentalDuplications/GRCh38_segdups.bed.gz" GRCh38_segdups.bed.gz
+        gzip -dc GRCh38_segdups.bed.gz | sed "s/^chr//" > GRCh38_segdups.bed && rm -f GRCh38_segdups.bed.gz
+    fi
+    manifest GRCh38_segdups.bed bed "$GS/SegmentalDuplications/ (GIAB v3.6, public domain; CNV confidence)"
 
     if [[ ! -s alphamissense.hg38.bcf ]]; then
         echo "  alphamissense.hg38.bcf <- Zenodo 10813168 (about 4 min)"

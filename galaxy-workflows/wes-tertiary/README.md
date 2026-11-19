@@ -8,7 +8,7 @@ Two Galaxy workflows for germline whole exome sequencing. Import the `.ga` files
 | [`wes-tertiary-from-vcf.ga`](wes-tertiary-from-vcf.ga) | **v2** | a germline VCF/BCF from any caller (FreeBayes, GATK, DeepVariant, DRAGEN, …) | Normalisation, restriction to the exome targets, quality filtering, ClinVar, gnomAD and SnpEff annotation, prioritisation, tables, runs of homozygosity and a **clinical interpretation report** |
 
 Both end in a human-readable HTML report of the medically significant findings (section 4a): diagnostic
-findings, candidate variants, ACMG secondary findings, carrier status, pharmacogenomics, risk alleles,
+findings, candidate variants, copy-number variants and chromosome dosage, ACMG secondary findings, carrier status, pharmacogenomics, risk alleles,
 runs of homozygosity, coverage of clinically relevant genes, and what the analysis cannot detect.
 
 v1 embeds v2 as a subworkflow, so both workflows apply exactly the same tertiary logic.
@@ -20,6 +20,7 @@ flowchart LR
     fastp --> bwa[BWA-MEM] --> md[Picard MarkDuplicates]
     md --> stats[samtools stats] & hs[Picard CollectHsMetrics] & mos[mosdepth per-target coverage] & cds[mosdepth coding-exon coverage]
     md --> fb[FreeBayes]
+    mos --> cnv[wes_cnv<br/>CNVs vs the other samples]
   end
   subgraph v2["v2: from VCF (tertiary analysis)"]
     vcf[VCF] --> norm[bcftools norm<br/>split multiallelics, atomize complex alleles,<br/>left-align, REF check]
@@ -33,7 +34,7 @@ flowchart LR
     eff & roh & pcat --> rep[clinical report<br/>HTML + findings TSV]
   end
   fb --> vcf
-  md & mos & cds -.-> rep
+  md & mos & cds & cnv -.-> rep
   fastqc & fastp & md & stats & hs & bstats & eff --> mqc[MultiQC]
 ```
 
@@ -54,7 +55,7 @@ It also downloads and builds the reference and knowledge files and uploads them 
 | `system` | Installs bcftools, bedtools, samtools, tabix, curl, gawk and python3-venv with apt (`--conda`: into a conda environment instead) |
 | `venv` | Creates a Python environment with Ephemeris and BioBlend (`$VENV`, default `~/wes-venv`) |
 | `tools` | Installs the [`tools.yml`](tools.yml) repositories with Ephemeris; already-installed repositories are skipped |
-| `local-tools` | Copies the three local tools to the local tool directory and checks `local_tool_conf.xml`, `galaxy.yml` and the HTML allowlist. Then Galaxy installs the tools' Conda dependencies |
+| `local-tools` | Copies the four local tools to the local tool directory and checks `local_tool_conf.xml`, `galaxy.yml` and the HTML allowlist. Then Galaxy installs the tools' Conda dependencies |
 | `workflows` | Imports both `.ga` files; with `--update`, adds a new version to workflows already present |
 | `data` | Downloads and builds the section 2 files into `--data-dir`, with a `MANIFEST.tsv` (source, date, size) |
 | `upload` | Uploads the `MANIFEST.tsv` files into a new history and runs *SnpEff download* there |
@@ -78,7 +79,8 @@ The manual steps follow.
    If `python3 -m venv` reports that `ensurepip` is not available, install `python3-venv` (or `python3-full`)
    with `apt` first. The API key belongs to a Galaxy admin user (*User → Preferences → Manage API Key*).
 2. **Local tools** (not in the Tool Shed): copy [`tools/wes_clinical_report`](tools/wes_clinical_report),
-   [`tools/spliceai_score`](tools/spliceai_score) and [`tools/pharmcat_pgx`](tools/pharmcat_pgx) to the server,
+   [`tools/spliceai_score`](tools/spliceai_score), [`tools/pharmcat_pgx`](tools/pharmcat_pgx) and
+   [`tools/wes_cnv`](tools/wes_cnv) to the server,
    list them in a local tool config, and let Galaxy show the report HTML unsanitised:
    ```xml
    <!-- /etc/galaxy/local_tool_conf.xml -->
@@ -87,6 +89,7 @@ The manual steps follow.
            <tool file="wes_clinical_report/wes_clinical_report.xml"/>
            <tool file="spliceai_score/spliceai_score.xml"/>
            <tool file="pharmcat_pgx/pharmcat_pgx.xml"/>
+           <tool file="wes_cnv/wes_cnv.xml"/>
        </section>
    </toolbox>
    ```
@@ -95,7 +98,7 @@ The manual steps follow.
    dependencies from *Admin → Manage Dependencies*: Python 3.12 and samtools 1.22 (report), SpliceAI 1.3.1 with
    setuptools 80.9.0 and bcftools 1.24 in one environment (TensorFlow 2.19 CPU, about 2 GB; setuptools < 81 is
    needed because SpliceAI imports `pkg_resources`), PharmCAT 3.4.0 (`pharmcat3`; on its first run it downloads its
-   GRCh38 reference, 0.9 GB, into its environment). Without the allowlist entry the report still opens, but
+   GRCh38 reference, 0.9 GB, into its environment), Python 3.12, numpy 2.2.6 and samtools 1.22 (CNV calls). Without the allowlist entry the report still opens, but
    without its styling; the same applies to the PharmCAT report (`pharmcat_pgx`).
 3. **Workflows**: *Workflows → Import*, then upload `wes-tertiary-from-vcf.ga` and `wes-tertiary-from-fastq.ga`
    (or paste the raw GitHub URL of each file).
@@ -153,6 +156,10 @@ and VCFs. A naming mismatch does not raise an error. ClinVar/gnomAD annotations 
 | **Mother / Father: variant calls (VCF)** (optional) | Each parent's calls on the same reference, e.g. the *Raw variant calls* (or *Normalised variants*) of the FASTQ workflow run on the parent's reads | Trio analysis (section 4a): de novo variants, parental origin of every finding, compound heterozygotes phased by origin, parentage check. Raw (unfiltered) calls are best: a parental call missing because of a filter would look like a de novo variant. |
 | **Mother / Father: aligned reads (BAM)** (optional) | The parents' *Aligned reads (duplicates marked)* | Reads at the proband's variants that a parent's calls lack: a de novo variant is *confirmed* only when both parents have ≥ 15 reads and at most one alt read. |
 | **Affected parents** | `unknown` (default), `none`, `mother`, `father` or `both` | A dominant candidate inherited from a parent marked unaffected does not count as fitting the inheritance; one inherited from an affected parent is marked as segregating. |
+| **CNV reference panel (per-target depth)** (v1, optional) | A list collection of the *Per-target mean depth (mosdepth)* outputs of earlier samples of the same kit, sequencer and pipeline | Copy-number calls use the other samples of the run plus this panel; at least 3 are needed. Keep a growing collection of unrelated samples: more samples, and samples of the same batch, give better calls (section 7). |
+| **Segmental duplications (BED)** (v1, optional) | GIAB `GRCh38_segdups.bed.gz` (genome stratifications v3.6), `chr` removed for Ensembl names (`install.sh data` does this) | CNV calls mostly inside segmental duplications are marked low confidence. Public domain. |
+| **ClinGen dosage regions (TSV)** (optional) | [`ClinGen_region_curation_list_GRCh38.tsv`](https://ftp.clinicalgenome.org/ClinGen_region_curation_list_GRCh38.tsv) (100 kB) | Recurrent CNV regions (22q11.2, 7q11.23, 15q11-q13 ...) for CNV point 2A, and 359 population regions scored *dosage sensitivity unlikely* for 2F (benign). |
+| **Mother / Father: CNV per-target ratios** (optional) | The parents' *CNV per-target ratios* from v1 | The parents' read depth at each of the proband's CNVs: inherited (present in a parent), de novo (both parents normal) or unclear. |
 | **Recurrent artefacts (VCF)** (optional) | The laboratory's own list, built with [`data/build_artefact_list.sh`](data/build_artefact_list.sh) from earlier samples (below) | Alleles called in many of the laboratory's samples but rare or absent in gnomAD: systematic errors of the assay. The report marks matching calls low confidence. |
 | **Population allele frequencies (VCF)** | gnomAD v4.1 joint (exome + genome) frequencies reduced to the padded targets, as an indexed **BCF** built with [`data/build_gnomad_extract.sh`](data/build_gnomad_extract.sh) (below) | Transferred fields: `gnomAD_AF`, `_AN`, `_nhomalt` (homozygotes), `_grpmax` / `_grpmax_AF` / `_grpmax_AN` (genetic ancestry group with the highest AF), `_FAF95` / `_FAF95_grp` (highest filtering allele frequency, the statistic of the ACMG BA1/BS1 rules), `_filter` (gnomAD PASS / EXOMES_FILTERED / GENOMES_FILTERED / BOTH_FILTERED) and `_discordance_p` (exome vs genome frequency test). The caller's own `INFO/AF` is untouched. A file without these fields (e.g. an AF-only one) stops the annotation step with "tag not defined". |
 | **Missense predictions (AlphaMissense BCF)** | AlphaMissense hg38 predictions as an indexed **BCF** with `INFO/AM_score`, built with [`data/build_alphamissense.sh`](data/build_alphamissense.sh) (below) | Missense PP3/BP4 at the ClinGen-calibrated strengths. CC BY 4.0. |
@@ -259,6 +266,8 @@ The tables show the genotype columns of the first sample (`GEN[0]`); change them
 | `clinical_findings` | ✔ | ✔ | Every finding of the report as a table: category, gene, variant, genotype, depth, allele fraction, HGVS, gnomAD AF, ClinVar, QC flags, evidence |
 | `runs_of_homozygosity` | ✔ | ✔ | bcftools roh regions |
 | `coding_coverage_thresholds` | ✔ | | Bases covered at 1/10/20/30/50× per coding exon |
+| `target_mean_depth` | ✔ | | Mean depth per target (mosdepth regions): the input of the CNV calls; collect these as the laboratory's CNV reference panel |
+| `cnv_calls`, `cnv_targets`, `cnv_summary` | ✔ | | Copy-number calls (deletions, duplications with genes, confidence), per-target ratios (for plots and as a parent's input) and a JSON summary (noise, chromosome dosage, sex chromosomes) |
 
 ## 4a. The clinical report
 
@@ -278,11 +287,12 @@ laboratory.
 | ACMG SF v3.3 | 84 genes (v3.2 plus ABCD1, CYP27A1, PLN; Genet Med 2025;27:101454); biallelic only for MUTYH, ATP7B, BTD, GAA, RPE65, CYP27A1; ABCD1 hemizygous, homozygous or two heterozygous variants (not a single heterozygous variant in a female); HFE p.Cys282Tyr homozygotes only; TTN truncating only. Rare loss-of-function variants not in ClinVar are listed as *review* |
 | Carrier status | One P/LP allele in a recessive gene; two P/LP variants shown by the parents or the reads to be in cis count as one allele |
 | Trio (with the parents' calls) | Parental origin of every finding (inherited from the mother or father, both parents, de novo, possibly de novo, only one parent for a homozygote); compound heterozygotes phased by origin first, then from the reads; a dominant candidate inherited from a parent marked unaffected does not fit the inheritance; a **de novo table**: rare (gnomAD < 0.01 %) protein-altering or splice-altering variants of good quality absent from both parents' calls, confirmed in both parents' reads (≥ 15 reads, ≤ 1 alt read) or marked *possibly de novo*; three or more parent-absent changes within 10 bp (reads of a paralogous copy) and heterozygous calls without reference reads (repeat or complex loci the parents' calls write differently) stay *possibly de novo* without de novo points; a confirmed de novo variant with an alt fraction well below 0.5 (binomial p < 0.001) is noted as possibly post-zygotic (mosaic); PS2_Moderate (confirmed) / PM6_Supporting (assumed) in phenotype-matched genes after the ClinGen SVI de novo points; a **parentage check** on common SNVs (each parent must carry the proband's homozygous alleles), which withholds PS2/PM6 and puts a warning over the de novo table when it fails |
+| Copy-number variants (with the CNV calls) | Deletions and duplications from target read depth (`wes_cnv`), **high confidence** with ≥ 3 targets, mostly outside segmental duplications, not seen in the panel and log10 Bayes factor ≥ 5. Each CNV gets its genes (coding exons covered / of the gene), ClinGen dosage and GenCC diseases, and the ACMG/ClinGen CNV points read depth can support (Riggs et al. 2020): **2A** all coding exons of a ClinGen haploinsufficient (loss) or triplosensitive (gain) gene, or ≥ 80 % of a ClinGen HI/TS-3 region (+1.0); **2E** part of a haploinsufficient gene (+0.45); **2I** intragenic duplication in a haploinsufficient gene (+0.45); **2H** LOEUF < 0.35 (+0.15); **2F** inside a ClinGen population region with dosage sensitivity unlikely (−1.0); **3B/3C** 25/35 genes for losses, 35/50 for gains (+0.45/+0.9); **5A** de novo (+0.15, +0.45 with a phenotype match); **5B** inherited from an unaffected parent (−0.3); ≥ 0.99 pathogenic, 0.90–0.98 likely pathogenic. Inheritance fit: heterozygous loss of a dominant gene where loss of function causes disease; homozygous loss in a recessive gene, hemizygous on a male X; a heterozygous deletion in a recessive gene plus a P/LP or candidate small variant (compound heterozygote; the small variant is hemizygous, so in trans, when it lies inside the deletion and looks homozygous); a carrier otherwise; duplication of a triplosensitive dominant gene. The parents' read depth decides inherited (2 consecutive targets shifted by ≥ 0.2, or the mean by ≥ 0.25) vs de novo (both parents normal, and a strong call: log10 BF ≥ 10, ≥ 5 targets). Immunoglobulin and T-cell receptor loci are marked low confidence (somatic V(D)J deletions in blood and cell lines). **Chromosome dosage**: median ratio per chromosome (≥ 1.35 trisomy, 1.10–1.35 mosaic gain or large duplication, and the losses likewise) and the sex-chromosome complement (XX, XY, XXY, 45,X, XXX, XYY), named (Down, Edwards, Patau, Klinefelter, Turner syndromes) |
 | Pharmacogenomics | CYP2C19, CYP2C9, VKORC1, CYP4F2, SLCO1B1, DPYD, TPMT, NUDT15, CYP3A5, CYP2B6, UGT1A1 at fixed GRCh38 positions (checked against ClinVar and the reference). A missing variant counts as the reference allele only with ≥ 15 reads at the position (BAM in v1); otherwise the gene is *indeterminate*. CPIC phenotypes, ClinVar drug-response variants (≥ 1 star). Next to it, the PharmCAT 3.4.0 diplotypes and phenotypes (all defining positions of each star allele, with the positions missing from the VCF listed); PharmCAT's own HTML report carries the CPIC, DPWG and FDA recommendations |
 | Risk alleles | Factor V Leiden, prothrombin G20210A, HFE p.Cys282Tyr/p.His63Asp, APOE (flagged: disclose only with counselling and consent), ClinVar risk/association variants (≥ 1 star) |
 | Runs of homozygosity | Total length of runs ≥ 1 Mb (consanguinity), runs concentrated on one chromosome (uniparental disomy), homozygous findings inside runs |
 | Coverage | Per-gene coding coverage at 10/20×; clinically relevant genes below 95 % at 20× are listed, because a negative result there is not reliable |
-| Limits | Lists what an exome pipeline cannot detect (CNVs, SVs, repeat expansions, mtDNA, CYP2D6, HLA, pseudogene regions, mosaicism…) |
+| Limits | Lists what an exome pipeline cannot detect (small CNVs, SVs, repeat expansions, mtDNA, CYP2D6, HLA, pseudogene regions, mosaicism…) |
 
 **Population frequency.** Every frequency rule (BA1 > 5 %, BS1 above the cut-off, PM2_supporting below 0.01 %
 for dominant and 0.1 % for recessive genes, "too common for a penetrant disorder", the candidate cut-off) uses the
@@ -720,10 +730,76 @@ read checks.
 same de novo result (RYR2 confirmed from 27 and 44 reference reads, the ANKRD36 cluster as possibly de novo) and
 passed the parentage check at 99.9 %.
 
+### Copy-number variants (wes_cnv 0.1.0, report 0.7.0, GIAB IDT exomes)
+
+The 9 GIAB exomes of the validation above (IDT capture, NovaSeq 6000, 203,135 targets, median target depth
+49–53×) were called against panels of the 6 unrelated samples (relatives left out). The 9 form two library batches
+({HG001–HG005}, {HG006, HG007, NA12891, NA12892}; depth profiles correlate within a batch and anti-correlate between
+them), which one removed principal component of the panel accounts for. Settings were chosen on HG002 only.
+
+**Simulated CNVs** (HG001, HG002, HG005, two runs of 200 events each; observed reads thinned or added binomially at
+random runs of targets outside segmental duplications; no extra false calls in any run):
+
+| Event | 1 target | 2 targets | 3 targets | 5 targets | 10 targets |
+|---|---|---|---|---|---|
+| Heterozygous deletion | 1 / 89 (1 %) | 8 / 96 (8 %) | 28 / 101 (28 %) | 75 / 90 (83 %) | 81 / 81 (100 %) |
+| Homozygous deletion | 7 / 38 (18 %) | 39 / 52 (75 %) | 60 / 62 (97 %) | 54 / 54 (100 %) | 45 / 45 (100 %) |
+| Duplication | 3 / 101 (3 %) | 13 / 99 (13 %) | 30 / 86 (35 %) | 70 / 95 (74 %) | 103 / 111 (93 %) |
+
+**HG002 against the GIAB v5.0q structural-variant benchmark** (deletions removing ≥ 50 % of at least one used
+target, inside the benchmark regions):
+
+| Truth deletions | Found | High-confidence deletion calls | True |
+|---|---|---|---|
+| 1–2 targets: 18 | 0 | | |
+| 3–5 targets: 5 | 3 | | |
+| ≥ 6 targets: 2 | 2 (CFHR3–CFHR1 in a segmental duplication: low confidence) | | |
+| **25** | **5** | **3** (PCDHA8–10, ZAN, PIP/TAS2R39) | **3** |
+
+Outside segmental duplications every deletion call was true (3 of 3). Inside them 2 of 8 were. These are the KRTAP,
+PCDHB, NPIP, FOXD4L and similar gene families, which differ in copy number between people and between
+assemblies, so the report lists them as low confidence. Most truth deletions are single-target: a heterozygous
+one-exon deletion is beyond 50× exome depth.
+
+**Trios** (report with the parents' per-target ratios): of the 12 high-confidence CNVs of HG002, HG005 and HG001,
+11 were present in a parent's read depth and 1 was unclear. None was labelled de novo; true de novo exonic CNVs
+are rare. In the Galaxy run the 9 samples were called together, so each panel included the sample's relatives. There,
+7 high-confidence CNVs were called: 4 inherited and 1 unclear. Two weak calls in HG001 (log10 BF 6–7, absent from
+both parents) were not labelled de novo; they did not appear with the unrelated panel. A parent counts as carrying
+a CNV when 2 consecutive targets move the same way by ≥ 0.2: a parent's CNV can be shorter than the child's call,
+as the mother's DNAH6 duplication is. "De novo" needs log10 BF ≥ 10 and ≥ 5 targets. Using the parents' depth
+instead of their calls mattered:
+- **DNAH6 duplication (HG002):** missed by the parents' own calls, but present in a parent's depth.
+- **DMBT1 homozygous deletion (HG005):** both parents at ratio 0.3–0.8, so each carries a deletion; it is
+  Mendelian-consistent.
+- **HG001's 650 kb deletion at 22q11.22:** absent from both parents. It is the immunoglobulin-lambda locus,
+  rearranged in the B-cell line, and the report flags it.
+- **HG001's PRKRA deletion:** listed as a carrier finding (recessive gene).
+
+**Chromosome dosage**:
+- **Real samples:** all 9 got the correct sex chromosomes (XY 0.93–1.13 of a male's Y depth, XX 0). No false
+  aneuploidy: the median ratio per chromosome stayed within 0.97–1.03.
+- **Simulations, all detected:** trisomy 21 (ratio 1.48), XXY, 45,X, and a 30 % mosaic trisomy 18 (ratio 1.13,
+  "partial gain").
+
+| Step | Time | Memory |
+|---|---|---|
+| CNV calls, one sample, 6-sample panel (command line) | 11 s | 0.50 GiB |
+| CNV calls in Galaxy, 9 samples mapped over one collection (panel = the other 8) | 25–27 s per job (with `samtools faidx`), 93 s wall | — |
+| Clinical report with the CNV inputs (HG002) | 7.2 s (6.6 s without) | 1.22 GiB (1.16 without) |
+| VCF workflow (release 0.7) on HG002 in Galaxy with the CNV outputs and both parents' ratios | all 16 steps ok; the report has 17 CNV rows | — |
+
+The settings (`p_cnv` 1e-4, Student-t df 10, one principal component) favour precision. A higher `p_cnv` (1e-3)
+found 3-target heterozygous deletions about twice as often but added 25 non-inherited 1–2-target deletions in
+HG001.
+
 ## 8. Scope and limitations
 
-Germline SNVs and short indels in the exome targets only. Not covered: CNV/SV calling, mitochondrial variants
-and repeat expansions. The ACMG/AMP evidence codes are an automated subset for triage, not a classification, and
+Germline SNVs and short indels in the exome targets, and CNVs of several exons from read depth (section 7).
+Not covered: CNVs of one or two exons (rarely detected at 50×), balanced and other structural variants, CNV
+breakpoints, CNVs in segmental duplications (marked low confidence), mitochondrial variants and repeat
+expansions. CNV calls need ≥ 3 other samples of the same kit; with a small or mixed-batch panel they miss small
+events, and relatives in the same run share their inherited CNVs. The ACMG/AMP evidence codes are an automated subset for triage, not a classification, and
 the HPO ranking depends on the terms given. Trio analysis needs the parents' calls on the same reference and
 works on the variants the proband's caller found; de novo status at repeats, segmental duplications and other
 loci where calls are written differently stays *possibly de novo*, and a parent's low-level mosaicism (a single
