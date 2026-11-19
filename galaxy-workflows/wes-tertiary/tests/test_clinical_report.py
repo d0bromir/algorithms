@@ -148,8 +148,79 @@ def test_predictor_codes():
 
 def test_candidate_evidence_codes():
     rows, _ = run_report()
-    note = next(r["note"] for r in rows if r["gene"] == "GENEX")
-    assert "PVS1" in note and "PM2_supporting" in note
+    g = next(r for r in rows if r["gene"] == "GENEX")
+    assert "PVS1" in g["note"] and "PM2_supporting" in g["note"]
+    assert g["acmg_class"] in ("likely pathogenic", "pathogenic") and int(g["acmg_points"]) >= 6
+    assert all(r["acmg_class"] == "" for r in rows if r["category"].startswith("pgx"))
+
+
+def _var(effect, gene="G", aa="", info=None, af=None, nhomalt=None, hgvs_c="c.1A>T"):
+    v = rep.Variant()
+    v.anns = [["A", effect, "HIGH", gene, gene, "transcript", "T", "protein_coding", "1/2", hgvs_c, "p.X1Y", "", "", aa]]
+    v.info, v.af, v.faf, v.nhomalt, v.am, v.sai, v.chrom = info or {}, af, None, nhomalt, None, None, "1"
+    return v
+
+
+def test_acmg_points_and_classes():
+    cl = rep.acmg_classify
+    assert cl(["PVS1", "PM2_supporting"]) == ("likely pathogenic", 9), "PVS1 + PM2_Supporting is LP (Tavtigian)"
+    assert cl(["PVS1", "PS1"]) == ("pathogenic", 12)
+    assert cl(["PM2_supporting", "PP3_Moderate", "PM5"]) == ("uncertain significance", 5)
+    assert cl(["PM2_supporting", "PP3_Strong", "PM1_Supporting", "PM5"]) == ("likely pathogenic", 7), \
+        "PM1 + PP3 count at most 4 points"
+    assert cl(["BS1", "BP4_Moderate", "BP7"]) == ("benign", -7)
+    assert cl(["BS2_Supporting", "BP4_Supporting"]) == ("likely benign", -2)
+    assert cl(["BA1"]) == ("benign", 0) and cl(["BA1", "PP3_Strong"])[0] == "conflicting (BA1)"
+    assert [rep.code_points(c) for c in ("PVS1_Strong", "PVS1_Moderate", "PM3_Supporting", "PS2_Moderate", "BP3")] == \
+        [4, 2, 1, 2, -1]
+
+
+def test_acmg_criteria():
+    nmd = _var("stop_gained", aa="10/400", info={"NMD": "(G|G|1|1.00)"})
+    assert rep.pvs1_code(nmd, "G") == "PVS1"
+    assert rep.pvs1_code(_var("stop_gained", aa="100/400"), "G") == "PVS1_Strong", "escapes NMD, removes 75 %"
+    assert rep.pvs1_code(_var("frameshift_variant", aa="390/400"), "G") == "PVS1_Moderate", "removes < 10 %"
+    assert rep.pvs1_code(_var("start_lost"), "G") == "PVS1_Moderate"
+    assert rep.pvs1_code(_var("splice_donor_variant&intron_variant"), "G") == "PVS1"
+    ev = lambda v, moi={"AR"}: rep.acmg_evidence(v, "G", moi, {}, False, 0.01, {})
+    assert "BA1" in ev(_var("missense_variant", af=0.2))
+    hfe = rep.acmg_evidence(_var("missense_variant", gene="HFE", af=0.06, hgvs_c="c.845G>A"), "HFE", {"AR"}, {}, False,
+                            0.01, {})
+    assert "BA1" not in hfe and "BS1" not in hfe, "ClinGen BA1 exception list"
+    assert "BS1" in ev(_var("missense_variant", af=0.002), {"AD"}) and "BS1" not in ev(_var("missense_variant", af=0.002))
+    assert "BS2_Supporting" in ev(_var("missense_variant", af=0.004, nhomalt=3))
+    assert "BS2_Supporting" not in ev(_var("missense_variant", af=0.004, nhomalt=3), {"AD", "AR"})
+    inf = _var("inframe_deletion")
+    assert "PM4" in ev(inf)
+    inf.repeat = "tandem repeat ((GCA) x6)"
+    assert "BP3" in ev(inf) and "PM4" not in ev(inf)
+    syn = _var("synonymous_variant")
+    syn.sai = 0.02
+    assert "BP7" in ev(syn) and "BP4_Supporting" not in ev(syn)
+    early = _var("frameshift_variant", aa="100/400")
+    early.anns[0][8] = "3/10"
+    assert rep.pvs1_code(early, "G") == "PVS1", "stop before the penultimate exon: NMD (50-nt rule)"
+    minor = _var("stop_gained", aa="20/120")  # LoF on a short isoform only; the principal transcript is missense
+    minor.anns.append(["A", "missense_variant", "MODERATE", "G", "G", "transcript", "T2", "protein_coding", "2/9",
+                       "c.60A>T", "p.K20N", "", "", "20/800"])
+    assert rep.main_ann(minor, "G")[6] == "T2"
+    assert not [c for c in ev(minor) if c.startswith("PVS1")]
+    assert "PVS1" in ev(_var("splice_donor_variant&intron_variant", hgvs_c="c.100+1G>A"))
+    assert not [c for c in ev(_var("splice_donor_variant&intron_variant", hgvs_c="c.-187+2T>C")) if
+                c.startswith("PVS1")], "splice site of a 5' UTR intron"
+
+
+def test_pm1_from_clinvar_residues():
+    v = _var("missense_variant")
+    v.anns[0][10] = "p.Arg50Trp"
+    v.pos, v.ref, v.alt = 100, "C", "T"
+    cvp = {("G", r): [("Gly", "Asp", "P", 2, "1", "1", 1, "G", "A")] for r in (47, 48, 52)}
+    assert "PM1_Supporting" in rep.protein_evidence(v, "G", cvp)[0]
+    cvp[("G", 53)] = [("Ala", "Thr", "B", 2, "2", "1", 2, "G", "A")]
+    assert "PM1_Supporting" not in rep.protein_evidence(v, "G", cvp)[0], "a benign missense nearby: no hot spot"
+    cvp2 = {("G", 50): [("Arg", "Gln", "P", 2, "1", "1", 1, "G", "A")] * 3}
+    codes = rep.protein_evidence(v, "G", cvp2)[0]
+    assert "PM5" in codes and "PM1_Supporting" not in codes, "the variant's own residue counts for PM5 only"
 
 
 def test_pharmacogenomics_vcf_only():
@@ -157,7 +228,7 @@ def test_pharmacogenomics_vcf_only():
     pgx = {r["gene"]: (r["genotype"], r["note"]) for r in rows if r["category"] == "pgx"}
     assert pgx["CYP2C19"] == ("*2/*2", "Poor metabolizer")
     assert pgx["CYP2C9"][1].startswith("Normal metabolizer")
-    assert all(len(r) == 25 and None not in r.values() for r in rows)
+    assert all(len(r) == 28 and None not in r.values() for r in rows)
     assert "absence of a variant is assumed to be the reference allele" in html
 
 
@@ -167,7 +238,7 @@ def test_pharmcat_calls():
     assert pc["CYP2C19"] == ("*1/*2", "Intermediate Metabolizer"), "PharmCAT 3.4.0 on HG001 (GeT-RM: *1/*2)"
     assert pc["CYP3A5"] == ("*3/*3", "Poor Metabolizer")
     assert "<h3>PharmCAT 3.4.0</h3>" in html and "Missing positions" in html
-    assert all(len(r) == 25 for r in rows)
+    assert all(len(r) == 28 for r in rows)
     _, html = run_report()
     assert "PharmCAT" not in html.split("<h2>7. Pharmacogenomics")[1].split("<h2>8.")[0]
 
