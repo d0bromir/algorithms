@@ -1,0 +1,6 @@
+# scripts run on Linux servers: keep LF even in Windows checkouts
+*.sh text eol=lf
+*.py text eol=lf
+*.xml text eol=lf
+*.yml text eol=lf
+*.txt text eol=lf
