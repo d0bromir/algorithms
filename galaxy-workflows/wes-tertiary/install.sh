@@ -54,7 +54,7 @@ CONFIGURE=0
 DRY=0
 VENV="${VENV:-$HOME/wes-venv}"
 PREFIX="${PREFIX:-$HOME/wes-env}"
-LOCAL_TOOL_IDS=(wes_clinical_report spliceai_score pharmcat_pgx wes_cnv)
+LOCAL_TOOL_IDS=(wes_clinical_report spliceai_score pharmcat_pgx wes_cnv wes_mito)
 
 die() { echo "install.sh: $*" >&2; exit 1; }
 say() { printf '\n== %s\n' "$*"; }
@@ -292,6 +292,54 @@ stage_data() {
     manifest ClinGen_gene_curation_list_GRCh38.tsv tabular "https://ftp.clinicalgenome.org/"
     fetch https://ftp.clinicalgenome.org/ClinGen_region_curation_list_GRCh38.tsv ClinGen_region_curation_list_GRCh38.tsv
     manifest ClinGen_region_curation_list_GRCh38.tsv tabular "https://ftp.clinicalgenome.org/ (recurrent CNV and population regions)"
+    local MANE_V=1.5 MN=https://ftp.ncbi.nlm.nih.gov/refseq/MANE/MANE_human
+    fetch "$MN/release_$MANE_V/MANE.GRCh38.v$MANE_V.summary.txt.gz" "MANE.GRCh38.v$MANE_V.summary.txt.gz"
+    manifest "MANE.GRCh38.v$MANE_V.summary.txt.gz" tabular "$MN/release_$MANE_V/ (public domain)"
+    if [[ ! -s gene_disease.tsv ]]; then
+        local G2P=https://ftp.ebi.ac.uk/pub/databases/gene2phenotype/G2P_data_downloads g2p_dir
+        g2p_dir="$(curl -fsL "$G2P/" | grep -o 'href="20[0-9_]*/"' | cut -d'"' -f2 | sort | tail -1)"
+        fetch https://search.clinicalgenome.org/kb/gene-validity/download clingen_gene_validity.csv
+        fetch "$G2P/$g2p_dir" g2p.listing.html
+        local g2p_file; g2p_file="$(grep -o 'href="allG2P_[^"]*\.csv\.gz"' g2p.listing.html | cut -d'"' -f2 | head -1)"
+        fetch "$G2P/$g2p_dir$g2p_file" "$g2p_file"
+        fetch https://www.orphadata.com/data/xml/en_product6.xml en_product6.xml
+        fetch https://www.orphadata.com/data/xml/en_product9_ages.xml en_product9_ages.xml
+        python3 "$HERE/data/build_gene_disease.py" clingen_gene_validity.csv "$g2p_file" en_product6.xml \
+            en_product9_ages.xml gene_disease.tsv
+        rm -f g2p.listing.html clingen_gene_validity.csv allG2P_*.csv.gz en_product6.xml en_product9_ages.xml
+    fi
+    if [[ ! -s vcep_rules.tsv ]]; then
+        fetch "https://erepo.clinicalgenome.org/evrepo/api/classifications/all?format=tabbed" erepo.tsv
+        python3 "$HERE/data/build_vcep.py" --fetch cspec erepo.tsv vcep_rules.tsv erepo_variants.tsv
+        rm -rf cspec erepo.tsv
+    fi
+    manifest vcep_rules.tsv tabular "ClinGen CSpec registry via data/build_vcep.py (ClinGen terms of use)"
+    manifest erepo_variants.tsv tabular "ClinGen Evidence Repository via data/build_vcep.py (ClinGen terms of use)"
+    fetch https://zenodo.org/records/6347673/files/Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz         Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz
+    manifest Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz tabular "https://zenodo.org/records/6347673 (CC BY 4.0)"
+    if [[ ! -s mave_evidence.tsv.gz ]]; then
+        local MV; MV="$(curl -fsL https://zenodo.org/api/records/20840937 | python3 -c 'import json,sys; print([f["links"]["self"] for f in json.load(sys.stdin)["files"] if f["key"].endswith(".tar.gz")][0])')"
+        fetch "$MV" mavedb.tar.gz
+        python3 "$HERE/data/build_mavedb.py" mavedb.tar.gz mave_evidence.tsv && gzip -f mave_evidence.tsv
+        rm -f mavedb.tar.gz
+    fi
+    manifest mave_evidence.tsv.gz tabular "MaveDB bulk download (CC0, Zenodo 20840937) via data/build_mavedb.py"
+    if [[ ! -s gnomad.v3.1.chrM.vcf.gz ]]; then  # chrM -> the reference's mitochondrial name (Ensembl: MT)
+        fetch https://storage.googleapis.com/gcp-public-data--gnomad/release/3.1/vcf/genomes/gnomad.genomes.v3.1.sites.chrM.vcf.bgz gnomad.chrM.vcf.bgz
+        local mt; mt="$(cut -f1 "$FA.fai" | grep -m1 -xE 'MT|chrM')"
+        gzip -dc gnomad.chrM.vcf.bgz | sed -e "s/^chrM\t/$mt\t/" -e "s/^##contig=<ID=chrM,/##contig=<ID=$mt,/" | bgzip > gnomad.v3.1.chrM.vcf.gz
+        rm -f gnomad.chrM.vcf.bgz
+    fi
+    manifest gnomad.v3.1.chrM.vcf.gz vcf_bgzip "gnomAD v3.1 chrM sites (CC0), renamed to the reference's mitochondrial contig"
+    fetch https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/exome_cnv/gnomad.v4.1.cnv.all.vcf.gz gnomad.v4.1.cnv.all.vcf.gz
+    manifest gnomad.v4.1.cnv.all.vcf.gz vcf_bgzip "gnomAD v4.1 exome CNVs (CC0)"
+    if [[ ! -s uniprot_features.tsv.gz ]]; then
+        fetch "https://rest.uniprot.org/uniprotkb/stream?query=organism_id:9606+AND+reviewed:true&format=tsv&fields=accession,gene_primary,length,xref_ensembl,ft_domain,ft_region,ft_motif,ft_zn_fing,ft_dna_bind,ft_act_site,ft_binding,ft_repeat,ft_coiled" uniprot_human.tsv
+        python3 "$HERE/data/build_uniprot_features.py" uniprot_human.tsv uniprot_features.tsv && gzip -f uniprot_features.tsv
+        rm -f uniprot_human.tsv
+    fi
+    manifest uniprot_features.tsv.gz tabular "UniProtKB/Swiss-Prot human (CC BY 4.0) via data/build_uniprot_features.py"
+    manifest gene_disease.tsv tabular "ClinGen gene-disease validity (CC0), G2P (CC0), Orphanet (CC BY 4.0) via data/build_gene_disease.py"
     local GS=https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/genome-stratifications/v3.6/GRCh38@all
     if [[ ! -s GRCh38_segdups.bed ]]; then  # Ensembl names, like the reference
         fetch "$GS/SegmentalDuplications/GRCh38_segdups.bed.gz" GRCh38_segdups.bed.gz
@@ -304,6 +352,11 @@ stage_data() {
         bash "$HERE/data/build_alphamissense.sh" "$FA" alphamissense.hg38.bcf
     fi
     manifest alphamissense.hg38.bcf bcf "https://zenodo.org/records/10813168 (CC BY 4.0) via data/build_alphamissense.sh"
+    if [[ ! -s missense_scores.hg38.bcf ]]; then
+        echo "  missense_scores.hg38.bcf <- AlphaMissense + REVEL v1.3 (Zenodo 7072866; about 10 min)"
+        bash "$HERE/data/build_revel.sh" "$FA" alphamissense.hg38.bcf missense_scores.hg38.bcf
+    fi
+    manifest missense_scores.hg38.bcf bcf "AlphaMissense (CC BY 4.0) + REVEL v1.3 (non-commercial) via data/build_revel.sh; use as the missense predictions"
 
     if [[ -n "$REGIONS" ]]; then
         if [[ ! -s gnomad.v4.1.joint.targets.GRCh38.bcf ]]; then

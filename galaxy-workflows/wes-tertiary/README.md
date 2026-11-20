@@ -163,6 +163,14 @@ and VCFs. A naming mismatch does not raise an error. ClinVar/gnomAD annotations 
 | **Recurrent artefacts (VCF)** (optional) | The laboratory's own list, built with [`data/build_artefact_list.sh`](data/build_artefact_list.sh) from earlier samples (below) | Alleles called in many of the laboratory's samples but rare or absent in gnomAD: systematic errors of the assay. The report marks matching calls low confidence. |
 | **Population allele frequencies (VCF)** | gnomAD v4.1 joint (exome + genome) frequencies reduced to the padded targets, as an indexed **BCF** built with [`data/build_gnomad_extract.sh`](data/build_gnomad_extract.sh) (below) | Transferred fields: `gnomAD_AF`, `_AN`, `_nhomalt` (homozygotes), `_grpmax` / `_grpmax_AF` / `_grpmax_AN` (genetic ancestry group with the highest AF), `_FAF95` / `_FAF95_grp` (highest filtering allele frequency, the statistic of the ACMG BA1/BS1 rules), `_filter` (gnomAD PASS / EXOMES_FILTERED / GENOMES_FILTERED / BOTH_FILTERED) and `_discordance_p` (exome vs genome frequency test). The caller's own `INFO/AF` is untouched. A file without these fields (e.g. an AF-only one) stops the annotation step with "tag not defined". |
 | **Missense predictions (AlphaMissense BCF)** | AlphaMissense hg38 predictions as an indexed **BCF** with `INFO/AM_score`, built with [`data/build_alphamissense.sh`](data/build_alphamissense.sh) (below) | Missense PP3/BP4 at the ClinGen-calibrated strengths. CC BY 4.0. |
+| **MANE transcripts (summary)** (optional) | [`MANE.GRCh38.v1.5.summary.txt.gz`](https://ftp.ncbi.nlm.nih.gov/refseq/MANE/MANE_human/release_1.5/) (1.1 MB, public domain) | MANE Select naming and classification, RefSeq names. |
+| **Curated gene-disease table** (optional) | Built with [`data/build_gene_disease.py`](data/build_gene_disease.py) from ClinGen validity, G2P and Orphanet (below; 3 MB) | Disease context section, curated inheritance and mechanism. |
+| **ClinGen expert-panel rules (VCEP)** / **classifications (ERepo)** (optional) | Built with [`data/build_vcep.py`](data/build_vcep.py) from the ClinGen CSpec registry and Evidence Repository (below; 1 MB and 4 MB) | Gene-specific ACMG rules; expert classifications next to ClinVar. |
+| **Predicted dosage sensitivity (Collins TSV)** (optional) | [`Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz`](https://zenodo.org/records/6347673) (0.4 MB, CC BY 4.0) | pHaplo/pTriplo of the genes in a CNV (≥ 0.86 / ≥ 0.94); 2H for a deletion of a predicted haploinsufficient gene. |
+| **Functional assays (MaveDB TSV)** (optional) | Built with [`data/build_mavedb.py`](data/build_mavedb.py) from the [MaveDB bulk download](https://zenodo.org/records/20840937) (CC0; 1.9 GB in, 3.5 MB out) | PS3/BS3 at the calibrated strength for variants a calibrated multiplexed assay measured (73 score sets; clinical calibrations in 10 genes, research-only ones shown but not scored). |
+| **Population CNVs (gnomAD exome CNV VCF)** (optional) | [`gnomad.v4.1.cnv.all.vcf.gz`](https://gnomad.broadinstitute.org/downloads) (9 MB, CC0; rare CNVs of 464,297 exomes) | The frequency of a gnomAD CNV of the same type with ≥ 50 % reciprocal overlap next to each CNV call; 4O (−1) when an ancestry group (≥ 1,000 exomes) has it at ≥ 1 %. |
+| **Protein features (UniProt TSV)** (optional) | Built with [`data/build_uniprot_features.py`](data/build_uniprot_features.py) from the reviewed human UniProt entries (REST API; 15 MB in, 2.2 MB out, CC BY 4.0) | The domain, region, motif or site at each variant's residue, on the MANE transcripts that encode UniProt's canonical isoform (12,926 of 19,438). Shown for review (PM1 needs a gene-specific definition), not scored. |
+| **Mitochondrial frequencies (gnomAD chrM VCF)** (FASTQ workflow, optional) | `gnomad.genomes.v3.1.sites.chrM.vcf.bgz` (5 MB, CC0) with `chrM` renamed to the reference's name (`install.sh data` does it) | mtDNA frequencies, haplogroup-defining flags and tRNA predictions for `wes_mito`. |
 
 The gnomAD file is built once with [`data/build_gnomad_extract.sh`](data/build_gnomad_extract.sh) on any Linux
 machine with `bcftools` (≥ 1.17) and `bedtools`. It reads only the indexed blocks of the public gnomAD v4.1 joint
@@ -215,6 +223,39 @@ It keeps the GRCh38 single-nucleotide missense variants classified pathogenic/li
 benign (219,540 in the November 2026 release, 49 s, 4.3 MB) with their residue on ClinVar's RefSeq transcript. Upload
 it with datatype `tabular`. The HPO and ClinGen files are used as downloaded (HPO: free with attribution; ClinGen:
 free to use with attribution).
+
+The MANE summary is used as downloaded (`MANE.GRCh38.v1.5.summary.txt.gz`, 1.1 MB, public domain). The curated
+gene-disease table merges ClinGen gene-disease validity, Gene2Phenotype (all panels) and Orphanet (CC BY 4.0):
+```bash
+curl -sL -o clingen_gene_validity.csv https://search.clinicalgenome.org/kb/gene-validity/download
+curl -sLO https://ftp.ebi.ac.uk/pub/databases/gene2phenotype/G2P_data_downloads/2026_10_28/allG2P_2026-10-28.csv.gz
+curl -sLO https://www.orphadata.com/data/xml/en_product6.xml
+curl -sLO https://www.orphadata.com/data/xml/en_product9_ages.xml
+python3 data/build_gene_disease.py clingen_gene_validity.csv allG2P_2026-10-28.csv.gz en_product6.xml \
+    en_product9_ages.xml gene_disease.tsv
+```
+In November 2026: 15,530 associations of 5,272 genes (ClinGen 3,736, G2P 3,856, Orphanet 7,938), 1.3 s, 3.0 MB;
+the file header records the SHA-256 of each source. `install.sh data` does both.
+
+The ClinGen expert-panel files come from the CSpec registry (one JSON per criteria specification) and the Evidence
+Repository:
+```bash
+curl -sL -o erepo.tsv "https://erepo.clinicalgenome.org/evrepo/api/classifications/all?format=tabbed"
+python3 data/build_vcep.py --fetch cspec erepo.tsv vcep_rules.tsv erepo_variants.tsv
+```
+Of 214 specifications, 117 are released (129 genes). For each gene and criterion the rules table lists the strengths
+the panel allows and, for BA1, BS1 and PM2, the allele-frequency cut-off taken from the panel's text: the first
+number after a comparison ("≥0.001", "greater than 0.0163", "1.11 x 10<sup>-5</sup>"), never a bare number (those
+are prevalences, penetrances, confidence levels). Cut-offs that contradict each other within a specification (BS1 ≥
+BA1, PM2 ≥ BS1) are dropped: 8 in November 2026. The cut-offs of the 129 genes were checked by hand against the
+panels' text. The Evidence Repository gave 13,385 classifications with a GRCh38 genomic HGVS name, which the report
+matches with its own 3'-shifted names.
+
+REVEL is joined to the AlphaMissense file with [`data/build_revel.sh`](data/build_revel.sh) (REVEL v1.3, Zenodo
+7072866, free for non-commercial use); upload the result as the *Missense predictions* input:
+```bash
+build_revel.sh GRCh38.fa alphamissense.hg38.bcf missense_scores.hg38.bcf
+```
 
 The recurrent-artefact list is built from the called VCFs of earlier samples sequenced with the same kit, sequencer
 and pipeline (the *Raw variant calls* of the FASTQ workflow), with the gnomAD extract above:
@@ -281,10 +322,14 @@ laboratory.
 |---|---|
 | Sample and data quality | Ts/Tv, het/hom, het allele-fraction distribution (contamination hint), genetic sex from chrX heterozygosity and chrY coverage, target coverage at 10/20/30× |
 | Diagnostic findings | ClinVar pathogenic/likely pathogenic (not conflicting) **and** a genotype that fits the gene's mode of inheritance in GenCC: one allele for dominant genes, hemizygous for X-linked genes in males, two alleles for recessive genes. Genes with both dominant and recessive disorders, X-linked heterozygous females and genes without a GenCC entry go to a *review* table |
-| Candidate variants | Not classified in ClinVar (or VUS/conflicting), gnomAD frequency below the cut-off (default 1 %), in a GenCC gene: predicted loss-of-function; missense with AlphaMissense ≥ 0.906 (PP3_Moderate or stronger); missense at a residue with a pathogenic ClinVar missense variant (PS1/PM5); predicted splice-altering outside the canonical sites (SpliceAI ≥ 0.5, or ≥ 0.2 in genes matching the HPO terms); missense/in-frame variants in genes matching the HPO terms. An automated ACMG/AMP class (next row), inheritance fit (incl. compound heterozygotes, phased from the reads where possible) and ranking by phenotype match, disease-level phenotype match and evidence |
+| Candidate variants | Not classified in ClinVar (or VUS/conflicting), gnomAD frequency below the cut-off (default 1 %), in a GenCC gene: predicted loss-of-function; missense with AlphaMissense (and REVEL, when the predictions file has it) ≥ 0.906 (PP3_Moderate or stronger); missense at a residue with a pathogenic ClinVar missense variant (PS1/PM5); predicted splice-altering outside the canonical sites (SpliceAI ≥ 0.5, or ≥ 0.2 in genes matching the HPO terms); missense/in-frame variants in genes matching the HPO terms. An automated ACMG/AMP class (next row), inheritance fit (incl. compound heterozygotes, phased from the reads where possible) and ranking by phenotype match, disease-level phenotype match and evidence |
 | Phenotype match by disease | With HPO terms: for every gene with a finding, the HPO-annotated disease that explains the largest share of the patient's terms, each term weighted by its information content; which terms it explains and which it does not, with the disease's onset, course and inheritance |
 | Automated ACMG/AMP class | For every candidate and de novo variant, and beside the ClinVar class of every P/LP finding (flagged when the automated class is benign): the evidence codes a VCF supports, combined by the Bayesian point system (Tavtigian et al. 2018, 2020; Supporting 1, Moderate 2, Strong 4, Very strong 8 points; pathogenic ≥ 10, likely pathogenic 6–9, uncertain 0–5, likely benign −1 to −6, benign ≤ −7; BA1 alone is benign). **PVS1** by the ClinGen SVI decision tree as far as SnpEff supports it, on the principal transcript (the longest protein the variant hits; SnpEff lists minor isoforms first) (nonsense/frameshift before the penultimate exon or SnpEff-predicted NMD, canonical splice site outside UTR introns, exon loss: Very strong; NMD-escaping truncation removing > 10 % of the protein: Strong, else Moderate; start loss: Moderate), only where loss of function is a disease mechanism. **PM2_Supporting**, **BA1** (> 5 %, except the ClinGen BA1 exception list), **BS1** (above the rare-variant cut-off; 0.1 % for genes with only dominant disorders), **BS2_Supporting** (≥ 2 gnomAD homozygotes, recessive-only autosomal gene). **PS1**, **PM5** and **PM1_Supporting** (≥ 3 pathogenic and no benign ClinVar missense variants at other residues within 5; PM1 + PP3 ≤ 4 points) from the ClinVar residue table. **PM4** (in-frame indel or stop loss outside a repeat) / **BP3** (in a repeat). **PP2** (missense Z > 3.09). **PP3/BP4** (AlphaMissense, SpliceAI; calibrated strengths) and **BP7** (synonymous, SpliceAI ≤ 0.1). With HPO terms matching the gene: **PP4**, **PM3** (ClinGen SVI points: in trans, phase unknown or homozygous with a ClinVar P/LP variant) and **PS2/PM6** (trio). Not used: functional data, case counts, segregation, VCEP gene-specific rules, literature. A draft for the analyst, validated against ClinVar in section 7 |
 | Gene knowledge | Next to every gene: GenCC diseases, GenCC disputed/refuted/no-known-relationship assertions, ClinGen haploinsufficiency and triplosensitivity, and (HPO) onset, course and inheritance of its diseases |
+| Transcripts and names (with *MANE transcripts*) | Every variant is named and classified on the MANE Select transcript of its gene (MANE Plus Clinical where that is the only MANE transcript hit), with the paired RefSeq `NM_`/`NP_` name (identical sequence, so the same c./p. numbering; flagged if SnpEff's transcript version differs) and the genomic name on the RefSeq chromosome (`NC_…:g.`, indels 3'-shifted on the reference as HGVS requires). A variant that truncates only a non-MANE isoform is flagged and gets no PVS1 |
+| Disease context (with the *Curated gene-disease table*) | For every gene with a finding, each disease that ClinGen, Gene2Phenotype or Orphanet links to it: MONDO/ORPHA id, the curators' validity, inheritance, disease mechanism (loss/gain of function, dominant negative), onset, the patient's HPO terms annotated to that disease, and whether the patient's genotype fits that disease's inheritance (zygosity, sex, a second allele and its phase). Curated inheritance adds to GenCC's; where the curated diseases name only gain-of-function or dominant-negative mechanisms, loss of function gets no PVS1 |
+| ClinGen expert-panel rules (with *ClinGen expert-panel rules (VCEP)*) | For the 129 genes with a released ClinGen VCEP specification: the panel's allele-frequency cut-offs replace the default BA1/BS1/PM2 rules, codes the panel does not use for the gene are removed (e.g. PVS1 for gain-of-function genes, PP2) and codes stronger than the panel allows are reduced; the automated class says what the panel's rules changed. With *ClinGen expert-panel classifications (ERepo)*, the panel's own classification of the variant and its met criteria are shown next to ClinVar |
+| Input provenance | SHA-256 of every input file and a fingerprint over the script and all inputs and parameters, in the report and the TSV (`report_meta` row `fingerprint`): two reports with the same fingerprint were made from the same data by the same rules. The report prints cleanly to PDF (A4, page numbers) from the browser |
 | ACMG SF v3.3 | 84 genes (v3.2 plus ABCD1, CYP27A1, PLN; Genet Med 2025;27:101454); biallelic only for MUTYH, ATP7B, BTD, GAA, RPE65, CYP27A1; ABCD1 hemizygous, homozygous or two heterozygous variants (not a single heterozygous variant in a female); HFE p.Cys282Tyr homozygotes only; TTN truncating only. Rare loss-of-function variants not in ClinVar are listed as *review* |
 | Carrier status | One P/LP allele in a recessive gene; two P/LP variants shown by the parents or the reads to be in cis count as one allele |
 | Trio (with the parents' calls) | Parental origin of every finding (inherited from the mother or father, both parents, de novo, possibly de novo, only one parent for a homozygote); compound heterozygotes phased by origin first, then from the reads; a dominant candidate inherited from a parent marked unaffected does not fit the inheritance; a **de novo table**: rare (gnomAD < 0.01 %) protein-altering or splice-altering variants of good quality absent from both parents' calls, confirmed in both parents' reads (≥ 15 reads, ≤ 1 alt read) or marked *possibly de novo*; three or more parent-absent changes within 10 bp (reads of a paralogous copy) and heterozygous calls without reference reads (repeat or complex loci the parents' calls write differently) stay *possibly de novo* without de novo points; a confirmed de novo variant with an alt fraction well below 0.5 (binomial p < 0.001) is noted as possibly post-zygotic (mosaic); PS2_Moderate (confirmed) / PM6_Supporting (assumed) in phenotype-matched genes after the ClinGen SVI de novo points; a **parentage check** on common SNVs (each parent must carry the proband's homozygous alleles), which withholds PS2/PM6 and puts a warning over the de novo table when it fails |
@@ -292,9 +337,10 @@ laboratory.
 | Pharmacogenomics | CYP2C19, CYP2C9, VKORC1, CYP4F2, SLCO1B1, DPYD, TPMT, NUDT15, CYP3A5, CYP2B6, UGT1A1 at fixed GRCh38 positions (checked against ClinVar and the reference). A missing variant counts as the reference allele only with ≥ 15 reads at the position (BAM in v1); otherwise the gene is *indeterminate*. CPIC phenotypes, ClinVar drug-response variants (≥ 1 star). Next to it, the PharmCAT 3.4.0 diplotypes and phenotypes (all defining positions of each star allele, with the positions missing from the VCF listed); PharmCAT's own HTML report carries the CPIC, DPWG and FDA recommendations |
 | Risk alleles | Factor V Leiden, prothrombin G20210A, HFE p.Cys282Tyr/p.His63Asp, APOE (flagged: disclose only with counselling and consent), ClinVar risk/association variants (≥ 1 star) |
 | Runs of homozygosity and uniparental disomy | Total length of runs ≥ 1 Mb (consanguinity), runs concentrated on one chromosome, homozygous findings inside runs. With both parents: **uniparental disomy** (whole chromosome or segment, maternal or paternal, isodisomy or heterodisomy) from common SNVs where the proband lacks one parent's alleles, with the imprinting disorder (chromosomes 6, 7, 11, 14, 15, 16, 20), a CNV deletion that would explain it, and homozygous findings that only one parent carries. The **parent of origin** of a chromosome gain and of the X chromosomes in a sex-chromosome aneuploidy appears beside the chromosome dosage (section 4) |
+| Mitochondrial DNA (with the *Mitochondrial calls/summary* of `wes_mito`) | Homoplasmic (≥ 90 % of ≥ 5 reads) and heteroplasmic (≥ 10 % of ≥ 20 reads, ≥ 3 reads) mtDNA variants from the exome's off-target chrM reads: chrM coverage and the heteroplasmy detectable at the median depth; ClinVar pathogenic/likely pathogenic variants with their level; rare tRNA variants predicted pathogenic by MitoTIP or PON-mt-tRNA; gnomAD v3.1 homoplasmic/heteroplasmic frequencies; MT-RNR1 m.1555A>G, m.1494C>T, m.1095T>C for aminoglycosides (CPIC), with the read depth so that *not carried* is told apart from *not covered*; a mixture check (heteroplasmy at ≥ 3 common variants of other haplogroups: contamination or nuclear mitochondrial segments) |
 | Changes since the previous report | With the findings TSV of an earlier report of the same sample (*Previous report: findings (TSV)*): the results that are **new**, **changed** or **no longer reported**, matched by variant, by gene for gene-level results (pharmacogenomics, APOE) and by ≥ 50 % reciprocal overlap for CNVs and UPD. Each change shows what both reports said and the evidence that differs: category, ClinVar classification and review status, automated ACMG class, genotype, gnomAD frequency, QC flags, or a variant no longer called. Results and findings to review (diagnostic, secondary findings, de novo, UPD, pathogenic CNVs; candidates, carrier status, pharmacogenomics) come first, other listed variants after. The TSV records the report version and the HPO, GenCC, ClinGen and SnpEff releases (`report_meta` rows), shown beside the previous report's. A **same-person check**: if < 65 % of the previous report's listed variants have the same genotype in the current calls, the section warns that the previous report is probably of another sample |
 | Coverage | Per-gene coding coverage at 10/20×; clinically relevant genes below 95 % at 20× are listed, because a negative result there is not reliable |
-| Limits | Lists what an exome pipeline cannot detect (small CNVs, SVs, repeat expansions, mtDNA, CYP2D6, HLA, pseudogene regions, mosaicism…) |
+| Limits | Lists what an exome pipeline cannot detect (small CNVs, SVs, repeat expansions, mtDNA deletions, CYP2D6, HLA, pseudogene regions, mosaicism…) |
 
 **Population frequency.** Every frequency rule (BA1 > 5 %, BS1 above the cut-off, PM2_supporting below 0.01 %
 for dominant and 0.1 % for recessive genes, "too common for a penetrant disorder", the candidate cut-off) uses the
@@ -996,12 +1042,107 @@ Rare variants alone do not work: a report lists only 4–20, and a parent or chi
 | Report on the HG002 trio, 0.9.0 → 0.10.0 → 0.10.0 with a previous report (mean of 2; host shared with a mapping job) | 18.9 s → 19.1 s → 19.3 s | 1.70 → 1.70 → 1.71 GiB |
 | Report 0.10.0 in Galaxy on HG002 with its 2026-11-15 report (workflows release 0.10, 0 upgrade messages on import) | 34 s; 24 new, 7 changed, 0 dropped | — |
 
+### Knowledge sources and ACMG classification (report 0.11.0, ClinVar ≥ 2 stars)
+
+Report 0.11 adds MANE transcripts, curated gene-disease associations (ClinGen, G2P, Orphanet), the ClinGen expert
+panels' rules (CSpec) and classifications (ERepo), REVEL, MaveDB functional assays, Collins dosage scores, gnomAD
+exome CNVs and UniProt features. Each one was added in turn on the ClinVar benchmark of section 7 (report 0.8.0),
+rebuilt from the 2026-11 ClinVar release: 30,000 ≥ 2-star SNVs and indels, run through the VCF workflow release 0.10;
+17,802 tuning (odd chromosomes and X) and 9,591 held-out (even) variants passed its filters. REVEL was added to the
+annotated VCF with `bcftools annotate`. Two choices were made on the tuning half only: how to combine AlphaMissense
+and REVEL, and which VCEP strength caps to apply (below).
+
+Held-out half; each cell is the share called on the correct side / the wrong side (P/LP called LB/B, or B/LB called
+LP/P):
+
+| Step (cumulative) | ClinVar P/LP (5,021) | ClinVar B/LB (4,570) | Expert panel P/LP (1,080) | Expert panel B/LB (704) | Time | Memory |
+|---|---|---|---|---|---|---|
+| Report 0.10 rules (AlphaMissense) | 71.8 % / 0.1 % | 43.2 % / 0.1 % | 60.5 % / 0.2 % | 57.1 % / 0.1 % | 4 s | 0.81 GiB |
+| + MANE transcripts | 72.3 % / 0.1 % | 43.3 % / 0.0 % | 61.0 % / 0.2 % | 57.1 % / 0.1 % | 4 s | 0.82 GiB |
+| + curated gene-disease | 72.2 % / 0.1 % | 43.2 % / 0.0 % | 61.0 % / 0.2 % | 57.1 % / 0.1 % | 5 s | 0.84 GiB |
+| + VCEP rules | 71.5 % / 0.1 % | 46.2 % / 0.0 % | 59.8 % / 0.2 % | 71.4 % / 0.0 % | 5 s | 0.84 GiB |
+| + REVEL first | 73.2 % / 0.1 % | 46.0 % / 0.0 % | 66.5 % / 0.3 % | 68.3 % / 0.1 % | 4 s | 0.84 GiB |
+| **+ MaveDB (report 0.11)** | **73.4 % / 0.2 %** | **46.3 % / 0.0 %** | **67.4 % / 0.6 %** | **70.3 % / 0.1 %** | 6 s | 0.84 GiB |
+
+Tuning half, same steps: P/LP 72.7 → 74.9 %, B/LB 37.1 → 43.6 %, wrong side 0.1-0.2 % throughout. Time and memory:
+classifying one half on one core, with loading.
+
+- **MANE.** Several loss-of-function calls were on minor isoforms and are intronic on the MANE transcript. In the
+  GIAB exomes this removed PVS1 from five variants (PIGQ, PTPN4, AP1S1, CLPB, SPINK2), two of them LP before. They
+  are now flagged "loss of function only on other transcripts".
+- **REVEL and AlphaMissense.** Three ways to combine the two calibrated predictors were compared on the tuning half,
+  with MANE, the curated diseases and all VCEP caps (one predictor per variant, as ClinGen requires): AlphaMissense
+  only gave 69.3 % P/LP and 42.9 % B/LB on the correct side; both must agree, 68.4 % and 41.6 %; REVEL first, with
+  AlphaMissense where REVEL has no score, 70.4 % and 41.7 %. REVEL first was chosen.
+- **VCEP strength caps.** Applying every cap of the 129 genes' specifications lost 4.5 points of pathogenic recall on
+  the tuning half. 351 variants dropped from P/LP, mainly in GCK, FBN1 and LDLR, because many specifications allow
+  PP3 only at Supporting (written before the 2022 calibration of REVEL and other predictors) and define PM1 by their
+  own domains. On the tuning half, keeping the calibrated PP3/BP4 strengths and the report's own PM1_Supporting, but
+  applying the panels' frequency cut-offs and code removals, kept 73.9 % of P/LP (74.9 % without any VCEP rules) and
+  42.1 % of B/LB (35.2 % without). This mode is the default (`VCEP_KEEP_STRENGTH`).
+- **MaveDB.** Clinically calibrated assays gave PS3 or BS3 to 55 held-out variants; 49 agreed with ClinVar's side.
+  Most calibrations are built from ClinVar classifications, so this agreement is an upper bound.
+- **Genomic HGVS names.** The report's 3'-shifted genomic names were compared with the ClinGen Evidence Repository's
+  for its 11,868 classified variants with a ClinVar record: identical for 11,865 (10,410 SNVs, 958 of 961 deletions,
+  427 insertions/duplications, 70 delins). Two of the three differences are ERepo naming a deletion at its 5'
+  position; the report also looks that name up.
+
+On the three GIAB exomes (0.10 against 0.11 with all inputs):
+- REVEL now also selects missense candidates (REVEL ≥ 0.773, PP3_Moderate, like AlphaMissense ≥ 0.906): HG002
+  gained 4 candidates and lost 1, HG005 gained 5 and lost 1, HG001 gained 2 and lost 2;
+- 10 automated classes changed: 7 de novo or possibly de novo missense variants moved between VUS and LB with REVEL's
+  BP4 (6 to LB, 1 to VUS); AP1S1 and CLPB went from LP to VUS (PVS1 on a minor isoform only, MANE); PLG p.Lys38Glu
+  in HG001 went from LB to VUS (REVEL gives no BP4);
+- CFAP74 p.Arg218Trp in HG005 moved from *ClinVar P/LP to review* to *carrier*: the curated diseases of CFAP74 are
+  recessive only;
+- none of the GIAB variants has an ERepo classification or MaveDB data.
+
+| Clinical report, all inputs (median of 3) | 0.10.0 | 0.11.0 |
+|---|---|---|
+| HG002 | 16.2 s, 1.70 GiB | 24.1 s, 1.88 GiB |
+| HG005 | 15.7 s, 1.52 GiB | 24.7 s, 1.70 GiB |
+| HG001 | 13.0 s, 1.50 GiB | 21.1 s, 1.68 GiB |
+
+### Mitochondrial DNA from exome reads (wes_mito 0.1.0, report 0.11.0, GIAB IDT exomes)
+
+`wes_mito` was run on the duplicate-marked BAMs of the seven GIAB exomes still on the server: one process
+per sample (pinned to cores 64-127), 11 s and 27 MB each.
+
+| Sample | Median chrM depth | ≥ 20× | Homoplasmic | Heteroplasmic | Mixture check (sites) | Time | Memory |
+|---|---|---|---|---|---|---|---|
+| HG001 | 14× | 14 % | 14 | 0 | — (0) | 11.1 s | 0.03 GiB |
+| NA12891 (HG001's father) | 121× | 100 % | 16 | 7 | flagged (3) | 11.7 s | 0.03 GiB |
+| NA12892 (HG001's mother) | 49× | 100 % | 15 | 10 | flagged (7) | 11.0 s | 0.03 GiB |
+| HG003 | 12× | 13 % | 36 | 0 | — (0) | 11.0 s | 0.03 GiB |
+| HG004 | 11× | 8 % | 11 | 0 | — (0) | 10.9 s | 0.03 GiB |
+| HG006 | 39× | 98 % | 41 | 6 | — (1) | 11.2 s | 0.03 GiB |
+| HG007 | 82× | 100 % | 26 | 28 | flagged (17) | 11.4 s | 0.03 GiB |
+
+The chrM depth follows the two library batches of these exomes (HG001-HG004 low, HG006/HG007/NA12891/NA12892 high).
+
+**Maternal inheritance.** mtDNA comes from the mother only, which checks the homoplasmic calls without a truth set:
+- all 14 homoplasmic variants of HG001 are in her mother NA12892;
+- 14 of the mother's 15 homoplasmic variants are called in HG001. The other, m.8860A>G, is in 6 of HG001's 7 reads
+  (86 %): below the 90 % homoplasmic cut-off, and too few reads for a heteroplasmic call;
+- the father NA12891 shares only 6 of his 16 with HG001, all of them common to both parents' haplogroups.
+
+**Mixture check.** HG007 has heteroplasmy at 17 positions that are common homoplasmic variants of other haplogroups
+(and a group of calls near 88 %): a second mtDNA lineage, most likely from nuclear mitochondrial segments in its
+deeper off-target reads, or contamination. NA12891/NA12892 have 3 and 7 such sites. The report then warns that low
+heteroplasmy is unreliable in the sample. There is no mtDNA truth set for these cell lines, so heteroplasmy calls
+are not benchmarked.
+
 ## 8. Scope and limitations
 
 Germline SNVs and short indels in the exome targets, and CNVs of several exons from read depth (section 7).
 Not covered: CNVs of one or two exons (rarely detected at 50×), balanced and other structural variants, CNV
-breakpoints, CNVs in segmental duplications (marked low confidence), mitochondrial variants and repeat
-expansions. CNV calls need ≥ 3 other samples of the same kit; with a small or mixed-batch panel they miss small
+breakpoints, CNVs in segmental duplications (marked low confidence), large mtDNA deletions and repeat
+expansions. mtDNA variants come from the off-target reads: heteroplasmy below about 25 % is not detectable in
+low-coverage exomes (median 11-14× in one GIAB batch), and NUMT reads can mimic low heteroplasmy (the mixture check
+flags it). MITOMAP refuses automated downloads, so mtDNA classifications come from ClinVar and gnomAD only. dbNSFP
+(BayesDel, CADD, MetaRNN and others) needs a registration with an institutional address and is not used; REVEL
+and AlphaMissense are the missense predictors. VCEP frequency cut-offs are read from the panels' free text and the
+panels' gene-specific rules that need case or functional data are not applied. CNV calls need ≥ 3 other samples of the same kit; with a small or mixed-batch panel they miss small
 events, and relatives in the same run share their inherited CNVs. The automated ACMG/AMP class uses only the evidence a VCF supports (no functional, segregation, case-count or
 literature evidence) and is a draft for review, and the HPO ranking depends on the terms given. Trio analysis needs the parents' calls on the same reference and
 works on the variants the proband's caller found; de novo status at repeats, segmental duplications and other

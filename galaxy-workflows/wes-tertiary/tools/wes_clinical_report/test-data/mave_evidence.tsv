@@ -1,0 +1,4 @@
+# source	test	sha256:0
+key	gene	urn	score	code	calibration	research_only	title
+NC_000013.11:g.32340301C>T	BRCA2	urn:mavedb:00000097-0-1	-2.1	PS3_Moderate	VCEP calibration	0	BRCA2 HDR assay
+NC_000013.11:g.32340301C>T	BRCA2	urn:mavedb:00000098-0-1	-1.5	PS3_Strong	ExCALIBR calibration	1	BRCA2 SGE

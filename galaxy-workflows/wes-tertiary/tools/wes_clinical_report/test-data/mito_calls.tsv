@@ -1,0 +1,4 @@
+pos	ref	alt	gene	depth	alt_reads	alt_fwd	alt_rev	heteroplasmy	call	gnomad_af_hom	gnomad_af_het	gnomad_max_hl	haplogroup_defining	common_low_heteroplasmy	trna_prediction	clinvar	clinvar_review	clinvar_condition	flags
+1555	A	G	MT-RNR1	40	40	20	20	1.000	homoplasmic	0.00177	0.00001	1.0				Pathogenic	criteria provided, multiple submitters, no conflicts	Aminoglycoside-induced deafness	
+3243	A	G	MT-TL1	60	15	8	7	0.250	heteroplasmic	0.0000	0.0001	0.6			MitoTIP likely pathogenic	Pathogenic	reviewed by expert panel	MELAS syndrome	heteroplasmic: confirm (NUMT reads or contamination can mimic low levels)
+263	A	G	control region	30	30	15	15	1.000	homoplasmic	0.97	0.0001	1.0	yes						

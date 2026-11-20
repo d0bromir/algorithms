@@ -1,6 +1,6 @@
 class: GalaxyWorkflow
 label: WES tertiary analysis from FASTQ (v1)
-release: "0.10"
+release: "0.11"
 license: MIT
 tags:
   - WES
@@ -238,6 +238,77 @@ inputs:
       The "Clinical findings (table)" of an earlier run on the same sample: the report then lists what is new,
       changed or no longer reported since, with the evidence that differs (reanalysis).
     position: {left: 0, top: 4060}
+  "MANE transcripts (summary)":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: >-
+      MANE.GRCh38.v1.x.summary.txt.gz from NCBI: variants are named and classified on the MANE Select transcript,
+      with the paired RefSeq NM_/NP_ names.
+    position: {left: 0, top: 4180}
+  "Curated gene-disease table":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: >-
+      ClinGen gene-disease validity, Gene2Phenotype and Orphanet merged by data/build_gene_disease.py: inheritance and
+      disease mechanism per disease, and the disease-context section of the report.
+    position: {left: 0, top: 4300}
+  "ClinGen expert-panel rules (VCEP)":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: >-
+      ClinGen CSpec criteria specifications built by data/build_vcep.py: the expert panels' gene-specific frequency
+      cut-offs, criteria and strengths replace the default ACMG rules for their genes.
+    position: {left: 0, top: 4420}
+  "ClinGen expert-panel classifications (ERepo)":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: >-
+      ClinGen Evidence Repository classifications built by data/build_vcep.py, shown with their met criteria next to
+      ClinVar.
+    position: {left: 0, top: 4540}
+  "Predicted dosage sensitivity (Collins TSV)":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: >-
+      Collins et al. 2022 pHaplo/pTriplo scores (Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz, CC BY 4.0):
+      predicted haploinsufficient and triplosensitive genes in a copy-number variant.
+    position: {left: 0, top: 4660}
+  "Functional assays (MaveDB TSV)":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: >-
+      Calibrated multiplexed functional assays from MaveDB (CC0), built by data/build_mavedb.py: PS3/BS3 at the
+      calibrated strength for the variants an assay measured.
+    position: {left: 0, top: 4780}
+  "Mitochondrial frequencies (gnomAD chrM VCF)":
+    type: data
+    format: [vcf_bgzip, vcf]
+    optional: true
+    doc: >-
+      gnomad.genomes.v3.1.sites.chrM.vcf.bgz (CC0) with chrM renamed to the reference's name (install.sh does this):
+      mtDNA frequencies, haplogroup-defining flags and tRNA predictions for the mitochondrial calls.
+    position: {left: 0, top: 4900}
+  "Population CNVs (gnomAD exome CNV VCF)":
+    type: data
+    format: [vcf_bgzip, vcf]
+    optional: true
+    doc: >-
+      gnomad.v4.1.cnv.all.vcf.gz (rare CNVs of 464,297 exomes, CC0): the population frequency of each CNV call.
+    position: {left: 0, top: 5020}
+  "Protein features (UniProt TSV)":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: >-
+      UniProtKB/Swiss-Prot domains, regions, motifs and sites by Ensembl transcript, built by
+      data/build_uniprot_features.py (CC BY 4.0): shown at each variant's residue.
+    position: {left: 0, top: 5140}
 
 outputs:
   multiqc_report:
@@ -254,6 +325,10 @@ outputs:
     outputSource: target_coverage/output_thresholds_bed
   target_mean_depth:
     outputSource: target_coverage/output_regions_bed
+  mito_calls:
+    outputSource: mito_calling/calls
+  mito_summary:
+    outputSource: mito_calling/summary
   cnv_calls:
     outputSource: cnv_calling/calls
   cnv_targets:
@@ -563,6 +638,26 @@ steps:
     out:
       output_vcf: {rename: "Raw variant calls (FreeBayes)"}
 
+  mito_calling:
+    doc: >-
+      Mitochondrial DNA variants and heteroplasmy from the off-target chrM reads (local tool tools/wes_mito).
+    tool_id: wes_mito
+    tool_version: 0.1.0+galaxy0
+    position: {left: 1340, top: 820}
+    in:
+      bam: mark_duplicates/outFile
+      reference: "Reference genome (FASTA)"
+      gnomad_mt: "Mitochondrial frequencies (gnomAD chrM VCF)"
+      clinvar: "ClinVar (VCF)"
+    state:
+      min_hl: 0.1
+      min_alt: 3
+      min_depth: 20
+      min_depth_hom: 5
+    out:
+      calls: {rename: "Mitochondrial calls"}
+      summary: {rename: "Mitochondrial summary"}
+
   tertiary:
     doc: Tertiary analysis of each sample's VCF (embedded workflow "WES tertiary analysis from VCF (v2)").
     position: {left: 1600, top: 220}
@@ -602,6 +697,16 @@ steps:
       "Mother: CNV per-target ratios": "Mother: CNV per-target ratios"
       "Father: CNV per-target ratios": "Father: CNV per-target ratios"
       "Previous report: findings (TSV)": "Previous report: findings (TSV)"
+      "MANE transcripts (summary)": "MANE transcripts (summary)"
+      "Curated gene-disease table": "Curated gene-disease table"
+      "ClinGen expert-panel rules (VCEP)": "ClinGen expert-panel rules (VCEP)"
+      "ClinGen expert-panel classifications (ERepo)": "ClinGen expert-panel classifications (ERepo)"
+      "Predicted dosage sensitivity (Collins TSV)": "Predicted dosage sensitivity (Collins TSV)"
+      "Functional assays (MaveDB TSV)": "Functional assays (MaveDB TSV)"
+      "Mitochondrial calls (wes_mito TSV)": mito_calling/calls
+      "Mitochondrial summary (wes_mito JSON)": mito_calling/summary
+      "Population CNVs (gnomAD exome CNV VCF)": "Population CNVs (gnomAD exome CNV VCF)"
+      "Protein features (UniProt TSV)": "Protein features (UniProt TSV)"
 
   multiqc:
     doc: One QC report for all samples.

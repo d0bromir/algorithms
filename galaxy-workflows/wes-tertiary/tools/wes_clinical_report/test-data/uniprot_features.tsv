@@ -1,0 +1,4 @@
+# source	test	sha256:0
+transcript	gene	accession	start	end	type	note
+TXB	BRCA2	P51587	300	500	region	Interaction with NPM1
+TXB	BRCA2	P51587	410	420	domain	BRC repeat test
