@@ -1,0 +1,8 @@
+# source	test	sha256:0
+gene	source	disease	disease_id	moi	validity	mechanism	role	onset	hpo	ref	xref
+BRCA2	ClinGen	hereditary breast ovarian cancer syndrome	MONDO:0012933	AD	definitive					https://search.clinicalgenome.org/kb/gene-validity/CGGV:test	
+BRCA2	G2P	BRCA2-related Fanconi anemia	MONDO:0013697	AR	definitive	LoF	absent gene product		HP:0001903;HP:0001873	G2P00100	OMIM:605724
+BRCA2	Orphanet	Hereditary breast and ovarian cancer syndrome	ORPHA:145	AD	assessed		Disease-causing germline mutation(s) in	Adult		ORPHA:145	
+PAH	G2P	PAH-related phenylketonuria	MONDO:0009861	AR	definitive	LoF	absent gene product		HP:0001249	G2P00200	OMIM:261600
+GENER	G2P	GENER-related overgrowth	MONDO:0000001	AD	definitive	GoF	altered gene product structure			G2P00300	
+GENER	Orphanet	GENER disease group	ORPHA:1	AD,AR,XLR	assessed		Disease-causing germline mutation(s) in			ORPHA:1	

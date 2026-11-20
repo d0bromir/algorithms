@@ -1,6 +1,7 @@
 """The report's automated ACMG classification against ClinVar >= 2-star assertions (README section 7).
 
     python3 tests/acmg_clinvar_eval.py ANNOTATED.vcf clinvar_truth.tsv REF_DIR [--split tune|holdout|all] [--tsv OUT]
+        [--mane MANE.summary.txt.gz] [--gene-disease gene_disease.tsv] [--vcep-rules vcep_rules.tsv]
 
 ANNOTATED.vcf is the VCF workflow's annotated_vcf for tests/acmg_clinvar_set.py's pseudo-sample; REF_DIR holds the
 reference files install.sh downloads (GenCC, gnomAD constraint, ClinGen dosage, ClinVar residue table, FASTA).
@@ -13,6 +14,11 @@ import wes_clinical_report as R
 ap = argparse.ArgumentParser()
 ap.add_argument("vcf"); ap.add_argument("truth"); ap.add_argument("ref")
 ap.add_argument("--split", default="tune"); ap.add_argument("--tsv")
+ap.add_argument("--mane", help="MANE summary: classify on MANE transcripts (report >= 0.11)")
+ap.add_argument("--gene-disease", help="data/build_gene_disease.py table: curated inheritance and mechanism")
+ap.add_argument("--missense-policy", choices=("alphamissense", "revel", "concordant"),
+                help="how AlphaMissense and REVEL are combined (default: the report's MISSENSE_POLICY)")
+ap.add_argument("--vcep-rules", help="data/build_vcep.py rules: ClinGen expert-panel cut-offs, codes and strengths")
 a = ap.parse_args()
 t0 = time.time()
 truth = {}
@@ -24,6 +30,11 @@ gencc = R.load_gencc(f"{a.ref}/gencc-submissions.tsv")
 constraint = R.load_constraint(f"{a.ref}/gnomad.v4.1.constraint_metrics.tsv")
 dosage = R.load_dosage(f"{a.ref}/ClinGen_gene_curation_list_GRCh38.tsv")
 cvp = R.load_clinvar_protein(f"{a.ref}/clinvar_protein.tsv.gz")
+R.MANE.update(R.load_mane(a.mane))
+R.CURATED.update(R.load_gene_disease(a.gene_disease)[0])
+R.VCEP.update(R.load_vcep_rules(a.vcep_rules)[0])
+if a.missense_policy:
+    R.MISSENSE_POLICY = a.missense_policy
 _s, _c, variants, prefix = R.parse_vcf(a.vcf)
 
 
@@ -41,7 +52,7 @@ for v in inframe:
 
 
 def moi_of(g):
-    m = R.gene_moi(gencc.get(g, []))
+    m = R.gene_moi(gencc.get(g, [])) | R.curated_moi(g)
     if not m and g in R.ACMG_SF:
         m = {"AR"} if R.ACMG_SF[g] in ("biallelic", "hfe") else ({"XL"} if R.ACMG_SF[g] == "xl" else {"AD"})
     return m

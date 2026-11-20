@@ -1,4 +1,4 @@
-<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.10.0+galaxy0" profile="23.0">
+<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.11.0+galaxy0" profile="23.0">
     <description>diagnostic, secondary, carrier, pharmacogenomic and risk findings in one human-readable report</description>
     <requirements>
         <requirement type="package" version="3.12">python</requirement>
@@ -102,6 +102,18 @@ python3 '$__tool_directory__/wes_clinical_report.py'
     #if $coverage_summary:
         --coverage-summary '$coverage_summary'
     #end if
+    #if $mane:
+        --mane '$mane'
+    #end if
+    #if $gene_disease:
+        --gene-disease '$gene_disease'
+    #end if
+    #if $vcep_rules:
+        --vcep-rules '$vcep_rules'
+    #end if
+    #if $erepo:
+        --erepo '$erepo'
+    #end if
     #if $previous_tsv:
         #import re
         #set $previous_name = re.sub(r"[^\w .,:()+-]", "_", str($previous_tsv.element_identifier))
@@ -175,6 +187,14 @@ python3 '$__tool_directory__/wes_clinical_report.py'
         <param name="target_coverage" type="data" format="bed" optional="true" label="Per-target coverage (mosdepth thresholds BED)"/>
         <param name="gene_coverage" type="data" format="bed" optional="true" label="Coding-exon coverage (mosdepth thresholds BED, gene in column 4)"/>
         <param name="coverage_summary" type="data" format="tabular" optional="true" label="Coverage summary (mosdepth summary)"/>
+        <param name="mane" type="data" format="tabular,tsv,txt" optional="true" label="MANE transcripts (MANE.GRCh38 summary)"
+               help="https://ftp.ncbi.nlm.nih.gov/refseq/MANE/MANE_human/: variants named and classified on MANE Select transcripts, with the paired RefSeq NM_/NP_ names."/>
+        <param name="gene_disease" type="data" format="tabular,tsv,txt" optional="true" label="Curated gene-disease table (ClinGen, G2P, Orphanet)"
+               help="Built with data/build_gene_disease.py in the workflow repository: inheritance and disease mechanism of each disease, and the disease-context section."/>
+        <param name="vcep_rules" type="data" format="tabular,tsv,txt" optional="true" label="ClinGen expert-panel rules (VCEP, from CSpec)"
+               help="Built with data/build_vcep.py: gene-specific allele-frequency cut-offs, criteria and strengths of the ClinGen variant curation expert panels."/>
+        <param name="erepo" type="data" format="tabular,tsv,txt" optional="true" label="ClinGen expert-panel classifications (ERepo)"
+               help="Built with data/build_vcep.py from the ClinGen Evidence Repository: the panel's own classification of a variant, shown next to ClinVar."/>
         <param name="previous_tsv" type="data" format="tabular" optional="true" label="Previous report of this sample: findings (TSV)"
                help="The findings TSV of an earlier run of this tool on the same sample. The report then lists what is new, what changed (ClinVar, ACMG class, category, genotype) and what is no longer reported, with the evidence that differs."/>
         <param name="max_af" type="float" value="0.01" min="0" max="1" label="Rare variant cut-off (population allele frequency)"
@@ -302,6 +322,30 @@ python3 '$__tool_directory__/wes_clinical_report.py'
                     <has_text_matching expression="	change_new	PLN	"/>
                     <has_text_matching expression="	change_changed	BRCA2	"/>
                     <has_text_matching expression="	report_meta	wes_clinical_report	"/>
+                </assert_contents>
+            </output>
+        </test>
+        <test expect_num_outputs="2">
+            <param name="vcf" value="annotated.vcf" ftype="vcf"/>
+            <param name="gencc" value="gencc.tsv" ftype="tabular"/>
+            <param name="constraint" value="constraint.tsv" ftype="tabular"/>
+            <param name="mane" value="mane.tsv" ftype="tabular"/>
+            <param name="gene_disease" value="gene_disease.tsv" ftype="tabular"/>
+            <param name="vcep_rules" value="vcep_rules.tsv" ftype="tabular"/>
+            <param name="erepo" value="erepo_variants.tsv" ftype="tabular"/>
+            <output name="report" ftype="html">
+                <assert_contents>
+                    <has_text text="TXB (MANE Select)"/>
+                    <has_text text="NM_000059.4:c.1234C&amp;gt;T"/>
+                    <has_text text="10. Disease context of the reported genes"/>
+                    <has_text text="ClinGen ENIGMA BRCA1 and BRCA2 VCEP: Likely Pathogenic"/>
+                    <has_text text="Input provenance"/>
+                </assert_contents>
+            </output>
+            <output name="findings" ftype="tabular">
+                <assert_contents>
+                    <has_text_matching expression="	report_meta	fingerprint	"/>
+                    <has_text text="NC_000013.11:g.32340301C&gt;T"/>
                 </assert_contents>
             </output>
         </test>

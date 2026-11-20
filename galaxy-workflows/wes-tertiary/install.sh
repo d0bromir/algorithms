@@ -292,6 +292,30 @@ stage_data() {
     manifest ClinGen_gene_curation_list_GRCh38.tsv tabular "https://ftp.clinicalgenome.org/"
     fetch https://ftp.clinicalgenome.org/ClinGen_region_curation_list_GRCh38.tsv ClinGen_region_curation_list_GRCh38.tsv
     manifest ClinGen_region_curation_list_GRCh38.tsv tabular "https://ftp.clinicalgenome.org/ (recurrent CNV and population regions)"
+    local MANE_V=1.5 MN=https://ftp.ncbi.nlm.nih.gov/refseq/MANE/MANE_human
+    fetch "$MN/release_$MANE_V/MANE.GRCh38.v$MANE_V.summary.txt.gz" "MANE.GRCh38.v$MANE_V.summary.txt.gz"
+    manifest "MANE.GRCh38.v$MANE_V.summary.txt.gz" tabular "$MN/release_$MANE_V/ (public domain)"
+    if [[ ! -s gene_disease.tsv ]]; then
+        local G2P=https://ftp.ebi.ac.uk/pub/databases/gene2phenotype/G2P_data_downloads g2p_dir
+        g2p_dir="$(curl -fsL "$G2P/" | grep -o 'href="20[0-9_]*/"' | cut -d'"' -f2 | sort | tail -1)"
+        fetch https://search.clinicalgenome.org/kb/gene-validity/download clingen_gene_validity.csv
+        fetch "$G2P/$g2p_dir" g2p.listing.html
+        local g2p_file; g2p_file="$(grep -o 'href="allG2P_[^"]*\.csv\.gz"' g2p.listing.html | cut -d'"' -f2 | head -1)"
+        fetch "$G2P/$g2p_dir$g2p_file" "$g2p_file"
+        fetch https://www.orphadata.com/data/xml/en_product6.xml en_product6.xml
+        fetch https://www.orphadata.com/data/xml/en_product9_ages.xml en_product9_ages.xml
+        python3 "$HERE/data/build_gene_disease.py" clingen_gene_validity.csv "$g2p_file" en_product6.xml \
+            en_product9_ages.xml gene_disease.tsv
+        rm -f g2p.listing.html clingen_gene_validity.csv allG2P_*.csv.gz en_product6.xml en_product9_ages.xml
+    fi
+    if [[ ! -s vcep_rules.tsv ]]; then
+        fetch "https://erepo.clinicalgenome.org/evrepo/api/classifications/all?format=tabbed" erepo.tsv
+        python3 "$HERE/data/build_vcep.py" --fetch cspec erepo.tsv vcep_rules.tsv erepo_variants.tsv
+        rm -rf cspec erepo.tsv
+    fi
+    manifest vcep_rules.tsv tabular "ClinGen CSpec registry via data/build_vcep.py (ClinGen terms of use)"
+    manifest erepo_variants.tsv tabular "ClinGen Evidence Repository via data/build_vcep.py (ClinGen terms of use)"
+    manifest gene_disease.tsv tabular "ClinGen gene-disease validity (CC0), G2P (CC0), Orphanet (CC BY 4.0) via data/build_gene_disease.py"
     local GS=https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/genome-stratifications/v3.6/GRCh38@all
     if [[ ! -s GRCh38_segdups.bed ]]; then  # Ensembl names, like the reference
         fetch "$GS/SegmentalDuplications/GRCh38_segdups.bed.gz" GRCh38_segdups.bed.gz
@@ -304,6 +328,11 @@ stage_data() {
         bash "$HERE/data/build_alphamissense.sh" "$FA" alphamissense.hg38.bcf
     fi
     manifest alphamissense.hg38.bcf bcf "https://zenodo.org/records/10813168 (CC BY 4.0) via data/build_alphamissense.sh"
+    if [[ ! -s missense_scores.hg38.bcf ]]; then
+        echo "  missense_scores.hg38.bcf <- AlphaMissense + REVEL v1.3 (Zenodo 7072866; about 10 min)"
+        bash "$HERE/data/build_revel.sh" "$FA" alphamissense.hg38.bcf missense_scores.hg38.bcf
+    fi
+    manifest missense_scores.hg38.bcf bcf "AlphaMissense (CC BY 4.0) + REVEL v1.3 (non-commercial) via data/build_revel.sh; use as the missense predictions"
 
     if [[ -n "$REGIONS" ]]; then
         if [[ ! -s gnomad.v4.1.joint.targets.GRCh38.bcf ]]; then

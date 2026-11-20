@@ -1,0 +1,8 @@
+# source	test	sha256:0
+gene	spec	version	panel	code	applicable	value	text
+BRCA2	GN097	1.1	ENIGMA BRCA1 and BRCA2 VCEP	BA1	Stand Alone	0.001	Stand Alone: >0.001
+BRCA2	GN097	1.1	ENIGMA BRCA1 and BRCA2 VCEP	BS1	Strong;Supporting	0.0001	Strong: >0.0001
+BRCA2	GN097	1.1	ENIGMA BRCA1 and BRCA2 VCEP	PM2	Supporting		Supporting: absent
+BRCA2	GN097	1.1	ENIGMA BRCA1 and BRCA2 VCEP	PP2			
+BRCA2	GN097	1.1	ENIGMA BRCA1 and BRCA2 VCEP	PP3	Supporting		Supporting: BayesDel
+GENER	GN999	1.0	Test VCEP	PVS1			

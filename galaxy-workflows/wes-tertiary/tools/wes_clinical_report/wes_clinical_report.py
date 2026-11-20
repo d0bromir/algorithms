@@ -25,15 +25,17 @@ import bisect
 import collections
 import datetime
 import gzip
+import hashlib
 import html
 import json
 import math
+import os
 import re
 import statistics
 import subprocess
 import sys
 
-VERSION = "0.10.0"
+VERSION = "0.11.0"
 
 # --------------------------------------------------------------------------------------------- rules
 # ACMG secondary findings v3.3 (ACMG policy statement, Genet Med 2025;27:101454): the 81 genes of v3.2 (Miller et al.,
@@ -218,10 +220,12 @@ class Variant:
                  "zyg", "gene", "effect", "impact", "hgvs_c", "hgvs_p", "feature", "af", "clnsig", "revstat",
                  "clndn", "stars", "rs", "ab", "flags",
                  "an", "nhomalt", "grpmax", "grpmax_af", "faf", "faf_grp", "gfilter", "gdisc", "artefact",
-                 "am", "sai", "sai_gene", "repeat")
+                 "am", "sai", "sai_gene", "repeat", "mane", "refseq", "hgvs_g", "revel")
 
     def __init__(self):
         self.repeat = None  # repeat context of an in-frame change (repeat_flag), set when the reference is given
+        self.mane, self.refseq, self.hgvs_g = "", "", ""
+        self.revel = None
 
     def key(self):
         return f"{self.chrom}:{self.pos}:{self.ref}>{self.alt}"
@@ -317,6 +321,7 @@ def parse_vcf(path, sample_index=0):
                 v.faf, v.faf_grp = fnum(gn.get("gnomAD_FAF95")), gn.get("gnomAD_FAF95_grp")
                 v.gfilter, v.gdisc = gn.get("gnomAD_filter"), fnum(gn.get("gnomAD_discordance_p"))
                 v.am = fnum(str(info["AM_score"]).split(",")[0]) if info.get("AM_score") not in (None, True) else None
+                v.revel = fnum(str(info["REVEL"]).split(",")[0]) if info.get("REVEL") not in (None, True) else None
                 v.sai, v.sai_gene = spliceai_max(info.get("SpliceAI"), alt)
                 v.clnsig = str(info.get("CLNSIG", "")) if info.get("CLNSIG") not in (None, True, ".") else ""
                 v.revstat = str(info.get("CLNREVSTAT", "")) if info.get("CLNREVSTAT") not in (None, True) else ""
@@ -350,6 +355,15 @@ def spliceai_max(field, alt):
 AM_PP3 = ((0.990, "PP3_Strong"), (0.906, "PP3_Moderate"), (0.792, "PP3_Supporting"))
 AM_BP4 = ((0.099, "BP4_Moderate"), (0.169, "BP4_Supporting"))
 CODE_RANK = {"PP3_Supporting": 1, "PP3_Moderate": 2, "PP3_Strong": 3}
+# REVEL (Pejaver et al., AJHG 2022, Table 2; ClinGen SVI). BP4 Very strong (<= 0.003) is reported as Strong: the
+# SVI caps computational evidence at Strong.
+REVEL_PP3 = ((0.932, "PP3_Strong"), (0.773, "PP3_Moderate"), (0.644, "PP3_Supporting"))
+REVEL_BP4 = ((0.016, "BP4_Strong"), (0.183, "BP4_Moderate"), (0.290, "BP4_Supporting"))
+BP4_RANK = {"BP4_Supporting": 1, "BP4_Moderate": 2, "BP4_Strong": 3}
+# How the two calibrated missense predictors are combined (one predictor per variant, ClinGen SVI):
+#   "alphamissense": AlphaMissense only (report <= 0.10); "revel": REVEL, AlphaMissense where REVEL has no score;
+#   "concordant": both must point the same way and the weaker strength is used (one score alone counts as itself).
+MISSENSE_POLICY = "concordant"
 
 
 def am_code(score):
@@ -365,6 +379,33 @@ def am_code(score):
     return None
 
 
+def revel_code(score):
+    if score is None:
+        return None
+    s = round(score, 3)
+    for t, c in REVEL_PP3:
+        if s >= t:
+            return c
+    for t, c in REVEL_BP4:
+        if s <= t:
+            return c
+    return None
+
+
+def missense_code(v, policy=None):
+    """The missense PP3/BP4 code from AlphaMissense and REVEL under MISSENSE_POLICY."""
+    policy = policy or MISSENSE_POLICY
+    am, rv = am_code(v.am), revel_code(getattr(v, "revel", None))
+    if policy == "alphamissense" or getattr(v, "revel", None) is None:
+        return am
+    if policy == "revel" or v.am is None:
+        return rv
+    if not am or not rv or am[:3] != rv[:3]:
+        return None  # one is neutral or they disagree
+    rank = CODE_RANK if am.startswith("PP3") else BP4_RANK
+    return min(am, rv, key=rank.get)
+
+
 def is_canonical_splice(v, gene):
     a = ann_for_gene(v, gene) if gene else (v.anns[0] if v.anns else None)
     return bool(a) and ("splice_acceptor_variant" in a[1] or "splice_donor_variant" in a[1])
@@ -374,7 +415,7 @@ def predictor_codes(v, gene):
     """PP3/BP4 from one calibrated missense predictor (AlphaMissense) and SpliceAI (Walker et al. 2023: max delta
     >= 0.2 PP3, <= 0.1 BP4, Supporting, outside the canonical +/-1,2 positions). The two PP3s are never summed: the
     stronger one is used. BP4 for a missense variant needs SpliceAI <= 0.1 (or no splice score)."""
-    am = am_code(v.am) if is_missense(v, gene) and v.am is not None else None
+    am = missense_code(v) if is_missense(v, gene) else None
     sp = None
     if v.sai is not None and not is_canonical_splice(v, gene):
         sp = "PP3_Supporting" if v.sai >= 0.2 else ("BP4_Supporting" if v.sai <= 0.1 else None)
@@ -400,6 +441,8 @@ def predictor_text(v):
     parts = []
     if v.am is not None:
         parts.append(f"AlphaMissense {v.am:.3f}")
+    if getattr(v, "revel", None) is not None:
+        parts.append(f"REVEL {v.revel:.3f}")
     if v.sai is not None:
         parts.append(f"SpliceAI {v.sai:.2f}")
     return ", ".join(parts)
@@ -422,10 +465,16 @@ def ann_for_gene(v, gene):
 
 
 def main_ann(v, gene):
-    """The gene's annotation on its principal transcript, approximated as the longest protein among the transcripts the
-    variant hits (SnpEff field AA.pos/AA.length; Ensembl canonical/MANE Select is the longest isoform for most genes).
-    SnpEff lists the most severe consequence first, often on a minor isoform; ACMG codes use this one instead.
-    Without protein lengths (intronic and splice-site hits) the most severe annotation is kept."""
+    """The gene's annotation on its principal transcript: MANE Select (then MANE Plus Clinical) when the MANE table is
+    loaded, otherwise the longest protein among the transcripts the variant hits (SnpEff field AA.pos/AA.length;
+    MANE Select is the longest isoform for most genes). SnpEff lists the most severe consequence first, often on a
+    minor isoform; ACMG codes use this one instead. Without protein lengths (intronic and splice-site hits) the most
+    severe annotation is kept."""
+    if MANE:
+        ranked = [(MANE_RANK.get((mane_of(a) or {}).get("status"), 0), -i, a) for i, a in enumerate(v.anns)
+                  if a[3] == gene]
+        if ranked and max(ranked)[0] > 0:
+            return max(ranked, key=lambda x: x[:2])[2]
     best, best_len = None, 0
     for a in v.anns:
         if a[3] != gene:
@@ -468,6 +517,380 @@ def stars_txt(n):
 
 
 # ------------------------------------------------------------------------------- knowledge bases
+# ------------------------------------------------------------------ transcripts (MANE) and genomic HGVS
+# RefSeq accessions of the GRCh38 chromosomes (HGVS genomic reference sequences)
+NC_GRCH38 = {**{str(i): f"NC_0000{i:02d}.{v}" for i, v in zip(range(1, 23), (
+    11, 12, 12, 12, 10, 12, 14, 11, 12, 11, 10, 12, 11, 9, 10, 10, 11, 10, 10, 11, 9, 11))},
+    "X": "NC_000023.11", "Y": "NC_000024.10", "MT": "NC_012920.1"}
+MANE = {}  # Ensembl transcript (no version) -> MANE record; set by build() from --mane
+MANE_RANK = {"MANE Select": 2, "MANE Plus Clinical": 1}
+
+
+def load_mane(path):
+    """MANE summary (MANE.GRCh38.v1.x.summary.txt.gz): ENST (unversioned) -> {enst, nm, ensp, np, status, gene}."""
+    out = {}
+    if not path:
+        return out
+    with opener(path) as f:
+        head = f.readline().lstrip("#").rstrip("\n").split("\t")
+        ix = {h: i for i, h in enumerate(head)}
+        need = ("symbol", "RefSeq_nuc", "RefSeq_prot", "Ensembl_nuc", "Ensembl_prot", "MANE_status")
+        if not all(k in ix for k in need):
+            raise SystemExit(f"--mane is not a MANE summary file (needs columns {need})")
+        for line in f:
+            t = line.rstrip("\n").split("\t")
+            if len(t) < len(head):
+                continue
+            out[t[ix["Ensembl_nuc"]].split(".")[0]] = {
+                "enst": t[ix["Ensembl_nuc"]], "nm": t[ix["RefSeq_nuc"]], "ensp": t[ix["Ensembl_prot"]],
+                "np": t[ix["RefSeq_prot"]], "status": t[ix["MANE_status"]], "gene": t[ix["symbol"]]}
+    return out
+
+
+def mane_of(a):
+    """MANE record of a SnpEff annotation's transcript, or None."""
+    return MANE.get(a[6].split(".")[0]) if a and len(a) > 6 and a[6] else None
+
+
+def refseq_names(v, a):
+    """'NM_...:c.X (NP_...:p.Y)' for an annotation on a MANE transcript. MANE pairs an Ensembl and a RefSeq transcript
+    of identical sequence, so the c./p. numbering carries over, provided SnpEff's transcript version is the paired one
+    (otherwise the RefSeq name is given with a note)."""
+    m = mane_of(a)
+    if not m or not a[9]:
+        return ""
+    s = f"{m['nm']}:{a[9]}" + (f" ({m['np']}:{a[10]})" if a[10] else "")
+    if a[6] != m["enst"]:
+        s += f" [MANE pairs {m['enst']}, SnpEff annotated {a[6]}: check the numbering]"
+    return s
+
+
+def apply_main_annotation(v):
+    """Show each variant on its gene's principal transcript (MANE Select where known), not on SnpEff's first one."""
+    if not v.anns:
+        return
+    a = main_ann(v, v.gene) or v.anns[0]
+    v.effect, v.impact, v.feature, v.hgvs_c, v.hgvs_p = a[1], a[2], a[6], a[9], a[10]
+    v.mane = (mane_of(a) or {}).get("status", "")
+    v.refseq = refseq_names(v, a)
+
+
+def other_transcript_lof(v):
+    """A flag when the variant truncates another transcript of the gene but not the principal one (PVS1 then does
+    not apply on the principal transcript; the exon may still matter if that isoform is expressed in the tissue)."""
+    a = main_ann(v, v.gene) if v.anns else None
+    if not a or any(e in a[1] for e in LOF_EFFECTS):
+        return ""
+    alt = [x for x in v.anns if x[3] == v.gene and x is not a and any(e in x[1] for e in LOF_EFFECTS)]
+    if not alt:
+        return ""
+    return (f"loss of function only on other transcripts ({alt[0][6]} {alt[0][1].split('&')[0]}"
+            + (f" +{len(alt) - 1}" if len(alt) > 1 else "") + f"); {a[1].split('&')[0]} on {a[6]}")
+
+
+def hgvs_g(v, ctx=None):
+    """HGVS genomic name on the RefSeq chromosome. Indels are shifted to their 3'-most position (HGVS rule; VCF
+    left-aligns them) and insertions of a copy of the adjacent sequence named dup, when the reference sequence around
+    the variant (ctx: (seq, offset of POS)) is known; otherwise the VCF position is used and the name says so."""
+    acc = NC_GRCH38.get(v.chrom, v.chrom)
+    ref, alt, pos = v.ref, v.alt, v.pos
+    while ref and alt and ref[0] == alt[0] and (len(ref) > 1 or len(alt) > 1):  # VCF anchor base(s)
+        ref, alt, pos = ref[1:], alt[1:], pos + 1
+    while len(ref) > 1 and len(alt) > 1 and ref[-1] == alt[-1]:
+        ref, alt = ref[:-1], alt[:-1]
+    if len(ref) == 1 and len(alt) == 1:
+        return f"{acc}:g.{pos}{ref}>{alt}"
+    seq, off = ctx if ctx else (None, None)
+    if seq is not None:
+        seq_pos = lambda i: v.pos - off + i  # genomic position of seq[i]  # noqa: E731
+        i = pos - (v.pos - off)  # index of the first changed base in seq
+    if not alt:  # deletion of ref
+        n = len(ref)
+        if seq is not None and seq[i:i + n] == ref:
+            while i + n < len(seq) and seq[i + n] == seq[i]:
+                i += 1
+            pos = seq_pos(i)
+        name = f"{pos}del" if n == 1 else f"{pos}_{pos + n - 1}del"
+        return f"{acc}:g.{name}" + ("" if seq is not None else " (not 3'-shifted)")
+    if not ref:  # insertion of alt after pos - 1
+        ins, n = alt, len(alt)
+        if seq is not None:
+            while i < len(seq) and seq[i] == ins[0]:
+                ins, i = ins[1:] + ins[0], i + 1
+            if i - n >= 0 and seq[i - n:i] == ins:
+                a, b = seq_pos(i - n), seq_pos(i - 1)
+                return f"{acc}:g.{a}dup" if n == 1 else f"{acc}:g.{a}_{b}dup"
+            return f"{acc}:g.{seq_pos(i - 1)}_{seq_pos(i)}ins{ins}"
+        return f"{acc}:g.{pos - 1}_{pos}ins{alt} (not 3'-shifted)"
+    end = pos + len(ref) - 1
+    return f"{acc}:g.{pos}_{end}delins{alt}" if end > pos else f"{acc}:g.{pos}delins{alt}"
+
+
+# ------------------------------------------------------------------ curated gene-disease knowledge
+CURATED = collections.defaultdict(list)  # gene -> rows of data/build_gene_disease.py; set by build() from --gene-disease
+VALIDITY_RANK = {"definitive": 6, "strong": 5, "moderate": 4, "assessed": 3, "limited": 2, "not yet assessed": 1,
+                 "supportive": 3, "disputed": -1, "refuted": -2, "no known disease relationship": -2}
+VALID_ENOUGH = 4  # moderate or better (ClinGen/G2P); Orphanet 'assessed' disease-causing associations count too
+MOI_NAME = {"AD": "autosomal dominant", "AR": "autosomal recessive", "XLD": "X-linked dominant",
+            "XLR": "X-linked recessive", "XL": "X-linked", "SD": "semidominant", "MT": "mitochondrial",
+            "YL": "Y-linked", "MF": "multifactorial"}
+MECH_NAME = {"LoF": "loss of function", "GoF": "gain of function", "DN": "dominant negative",
+             "non-LoF": "not loss of function", "undetermined": "undetermined"}
+
+
+def load_gene_disease(path):
+    """data/build_gene_disease.py output -> (gene -> [row dict], {source file: sha256})."""
+    out, sources = collections.defaultdict(list), {}
+    if not path:
+        return out, sources
+    with opener(path) as f:
+        head = None
+        for line in f:
+            t = line.rstrip("\r\n").split("\t")
+            if line.startswith("# source"):
+                sources[t[1]] = t[2] if len(t) > 2 else ""
+                continue
+            if head is None:
+                head = t
+                if "gene" not in head or "validity" not in head:
+                    raise SystemExit("--gene-disease is not a build_gene_disease.py table")
+                continue
+            r = dict(zip(head, t + [""] * (len(head) - len(t))))
+            r["mois"] = [m for m in r["moi"].split(",") if m]
+            out[r["gene"]].append(r)
+    return out, sources
+
+
+def curated_valid(r):
+    """Does this curated association establish a germline disease relationship?"""
+    if r["source"] == "Orphanet":
+        return r["validity"] == "assessed" and r["role"].startswith("Disease-causing germline")
+    return VALIDITY_RANK.get(r["validity"], 0) >= VALID_ENOUGH
+
+
+def curated_moi(gene):
+    """Modes of inheritance of the gene's established curated diseases, in gene_moi's terms (AD, AR, XL, MT)."""
+    out = set()
+    for r in CURATED.get(gene, ()):
+        if not curated_valid(r) or (r["source"] == "Orphanet" and len(r["mois"]) > 1):
+            continue  # Orphanet gives the inheritance of a disease group, not of this gene, when it lists several
+        for m in r["mois"]:
+            out.add({"XLD": "XL", "XLR": "XL", "SD": "AD"}.get(m, m) if m in ("AD", "AR", "XLD", "XLR", "XL", "SD", "MT")
+                    else "")
+    out.discard("")
+    return out
+
+
+def curated_mechanisms(gene):
+    """Molecular mechanisms of the gene's established curated diseases: set of LoF, GoF, DN, ..."""
+    return {r["mechanism"] for r in CURATED.get(gene, ()) if curated_valid(r) and r["mechanism"]}
+
+
+def lof_not_mechanism(gene):
+    """True when the curated diseases name only gain-of-function or dominant-negative mechanisms: PVS1 does not apply
+    (Abou Tayoun et al. 2018, first step: is LoF a known mechanism of the disease?)."""
+    m = curated_mechanisms(gene) - {"undetermined"}
+    return bool(m) and "LoF" not in m
+
+
+def genotype_fit(moi, vs, sex, second_note=""):
+    """How the patient's genotype at the gene fits one disease's inheritance: (verdict, text). vs: the reported variants
+    of the gene; second_note: what is known about a second allele (phase)."""
+    het = [v for v in vs if v.zyg == "het"]
+    hom = [v for v in vs if v.zyg == "hom"]
+    x = any(v.chrom == "X" and not any(a <= v.pos <= b for a, b in PAR_GRCH38) for v in vs)
+    if not moi:
+        return "unknown", "inheritance not curated"
+    out = []
+    for m in moi:
+        if m in ("AD", "SD", "XLD") or (m == "XL" and not x):
+            out.append(("fits", f"{MOI_NAME[m]}: one allele suffices (penetrance may be incomplete)"))
+        elif m in ("XLR", "XL"):
+            if sex == "male" and x:
+                out.append(("fits", f"{MOI_NAME[m]}: hemizygous male"))
+            elif hom:
+                out.append(("fits", f"{MOI_NAME[m]}: homozygous female"))
+            elif sex == "female":
+                out.append(("carrier", f"{MOI_NAME[m]}: heterozygous female, usually an unaffected or mildly affected "
+                                       "carrier (skewed X-inactivation)"))
+            else:
+                out.append(("unknown", f"{MOI_NAME[m]}: sex unknown"))
+        elif m == "AR":
+            if hom:
+                out.append(("fits", "autosomal recessive: homozygous"))
+            elif len(het) >= 2:
+                ok = "cis" not in second_note
+                out.append(("fits" if ok else "carrier", "autosomal recessive: two alleles"
+                            + (f" ({second_note})" if second_note else " (phase unknown)")))
+            else:
+                out.append(("carrier", "autosomal recessive: one allele found (carrier unless a second allele was "
+                                       "missed: deletion, deep-intronic or uncovered exon)"))
+        elif m == "MT":
+            out.append(("unknown", "mitochondrial: nuclear variant not applicable"))
+        elif m == "MF":
+            out.append(("unknown", "multifactorial: a contributing allele at most"))
+        else:
+            out.append(("unknown", MOI_NAME.get(m, m)))
+    rank = {"fits": 2, "carrier": 1, "unknown": 0}
+    best = max(out, key=lambda o: rank[o[0]])
+    return best[0], "; ".join(dict.fromkeys(t for _v, t in out))
+
+
+def disease_phenotype(r, pheno):
+    """Patient HPO terms matching the curated disease: through the HPO disease annotations of its ORPHA/OMIM id (with
+    the ontology propagation of phenotype_to_genes), or G2P's own phenotype list (exact terms)."""
+    ids = [r["disease_id"]] + ([r["xref"]] if r.get("xref") else [])
+    for d in ids:
+        if d in pheno.disease_terms:
+            return sorted(pheno.disease_terms[d]), "HPO annotation"
+    exact = sorted(set(r["hpo"].split(";")) & pheno.terms) if r.get("hpo") else []
+    return exact, ("G2P phenotypes" if exact else "")
+
+
+def curated_rows_sorted(gene):
+    """Gene's curated rows: established ones first, then by validity and source."""
+    src = {"ClinGen": 0, "G2P": 1, "Orphanet": 2}
+    return sorted(CURATED.get(gene, ()), key=lambda r: (not curated_valid(r), -VALIDITY_RANK.get(r["validity"], 0),
+                                                         src.get(r["source"], 3), r["disease"]))
+
+
+# ------------------------------------------------------------------ ClinGen expert panel (VCEP) rules and classifications
+VCEP = collections.defaultdict(list)  # gene -> specifications; set by build() from --vcep-rules
+EREPO = {}  # genomic HGVS -> [expert classification]; set by build() from --erepo
+VCEP_NOTES = {}  # (variant key, gene) -> what the panel's rules changed (filled by acmg_evidence)
+STRENGTH_OF = {"supporting": "Supporting", "moderate": "Moderate", "strong": "Strong", "verystrong": "Very Strong"}
+STRENGTH_ORDER = ["Supporting", "Moderate", "Strong", "Very Strong"]
+SUFFIX_OF = {"Supporting": "Supporting", "Moderate": "Moderate", "Strong": "Strong", "Very Strong": "VeryStrong"}
+
+
+def load_vcep_rules(path):
+    """data/build_vcep.py rules -> (gene -> [{spec, version, panel, codes: {code: set(strengths)}, freq: {code: x}}],
+    source)."""
+    out, src = collections.defaultdict(list), ""
+    if not path:
+        return out, src
+    specs = {}
+    with opener(path) as f:
+        head = None
+        for line in f:
+            t = line.rstrip("\r\n").split("\t")
+            if line.startswith("# source"):
+                src = t[1] + (" " + t[2] if len(t) > 2 else "")
+                continue
+            if head is None:
+                head = t
+                continue
+            r = dict(zip(head, t + [""] * (len(head) - len(t))))
+            k = (r["gene"], r["spec"])
+            if k not in specs:
+                specs[k] = {"spec": r["spec"], "version": r["version"], "panel": r["panel"], "codes": {}, "freq": {}}
+                out[r["gene"]].append(specs[k])
+            specs[k]["codes"][r["code"]] = {s for s in r["applicable"].split(";") if s}
+            if r["value"]:
+                specs[k]["freq"][r["code"]] = float(r["value"])
+    return out, src
+
+
+def load_erepo(path):
+    """data/build_vcep.py ERepo table -> genomic HGVS -> [row dict]."""
+    out = collections.defaultdict(list)
+    if not path:
+        return out
+    with opener(path) as f:
+        head = None
+        for line in f:
+            if line.startswith("#"):
+                continue
+            t = line.rstrip("\r\n").split("\t")
+            if head is None:
+                head = t
+                continue
+            r = dict(zip(head, t + [""] * (len(head) - len(t))))
+            out[r["hgvs_g"]].append(r)
+    return out
+
+
+def code_strength(code):
+    """'PM2_supporting' -> ('PM2', 'Supporting'); 'PVS1' -> ('PVS1', 'Very Strong'); 'BA1' -> ('BA1', 'Stand Alone')."""
+    base, _, s = code.partition("_")
+    if base == "BA1":
+        return base, "Stand Alone"
+    if not s:
+        s = DEFAULT_STRENGTH["PVS" if base.startswith("PVS") else base[:-1]]
+    return base, STRENGTH_OF[s.lower().replace("_", "")]
+
+
+def vcep_frequency(gene):
+    """The panel cut-offs for the gene, combined conservatively across its specifications (BA1 and BS1 the highest,
+    PM2 the lowest): {code: fraction}."""
+    out = {}
+    for sp in VCEP.get(gene, ()):
+        for c, x in sp["freq"].items():
+            out[c] = (min if c == "PM2" else max)(out.get(c, x), x)
+    return out
+
+
+def vcep_adjust(gene, codes, p, ba1_exception=False):
+    """Apply the gene's ClinGen VCEP specifications to automated codes: the panel's frequency cut-offs replace the
+    default BA1/BS1/PM2 rules, codes the panel does not use for the gene are removed, and codes stronger than the panel
+    allows are reduced to the strongest allowed level (never raised). Returns (codes, notes)."""
+    specs = VCEP.get(gene)
+    if not specs:
+        return codes, []
+    notes = []
+    fq = vcep_frequency(gene)
+    out = [c for c in codes if not (c.split("_")[0] in fq and c.split("_")[0] in ("BA1", "BS1", "PM2"))]
+    if fq:
+        if "BA1" in fq and p is not None and p >= fq["BA1"] and not ba1_exception:
+            out.append("BA1")
+        elif "BS1" in fq and p is not None and p >= fq["BS1"] and not ba1_exception:
+            out.append("BS1")
+        if "PM2" in fq and (p is None or p < fq["PM2"]):
+            out.append("PM2_supporting")
+        if {"BA1", "BS1"} & set(out):  # too common for the disease: not rare as well
+            out = [c for c in out if not c.startswith("PM2")]
+        before = {c.split("_")[0] for c in codes} & {"BA1", "BS1", "PM2"}
+        after = {c.split("_")[0] for c in out} & {"BA1", "BS1", "PM2"}
+        if before != after:
+            notes.append("frequency cut-offs " + ", ".join(f"{c} {fmt_af(x)}" for c, x in sorted(fq.items()))
+                         + f": {','.join(sorted(before)) or 'none'} -> {','.join(sorted(after)) or 'none'}")
+    final = []
+    for c in out:
+        base, st = code_strength(c)
+        allowed = [s for sp in specs if base in sp["codes"] for s in sp["codes"][base]]
+        if not any(base in sp["codes"] for sp in specs):
+            final.append(c)  # code not covered by the specification
+        elif not allowed:
+            notes.append(f"{c} not used for {gene}")
+        elif st in allowed or st == "Stand Alone":
+            final.append(c)
+        else:
+            lower = [s for s in STRENGTH_ORDER[:STRENGTH_ORDER.index(st)] if s in allowed] if st in STRENGTH_ORDER else []
+            if lower:
+                nc = f"{base}_{SUFFIX_OF[lower[-1]]}"
+                final.append(nc)
+                notes.append(f"{c} -> {nc}")
+            else:
+                notes.append(f"{c} not allowed at this strength for {gene}")
+    return final, notes
+
+
+def vcep_label(gene):
+    return "; ".join(f"{sp['panel']} v{sp['version']} ({sp['spec']})" for sp in VCEP.get(gene, ()))
+
+
+def erepo_cell(v):
+    """The ClinGen expert panel's own classification of this exact variant, if any (matched by genomic HGVS)."""
+    rs = EREPO.get(v.hgvs_g.split(" ")[0]) if v.hgvs_g else None
+    if not rs:
+        return ""
+    return "<br>" + "<br>".join(
+        tag(f"ClinGen {r['panel']}: {r['assertion']}", "t-red" if "athogenic" in r["assertion"] else
+            ("t-grn" if "enign" in r["assertion"] else "t-amb"))
+        + f"<span class='small'> {esc(r['disease'])} ({esc(r['approved'])}); met {esc(r['met'].replace(',', ', '))}"
+        + (f" <a href='{esc(r['link'])}'>ERepo</a>" if r["link"] else "") + "</span>" for r in rs[:2])
+
+
 def load_gencc(path):
     """gene -> list of (disease, moi, classification, submitter)."""
     genes = collections.defaultdict(list)
@@ -1092,6 +1515,8 @@ def lof_mechanism(gene, moi, constraint, dosage):
     """Is loss of function a known disease mechanism? Recessive or X-linked inheritance, ClinGen haploinsufficiency
     score 3 or 2, or a LoF-intolerant gene (LOEUF < 0.6) unless ClinGen scores haploinsufficiency as unlikely (40)."""
     hi = dosage.get(gene, (None, None))[0]
+    if hi != 3 and lof_not_mechanism(gene):
+        return False  # curated diseases are gain-of-function / dominant-negative only (G2P, Orphanet)
     if "AR" in moi or "XL" in moi or hi in (2, 3):
         return True
     loeuf = constraint.get(gene, (None, None, None))[0]
@@ -1180,6 +1605,9 @@ def acmg_evidence(v, gene, moi, constraint, hpo_hit, max_af, dosage=None, protei
         codes += pc
     if hpo_hit:
         codes.append("PP4")
+    if VCEP.get(gene):
+        codes, notes = vcep_adjust(gene, codes, p, (gene, a[9]) in BA1_EXCEPTIONS)
+        VCEP_NOTES[(v.key(), gene)] = notes
     return codes
 
 
@@ -1259,6 +1687,12 @@ padding:4px 6px;vertical-align:top;text-align:left}th{background:#eef2f7}tr:nth-
 .t-red{background:#f6d3d1}.t-amb{background:#fbe7bf}.t-grn{background:#d7eed7}.t-blu{background:#d6e6f7}
 .none{color:#5b6576;font-style:italic}.small{font-size:.84em;color:#5b6576}code{font-size:.92em}
 ul.kv{list-style:none;padding:0;columns:2}ul.kv li{margin:2px 0}
+@page{size:A4;margin:14mm 12mm 16mm;@bottom-right{content:"page " counter(page) " of " counter(pages);
+font-size:8pt;color:#5b6576}}
+@media print{body{max-width:none;margin:0;padding:0;font-size:9pt}h2{break-after:avoid;margin-top:1.2em}
+h3{break-after:avoid}table{font-size:8pt}tr,.box{break-inside:avoid}thead{display:table-header-group}
+a{color:inherit;text-decoration:none}.tag,th,tr:nth-child(even) td,.box{-webkit-print-color-adjust:exact;
+print-color-adjust:exact}}
 """
 
 
@@ -1273,7 +1707,12 @@ def var_cell(v):
     s += f'<br><span class="small">{esc(v.chrom)}:{v.pos} {esc(v.ref)}&gt;{esc(v.alt)}'
     if v.rs:
         s += f" {esc(v.rs)}"
-    s += f"<br>{esc(v.feature)}</span>"
+    s += f"<br>{esc(v.feature)}" + (f" ({esc(v.mane)})" if v.mane else "")
+    if v.refseq:
+        s += f"<br>{esc(v.refseq)}"
+    if v.hgvs_g:
+        s += f"<br>{esc(v.hgvs_g)}"
+    s += "</span>"
     return s
 
 
@@ -1324,10 +1763,11 @@ def call_cell(v, sex):
 
 def clinvar_cell(v):
     if not v.clnsig:
-        return '<span class="small">not in ClinVar</span>'
+        return '<span class="small">not in ClinVar</span>' + erepo_cell(v)
     s = esc(v.clnsig.replace("_", " ").replace("|", "; "))
     if v.revstat:
         s += f"<br><span class='small'>{stars_txt(v.stars)} {esc(v.revstat.replace('_', ' ').replace('|', ', '))}</span>"
+    s += erepo_cell(v)
     if v.clndn:
         dn = [d for d in v.clndn.split("|") if d and d not in ("not provided", "not specified")]
         if dn:
@@ -2140,7 +2580,7 @@ def cnv_evidence(c, K, constraint, regions, origin):
 TSV_COLS = ["sample", "category", "gene", "chrom", "pos", "ref", "alt", "genotype", "depth", "alt_fraction", "hgvs_c",
             "hgvs_p", "effect", "gnomad_af", "gnomad_grpmax_af", "gnomad_faf95", "gnomad_nhomalt", "alphamissense",
             "spliceai", "clinvar", "clinvar_review", "clinvar_condition", "qc_flags", "confidence", "note",
-            "acmg_class", "acmg_points", "acmg_codes"]
+            "acmg_class", "acmg_points", "acmg_codes", "transcript", "hgvs_refseq", "hgvs_g"]
 # how much a finding matters when it appears, changes or disappears: 3 reported result, 2 needs review, 1 listed,
 # 0 not compared (low-confidence CNVs are mostly artefacts and change with every panel)
 CHANGE_TIER = {"diagnostic": 3, "acmg_sf_reportable": 3, "de_novo": 3, "upd": 3, "cnv_pathogenic": 3,
@@ -2210,6 +2650,18 @@ def knowledge_releases(args, vcf_path):
                     m = re.match(r"#(\d{1,2} \w+, ?\d{4})\s*$", line)
                     if m:
                         rel[key] = m.group(1)
+    if getattr(args, "mane", None):
+        m = re.search(r"v\d+\.\d+", os.path.basename(args.mane))
+        rel["mane"] = m.group(0) if m else os.path.basename(args.mane)
+    if getattr(args, "vcep_rules", None):
+        rel["vcep_rules"] = load_vcep_rules(args.vcep_rules)[1][:80]
+    if getattr(args, "erepo", None):
+        with opener(args.erepo) as f:
+            first = f.readline().rstrip("\n").split("\t")
+        rel["erepo"] = " ".join(first[1:3])[:80] if first[0] == "# source" else os.path.basename(args.erepo)
+    if getattr(args, "gene_disease", None):
+        _gd, src = load_gene_disease(args.gene_disease)
+        rel["gene_disease"] = "; ".join(f"{k} {v.replace('sha256:', '')[:12]}" for k, v in src.items())
     if args.gencc:
         with opener(args.gencc) as f:
             header = [h.strip('"') for h in f.readline().rstrip("\n").split("\t")]
@@ -2495,6 +2947,19 @@ def build(args):
     dosage = load_dosage(args.clingen_dosage)
     cvp = load_clinvar_protein(args.clinvar_protein)
     K = Knowledge(gencc, load_gencc_disputed(args.gencc), pheno, hpoa, dosage)
+    MANE.clear()
+    MANE.update(load_mane(args.mane))
+    gd, gd_sources = load_gene_disease(args.gene_disease)
+    CURATED.clear()
+    CURATED.update(gd)
+    for v in variants:
+        apply_main_annotation(v)
+    vr, vcep_src = load_vcep_rules(args.vcep_rules)
+    VCEP.clear()
+    VCEP.update(vr)
+    VCEP_NOTES.clear()
+    EREPO.clear()
+    EREPO.update(load_erepo(args.erepo))
     roh = load_roh(args.roh)
     target_cov = load_thresholds(args.target_coverage)
     gene_cov_rows = load_thresholds(args.gene_coverage)
@@ -2558,6 +3023,10 @@ def build(args):
     n_artefact = 0
     for v in variants:
         v.flags = variant_flags(v)
+        if MANE:
+            o = other_transcript_lof(v)
+            if o:
+                v.flags.append(o)
         v.artefact = artefacts.get((v.chrom, v.pos, v.ref, v.alt))
         if v.artefact:
             n_artefact += 1
@@ -2624,7 +3093,7 @@ def build(args):
         return True, phase_text(p) if p else "phase unknown"
 
     def moi_of(g):
-        m = gene_moi(gencc.get(g, []))
+        m = gene_moi(gencc.get(g, [])) | curated_moi(g)
         if not m and g in ACMG_SF:
             m = {"AR"} if ACMG_SF[g] in ("biallelic", "hfe") else ({"XL"} if ACMG_SF[g] == "xl" else {"AD"})
         if not m and v_chrom_of_gene.get(g) == "X":
@@ -2732,6 +3201,10 @@ def build(args):
         o = origin(v)[0] if trio else None
         ev, _pn, cls, pts = classify(v, g, dn_codes(v, o, g))
         s = clinvar_cell(v) + "<br><span class='small'>automated: </span>" + acmg_tag(cls, pts)
+        if VCEP.get(g):
+            nt = VCEP_NOTES.get((v.key(), g), [])
+            s += (f"<br><span class='small'>ClinGen VCEP rules: {esc(vcep_label(g))}"
+                  + (": " + esc("; ".join(nt)) if nt else ": no change to the default codes") + "</span>")
         if "benign" in cls and "BA1" not in cls:
             s += "<br><span class='small'>disagrees with ClinVar: " + esc(",".join(ev)) + "</span>"
         return s
@@ -2747,7 +3220,7 @@ def build(args):
         for g in genes_of(v)[:3]:
             if g in gencc or g in ACMG_SF:
                 if (is_lof(v, g) or (is_missense(v, g) and hpo_match.get(g))
-                        or (is_missense(v, g) and CODE_RANK.get(am_code(v.am), 0) >= 2)
+                        or (is_missense(v, g) and CODE_RANK.get(missense_code(v), 0) >= 2)
                         or splice_candidate(v, g, bool(hpo_match.get(g)))
                         or {"PS1", "PM5"} & set(protein_evidence(v, g, cvp)[0])):
                     rare_by_gene[g].append(v)
@@ -3039,6 +3512,13 @@ def build(args):
         g[1] += th.get("20X", 0)
         g[2] += th.get("10X", 0)
 
+    # genomic HGVS names of the variants a table may show (indels 3'-shifted on the reference)
+    shown_g = [v for v in variants if v.clnsig or freq(v) is None or freq(v) <= 0.05]
+    gctx = reference_contexts(args.reference, prefix, [v for v in shown_g if len(v.ref) != 1 or len(v.alt) != 1],
+                              flank=100) if args.reference else {}
+    for v in shown_g:
+        v.hgvs_g = hgvs_g(v, gctx.get(v.key()))
+
     # ================================================================ HTML
     R.h(f"<!doctype html><html><head><meta charset='utf-8'><title>Exome report: {esc(sample)}</title>"
         f"<style>{CSS}</style></head><body>")
@@ -3151,7 +3631,7 @@ def build(args):
         warn.append("Many heterozygous calls with low alt fraction: possible sample contamination or mosaicism.")
     if qc.get("pct_20X") is not None and qc["pct_20X"] < 90:
         warn.append(f"Only {qc['pct_20X']:.0f}% of target bases reach 20x (clinical exomes usually require >= 90-95%): "
-                    "absence of findings is not reliable in poorly covered genes (see section 10).")
+                    "absence of findings is not reliable in poorly covered genes (see section 11).")
     if warn:
         R.h("<div class='box warn'>" + "<br>".join(esc(w) for w in warn) + "</div>")
 
@@ -3191,7 +3671,7 @@ def build(args):
         + (" and rare missense variants at a residue where ClinVar has a pathogenic missense variant (PS1/PM5)" if cvp else "")
         + ". Each variant gets an automated ACMG/AMP class from the evidence codes a VCF supports, combined by the "
         "point system (pathogenic &ge; 10 points, likely pathogenic 6-9, uncertain 0-5, likely benign -1 to -6, benign "
-        "&le; -7; methods in section 11). It is a draft for the analyst: segregation, functional, case-count and "
+        "&le; -7; methods in section 12). It is a draft for the analyst: segregation, functional, case-count and "
         "literature evidence are missing, and PM3/PP4/PS2 depend on the phenotype terms given. Rows are ranked by "
         "phenotype match, inheritance fit and variant consequence, then by points.</p>")
     rows = []
@@ -3569,8 +4049,82 @@ def build(args):
             R.table(["Chromosome", "Region", "Both copies from", "Type", "Evidence", "Imprinting disorder", "Notes"],
                     rows)
 
+    # ---------------------------------------------------------------- disease context of the reported genes
+    R.h("<h2>10. Disease context of the reported genes</h2>")
+    ctx_cats = ("diagnostic", "pathogenic_review", "candidate", "candidate_inheritance_not_met", "de_novo",
+                "de_novo_possible", "carrier")
+    ctx_genes = collections.OrderedDict()
+    for cat, v, _n in R.rows:
+        if v is not None and (cat in ctx_cats or cat.startswith("acmg_sf_")) and v.gene:
+            ctx_genes.setdefault(v.gene, collections.OrderedDict())[v.key()] = v
+    if not CURATED:
+        R.h("<p class='none'>No curated gene-disease table given (ClinGen gene-disease validity, Gene2Phenotype, "
+            "Orphanet; data/build_gene_disease.py): the gene cells above show GenCC only.</p>")
+    elif not ctx_genes:
+        R.h("<p class='none'>No reported genes.</p>")
+    else:
+        R.h("<p class='small'>Every disease that ClinGen, Gene2Phenotype (G2P) or Orphanet links to a gene with a finding, "
+            "with the curators' validity, inheritance and disease mechanism, and how this patient's genotype fits each "
+            "disease's inheritance (zygosity, sex, second allele and its phase). The ClinVar condition of a variant and "
+            "these gene-level diseases are different statements: a variant is pathogenic for the condition its "
+            "submitters name, which may be only one of the gene's diseases. Patient phenotype: the patient's HPO terms "
+            "annotated to the disease (directly or through a more specific term). Established: ClinGen/G2P moderate or "
+            "stronger, Orphanet assessed disease-causing.</p>")
+        fit_tag = {"fits": "t-red", "carrier": "t-blu", "unknown": "t-amb"}
+        for g, vd in ctx_genes.items():
+            vs = list(vd.values())
+            note2 = ""
+            if len([v for v in vs if v.zyg == "het"]) >= 2:
+                note2 = second_allele(vs[0], vs)[1]
+            rows_g = curated_rows_sorted(g)
+            est = [r for r in rows_g if curated_valid(r)]
+            mech = curated_mechanisms(g) - {"undetermined"}
+            mois = {m for r in est for m in r["mois"] if not (r["source"] == "Orphanet" and len(r["mois"]) > 1)}
+            head = (f"<h3>{esc(g)}</h3><p class='small'>"
+                    + "; ".join(esc(f"{v.hgvs_p or v.hgvs_c} ({v.zyg})") for v in vs)
+                    + (f" &middot; disease mechanism: {esc(', '.join(MECH_NAME.get(m, m) for m in sorted(mech)))}"
+                       if mech else "")
+                    + (" &middot; " + tag("loss of function is not a curated mechanism: PVS1 not applied", "t-amb")
+                       if lof_not_mechanism(g) and any(is_lof(v, g) for v in vs) else "")
+                    + (" &middot; " + tag("curators disagree on inheritance: " + ", ".join(sorted(mois)), "t-amb")
+                       if len({"AR"} & mois) and len({"AD", "XLD", "SD"} & mois) else "")
+                    + "</p>")
+            R.h(head)
+            if not rows_g:
+                R.h("<p class='none'>No ClinGen, G2P or Orphanet association.</p>")
+                continue
+            shown, rows = rows_g[:10], []
+            for r in shown:
+                fit, txt = genotype_fit(r["mois"], vs, sex, note2)
+                terms, how = disease_phenotype(r, pheno) if hpo_terms else ([], "")
+                did = r["disease_id"]
+                url = (f"https://monarchinitiative.org/{did}" if did.startswith("MONDO:") else
+                       f"https://www.orpha.net/en/disease/detail/{did[6:]}" if did.startswith("ORPHA:") else "")
+                src_url = (r["ref"] if r["ref"].startswith("http") else
+                           f"https://www.ebi.ac.uk/gene2phenotype/lgd/{r['ref']}" if r["ref"].startswith("G2P") else url)
+                rows.append([
+                    f"<b>{esc(r['disease'])}</b><br><span class='small'>"
+                    + (f"<a href='{esc(url)}'>{esc(did)}</a>" if url else esc(did))
+                    + (f"; onset {esc(r['onset'])}" if r.get("onset") else "") + "</span>",
+                    (f"<a href='{esc(src_url)}'>{esc(r['source'])}</a>" if src_url else esc(r["source"]))
+                    + f"<br>{tag(r['validity'] or 'n/a', 't-grn' if curated_valid(r) else 't-amb')}",
+                    esc(", ".join(MOI_NAME.get(m, m) for m in r["mois"]) or "not given"),
+                    esc(MECH_NAME.get(r["mechanism"], r["mechanism"]) or "")
+                    + (f"<br><span class='small'>{esc(r['role'])}</span>" if r.get("role") else ""),
+                    tag(fit, fit_tag[fit]) + f"<br><span class='small'>{esc(txt)}</span>",
+                    (", ".join(esc(f"{t} {pheno.names.get(t, '')}".strip()) for t in terms)
+                     + f"<br><span class='small'>{esc(how)}</span>") if terms else
+                    ("<span class='small'>none of the patient's terms</span>" if hpo_terms else
+                     "<span class='small'>no HPO terms given</span>")])
+            R.table(["Disease", "Source, validity", "Inheritance", "Mechanism / role", "Genotype fit",
+                     "Patient phenotype"], rows)
+            if len(rows_g) > len(shown):
+                R.h(f"<p class='small'>{len(rows_g) - len(shown)} further associations "
+                    f"({sum(not curated_valid(r) for r in rows_g[len(shown):])} not established) are in the source "
+                    "table.</p>")
+
     # coverage
-    R.h("<h2>10. Coverage of clinically relevant genes</h2>")
+    R.h("<h2>11. Coverage of clinically relevant genes</h2>")
     if gene_cov:
         rel = set(ACMG_SF) | set(pgx) | set(g for g in hpo_match) | {v.gene for v, _ in diag}
         rows = []
@@ -3590,7 +4144,7 @@ def build(args):
             "cannot be distinguished from missing coverage.</p>")
 
     # methods & limits
-    R.h("<h2>11. Methods, data sources and limitations</h2><ul>")
+    R.h("<h2>12. Methods, data sources and limitations</h2><ul>")
     R.h("<li>Variant annotation: SnpEff (consequence, HGVS), ClinVar (clinical significance and review status), "
         "gnomAD (population allele frequency) as provided to the workflow.</li>")
     R.h("<li>Frequency rules use the higher of the overall gnomAD allele frequency and the highest filtering allele "
@@ -3605,6 +4159,33 @@ def build(args):
         f"dosage sensitivity: ClinGen ({'loaded, ' + str(len(dosage)) + ' genes' if dosage else 'not provided'}); "
         f"phenotype: HPO phenotype_to_genes ({'loaded' if args.hpo_genes else 'not provided'}) and disease annotations "
         f"({'loaded, ' + str(len(hpoa)) + ' diseases' if hpoa else 'not provided'}).</li>")
+    if MANE:
+        R.h(f"<li>Transcripts: variants are named and classified on the MANE Select transcript of the gene (MANE Plus "
+            f"Clinical where it is the only MANE transcript hit; {len(MANE):,} MANE transcripts, release "
+            f"{esc(os.path.basename(args.mane))}); the RefSeq NM_/NP_ name is the MANE pair, "
+            "identical in sequence, so c./p. numbering is the same. Genomic names are on the RefSeq chromosome, indels "
+            "3'-shifted (HGVS). Variants that truncate only a non-MANE isoform are flagged and do not get PVS1.</li>")
+    else:
+        R.h("<li>Transcripts: no MANE table given; the principal transcript is approximated as the longest protein "
+            "among those hit, and only Ensembl names are shown.</li>")
+    if CURATED:
+        R.h(f"<li>Curated gene-disease associations ({len(CURATED):,} genes; "
+            + esc("; ".join(f"{k}" for k in gd_sources)) + "): ClinGen gene-disease validity, Gene2Phenotype (G2P) and "
+            "Orphanet. Their inheritance (moderate or stronger; Orphanet only where one mode is given for the disease) "
+            "adds to GenCC's, and loss of function is not taken as a mechanism (no PVS1) where the curated diseases "
+            "name only gain-of-function or dominant-negative mechanisms and ClinGen does not score haploinsufficiency "
+            "3. Section 10 lists each disease of a reported gene with the patient's genotype fit.</li>")
+    if VCEP:
+        R.h(f"<li>ClinGen expert-panel (VCEP) specifications for {len(VCEP)} genes ({esc(vcep_src)}): the panel's "
+            "allele-frequency cut-offs replace the default BA1/BS1/PM2 rules (taken from the panel's text by "
+            "data/build_vcep.py; several specifications of a gene are combined conservatively), codes the panel does "
+            "not use for the gene are removed (e.g. PVS1 for gain-of-function genes, PP2, PM1 outside defined "
+            "domains), and codes stronger than the panel allows are reduced. Panel rules that need data a VCF lacks "
+            "(functional domains, case counts, segregation) are not applied; the automated class says which rules "
+            "changed it.</li>")
+    if EREPO:
+        R.h(f"<li>ClinGen Evidence Repository: {sum(len(x) for x in EREPO.values()):,} expert-panel classifications "
+            "matched by genomic HGVS name and shown with their met criteria next to ClinVar.</li>")
     R.h("<li>Loss of function counts as a disease mechanism (PVS1, and a LoF candidate in a dominant gene) for recessive "
         "or X-linked genes, ClinGen haploinsufficiency score 3 or 2, or LOEUF &lt; 0.6 unless ClinGen scores "
         "haploinsufficiency as unlikely (Abou Tayoun et al. 2018; Riggs et al. 2020).</li>")
@@ -3687,8 +4268,9 @@ def build(args):
         "and pseudogene regions (e.g. SMN1/SMN2, CYP21A2, PMS2 exons 11-15, GBA1), and genes or exons with low coverage. "
         "A negative report does not exclude a genetic diagnosis.</li>")
     R.h("<li>The automated ACMG/AMP class uses only the evidence a VCF and the knowledge files support. Functional "
-        "studies (PS3/BS3), case counts (PS4), segregation (PP1/BS4), an alternative cause (BP5), gene-specific "
-        "ClinGen VCEP rules and the literature are not used, so a variant can move by several points on manual "
+        "studies (PS3/BS3), case counts (PS4), segregation (PP1/BS4), an alternative cause (BP5)"
+        + (", the parts of ClinGen VCEP rules that need such data" if VCEP else ", gene-specific ClinGen VCEP rules")
+        + " and the literature are not used, so a variant can move by several points on manual "
         "review; a likely pathogenic or pathogenic class needs that review before it is reported.</li>")
     R.h("<li>ClinVar classifications change: findings should be re-evaluated against the current ClinVar release "
         "before reporting, and the data periodically reanalysed.</li>")
@@ -3696,7 +4278,14 @@ def build(args):
         R.h("<li>The comparison with a previous report sees only what that report listed: a variant that was "
             "called but not listed before shows as new without its earlier state.</li>")
     R.h("</ul>")
-    R.meta = {"wes_clinical_report": VERSION, "date": today, "sample": sample}
+    prov, fingerprint = provenance(args)
+    R.h("<h3>Input provenance</h3><p class='small'>SHA-256 of every input file (reads and reference: size only). "
+        "The fingerprint hashes this script and all inputs: two reports with the same fingerprint were made from the "
+        f"same data by the same rules. Fingerprint <code>{fingerprint}</code>.</p>")
+    R.table(["Input", "File", "Size", "SHA-256"],
+            [[esc(k), esc(name), f"{size:,}", f"<code>{esc(h[:16])}</code>" if h else "not hashed"]
+             for k, name, size, h in prov])
+    R.meta = {"wes_clinical_report": VERSION, "date": today, "sample": sample, "fingerprint": fingerprint}
     R.meta.update(knowledge_releases(args, args.vcf))
     if args.previous_tsv:
         prev_meta, prev_rows = load_previous(args.previous_tsv)
@@ -3719,11 +4308,11 @@ def tsv_records(R, sample):
             genes, genotype, txt, (chrom, start, end) = note
             out.append([sample, cat, genes, chrom, str(start), "", f"<{genotype.split()[0]}>", genotype]
                        + [""] * 15 + [txt.split("; ")[2] if txt.count("; ") >= 2 else "",
-                                      txt.replace("\t", " ") + f"; end {end}", "", "", ""])
+                                      txt.replace("\t", " ") + f"; end {end}", "", "", "", "", "", ""])
             continue
         if v is None:  # gene-level result: (gene, genotype, phenotype)
             gene, genotype, pheno = note
-            out.append([sample, cat, gene, "", "", "", "", genotype] + [""] * 16 + [pheno, "", "", ""])
+            out.append([sample, cat, gene, "", "", "", "", genotype] + [""] * 16 + [pheno, "", "", "", "", "", ""])
             continue
         lc = low_confidence(v)
         out.append([str(x) for x in (
@@ -3734,7 +4323,8 @@ def tsv_records(R, sample):
             f"{v.am:.3f}" if v.am is not None else "", f"{v.sai:.2f}" if v.sai is not None else "", v.clnsig,
             v.revstat, v.clndn, ";".join(v.flags), "low: " + ", ".join(lc) if lc else "high",
             note.replace("\t", " "))]
-            + ([acmg[id(v)][0], str(acmg[id(v)][1]), ",".join(acmg[id(v)][2])] if id(v) in acmg else ["", "", ""]))
+            + ([acmg[id(v)][0], str(acmg[id(v)][1]), ",".join(acmg[id(v)][2])] if id(v) in acmg else ["", "", ""])
+            + [v.feature, v.refseq, v.hgvs_g])
     return out
 
 
@@ -3745,15 +4335,43 @@ def change_records(changes, sample):
         r = c["row"]
         rec = [sample, "change_" + c["kind"]] + [r.get(k, "") for k in TSV_COLS[2:24]] \
             + [f"tier {c['tier']}; previous: {c['before']}; now: {c['now']}; {c['why']}".replace("\t", " "),
-               "", "", ""]
+               "", "", "", r.get("transcript", ""), r.get("hgvs_refseq", ""), r.get("hgvs_g", "")]
         out.append(rec)
     return out
+
+
+NOT_HASHED = ("bam", "mother_bam", "father_bam", "reference")  # large; recorded by size
+
+
+def sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            h.update(b)
+    return h.hexdigest()
+
+
+def provenance(args):
+    """[(argument, file name, size, sha256)] of the input files, and a fingerprint of the script and all inputs."""
+    rows, fp = [], hashlib.sha256()
+    fp.update(open(os.path.abspath(__file__), "rb").read())
+    for k, v in sorted(vars(args).items()):
+        if k in ("html", "tsv") or not isinstance(v, str) or not os.path.isfile(v):
+            continue
+        size = os.path.getsize(v)
+        h = "" if k in NOT_HASHED else sha256_file(v)
+        rows.append((k.replace("_", "-"), os.path.basename(v), size, h))
+        fp.update(f"{k}\t{size}\t{h}\n".encode())
+    for k, v in sorted(vars(args).items()):
+        if isinstance(v, (int, float)) and not isinstance(v, bool) or (isinstance(v, str) and not os.path.isfile(v)):
+            fp.update(f"{k}={v}\n".encode())  # parameters (HPO terms, cut-offs) are part of the result
+    return rows, fp.hexdigest()[:24]
 
 
 def write_tsv(R, path, sample):
     with open(path, "w") as f:
         f.write("\t".join(TSV_COLS) + "\n")
-        meta = [[sample, "report_meta", k] + [""] * 21 + [str(val), "", "", ""] for k, val in getattr(R, "meta", {}).items()]
+        meta = [[sample, "report_meta", k] + [""] * 21 + [str(val), "", "", "", "", "", ""] for k, val in getattr(R, "meta", {}).items()]
         for rec in meta + tsv_records(R, sample) + getattr(R, "change_rows", []):
             f.write("\t".join(rec) + "\n")
 
@@ -3791,6 +4409,14 @@ def main(argv=None):
     ap.add_argument("--reference", help="indexed reference FASTA: repeat context of reported variants (needs samtools)")
     ap.add_argument("--min-ref-depth", type=int, default=15,
                     help="reads needed to read an uncalled pharmacogenomic/risk position as reference")
+    ap.add_argument("--mane", help="MANE summary (MANE.GRCh38.v1.x.summary.txt.gz): variants named on MANE Select "
+                    "transcripts, with the paired RefSeq NM_/NP_ names")
+    ap.add_argument("--gene-disease", help="curated gene-disease table (data/build_gene_disease.py: ClinGen validity, "
+                    "Gene2Phenotype, Orphanet): inheritance, mechanism and the disease-context section")
+    ap.add_argument("--vcep-rules", help="ClinGen expert-panel criteria per gene (data/build_vcep.py from the CSpec "
+                    "registry): gene-specific frequency cut-offs, codes and strengths")
+    ap.add_argument("--erepo", help="ClinGen expert-panel classifications (data/build_vcep.py from the Evidence "
+                    "Repository), shown next to ClinVar")
     ap.add_argument("--previous-tsv", help="TSV output of an earlier report of the same sample: lists what changed")
     ap.add_argument("--previous-name", help="name of the earlier report shown in the comparison")
     ap.add_argument("--max-af", type=float, default=0.01, help="rare-variant cut-off, applied to the higher of gnomAD AF and grpmax FAF95")

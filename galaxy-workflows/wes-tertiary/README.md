@@ -216,6 +216,19 @@ benign (219,540 in the November 2026 release, 49 s, 4.3 MB) with their residue o
 it with datatype `tabular`. The HPO and ClinGen files are used as downloaded (HPO: free with attribution; ClinGen:
 free to use with attribution).
 
+The MANE summary is used as downloaded (`MANE.GRCh38.v1.5.summary.txt.gz`, 1.1 MB, public domain). The curated
+gene-disease table merges ClinGen gene-disease validity, Gene2Phenotype (all panels) and Orphanet (CC BY 4.0):
+```bash
+curl -sL -o clingen_gene_validity.csv https://search.clinicalgenome.org/kb/gene-validity/download
+curl -sLO https://ftp.ebi.ac.uk/pub/databases/gene2phenotype/G2P_data_downloads/2026_10_28/allG2P_2026-10-28.csv.gz
+curl -sLO https://www.orphadata.com/data/xml/en_product6.xml
+curl -sLO https://www.orphadata.com/data/xml/en_product9_ages.xml
+python3 data/build_gene_disease.py clingen_gene_validity.csv allG2P_2026-10-28.csv.gz en_product6.xml \
+    en_product9_ages.xml gene_disease.tsv
+```
+In November 2026: 15,530 associations of 5,272 genes (ClinGen 3,736, G2P 3,856, Orphanet 7,938), 1.3 s, 3.0 MB;
+the file header records the SHA-256 of each source. `install.sh data` does both.
+
 The recurrent-artefact list is built from the called VCFs of earlier samples sequenced with the same kit, sequencer
 and pipeline (the *Raw variant calls* of the FASTQ workflow), with the gnomAD extract above:
 ```bash

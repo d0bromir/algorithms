@@ -1,6 +1,6 @@
 class: GalaxyWorkflow
 label: WES tertiary analysis from FASTQ (v1)
-release: "0.10"
+release: "0.11"
 license: MIT
 tags:
   - WES
@@ -238,6 +238,38 @@ inputs:
       The "Clinical findings (table)" of an earlier run on the same sample: the report then lists what is new,
       changed or no longer reported since, with the evidence that differs (reanalysis).
     position: {left: 0, top: 4060}
+  "MANE transcripts (summary)":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: >-
+      MANE.GRCh38.v1.x.summary.txt.gz from NCBI: variants are named and classified on the MANE Select transcript,
+      with the paired RefSeq NM_/NP_ names.
+    position: {left: 0, top: 4180}
+  "Curated gene-disease table":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: >-
+      ClinGen gene-disease validity, Gene2Phenotype and Orphanet merged by data/build_gene_disease.py: inheritance and
+      disease mechanism per disease, and the disease-context section of the report.
+    position: {left: 0, top: 4300}
+  "ClinGen expert-panel rules (VCEP)":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: >-
+      ClinGen CSpec criteria specifications built by data/build_vcep.py: the expert panels' gene-specific frequency
+      cut-offs, criteria and strengths replace the default ACMG rules for their genes.
+    position: {left: 0, top: 4420}
+  "ClinGen expert-panel classifications (ERepo)":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: >-
+      ClinGen Evidence Repository classifications built by data/build_vcep.py, shown with their met criteria next to
+      ClinVar.
+    position: {left: 0, top: 4540}
 
 outputs:
   multiqc_report:
@@ -602,6 +634,10 @@ steps:
       "Mother: CNV per-target ratios": "Mother: CNV per-target ratios"
       "Father: CNV per-target ratios": "Father: CNV per-target ratios"
       "Previous report: findings (TSV)": "Previous report: findings (TSV)"
+      "MANE transcripts (summary)": "MANE transcripts (summary)"
+      "Curated gene-disease table": "Curated gene-disease table"
+      "ClinGen expert-panel rules (VCEP)": "ClinGen expert-panel rules (VCEP)"
+      "ClinGen expert-panel classifications (ERepo)": "ClinGen expert-panel classifications (ERepo)"
 
   multiqc:
     doc: One QC report for all samples.

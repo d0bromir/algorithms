@@ -228,7 +228,7 @@ def test_pharmacogenomics_vcf_only():
     pgx = {r["gene"]: (r["genotype"], r["note"]) for r in rows if r["category"] == "pgx"}
     assert pgx["CYP2C19"] == ("*2/*2", "Poor metabolizer")
     assert pgx["CYP2C9"][1].startswith("Normal metabolizer")
-    assert all(len(r) == 28 and None not in r.values() for r in rows)
+    assert all(len(r) == 31 and None not in r.values() for r in rows)
     assert "absence of a variant is assumed to be the reference allele" in html
 
 
@@ -238,7 +238,7 @@ def test_pharmcat_calls():
     assert pc["CYP2C19"] == ("*1/*2", "Intermediate Metabolizer"), "PharmCAT 3.4.0 on HG001 (GeT-RM: *1/*2)"
     assert pc["CYP3A5"] == ("*3/*3", "Poor Metabolizer")
     assert "<h3>PharmCAT 3.4.0</h3>" in html and "Missing positions" in html
-    assert all(len(r) == 28 for r in rows)
+    assert all(len(r) == 31 for r in rows)
     _, html = run_report()
     assert "PharmCAT" not in html.split("<h2>7. Pharmacogenomics")[1].split("<h2>8.")[0]
 
@@ -564,7 +564,7 @@ def test_cnv_interpretation():
     assert cnv["CLEC18B"]["category"] == "cnv_low_confidence"
     assert "<h2>4. Copy-number variants and chromosome dosage</h2>" in html
     assert "Down syndrome" in html and "Chromosome dosage</b>: <b>chromosome 21" in html
-    assert "<h2>5. Secondary findings" in html and "<h2>11. Methods" in html
+    assert "<h2>5. Secondary findings" in html and "<h2>12. Methods" in html
 
 
 def test_cnv_not_analysed():
@@ -702,8 +702,112 @@ def test_reanalysis_changes():
 def test_reanalysis_other_sample():
     rows, _ = run_report()
     tmp = tempfile.mkdtemp()
-    other = [dict(rows[3], pos=str(5_000_000 + i), gene=f"OTHER{i}", gnomad_af="absent") for i in range(24)]
+    meta = [r for r in rows if r["category"] == "report_meta"]
+    first = next(r for r in rows if r["category"] != "report_meta" and r["pos"])
+    other = [dict(first, pos=str(5_000_000 + i), gene=f"OTHER{i}", gnomad_af="absent") for i in range(24)]
     path = os.path.join(tmp, "other.tsv")
-    _write_tsv(rows[:3] + other, path)
+    _write_tsv(meta + other, path)
     _, html = run_report(["--previous-tsv", path])
     assert "the previous report is probably of another sample" in html
+
+
+def test_hgvs_g():
+    v = rep.Variant()
+    v.chrom, v.pos, v.ref, v.alt = "1", 1000, "C", "T"
+    assert rep.hgvs_g(v) == "NC_000001.11:g.1000C>T"
+    # reference ...G[A]AAAT...: POS 1000 is the G (offset 2 in seq)
+    seq, off = "TTGAAAATCC", 2
+    v.ref, v.alt = "GA", "G"  # one A deleted: 3'-most A is at 1004
+    assert rep.hgvs_g(v, (seq, off)) == "NC_000001.11:g.1004del"
+    assert rep.hgvs_g(v).endswith("g.1001del (not 3'-shifted)")
+    v.ref, v.alt = "G", "GA"  # one more A: a duplication of the last A
+    assert rep.hgvs_g(v, (seq, off)) == "NC_000001.11:g.1004dup"
+    v.ref, v.alt = "G", "GC"  # C inserted between G and A: not a copy of a neighbour
+    assert rep.hgvs_g(v, (seq, off)) == "NC_000001.11:g.1000_1001insC"
+    seq2 = "TTGCACAGG"  # POS 1000 = G; CA CA repeat; inserting CA after G -> dup of the last CA (1003_1004)
+    v.ref, v.alt = "G", "GCA"
+    assert rep.hgvs_g(v, (seq2, 2)) == "NC_000001.11:g.1003_1004dup"
+    v.chrom, v.ref, v.alt = "X", "GAT", "GCC"
+    assert rep.hgvs_g(v) == "NC_000023.11:g.1001_1002delinsCC"
+
+
+def test_mane_and_disease_context():
+    extra = ["--mane", os.path.join(DATA, "mane.tsv"), "--gene-disease", os.path.join(DATA, "gene_disease.tsv")]
+    rows, html = run_report(extra)
+    brca2 = next(r for r in rows if r["gene"] == "BRCA2")
+    assert brca2["hgvs_refseq"].startswith("NM_000059.4:c.1234C>T") and brca2["transcript"] == "TXB"
+    assert "TXB (MANE Select)" in html
+    pah = [r for r in rows if r["gene"] == "PAH"]
+    assert pah and all("check the numbering" in r["hgvs_refseq"] for r in pah), \
+        "MANE pairs TXP.2, SnpEff annotated TXP: the RefSeq name carries a warning"
+    assert brca2["hgvs_g"] == "NC_000013.11:g.32340301C>T"
+    assert "<h2>10. Disease context of the reported genes</h2>" in html
+    assert "BRCA2-related Fanconi anemia" in html and "MONDO:0013697" in html
+    assert "autosomal recessive: one allele found" in html, "BRCA2 het: carrier for Fanconi anemia"
+    gener = next(r for r in rows if r["gene"] == "GENER")
+    assert "PVS1" not in gener["acmg_codes"], "GENER: curated mechanism is gain of function only"
+    rows0, _ = run_report()
+    assert "PVS1" in next(r for r in rows0 if r["gene"] == "GENER")["acmg_codes"]
+    assert "loss of function is not a curated mechanism" in html
+
+
+def test_curated_moi_and_fit():
+    rep.CURATED.clear()
+    rep.CURATED.update(rep.load_gene_disease(os.path.join(DATA, "gene_disease.tsv"))[0])
+    try:
+        assert rep.curated_moi("BRCA2") == {"AD", "AR"}
+        assert rep.curated_moi("GENER") == {"AD"}, "Orphanet's disease-group inheritance (AD,AR,XLR) is not used"
+        assert rep.lof_not_mechanism("GENER") and not rep.lof_not_mechanism("PAH")
+        v = _var("missense_variant")
+        v.zyg, v.pos = "het", 100
+        assert rep.genotype_fit(["AR"], [v], "female")[0] == "carrier"
+        assert rep.genotype_fit(["AD"], [v], "female")[0] == "fits"
+        v.chrom = "X"
+        assert rep.genotype_fit(["XLR"], [v], "male")[0] == "fits"
+        assert rep.genotype_fit(["XLR"], [v], "female")[0] == "carrier"
+        w = _var("missense_variant")
+        w.zyg, w.pos = "het", 200
+        assert rep.genotype_fit(["AR"], [v, w], "female", "in cis (reads)")[0] == "carrier"
+    finally:
+        rep.CURATED.clear()
+
+
+def test_vcep_rules():
+    rep.VCEP.clear()
+    rep.VCEP.update(rep.load_vcep_rules(os.path.join(DATA, "vcep_rules.tsv"))[0])
+    try:
+        adj = rep.vcep_adjust
+        assert adj("BRCA2", ["PM2_supporting", "PP2", "PP3_Strong"], None)[0] == ["PM2_supporting", "PP3_Supporting"], \
+            "PP2 not used by the panel; PP3 capped at Supporting"
+        assert adj("BRCA2", ["PM2_supporting"], 0.0005)[0] == ["BS1"], "panel BS1 cut-off 0.0001"
+        assert adj("BRCA2", ["BS1"], 0.002)[0] == ["BA1"], "panel BA1 cut-off 0.001 (default 5 %)"
+        assert adj("GENER", ["PVS1", "PM2_supporting"], None)[0] == ["PM2_supporting"]
+        assert adj("OTHER", ["PVS1", "PP2"], None)[0] == ["PVS1", "PP2"], "genes without a specification unchanged"
+        assert rep.vcep_frequency("BRCA2") == {"BA1": 0.001, "BS1": 0.0001}
+    finally:
+        rep.VCEP.clear()
+
+
+def test_vcep_and_erepo_in_report():
+    extra = ["--vcep-rules", os.path.join(DATA, "vcep_rules.tsv"), "--erepo", os.path.join(DATA, "erepo_variants.tsv")]
+    rows, html = run_report(extra)
+    assert "ClinGen ENIGMA BRCA1 and BRCA2 VCEP: Likely Pathogenic" in html, "ERepo matched by genomic HGVS"
+    assert "ClinGen VCEP rules: ENIGMA BRCA1 and BRCA2 VCEP v1.1" in html
+    gener = next(r for r in rows if r["gene"] == "GENER")
+    assert "PVS1" not in gener["acmg_codes"]
+    meta = {r["gene"]: r["note"] for r in rows if r["category"] == "report_meta"}
+    assert "vcep_rules" in meta and "erepo" in meta
+
+
+def test_missense_policy():
+    v = _var("missense_variant")
+    v.am, v.revel = 0.995, 0.80
+    assert rep.revel_code(0.80) == "PP3_Moderate" and rep.revel_code(0.01) == "BP4_Strong"
+    assert rep.revel_code(0.29) == "BP4_Supporting" and rep.revel_code(0.5) is None
+    assert rep.missense_code(v, "alphamissense") == "PP3_Strong"
+    assert rep.missense_code(v, "revel") == "PP3_Moderate"
+    assert rep.missense_code(v, "concordant") == "PP3_Moderate", "both pathogenic: the weaker strength"
+    v.revel = 0.1
+    assert rep.missense_code(v, "concordant") is None, "disagreeing predictors give no PP3/BP4"
+    v.revel = None
+    assert rep.missense_code(v, "concordant") == "PP3_Strong", "one score alone counts as itself"
