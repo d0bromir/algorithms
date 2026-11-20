@@ -294,6 +294,13 @@ inputs:
       gnomad.genomes.v3.1.sites.chrM.vcf.bgz (CC0) with chrM renamed to the reference's name (install.sh does this):
       mtDNA frequencies, haplogroup-defining flags and tRNA predictions for the mitochondrial calls.
     position: {left: 0, top: 4900}
+  "Population CNVs (gnomAD exome CNV VCF)":
+    type: data
+    format: [vcf_bgzip, vcf]
+    optional: true
+    doc: >-
+      gnomad.v4.1.cnv.all.vcf.gz (rare CNVs of 464,297 exomes, CC0): the population frequency of each CNV call.
+    position: {left: 0, top: 5020}
 
 outputs:
   multiqc_report:
@@ -690,6 +697,7 @@ steps:
       "Functional assays (MaveDB TSV)": "Functional assays (MaveDB TSV)"
       "Mitochondrial calls (wes_mito TSV)": mito_calling/calls
       "Mitochondrial summary (wes_mito JSON)": mito_calling/summary
+      "Population CNVs (gnomAD exome CNV VCF)": "Population CNVs (gnomAD exome CNV VCF)"
 
   multiqc:
     doc: One QC report for all samples.

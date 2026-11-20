@@ -1855,6 +1855,51 @@ def clinvar_cell(v):
 COLLINS_HAPLO, COLLINS_TRIPLO = 0.86, 0.94
 
 
+GNOMAD_CNV_GROUPS = ("afr", "amr", "asj", "eas", "fin", "mid", "nfe", "sas")
+
+
+def load_gnomad_cnv(path):
+    """gnomAD v4.1 exome CNVs (gnomad.v4.1.cnv.all.vcf.gz; rare CNVs of 464,297 exomes) ->
+    {(chrom, DEL|DUP): sorted [(start, end, carriers, samples, max group frequency, group)]}."""
+    out = collections.defaultdict(list)
+    if not path:
+        return out
+    with opener(path) as f:
+        for line in f:
+            if line[0] == "#":
+                continue
+            t = line.split("\t", 8)
+            info = dict(kv.split("=", 1) for kv in t[7].split(";") if "=" in kv)
+            ty = info.get("SVTYPE")
+            if ty not in ("DEL", "DUP") or t[6] not in ("PASS", "."):
+                continue
+            sc, sn = fnum(info.get("SC")) or 0, fnum(info.get("SN")) or 0
+            best, grp = 0.0, ""
+            for g in GNOMAD_CNV_GROUPS:
+                gs, gn = fnum(info.get(f"SC_{g}")) or 0, fnum(info.get(f"SN_{g}")) or 0
+                if gn >= 1000 and gs / gn > best:
+                    best, grp = gs / gn, g
+            out[(norm_chrom(t[0]), ty)].append((int(t[1]), int(info["END"]), sc, sn, best, grp))
+    for k in out:
+        out[k].sort()
+    return out
+
+
+def gnomad_cnv_match(c, db, min_overlap=0.5):
+    """The gnomAD exome CNV of the same type with the largest carrier count among those overlapping the call
+    reciprocally by >= min_overlap, or None."""
+    best = None
+    for s, e, sc, sn, mx, grp in db.get((c["chrom"], c["type"]), ()):
+        if s > c["end"]:
+            break
+        ov = min(e, c["end"]) - max(s, c["start"])
+        if ov <= 0 or ov / (e - s) < min_overlap or ov / max(c["end"] - c["start"], 1) < min_overlap:
+            continue
+        if best is None or sc > best[2]:
+            best = (s, e, sc, sn, mx, grp)
+    return best
+
+
 def load_collins(path):
     """Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz -> gene -> (pHaplo, pTriplo)."""
     out = {}
@@ -1872,13 +1917,14 @@ def load_collins(path):
 class Knowledge:
     """Gene- and disease-level knowledge bases given to the report."""
 
-    def __init__(self, gencc=None, disputed=None, pheno=None, hpoa=None, dosage=None, collins=None):
+    def __init__(self, gencc=None, disputed=None, pheno=None, hpoa=None, dosage=None, collins=None, gnomad_cnv=None):
         self.gencc = gencc or {}
         self.disputed = disputed or {}
         self.pheno = pheno or Phenotype()
         self.hpoa = hpoa or {}
         self.dosage = dosage or {}
         self.collins = collins or {}
+        self.gnomad_cnv = gnomad_cnv or {}
 
 
 def disease_features(d, info):
@@ -2674,6 +2720,16 @@ def cnv_evidence(c, K, constraint, regions, origin):
                 g = max(names, key=lambda g: K.collins.get(g, (0, 0))[0])
                 codes.append(("2H", 0.15, f"{g} is predicted haploinsufficient (Collins et al. 2022 pHaplo "
                                           f"{K.collins[g][0]:.2f})"))
+    if K.gnomad_cnv:
+        m = gnomad_cnv_match(c, K.gnomad_cnv)
+        if m and m[4] >= 0.01:
+            codes.append(("4O", -1.0, f"{c['type']} of the same extent in {m[4]:.1%} of gnomAD exomes of the "
+                                      f"{m[5].upper()} group ({int(m[2])} of {int(m[3])} in all): common in the population"))
+        elif m:
+            notes.append(f"gnomAD v4.1 exome CNVs: {int(m[2])} of {int(m[3]):,} carriers of a {c['type']} of the "
+                         f"same extent (highest group {m[5].upper()} {m[4]:.3%})")
+        else:
+            notes.append("not among the rare gnomAD v4.1 exome CNVs (464,297 exomes)")
     sens = sorted(((K.collins[g][0 if loss else 1], g) for g in names if g in K.collins), reverse=True)
     top = [f"{g} {x:.2f}" for x, g in sens if x >= (COLLINS_HAPLO if loss else COLLINS_TRIPLO)]
     if top:
@@ -3069,7 +3125,8 @@ def build(args):
     hpoa = load_hpoa(args.hpo_annotations)
     dosage = load_dosage(args.clingen_dosage)
     cvp = load_clinvar_protein(args.clinvar_protein)
-    K = Knowledge(gencc, load_gencc_disputed(args.gencc), pheno, hpoa, dosage, load_collins(args.collins_dosage))
+    K = Knowledge(gencc, load_gencc_disputed(args.gencc), pheno, hpoa, dosage, load_collins(args.collins_dosage),
+                  load_gnomad_cnv(args.gnomad_cnv))
     MANE.clear()
     MANE.update(load_mane(args.mane))
     mito_rows, mito_sum = load_mito(args.mito_tsv, args.mito_json)
@@ -4628,6 +4685,8 @@ def main(argv=None):
                     "registry): gene-specific frequency cut-offs, codes and strengths")
     ap.add_argument("--erepo", help="ClinGen expert-panel classifications (data/build_vcep.py from the Evidence "
                     "Repository), shown next to ClinVar")
+    ap.add_argument("--gnomad-cnv", help="gnomAD v4.1 exome CNVs (gnomad.v4.1.cnv.all.vcf.gz): population frequency "
+                    "of each CNV call; 4O when common")
     ap.add_argument("--collins-dosage", help="Collins et al. 2022 dosage sensitivity scores "
                     "(Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz): predicted haploinsufficient and "
                     "triplosensitive genes in a CNV")

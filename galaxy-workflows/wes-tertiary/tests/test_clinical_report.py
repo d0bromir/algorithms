@@ -841,3 +841,12 @@ def test_mitochondrial_section():
     assert "MT-RNR1 (aminoglycosides" not in html.split("<h2>8.")[0], "MT-RNR1 no longer listed as not assessed"
     _, html0 = run_report()
     assert "Not analysed: no mitochondrial calls given" in html0
+
+
+def test_cnv_gnomad_frequency():
+    d = tempfile.mkdtemp()
+    rows, _ = run_report(_cnv_inputs(d) + ["--gnomad-cnv", os.path.join(DATA, "gnomad_cnv.vcf")])
+    cnv = {r["gene"]: r for r in rows if r["category"].startswith("cnv")}
+    assert "4O -1.00" in cnv["PAH"]["note"], "40 of 3,000 NFE exomes (1.3 %): common, benign evidence"
+    assert "2 of 464,000 carriers" in cnv["BRCA2"]["note"] and "4O" not in cnv["BRCA2"]["note"]
+    assert "not among the rare gnomAD v4.1 exome CNVs" in cnv["GENEX"]["note"]

@@ -319,6 +319,13 @@ inputs:
     optional: true
     doc: The summary of wes_mito (chrM coverage, detection limit, mixture check, MT-RNR1 depth).
     position: {left: 0, top: 4800}
+  "Population CNVs (gnomAD exome CNV VCF)":
+    type: data
+    format: [vcf_bgzip, vcf]
+    optional: true
+    doc: >-
+      gnomad.v4.1.cnv.all.vcf.gz (rare CNVs of 464,297 exomes, CC0): the population frequency of each CNV call.
+    position: {left: 0, top: 4920}
 
 outputs:
   annotated_vcf:
@@ -754,6 +761,7 @@ steps:
       mave: "Functional assays (MaveDB TSV)"
       mito_tsv: "Mitochondrial calls (wes_mito TSV)"
       mito_json: "Mitochondrial summary (wes_mito JSON)"
+      gnomad_cnv: "Population CNVs (gnomAD exome CNV VCF)"
     state:
       max_af: 0.01
       min_ref_depth: 15

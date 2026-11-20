@@ -331,6 +331,8 @@ stage_data() {
         rm -f gnomad.chrM.vcf.bgz
     fi
     manifest gnomad.v3.1.chrM.vcf.gz vcf_bgzip "gnomAD v3.1 chrM sites (CC0), renamed to the reference's mitochondrial contig"
+    fetch https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/exome_cnv/gnomad.v4.1.cnv.all.vcf.gz gnomad.v4.1.cnv.all.vcf.gz
+    manifest gnomad.v4.1.cnv.all.vcf.gz vcf_bgzip "gnomAD v4.1 exome CNVs (CC0)"
     manifest gene_disease.tsv tabular "ClinGen gene-disease validity (CC0), G2P (CC0), Orphanet (CC BY 4.0) via data/build_gene_disease.py"
     local GS=https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/genome-stratifications/v3.6/GRCh38@all
     if [[ ! -s GRCh38_segdups.bed ]]; then  # Ensembl names, like the reference
