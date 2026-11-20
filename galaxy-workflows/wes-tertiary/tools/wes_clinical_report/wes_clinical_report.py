@@ -18,6 +18,10 @@ associations; runs of homozygosity; coverage of clinically relevant genes; limit
 ClinGen dosage sensitivity and HPO disease features (onset, course, inheritance). Given the findings TSV of an
 earlier report of the sample, a section lists what is new, changed or no longer reported since.
 
+Optional knowledge (0.11): MANE transcripts (RefSeq and genomic HGVS names), ClinGen/G2P/Orphanet disease context with
+genotype fit, ClinGen expert-panel rules and classifications, REVEL, MaveDB functional assays, Collins dosage and
+gnomAD exome CNV frequencies for CNVs, UniProt features, mitochondrial calls (wes_mito), and input provenance.
+
 Standard library only (Python >= 3.8).
 """
 import argparse
@@ -547,6 +551,13 @@ def load_mane(path):
                 "enst": t[ix["Ensembl_nuc"]], "nm": t[ix["RefSeq_nuc"]], "ensp": t[ix["Ensembl_prot"]],
                 "np": t[ix["RefSeq_prot"]], "status": t[ix["MANE_status"]], "gene": t[ix["symbol"]]}
     return out
+
+
+def mane_release(path):
+    """MANE release from the file name (MANE.GRCh38.v1.5.summary.txt.gz), or the file's SHA-256 prefix when the name
+    carries none (Galaxy stores datasets as dataset_N.dat)."""
+    m = re.search(r"v\d+\.\d+", os.path.basename(path))
+    return m.group(0) if m else "sha256:" + sha256_file(path)[:12]
 
 
 def mane_of(a):
@@ -2863,7 +2874,7 @@ def knowledge_releases(args, vcf_path):
                         rel[key] = m.group(1)
     if getattr(args, "mane", None):
         m = re.search(r"v\d+\.\d+", os.path.basename(args.mane))
-        rel["mane"] = m.group(0) if m else os.path.basename(args.mane)
+        rel["mane"] = m.group(0) if m else mane_release(args.mane)
     if getattr(args, "vcep_rules", None):
         rel["vcep_rules"] = load_vcep_rules(args.vcep_rules)[1][:80]
     if getattr(args, "erepo", None):
@@ -4462,7 +4473,7 @@ def build(args):
     if MANE:
         R.h(f"<li>Transcripts: variants are named and classified on the MANE Select transcript of the gene (MANE Plus "
             f"Clinical where it is the only MANE transcript hit; {len(MANE):,} MANE transcripts, release "
-            f"{esc(os.path.basename(args.mane))}); the RefSeq NM_/NP_ name is the MANE pair, "
+            f"{esc(mane_release(args.mane))}); the RefSeq NM_/NP_ name is the MANE pair, "
             "identical in sequence, so c./p. numbering is the same. Genomic names are on the RefSeq chromosome, indels "
             "3'-shifted (HGVS). Variants that truncate only a non-MANE isoform are flagged and do not get PVS1.</li>")
     else:

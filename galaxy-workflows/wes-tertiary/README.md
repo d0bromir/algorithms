@@ -1042,6 +1042,67 @@ Rare variants alone do not work: a report lists only 4–20, and a parent or chi
 | Report on the HG002 trio, 0.9.0 → 0.10.0 → 0.10.0 with a previous report (mean of 2; host shared with a mapping job) | 18.9 s → 19.1 s → 19.3 s | 1.70 → 1.70 → 1.71 GiB |
 | Report 0.10.0 in Galaxy on HG002 with its 2026-11-15 report (workflows release 0.10, 0 upgrade messages on import) | 34 s; 24 new, 7 changed, 0 dropped | — |
 
+### Knowledge sources and ACMG classification (report 0.11.0, ClinVar ≥ 2 stars)
+
+Report 0.11 adds MANE transcripts, curated gene-disease associations (ClinGen, G2P, Orphanet), the ClinGen expert
+panels' rules (CSpec) and classifications (ERepo), REVEL, MaveDB functional assays, Collins dosage scores, gnomAD
+exome CNVs and UniProt features. Each one was added in turn on the ClinVar benchmark of section 7 (report 0.8.0),
+rebuilt from the 2026-11 ClinVar release: 30,000 ≥ 2-star SNVs and indels, run through the VCF workflow release 0.10;
+17,802 tuning (odd chromosomes and X) and 9,591 held-out (even) variants passed its filters. REVEL was added to the
+annotated VCF with `bcftools annotate`. Two choices were made on the tuning half only: how to combine AlphaMissense
+and REVEL, and which VCEP strength caps to apply (below).
+
+Held-out half; each cell is the share called on the correct side / the wrong side (P/LP called LB/B, or B/LB called
+LP/P):
+
+| Step (cumulative) | ClinVar P/LP (5,021) | ClinVar B/LB (4,570) | Expert panel P/LP (1,080) | Expert panel B/LB (704) | Time | Memory |
+|---|---|---|---|---|---|---|
+| Report 0.10 rules (AlphaMissense) | 71.8 % / 0.1 % | 43.2 % / 0.1 % | 60.5 % / 0.2 % | 57.1 % / 0.1 % | 4 s | 0.81 GiB |
+| + MANE transcripts | 72.3 % / 0.1 % | 43.3 % / 0.0 % | 61.0 % / 0.2 % | 57.1 % / 0.1 % | 4 s | 0.82 GiB |
+| + curated gene-disease | 72.2 % / 0.1 % | 43.2 % / 0.0 % | 61.0 % / 0.2 % | 57.1 % / 0.1 % | 5 s | 0.84 GiB |
+| + VCEP rules | 71.5 % / 0.1 % | 46.2 % / 0.0 % | 59.8 % / 0.2 % | 71.4 % / 0.0 % | 5 s | 0.84 GiB |
+| + REVEL first | 73.2 % / 0.1 % | 46.0 % / 0.0 % | 66.5 % / 0.3 % | 68.3 % / 0.1 % | 4 s | 0.84 GiB |
+| **+ MaveDB (report 0.11)** | **73.4 % / 0.2 %** | **46.3 % / 0.0 %** | **67.4 % / 0.6 %** | **70.3 % / 0.1 %** | 6 s | 0.84 GiB |
+
+Tuning half, same steps: P/LP 72.7 → 74.9 %, B/LB 37.1 → 43.6 %, wrong side 0.1-0.2 % throughout. Time and memory:
+classifying one half on one core, with loading.
+
+- **MANE.** Several loss-of-function calls were on minor isoforms and are intronic on the MANE transcript. In the
+  GIAB exomes this removed PVS1 from five variants (PIGQ, PTPN4, AP1S1, CLPB, SPINK2), two of them LP before. They
+  are now flagged "loss of function only on other transcripts".
+- **REVEL and AlphaMissense.** Three ways to combine the two calibrated predictors were compared on the tuning half,
+  with MANE, the curated diseases and all VCEP caps (one predictor per variant, as ClinGen requires): AlphaMissense
+  only gave 69.3 % P/LP and 42.9 % B/LB on the correct side; both must agree, 68.4 % and 41.6 %; REVEL first, with
+  AlphaMissense where REVEL has no score, 70.4 % and 41.7 %. REVEL first was chosen.
+- **VCEP strength caps.** Applying every cap of the 129 genes' specifications lost 4.5 points of pathogenic recall on
+  the tuning half. 351 variants dropped from P/LP, mainly in GCK, FBN1 and LDLR, because many specifications allow
+  PP3 only at Supporting (written before the 2022 calibration of REVEL and other predictors) and define PM1 by their
+  own domains. On the tuning half, keeping the calibrated PP3/BP4 strengths and the report's own PM1_Supporting, but
+  applying the panels' frequency cut-offs and code removals, kept 73.9 % of P/LP (74.9 % without any VCEP rules) and
+  42.1 % of B/LB (35.2 % without). This mode is the default (`VCEP_KEEP_STRENGTH`).
+- **MaveDB.** Clinically calibrated assays gave PS3 or BS3 to 55 held-out variants; 49 agreed with ClinVar's side.
+  Most calibrations are built from ClinVar classifications, so this agreement is an upper bound.
+- **Genomic HGVS names.** The report's 3'-shifted genomic names were compared with the ClinGen Evidence Repository's
+  for its 11,868 classified variants with a ClinVar record: identical for 11,865 (10,410 SNVs, 958 of 961 deletions,
+  427 insertions/duplications, 70 delins). Two of the three differences are ERepo naming a deletion at its 5'
+  position; the report also looks that name up.
+
+On the three GIAB exomes (0.10 against 0.11 with all inputs):
+- REVEL now also selects missense candidates (REVEL ≥ 0.773, PP3_Moderate, like AlphaMissense ≥ 0.906): HG002
+  gained 4 candidates and lost 1, HG005 gained 5 and lost 1, HG001 gained 2 and lost 2;
+- 10 automated classes changed: 7 de novo or possibly de novo missense variants moved between VUS and LB with REVEL's
+  BP4 (6 to LB, 1 to VUS); AP1S1 and CLPB went from LP to VUS (PVS1 on a minor isoform only, MANE); PLG p.Lys38Glu
+  in HG001 went from LB to VUS (REVEL gives no BP4);
+- CFAP74 p.Arg218Trp in HG005 moved from *ClinVar P/LP to review* to *carrier*: the curated diseases of CFAP74 are
+  recessive only;
+- none of the GIAB variants has an ERepo classification or MaveDB data.
+
+| Clinical report, all inputs (median of 3) | 0.10.0 | 0.11.0 |
+|---|---|---|
+| HG002 | 16.2 s, 1.70 GiB | 24.1 s, 1.88 GiB |
+| HG005 | 15.7 s, 1.52 GiB | 24.7 s, 1.70 GiB |
+| HG001 | 13.0 s, 1.50 GiB | 21.1 s, 1.68 GiB |
+
 ### Mitochondrial DNA from exome reads (wes_mito 0.1.0, report 0.11.0, GIAB IDT exomes)
 
 `wes_mito` was run on the duplicate-marked BAMs of the seven GIAB exomes still on the server: one process
@@ -1075,8 +1136,13 @@ are not benchmarked.
 
 Germline SNVs and short indels in the exome targets, and CNVs of several exons from read depth (section 7).
 Not covered: CNVs of one or two exons (rarely detected at 50×), balanced and other structural variants, CNV
-breakpoints, CNVs in segmental duplications (marked low confidence), mitochondrial variants and repeat
-expansions. CNV calls need ≥ 3 other samples of the same kit; with a small or mixed-batch panel they miss small
+breakpoints, CNVs in segmental duplications (marked low confidence), large mtDNA deletions and repeat
+expansions. mtDNA variants come from the off-target reads: heteroplasmy below about 25 % is not detectable in
+low-coverage exomes (median 11-14× in one GIAB batch), and NUMT reads can mimic low heteroplasmy (the mixture check
+flags it). MITOMAP refuses automated downloads, so mtDNA classifications come from ClinVar and gnomAD only. dbNSFP
+(BayesDel, CADD, MetaRNN and others) needs a registration with an institutional address and is not used; REVEL
+and AlphaMissense are the missense predictors. VCEP frequency cut-offs are read from the panels' free text and the
+panels' gene-specific rules that need case or functional data are not applied. CNV calls need ≥ 3 other samples of the same kit; with a small or mixed-batch panel they miss small
 events, and relatives in the same run share their inherited CNVs. The automated ACMG/AMP class uses only the evidence a VCF supports (no functional, segregation, case-count or
 literature evidence) and is a draft for review, and the HPO ranking depends on the terms given. Trio analysis needs the parents' calls on the same reference and
 works on the variants the proband's caller found; de novo status at repeats, segmental duplications and other

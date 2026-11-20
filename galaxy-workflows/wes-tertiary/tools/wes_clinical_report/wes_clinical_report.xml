@@ -437,6 +437,17 @@ at sites where the parents are opposite homozygotes) or of the X chromosomes in 
 10. Coverage of clinically relevant genes.
 11. Methods and limitations.
 
+**Knowledge sources (0.11).** With the MANE summary, variants are named and classified on the MANE Select
+transcript, with the RefSeq NM_/NP_ name and the 3'-shifted genomic HGVS. With the curated gene-disease table
+(ClinGen validity, Gene2Phenotype, Orphanet), a section lists every disease of each reported gene with its
+inheritance, mechanism and how the patient's genotype fits it; loss of function gets no PVS1 where the curated
+mechanisms are gain of function or dominant negative only. With the ClinGen expert-panel files, the panels'
+frequency cut-offs and code exclusions replace the defaults for their 129 genes, and the panel's own classification
+of a variant is shown next to ClinVar. REVEL (when in the missense file) is the first missense predictor. MaveDB
+calibrated assays give PS3/BS3. Collins dosage scores and gnomAD exome CNV frequencies are added to CNV calls,
+UniProt features to the variant names, and the wes_mito outputs give a mitochondrial section (including MT-RNR1 for
+aminoglycosides). Every input file is listed with its SHA-256, and a fingerprint identifies the data and rules.
+
 **Reanalysis.** Given the findings TSV of an earlier report of the same sample, a section after the summary
 lists the results that are new, changed or no longer reported, matched by variant, by gene for gene-level results
 and by 50% reciprocal overlap for CNVs and uniparental disomy, with what each report said and the evidence that
