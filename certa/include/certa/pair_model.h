@@ -79,7 +79,9 @@ inline void record_inputs(const Placement& p, int* f) {
 }
 
 // A PR mate's pair margin: its AS plus the other mate's minus XS, the bound
-// on every other proper pair (0: not a PR mate with a mapped partner).
+// on every other proper pair (0: not a PR mate with a mapped partner). The
+// margin of a pair placed by place_pair (XM, Placement::pair_gap) is not an
+// input: the models were fitted without it.
 inline int pair_margin(const Placement& a, const Placement& b) {
   if (!a.mapped || !b.mapped || a.r.tier != kTierPR || a.r.sub_score <= -1000) return 0;
   return clampi(a.r.score + b.r.score - a.r.sub_score, 0, 40) + 1;
@@ -148,10 +150,31 @@ inline int score_mapq(double s, const double (&q)[60]) {
   return m;
 }
 
+// --mapq-scale bwa. The model's MAPQ m is a Phred: 10^(-m / 10) of such
+// records are misplaced. BWA-MEM's formula means something else by the same
+// numbers, and the tools that read MAPQ were built on its meaning: on HG002,
+// the mates minibwa and BWA-MEM2 give 60 are misplaced at 0.5-8 in 10,000
+// (Phred 31-43), those they give 50-54 at 1-5 % (Phred 13-20), those they
+// give 20-29 at 27-41 % (Phred 4-6). A Phred written as is tells such a tool
+// that most reads are doubtful: DeepVariant, trained on BWA-MEM, makes twice
+// the errors (bench/VALIDATION_RESULTS.md, "The fitted MAPQ on BWA's scale").
+// kBwaScale[m] is the MAPQ those aligners give records misplaced as often as
+// the model's m: 60 from Phred 40, then four Phred per level down to 55 at
+// Phred 20, and below that minibwa's measured levels. It is monotone, so
+// the order of the records by confidence is the model's (with ties where
+// levels merge); XP carries m itself.
+constexpr int kBwaScaleMax = 40;
+constexpr uint8_t kBwaScale[kBwaScaleMax + 1] = {0,  1,  4,  10, 16, 22, 27, 32, 38, 43, 45, 46, 48, 49,
+                                                 50, 51, 52, 53, 54, 54, 55, 55, 55, 55, 56, 56, 56, 56,
+                                                 57, 57, 57, 57, 58, 58, 58, 58, 59, 59, 59, 59, 60};
+inline int bwa_scale(int m) { return kBwaScale[clampi(m, 0, kBwaScaleMax)]; }
+
 // --mapq pair: both mates' MAPQ (pl: their placements after --iv-mapq; t2t:
-// their T2T views, or null without --t2t). Unmapped mates keep theirs.
-inline void pair_model_mapq(Placement* pl, bool proper, int64_t tlen, const T2tView* t2t) {
-  int q[2] = {pl[0].mapq, pl[1].mapq};
+// their T2T views, or null without --t2t). Unmapped mates keep theirs. The
+// model's MAPQ goes to Placement::phred; with `bwa` the MAPQ written is that
+// value on BWA-MEM's scale.
+inline void pair_model_mapq(Placement* pl, bool proper, int64_t tlen, const T2tView* t2t, bool bwa = false) {
+  int q[2] = {-1, -1};
   for (int x = 0; x < 2; ++x) {
     if (!pl[x].mapped) continue;
     int f[kT2tFeatures];
@@ -163,8 +186,11 @@ inline void pair_model_mapq(Placement* pl, bool proper, int64_t tlen, const T2tV
       q[x] = score_mapq(tree_score(f, kModelBase, kModelFeat, kModelThr, kModelLeaf), kModelQ);
     }
   }
-  pl[0].mapq = q[0];
-  pl[1].mapq = q[1];
+  for (int x = 0; x < 2; ++x) {
+    if (q[x] < 0) continue;
+    pl[x].phred = q[x];
+    pl[x].mapq = bwa ? bwa_scale(q[x]) : q[x];
+  }
 }
 
 }  // namespace certa

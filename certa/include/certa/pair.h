@@ -116,6 +116,17 @@ struct PairScratch {
   std::vector<uint8_t> lref, ltb;
   std::vector<int> lh[2], le[2];
   std::vector<int16_t> lh16[2], le16[2];
+  // pair_votes (interval.h): one read's q-mer ranges and voted diagonals,
+  // each mate's groups of diagonals per strand, and the joint loci.
+  std::vector<uint64_t> vkey, vlo;
+  std::vector<uint8_t> vok;
+  std::vector<uint32_t> vcnt;
+  std::vector<uint64_t> vord;  // q-mers by count, then groups by votes
+  std::vector<int64_t> vdiag;
+  struct VGroup { int votes; int64_t dmin, dmax; };
+  std::vector<VGroup> vgrp[2][2];  // [mate][strand]
+  struct VJoint { int votes; uint32_t key; int o, f, r; };
+  std::vector<VJoint> vjoint;
 };
 
 // Best alignment of `rd` whose first aligned base lies in [smin, smax], found
@@ -620,6 +631,28 @@ inline PairOut certify_pair(const IndexView& ix, const PairParams& pp, const uin
     return a.chain < b.chain;
   });
   int R1 = floor, upb = -BIG, S2 = floor, evaluated = 0;
+  // The best other pair actually found (the point MAPQ, as BWA-MEM's best
+  // other pair), next to S2, the bound on every other pair (XQ). Like S2's,
+  // an other pair has a mate that does not overlap R1's: a shifted copy of
+  // R1's own alignment is not one. Pairs realized before R1 is final are kept
+  // as loci and judged at the end.
+  int S2f = kNoSub;
+  struct Locus {
+    int64_t pos, end;
+    int strand;
+  };
+  struct Found {
+    int score;
+    Locus m[2];
+  };
+  std::vector<Found> found;
+  auto locus = [](const Result& a, int strand) {
+    int64_t n = 0;
+    for (int c = 0; c < a.n_cigar; ++c)
+      if ((a.cigar[c] & 0xF) == kOpM || (a.cigar[c] & 0xF) == kOpD) n += a.cigar[c] >> 4;
+    return Locus{a.ref_pos, a.ref_pos + n, strand};
+  };
+  auto overlaps = [](const Locus& a, const Locus& b) { return a.strand == b.strand && a.pos < b.end && b.pos < a.end; };
   // The anchors that realized R1's pair, with what bounding their other
   // pairs needs.
   struct Win {
@@ -734,7 +767,11 @@ inline PairOut certify_pair(const IndexView& ix, const PairParams& pp, const uin
         best[1] = a2;
       }
     } else if (r > R1) {
-      if (id_strand >= 0) S2 = std::max(S2, confirmed ? upb : R1);
+      if (id_strand >= 0) {
+        S2 = std::max(S2, confirmed ? upb : R1);
+        // The previous best pair was realized.
+        found.push_back({R1, {locus(best[0], id_strand), locus(best[1], 1 - id_strand)}});
+      }
       R1 = r;
       upb = up;
       confirmed = true;
@@ -744,9 +781,13 @@ inline PairOut certify_pair(const IndexView& ix, const PairParams& pp, const uin
       wins.assign(1, win);
     } else {
       S2 = std::max(S2, up);
+      found.push_back({r, {locus(a1, s1), locus(a2, 1 - s1)}});
     }
   }
   if (id_strand < 0 || !confirmed || R1 <= floor || upb > R1 || S2 > R1) return po;
+  const Locus r1l[2] = {locus(best[0], id_strand), locus(best[1], 1 - id_strand)};
+  for (const Found& f : found)
+    if (!overlaps(f.m[0], r1l[0]) || !overlaps(f.m[1], r1l[1])) S2f = std::max(S2f, f.score);
   // The other pairs through R1's anchors. Pairs at or below `relevant` (the
   // anchor's bands were narrowed to it) are bounded by it.
   for (const Win& w : wins) {
@@ -755,33 +796,78 @@ inline PairOut certify_pair(const IndexView& ix, const PairParams& pp, const uin
     const Cluster& cl = X.ws->clusters[w.chain];
     const Result& ax = best[w.mate];
     const Result& ay = best[1 - w.mate];
-    auto span = [](const Result& a) {
-      int64_t n = 0;
-      for (int c = 0; c < a.n_cigar; ++c)
-        if ((a.cigar[c] & 0xF) == kOpM || (a.cigar[c] & 0xF) == kOpD) n += a.cigar[c] >> 4;
-      return n;
-    };
+    const Locus& lx = r1l[w.mate];
+    const Locus& ly = r1l[1 - w.mate];
     S2 = std::max(S2, w.relevant);
+    // A pair found here (S2f) is located, proper (mate y starting in mate
+    // x's partner range) and other: the mate that moves does not overlap
+    // R1's. Where the best alignment overlaps (a shifted copy of R1's own),
+    // the best starting far enough before it is searched for instead (a
+    // band holds at most kPadMax gaps, so an alignment starting L + kPadMax
+    // before R1's ends before it). Tracebacks run only for a pair that would
+    // raise S2f.
+    auto pairs_with = [&](int64_t xpos, int64_t ypos) {
+      int64_t lo, hi;
+      partner_range(cl.strand, xpos, xpos, &lo, &hi);
+      return ypos >= lo && ypos <= hi;
+    };
     // x where R1 has it (<= sx), y starting before R1's y or after its end.
     const uint8_t* ry = Y.ws->seq[1 - cl.strand];
+    auto y_found = [&](const Band& bd, int v, int64_t a, int64_t b) {
+      Result yo;  // R1's x with this y: 0 not found, 1 found, -1 overlapping R1's y
+      if (!locate(ry, Y.L, bd, v, a, b, &yo)) return 0;
+      if (overlaps(locus(yo, ly.strand), ly)) return -1;
+      return pairs_with(ax.ref_pos, yo.ref_pos) ? 1 : 0;
+    };
     auto ywin = [&](int64_t a, int64_t b) {
       if (b < a) return;
       Band bd;
       int t;
       const int v = window_search(ix, ry, Y.L, a, b, pp.wq, w.need, sc, &bd, &t);
       S2 = std::max(S2, w.sx + std::max(v, t));
+      if (v == kNoSub || ax.score + v <= S2f) return;
+      const int got = y_found(bd, v, a, b);
+      if (got > 0) S2f = ax.score + v;
+      if (got >= 0) return;
+      const int64_t b2 = std::min<int64_t>(b, ay.ref_pos - Y.L - kPadMax);
+      if (b2 < a) return;
+      const int v2 = window_search(ix, ry, Y.L, a, b2, pp.wq, w.need, sc, &bd, &t);
+      if (v2 != kNoSub && ax.score + v2 > S2f && y_found(bd, v2, a, b2) > 0) S2f = ax.score + v2;
     };
     ywin(w.ulo, std::min(w.uhi, ay.ref_pos - 1));
-    ywin(std::max(w.ulo, ay.ref_pos + span(ay)), w.uhi);
+    ywin(std::max(w.ulo, ly.end), w.uhi);
     // x elsewhere in its chain (starting before R1's x or after its end), y
     // anywhere in the window (<= max(fu, thr)).
-    int64_t blo;
-    int bB;
-    const int xo = std::max(chain_best(ix, X.L, cl, w.apad, *X.ws, &blo, &bB, INT64_MIN, ax.ref_pos - 1),
-                            chain_best(ix, X.L, cl, w.apad, *X.ws, &blo, &bB, ax.ref_pos + span(ax), INT64_MAX));
+    Band xb[2];
+    const int64_t xmin[2] = {INT64_MIN, lx.end}, xmax[2] = {ax.ref_pos - 1, INT64_MAX};
+    int xv[2];
+    for (int k = 0; k < 2; ++k) xv[k] = chain_best(ix, X.L, cl, w.apad, *X.ws, &xb[k].lo, &xb[k].B, xmin[k], xmax[k]);
+    const int xo = std::max(xv[0], xv[1]);
     if (xo != kNoSub) S2 = std::max(S2, xo + std::max(w.fu, w.thr));
+    const uint8_t* rx = X.ws->seq[cl.strand];
+    auto x_found = [&](const Band& bd, int v, int64_t a, int64_t b) {
+      Result xr;  // this x with R1's y: as y_found
+      if (!locate(rx, X.L, bd, v, a, b, &xr)) return 0;
+      if (overlaps(locus(xr, lx.strand), lx)) return -1;
+      return pairs_with(xr.ref_pos, ay.ref_pos) ? 1 : 0;
+    };
+    for (int k = 0; k < 2; ++k) {
+      if (xv[k] == kNoSub || xv[k] + ay.score <= S2f) continue;
+      const int got = x_found(xb[k], xv[k], xmin[k], xmax[k]);
+      if (got > 0) S2f = xv[k] + ay.score;
+      if (got >= 0) continue;
+      const int64_t b2 = std::min<int64_t>(xmax[k], ax.ref_pos - X.L - kPadMax);
+      if (b2 < xmin[k]) continue;
+      Band bd;
+      const int v2 = chain_best(ix, X.L, cl, w.apad, *X.ws, &bd.lo, &bd.B, xmin[k], b2);
+      if (v2 != kNoSub && v2 + ay.score > S2f && x_found(bd, v2, xmin[k], b2) > 0) S2f = v2 + ay.score;
+    }
   }
   S2 = std::min(S2, R1);  // every pair scores <= R1 = OPT
+  S2f = std::min(S2f, S2);  // a pair found is a pair S2 bounds
+  // One mapq_margin or more below R1, a pair found gives the pair MAPQ 60, as
+  // none does: it is not reported.
+  if (S2f <= R1 - pp.mapq_margin) S2f = kNoSub;
   po.certified = true;
   po.score = R1;
   po.sub = S2;
@@ -805,6 +891,7 @@ inline PairOut certify_pair(const IndexView& ix, const PairParams& pp, const uin
     o.n_best = (uint16_t)(S2 == R1 ? 2 : 1);
     o.floor = (int16_t)floor;
     o.sub_score = (int16_t)S2;
+    o.sub_found = (int16_t)S2f;
     o.parts = (uint8_t)M[x].P;
     o.used = (uint8_t)M[x].m;
     // Witness (Theorem V): the parts this mate enumerated per strand, with

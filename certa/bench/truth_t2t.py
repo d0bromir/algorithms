@@ -10,7 +10,8 @@ T2T-CHM13 at another locus gets MAPQ 0.
 `place` keeps each mate's primary placement: contig, unclipped leftmost base,
 strand and MAPQ, with chrY PAR placements moved to chrX. With --chain the
 records are on hs1 and are lifted to GRCh38 by lift_sam.py's rule; a mapped
-record that does not lift is kept as such (state 2).
+record that does not lift is kept as such (state 2). --xp keeps XP (the
+pair model's Phred, which --mapq-scale bwa writes besides MAPQ) as the MAPQ.
 
 `eval` reads DIR's placements of truth_headroom.py's runs (ivcert,
 def.complete with def, bio.complete with bio, minibwa, bwa-mem2,
@@ -42,11 +43,23 @@ from truth_lift import CLS_TRUTH, Ref  # noqa: E402
 LOCUS = 150
 
 
+def xp_mapq(stream, xp):
+    """The records with MAPQ replaced by their XP:i (--mapq-scale bwa: the pair model's Phred), when present."""
+    for line in stream:
+        if line[0] != "@" and xp:
+            x = line.find("\tXP:i:")
+            if x >= 0:
+                f = line.split("\t", 5)
+                f[4] = line[x + 6:].split("\t", 1)[0].strip()
+                line = "\t".join(f)
+        yield line
+
+
 def cmd_place(a):
     n = np.load(a.truth)["cls"].shape[0]
     ref = Ref(a.fai)
     if not a.chain:
-        r = read_sam(sys.stdin, n, ref.index)
+        r = read_sam(xp_mapq(sys.stdin, a.xp), n, ref.index)
         ref.par_to_x(r["rc"], r["left"])
         np.savez(a.out, placed=r["placed"], rc=r["rc"].astype(np.int16), left=r["left"].astype(np.int32),
                  strand=r["strand"], mapq=r["mapq"])
@@ -191,6 +204,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("place")
     p.add_argument("--chain")
+    p.add_argument("--xp", action="store_true", help="rank by XP (the pair model's Phred) where a record has it")
     p.add_argument("truth")
     p.add_argument("fai")
     p.add_argument("out")

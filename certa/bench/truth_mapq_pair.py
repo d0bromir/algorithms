@@ -8,13 +8,13 @@ include/certa/mapq_model.h.
   truth_mapq_pair.py fit [--cv] OUT.npz ... > include/certa/mapq_model.h
   truth_mapq_pair.py fit --t2t OUT.npz ... > include/certa/mapq_model_t2t.h
   truth_mapq_pair.py eval [--half] --model MODEL.h ... truth.npz OUT.npz NAME=RUN.npz ...
-  samtools view PAIR.bam | truth_mapq_pair.py replay MODEL.h FEAT.npz
+  samtools view PAIR.bam | truth_mapq_pair.py replay [--bwa PAIR_MODEL_H] MODEL.h FEAT.npz
 
 RUN is paired interval mode with --iv-mapq cert, --iv-pair all,
 --mapq-limit 10 and --feature-tags. `feat` keeps per mate the SAM fields the
 model reads (flag, MAPQ, |TLEN|, soft clips, XT, XE, XD, XO, XN, XB, XQ, AS,
-NM, XS; -1 when absent and for an unmapped record; with --t2t also XC, the
-mate's placement on T2T-CHM13), whether it is placed with a truth, and
+NM, XS, XM; -1 when absent and for an unmapped record; with --t2t also XC,
+the mate's placement on T2T-CHM13), whether it is placed with a truth, and
 whether it is at the locus (truth_eval.py's rule at 150 bp).
 
 The model's inputs (`features`, mirrored by pair_model_features in
@@ -22,7 +22,8 @@ certa/interval.h) are, per mate, its own record's
   tier, MAPQ, gap to the second-best locus (XD, else XO, minus XE; 11: none),
   XE, log2 of the clusters verified, XB, XQ, NM, soft clips / 5, the pair
   margin of a PR mate (AS + the other mate's AS - XS), proper / mate-unmapped
-  flags, and |TLEN| in classes;
+  flags, and |TLEN| in classes (XM, the margin of a pair placed from the
+  alignments found, is kept for a refit but is not an input);
 and the other mate's tier, MAPQ, gap, XE, XQ, NM, soft clips and margin.
 With --t2t (t2t_model_features) also the mate's T2T placement: whether it
 lifts to the record's locus, elsewhere, or not at all; its gap to the
@@ -50,7 +51,7 @@ from truth_lift import CLS_TRUTH, Ref  # noqa: E402
 
 TIERS = ("S0", "S1", "SR", "S2", "SL", "PR", "R", "IV", "MR")
 PR = TIERS.index("PR")
-KEYS = ("XE", "XD", "XO", "XN", "XB", "XQ", "AS", "NM", "XS")
+KEYS = ("XE", "XD", "XO", "XN", "XB", "XQ", "AS", "NM", "XS", "XM")
 XC = ("t_cls", "t_tier", "t_mq", "t_xe", "t_xd", "t_xo")  # --t2t: XC:Z:cls,tier,mapq,xe,xd,xo
 TG = re.compile(r"\t(" + "|".join(KEYS) + r"):i:(-?\d+)")
 CLIP = re.compile(r"(\d+)S")
@@ -354,12 +355,22 @@ def cmd_eval(a):
     print(f"\n{nt:,} mates with a truth; misplaced per million among each run's N most confident.")
 
 
+def bwa_scale(path):
+    """kBwaScale of certa/pair_model.h: the model's MAPQ (a Phred) on BWA-MEM's scale."""
+    s = open(path).read()
+    body = s[s.index("kBwaScale[kBwaScaleMax + 1] = {"):]
+    return np.array([int(v) for v in re.findall(r"\d+", body[body.index("{") + 1:body.index("}")])], np.int64)
+
+
 def cmd_replay(a):
     """CERTA's --mapq pair MAPQ (stdin) against this script's on the same records (FEAT.npz: the same run's
-    features, from --feature-tags)."""
+    features, from --feature-tags). --bwa: CERTA wrote it on BWA-MEM's scale (--mapq-scale bwa, the default)."""
     m, T, t2t = read_header(a.model)
     z = np.load(a.npz)
     want = mapq_of(z, m, T, t2t)
+    if a.bwa:
+        sc = bwa_scale(a.bwa)
+        want = sc[np.minimum(want, len(sc) - 1)]
     n = want.shape[0]
     got = np.full((n, 2), -1, np.int64)
     for line in sys.stdin:
@@ -395,6 +406,7 @@ def main():
     p.add_argument("--model", action="append", default=[])
     p.add_argument("truth"), p.add_argument("npz"), p.add_argument("runs", nargs="*")
     p = sp.add_parser("replay")
+    p.add_argument("--bwa", help="certa/pair_model.h: the records' MAPQ is on BWA-MEM's scale")
     p.add_argument("model"), p.add_argument("npz")
     a = ap.parse_args()
     {"feat": cmd_feat, "fit": cmd_fit, "eval": cmd_eval, "replay": cmd_replay}[a.cmd](a)

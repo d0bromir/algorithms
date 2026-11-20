@@ -418,6 +418,33 @@ int oracle_pair_sub(const std::vector<uint8_t>& ref, const std::vector<uint8_t>&
   return best;
 }
 
+// The best proper pair whose mates do not both start where a1 and a2 do (on
+// their strands): every pair a search can find other than the reported one.
+int oracle_pair_other_start(const std::vector<uint8_t>& ref, const std::vector<uint8_t>& m1,
+                            const std::vector<uint8_t>& m2, int D, const Result& a1, const Result& a2) {
+  auto rc = [](const std::vector<uint8_t>& v) {
+    std::vector<uint8_t> o(v.size());
+    for (size_t i = 0; i < v.size(); ++i) o[i] = v[v.size() - 1 - i] < 4 ? 3 - v[v.size() - 1 - i] : 4;
+    return o;
+  };
+  const std::vector<uint8_t> seq[2][2] = {{m1, rc(m1)}, {m2, rc(m2)}};  // [mate][strand]
+  const Result* rep[2] = {&a1, &a2};
+  std::vector<int> full[2][2], other[2][2];
+  for (int m = 0; m < 2; ++m)
+    for (int st = 0; st < 2; ++st) {
+      full[m][st] = oracle_starts(ref, seq[m][st].data(), static_cast<int>(seq[m][st].size()));
+      other[m][st] = full[m][st];
+      if (st == rep[m]->strand) other[m][st][rep[m]->ref_pos] = -(1 << 20);
+    }
+  int best = INT32_MIN;
+  for (int f = 0; f < 2; ++f) {
+    const int r = 1 - f;
+    best = std::max(best, pair_from_starts(other[f][0], full[r][1], D));
+    best = std::max(best, pair_from_starts(full[f][0], other[r][1], D));
+  }
+  return best;
+}
+
 // Affine score of a reported alignment, clip penalties included.
 int rescore_affine(const IndexView& ix, const Result& r, const std::vector<uint8_t>& fwd) {
   const int L = static_cast<int>(fwd.size());
@@ -592,6 +619,492 @@ void test_iv_mapq() {
     CHECK(iv_mapq(p, IvMapq::kCert) == (uncertified ? 7 : 60), "--iv-mapq cert, tier %d: MAPQ %d", t,
           iv_mapq(p, IvMapq::kCert));
   }
+}
+
+// A PR mate's MAPQ (interval.h pr_mapq): BWA-MEM's pairing rule over a
+// direct reading, with q_pe from the best other pair found or the unpaired
+// alternative (the point estimate), or from S2 (bound, the fitted MAPQs').
+void test_pr_mapq() {
+  int checked = 0;
+  for (int q_se : {0, 5, 19, 20, 25, 60})
+    for (int found : {static_cast<int>(kNoSub), 250, 292, 295, 297, 300, 302})
+      for (int s2 : {250, 292, 297, 300, 302})
+        for (int un : {200, 285, 295, 302})
+          for (int nb : {1, 2}) {
+            if (found != kNoSub && found > s2) continue;  // a pair found is one S2 bounds
+            Result r{}, m{};
+            r.tier = m.tier = kTierPR;
+            r.score = 151;
+            m.score = 151;  // the pair: 302
+            r.sub_score = static_cast<int16_t>(s2);
+            r.sub_found = static_cast<int16_t>(found);
+            r.n_best = static_cast<uint16_t>(nb);
+            auto rule = [&](int q_pe) { return q_pe > q_se ? std::min(q_pe, q_se + 40) : q_se; };
+            const int subo = std::max(found, un);
+            const int want_point = rule(subo >= 302 ? 0 : std::min(60, static_cast<int>(6.02 * (302 - subo) + 0.499)));
+            const int want_bound = rule(nb == 1 ? std::min(60, static_cast<int>(6.02 * (302 - s2) + 0.499)) : 0);
+            CHECK(pr_mapq(r, m, q_se, un, false) == want_point,
+                  "pr_mapq point: q_se %d found %d S2 %d un %d: %d, not %d", q_se, found, s2, un,
+                  pr_mapq(r, m, q_se, un, false), want_point);
+            CHECK(pr_mapq(r, m, q_se, un, true) == want_bound, "pr_mapq bound: q_se %d S2 %d XB %d: %d, not %d", q_se,
+                  s2, nb, pr_mapq(r, m, q_se, un, true), want_bound);
+            ++checked;
+          }
+  // No other pair found and every mate at its single-end best: the pair
+  // margin over the unpaired alternative is 17, so q_pe is 60.
+  Result r{}, m{};
+  r.tier = m.tier = kTierPR;
+  r.score = m.score = 151;
+  r.sub_score = 297;
+  r.sub_found = kNoSub;
+  r.n_best = 1;
+  CHECK(pr_mapq(r, m, 0, 302 - kPenUnpaired, false) == 40 && pr_mapq(r, m, 20, 302 - kPenUnpaired, false) == 60 &&
+            pr_mapq(r, m, 20, 302 - kPenUnpaired, true) == 30,
+        "pr_mapq: a repeat mate with a unique partner");
+  // The unpaired alternative: a certified single-end result counts where it
+  // beats the pair's alignment of that mate; an uncertified one never.
+  Result se{}, sm{};
+  r.score = 140;
+  m.score = 151;
+  for (int c0 : {0, 1, 2})
+    for (int c1 : {0, 1, 2})
+      for (int s0 : {120, 140, 150})
+        for (int s1 : {151, 130}) {
+          se.certified = static_cast<uint8_t>(c0);
+          sm.certified = static_cast<uint8_t>(c1);
+          se.score = static_cast<int16_t>(s0);
+          sm.score = static_cast<int16_t>(s1);
+          const int want = (c0 == 1 ? std::max(140, s0) : 140) + (c1 == 1 ? std::max(151, s1) : 151) - kPenUnpaired;
+          CHECK(pr_unpaired(r, m, se, sm) == want, "pr_unpaired: certified %d/%d scores %d/%d: %d, not %d", c0, c1, s0,
+                s1, pr_unpaired(r, m, se, sm), want);
+        }
+  std::fprintf(stderr, "pr_mapq: %d cases against the pairing rule\n", checked);
+}
+
+// Tier R's seed votes (RepeatParams::vote_occ). A family of 60 copies of a
+// 300-bp element, each with its own substitutions at 5 % of the sites, so
+// most q-mers occur more than tau times and tier R's parts grow long. A read
+// from a copy carries the consensus base at most of that copy's own sites
+// (as a haplotype whose alleles match the other copies) and 2 more
+// substitutions: at its copy most parts hold a difference, while the other
+// copies match the read longest from a part's start, so the sampled copies
+// miss the read's copy. With votes, every bound stays sound (lo <= OPT <=
+// hi, exact => lo = OPT, the CIGAR rescores to lo), lo never falls and hi
+// only follows it, and lo reaches OPT on more reads.
+void test_tier_r_votes(std::mt19937_64& g) {
+  std::vector<uint8_t> c1 = random_seq(g, 60000);
+  const std::vector<uint8_t> elem = random_seq(g, 300);
+  std::vector<int64_t> copy_at;
+  std::vector<std::vector<int>> own;  // each copy's own sites
+  for (int r = 0; r < 60; ++r) {
+    std::vector<uint8_t> e = elem;
+    own.emplace_back();
+    for (int p = 0; p < 300; ++p)
+      if (g() % 20 == 0) {
+        e[p] = static_cast<uint8_t>((e[p] + 1 + g() % 3) % 4);
+        own.back().push_back(p);
+      }
+    std::copy(e.begin(), e.end(), c1.begin() + 8000 + r * 700);
+    copy_at.push_back(8000 + r * 700);
+  }
+  // A short-period tandem repeat (6-bp unit, 80 copies): its q-mers vote for
+  // diagonals 6 apart, which must still be split into groups that fit a band.
+  const std::vector<uint8_t> unit = random_seq(g, 6);
+  for (int r = 0; r < 80; ++r) std::copy(unit.begin(), unit.end(), c1.begin() + 52000 + r * 6);
+  for (int e = 0; e < 3; ++e) c1[52000 + g() % 480] = rand_base(g);
+  Reference ref;
+  ref.seq.owned.assign(kContigPad, 4);
+  ref.names.push_back("chr1");
+  ref.offsets.push_back(ref.seq.owned.size());
+  ref.lengths.push_back(c1.size());
+  ref.seq.owned.insert(ref.seq.owned.end(), c1.begin(), c1.end());
+  ref.seq.owned.insert(ref.seq.owned.end(), kContigPad, 4);
+  Index ix = Index::build(ref, 14, 1, 4);
+  const IndexView view = ix.view(ref);
+  const auto& R = ref.seq.owned;
+  RepeatParams off;  // interval mode's tier R, with a small tau so that parts grow
+  off.tau = 8;
+  off.sub_margin = 20;
+  off.fallback_samples = 8;
+  off.lb_chains = 8;
+  RepeatParams on = off;
+  on.vote_occ = 256;
+  on.vote_top = 8;
+  std::unique_ptr<Workspace> ws(new Workspace);
+  RepeatScratch sc;
+  int n = 0, opt_off = 0, opt_on = 0, raised = 0, exact_off = 0, exact_on = 0;
+  for (int k = 0; k < 180; ++k) {
+    const int L = 150;
+    std::vector<uint8_t> s;
+    if (k < 160) {
+      const size_t cp = g() % copy_at.size();
+      const int off0 = static_cast<int>(g() % 140);
+      const int64_t start = static_cast<int64_t>(ref.offsets[0]) + copy_at[cp] + off0;
+      s.assign(R.begin() + start, R.begin() + start + L);
+      for (int p : own[cp])
+        if (p >= off0 && p < off0 + L && g() % 10 < 7) s[p - off0] = elem[p];
+    } else {  // from the tandem repeat
+      const int64_t start = static_cast<int64_t>(ref.offsets[0]) + 52000 + static_cast<int64_t>(g() % 330);
+      s.assign(R.begin() + start, R.begin() + start + L);
+    }
+    for (int e = 0; e < 2; ++e) {
+      const size_t p = g() % s.size();
+      s[p] = static_cast<uint8_t>((s[p] + 1 + g() % 3) % 4);
+    }
+    if (g() % 2) {
+      std::vector<uint8_t> rc(L);
+      for (int i = 0; i < L; ++i) rc[i] = s[L - 1 - i] < 4 ? 3 - s[L - 1 - i] : 4;
+      s.swap(rc);
+    }
+    const RepeatOut a = repeat_tier(view, off, s.data(), L, *ws, sc);
+    const RepeatOut b = repeat_tier(view, on, s.data(), L, *ws, sc);
+    if (!a.claim || !b.claim) continue;
+    const int opt = oracle_local(R, s.data(), L);
+    ++n;
+    for (const RepeatOut* o : {&a, &b}) {
+      CHECK(o->lo == kNoSub || (o->lo <= opt && opt <= o->hi), "votes read %d: OPT %d outside [%d, %d]", k, opt, o->lo,
+            o->hi);
+      CHECK(!o->exact || o->lo == opt, "votes read %d: exact %d but OPT %d", k, o->lo, opt);
+      CHECK(o->lo == kNoSub || (o->has_aln && rescore_affine(view, o->aln, s) == o->lo),
+            "votes read %d: lo %d without a CIGAR that scores it", k, o->lo);
+      CHECK(o->sub_hi <= o->hi && (o->sub_lo == kNoSub || o->sub_lo <= o->sub_hi),
+            "votes read %d: SUB interval [%d, %d], hi %d", k, o->sub_lo, o->sub_hi, o->hi);
+    }
+    CHECK(b.lo >= a.lo && b.hi == std::max(b.lo, a.hi), "votes read %d: votes give [%d, %d], without [%d, %d]", k,
+          b.lo, b.hi, a.lo, a.hi);
+    CHECK(b.nparts == a.nparts && b.nocc == a.nocc, "votes read %d: the parts changed", k);
+    opt_off += a.lo == opt;
+    opt_on += b.lo == opt;
+    raised += b.lo > a.lo;
+    exact_off += a.exact;
+    exact_on += b.exact;
+  }
+  CHECK(n >= 170, "votes: only %d reads claimed", n);
+  // 178-180 of 180 on seeds 20260927, 1, 2 and 13 (139-164 without votes);
+  // votes for a q-mer's first hit only, or for the weakest groups, give 139-169.
+  CHECK(opt_on > opt_off && opt_on * 100 >= 97 * n, "votes: lo = OPT on %d of %d reads with votes, %d without",
+        opt_on, n, opt_off);
+  std::fprintf(stderr, "tier R votes: %d diverged-copy and tandem reads; lo = OPT on %d with votes, %d without (%d raised); "
+                       "exact %d / %d\n", n, opt_on, opt_off, raised, exact_on, exact_off);
+}
+
+// The pair stage's use of tier R's alternatives (RepeatOut::alt, place_pair).
+// Mate x is a 90-bp piece P of an element plus 60 bases Q of its own. Copy A
+// of P is followed by other bases, so x aligns there 90M60S (85); copy B has
+// one substitution in P and is followed by Q's first 15 bases, so x scores
+// best there (105 aligned with one mismatch, one clip: 95). Mate y lies on
+// the reverse strand 300 bp after copy A. Without the local rescue, the
+// window search around y (exhaustive above about L - 54) misses x at A, so
+// without the alternatives x stays at B; with them, the pair (A, y) scores
+// 85 + 150 = 235 against the unpaired 95 + 150 - 17 = 228, and x moves to A
+// as MR, with XQ 0 and MAPQ at most 40.
+void test_pair_alts(std::mt19937_64& g) {
+  std::vector<uint8_t> c1 = random_seq(g, 60000);
+  const std::vector<uint8_t> P = random_seq(g, 90), Q = random_seq(g, 60);
+  const int64_t A = 10000, B = 40000;
+  std::copy(P.begin(), P.end(), c1.begin() + A);
+  for (int i = 0; i < 8; ++i) c1[A + 90 + i] = static_cast<uint8_t>((Q[i] + 1) % 4);  // no extension past P
+  std::vector<uint8_t> P2 = P;
+  P2[45] = static_cast<uint8_t>((P2[45] + 1) % 4);
+  std::copy(P2.begin(), P2.end(), c1.begin() + B);
+  std::copy(Q.begin(), Q.begin() + 15, c1.begin() + B + 90);
+  for (int i = 0; i < 8; ++i) c1[B + 105 + i] = static_cast<uint8_t>((Q[15 + i] + 1) % 4);
+  // Both mates in repeats: x2 = P3 + Q3 is best at B2 (95: P3 with one
+  // substitution, then Q3's first 10 bases) and aligns 95M55S at A2 (90);
+  // y2's forward image U + S is best at D (95: U's last 10 bases, then S with
+  // one substitution) and aligns 55S95M at A2 + 355 (90). Only the two
+  // alternatives make a proper pair: 180 against 95 + 95 - 17 = 173.
+  const std::vector<uint8_t> P3 = random_seq(g, 95), Q3 = random_seq(g, 55), U = random_seq(g, 55),
+                             S = random_seq(g, 95);
+  const int64_t A2 = 15000, B2 = 45000, D = 50000;
+  std::copy(P3.begin(), P3.end(), c1.begin() + A2);
+  for (int i = 0; i < 8; ++i) c1[A2 + 95 + i] = static_cast<uint8_t>((Q3[i] + 1) % 4);
+  std::copy(S.begin(), S.end(), c1.begin() + A2 + 355);
+  for (int i = 0; i < 8; ++i) c1[A2 + 354 - i] = static_cast<uint8_t>((U[54 - i] + 1) % 4);
+  std::vector<uint8_t> P4 = P3, S2 = S;
+  P4[47] = static_cast<uint8_t>((P4[47] + 1) % 4);
+  S2[47] = static_cast<uint8_t>((S2[47] + 1) % 4);
+  std::copy(P4.begin(), P4.end(), c1.begin() + B2);
+  std::copy(Q3.begin(), Q3.begin() + 10, c1.begin() + B2 + 95);
+  for (int i = 0; i < 8; ++i) c1[B2 + 105 + i] = static_cast<uint8_t>((Q3[10 + i] + 1) % 4);
+  std::copy(U.begin() + 45, U.end(), c1.begin() + D);
+  std::copy(S2.begin(), S2.end(), c1.begin() + D + 10);
+  for (int i = 0; i < 8; ++i) c1[D - 1 - i] = static_cast<uint8_t>((U[44 - i] + 1) % 4);
+  Reference ref;
+  ref.seq.owned.assign(kContigPad, 4);
+  ref.names.push_back("chr1");
+  ref.offsets.push_back(ref.seq.owned.size());
+  ref.lengths.push_back(c1.size());
+  ref.seq.owned.insert(ref.seq.owned.end(), c1.begin(), c1.end());
+  ref.seq.owned.insert(ref.seq.owned.end(), kContigPad, 4);
+  Index ix = Index::build(ref, 14, 1, 4);
+  const IndexView view = ix.view(ref);
+  const int64_t off = static_cast<int64_t>(ref.offsets[0]);
+  const auto& R = ref.seq.owned;
+  std::vector<uint8_t> x(P);
+  x.insert(x.end(), Q.begin(), Q.end());
+  std::vector<uint8_t> y(R.begin() + off + A + 300, R.begin() + off + A + 450);
+  std::reverse(y.begin(), y.end());
+  for (auto& c : y) c = static_cast<uint8_t>(3 - c);
+  RepeatParams rp;  // as certa map --intervals
+  rp.tau = 256;
+  rp.sub_margin = 20;
+  rp.fallback_samples = 8;
+  rp.lb_chains = 8;
+  rp.vote_occ = 256;
+  rp.vote_top = 8;
+  std::unique_ptr<Workspace> ws(new Workspace);
+  RepeatScratch sc;
+  const RepeatOut ivx = repeat_tier(view, rp, x.data(), 150, *ws, sc);
+  const RepeatOut ivy = repeat_tier(view, rp, y.data(), 150, *ws, sc);
+  CHECK(ivx.has_aln && ivx.lo == 95 && ivx.aln.ref_pos == off + B && ivx.aln.strand == 0,
+        "pair alternatives: x's best is %d at %lld (strand %d), not 95 at copy B", ivx.lo,
+        static_cast<long long>(ivx.aln.ref_pos - off), ivx.aln.strand);
+  bool alt_a = false;
+  for (int k = 0; k < ivx.n_alt; ++k) {
+    CHECK(ivx.alt[k].score >= kRepAltMin && ivx.alt[k].score > ivx.lo - kRepAltDrop && ivx.alt[k].B <= BMAX &&
+              (k == 0 || ivx.alt[k].score <= ivx.alt[k - 1].score),
+          "pair alternatives: alternative %d scores %d (lo %d, B %d)", k, ivx.alt[k].score, ivx.lo, ivx.alt[k].B);
+    alt_a |= ivx.alt[k].score == 85 && ivx.alt[k].strand == 0 && ivx.alt[k].lo <= off + A &&
+             off + A < ivx.alt[k].lo + ivx.alt[k].B;
+  }
+  CHECK(alt_a, "pair alternatives: copy A (85) is not among x's %d alternatives", ivx.n_alt);
+  CHECK(ivy.has_aln && ivy.exact && ivy.lo == 150 && ivy.aln.ref_pos == off + A + 300 && ivy.aln.strand == 1,
+        "pair alternatives: y not placed exactly at A + 300");
+  Placement se[2] = {place_single(Result(), 0, &ivx, 150), place_single(Result(), 0, &ivy, 150)};
+  const uint8_t* cp[2] = {x.data(), y.data()};
+  const int Ls[2] = {150, 150};
+  PairScratch psc;
+  auto contig_of = [&](int64_t pos) { return ref.contig_of(pos); };
+  RepeatOut ivx0 = ivx;
+  ivx0.n_alt = 0;
+  const RepeatOut* without[2] = {&ivx0, &ivy};
+  Placement o0[2];
+  const bool p0 = place_pair(view, 850, 12, se, without, cp, Ls, psc, contig_of, o0);
+  CHECK(!p0 && o0[0].r.ref_pos == off + B, "pair alternatives: without them x is paired (%d) or moved to %lld", p0,
+        static_cast<long long>(o0[0].r.ref_pos - off));
+  const RepeatOut* with[2] = {&ivx, &ivy};
+  Placement o[2];
+  const bool p = place_pair(view, 850, 12, se, with, cp, Ls, psc, contig_of, o);
+  CHECK(p && o[0].r.ref_pos == off + A && o[0].r.strand == 0 && o[0].r.score == 85 && o[0].r.tier == kTierMR &&
+            o[0].xq == 0 && o[0].mapq <= 40 && o[0].xl == 95 && o[1].r.ref_pos == off + A + 300,
+        "pair alternatives: proper %d, x at %lld score %d tier %d XQ %d MAPQ %d XL %d", p,
+        static_cast<long long>(o[0].r.ref_pos - off), o[0].r.score, o[0].r.tier, o[0].xq, o[0].mapq, o[0].xl);
+  CHECK(rescore_affine(view, o[0].r, x) == o[0].r.score, "pair alternatives: x's CIGAR scores %d, AS %d",
+        rescore_affine(view, o[0].r, x), o[0].r.score);
+
+  // Both mates in repeats: only their alternatives pair, and two repeat
+  // mates vouch for nothing (MAPQ 0).
+  std::vector<uint8_t> x2(P3), y2(U);
+  x2.insert(x2.end(), Q3.begin(), Q3.end());
+  y2.insert(y2.end(), S.begin(), S.end());
+  std::reverse(y2.begin(), y2.end());
+  for (auto& c : y2) c = static_cast<uint8_t>(3 - c);
+  const RepeatOut ivx2 = repeat_tier(view, rp, x2.data(), 150, *ws, sc);
+  const RepeatOut ivy2 = repeat_tier(view, rp, y2.data(), 150, *ws, sc);
+  CHECK(ivx2.has_aln && ivx2.lo == 95 && ivx2.aln.ref_pos == off + B2 && ivy2.has_aln && ivy2.lo == 95 &&
+            ivy2.aln.ref_pos == off + D && ivy2.aln.strand == 1,
+        "pair alternatives, two repeat mates: bests %d at %lld and %d at %lld (strand %d)", ivx2.lo,
+        static_cast<long long>(ivx2.aln.ref_pos - off), ivy2.lo, static_cast<long long>(ivy2.aln.ref_pos - off),
+        ivy2.aln.strand);
+  Placement se2[2] = {place_single(Result(), 0, &ivx2, 150), place_single(Result(), 0, &ivy2, 150)};
+  const uint8_t* cp2[2] = {x2.data(), y2.data()};
+  RepeatOut ivx20 = ivx2, ivy20 = ivy2;
+  ivx20.n_alt = ivy20.n_alt = 0;
+  const RepeatOut* without2[2] = {&ivx20, &ivy20};
+  Placement q0[2];
+  CHECK(!place_pair(view, 850, 12, se2, without2, cp2, Ls, psc, contig_of, q0),
+        "pair alternatives, two repeat mates: paired without them");
+  const RepeatOut* with2[2] = {&ivx2, &ivy2};
+  Placement q[2];
+  const bool p2 = place_pair(view, 850, 12, se2, with2, cp2, Ls, psc, contig_of, q);
+  CHECK(p2 && q[0].r.ref_pos == off + A2 && q[0].r.score == 90 && q[0].r.tier == kTierMR &&
+            q[1].r.ref_pos == off + A2 + 355 && q[1].r.score == 90 && q[1].r.tier == kTierMR && q[0].mapq == 0 &&
+            q[1].mapq == 0 && q[0].xq == 0 && q[1].xq == 0,
+        "pair alternatives, two repeat mates: proper %d, x2 at %lld (%d, MAPQ %d), y2 at %lld (%d, MAPQ %d)", p2,
+        static_cast<long long>(q[0].r.ref_pos - off), q[0].r.score, q[0].mapq,
+        static_cast<long long>(q[1].r.ref_pos - off), q[1].r.score, q[1].mapq);
+  CHECK(rescore_affine(view, q[0].r, x2) == 90 && rescore_affine(view, q[1].r, y2) == 90,
+        "pair alternatives, two repeat mates: CIGARs score %d and %d", rescore_affine(view, q[0].r, x2),
+        rescore_affine(view, q[1].r, y2));
+  std::fprintf(stderr, "pair alternatives: x moves from copy B (95) to copy A (85) beside its mate (MAPQ %d, "
+                       "%d alternatives); two repeat mates pair by their alternatives (MAPQ %d)\n",
+               o[0].mapq, ivx.n_alt, q[0].mapq);
+}
+
+// The pair stage's joint seeds (pair_votes, place_pair). A 500-bp fragment F
+// has three copies: A holds mate x (F's first 150 bases) exactly and mate y
+// (the reverse complement of its last 150) with 4 substitutions; B holds y
+// exactly and x with 4; T holds each with one. So each mate's best
+// single-end alignment (150) is at a copy where the other scores 130: the
+// window search around it (above the other mate's 150 - 17) finds nothing,
+// and the mates stay unpaired, although the pair at T scores 290 against the
+// unpaired 283. Both mates have exact q-mers at T, most at T of the three
+// copies: the joint seeds find that pair. A second copy of T ties with it.
+void test_pair_votes(std::mt19937_64& g) {
+  const int L = 150;
+  auto sub = [](std::vector<uint8_t>& v, int i) { v[i] = static_cast<uint8_t>((v[i] + 1) % 4); };
+  const std::vector<uint8_t> F = random_seq(g, 500);
+  std::vector<uint8_t> T = F, A = F, B = F;
+  sub(T, 75);
+  sub(T, 425);
+  for (int i : {360, 400, 440, 480}) sub(A, i);
+  for (int i : {30, 60, 100, 140}) sub(B, i);
+  const int64_t pT = 10000, pA = 30000, pB = 50000, pT2 = 65000;
+  auto build = [&](bool second, Reference& ref) {
+    std::vector<uint8_t> c1 = random_seq(g, 80000);
+    std::copy(T.begin(), T.end(), c1.begin() + pT);
+    std::copy(A.begin(), A.end(), c1.begin() + pA);
+    std::copy(B.begin(), B.end(), c1.begin() + pB);
+    if (second) std::copy(T.begin(), T.end(), c1.begin() + pT2);
+    ref.seq.owned.assign(kContigPad, 4);
+    ref.names.push_back("chr1");
+    ref.offsets.push_back(ref.seq.owned.size());
+    ref.lengths.push_back(c1.size());
+    ref.seq.owned.insert(ref.seq.owned.end(), c1.begin(), c1.end());
+    ref.seq.owned.insert(ref.seq.owned.end(), kContigPad, 4);
+  };
+  auto rc = [](std::vector<uint8_t> v) {
+    std::reverse(v.begin(), v.end());
+    for (auto& c : v) c = static_cast<uint8_t>(3 - c);
+    return v;
+  };
+  RepeatParams rp;  // as certa map --intervals
+  rp.tau = 256;
+  rp.sub_margin = 20;
+  rp.fallback_samples = 8;
+  rp.lb_chains = 8;
+  rp.vote_occ = 256;
+  rp.vote_top = 8;
+  PairVoteParams pv;  // as certa map --intervals
+  pv.occ = 512;
+  pv.top = 8;
+  pv.pad = rp.vote_pad;
+  std::unique_ptr<Workspace> ws(new Workspace);
+  RepeatScratch sc;
+  PairScratch psc;
+  const int Ls[2] = {L, L};
+
+  Reference ref;
+  build(false, ref);
+  Index ix = Index::build(ref, 14, 1, 4);
+  const IndexView view = ix.view(ref);
+  const int64_t off = static_cast<int64_t>(ref.offsets[0]);
+  auto contig_of = [&](int64_t pos) { return ref.contig_of(pos); };
+  const std::vector<uint8_t> x(F.begin(), F.begin() + L), y = rc(std::vector<uint8_t>(F.begin() + 350, F.end()));
+  const RepeatOut ivx = repeat_tier(view, rp, x.data(), L, *ws, sc);
+  const RepeatOut ivy = repeat_tier(view, rp, y.data(), L, *ws, sc);
+  CHECK(ivx.has_aln && ivx.lo == 150 && ivx.aln.ref_pos == off + pA && ivx.aln.strand == 0 && ivy.has_aln &&
+            ivy.lo == 150 && ivy.aln.ref_pos == off + pB + 350 && ivy.aln.strand == 1,
+        "pair votes: bests %d at %lld and %d at %lld, not 150 at copies A and B", ivx.lo,
+        static_cast<long long>(ivx.aln.ref_pos - off), ivy.lo, static_cast<long long>(ivy.aln.ref_pos - off));
+  bool alt_t = false;
+  for (int k = 0; k < ivx.n_alt; ++k)
+    alt_t |= ivx.alt[k].score == 145 && ivx.alt[k].strand == 0 && ivx.alt[k].lo <= off + pT &&
+             off + pT < ivx.alt[k].lo + ivx.alt[k].B;
+  CHECK(alt_t, "pair votes: copy T (145) is not among x's %d alternatives", ivx.n_alt);
+  const Placement se[2] = {place_single(Result(), 0, &ivx, L), place_single(Result(), 0, &ivy, L)};
+  const uint8_t* cp[2] = {x.data(), y.data()};
+  RepeatOut ivx0 = ivx, ivy0 = ivy;
+  ivx0.n_alt = ivy0.n_alt = 0;
+  const RepeatOut* none[2] = {&ivx0, &ivy0};
+  auto at_t = [&](const Placement* o, int64_t t, int s) {
+    return o[0].mapped && o[1].mapped && o[0].r.ref_pos == off + t + s && o[0].r.strand == 0 && o[0].r.score == 145 &&
+           o[0].r.tier == kTierMR && o[1].r.ref_pos == off + t + 350 - s && o[1].r.strand == 1 &&
+           o[1].r.score == 145 && o[1].r.tier == kTierMR;
+  };
+  // Without the joint seeds (and without tier R's alternatives): unpaired.
+  Placement o0[2];
+  CHECK(!place_pair(view, 850, 12, se, none, cp, Ls, psc, contig_of, o0) && o0[0].r.ref_pos == off + pA &&
+            o0[1].r.ref_pos == off + pB + 350 && o0[0].pair_gap == -1,
+        "pair votes: paired without them, or a mate moved");
+  // With them: the pair at T, 7 above the unpaired alternative; two moved
+  // mates vouch for nothing (MAPQ 0, XQ 0); the alignments rescore.
+  for (int top : {8, 1}) {
+    PairVoteParams p1 = pv;
+    p1.top = top;
+    Placement o[2];
+    const bool p = place_pair(view, 850, 12, se, none, cp, Ls, psc, contig_of, o, -1, &p1);
+    CHECK(p && at_t(o, pT, 0) && o[0].pair_gap == 7 && o[1].pair_gap == 7 && o[0].mapq == 0 && o[1].mapq == 0 &&
+              o[0].xq == 0 && o[1].xq == 0 && o[0].xl == 150 && o[1].xl == 150,
+          "pair votes (top %d): proper %d, x at %lld (%d), y at %lld (%d), gap %d, MAPQ %d / %d", top, p,
+          static_cast<long long>(o[0].r.ref_pos - off), o[0].r.score, static_cast<long long>(o[1].r.ref_pos - off),
+          o[1].r.score, o[0].pair_gap, o[0].mapq, o[1].mapq);
+    CHECK(rescore_affine(view, o[0].r, x) == 145 && rescore_affine(view, o[1].r, y) == 145,
+          "pair votes: the CIGARs score %d and %d", rescore_affine(view, o[0].r, x), rescore_affine(view, o[1].r, y));
+  }
+  // Every 14-mer of a mate occurs in two or three copies: with one hit
+  // allowed nothing votes, and the pair is not found ...
+  PairVoteParams p_occ1 = pv;
+  p_occ1.occ = 1;
+  Placement o1[2];
+  CHECK(!place_pair(view, 850, 12, se, none, cp, Ls, psc, contig_of, o1, -1, &p_occ1),
+        "pair votes: paired by q-mers with more hits than allowed");
+  // ... unless x's alternative at T is given: y is then searched in its window.
+  const RepeatOut* x_alts[2] = {&ivx, &ivy0};
+  Placement o2[2];
+  CHECK(!place_pair(view, 850, 12, se, x_alts, cp, Ls, psc, contig_of, o2),
+        "pair votes: x's alternatives alone pair the mates without the window search");
+  const bool p2 = place_pair(view, 850, 12, se, x_alts, cp, Ls, psc, contig_of, o2, -1, &p_occ1);
+  CHECK(p2 && at_t(o2, pT, 0) && o2[0].pair_gap == 7,
+        "pair votes: y not found in the window of x's alternative (proper %d, x at %lld, y at %lld)", p2,
+        static_cast<long long>(o2[0].r.ref_pos - off), static_cast<long long>(o2[1].r.ref_pos - off));
+  // A pair that already scores the sum of its mates' bests: nothing is
+  // searched, and the records are the same with and without the joint seeds.
+  {
+    const std::vector<uint8_t> xt(T.begin(), T.begin() + L), yt = rc(std::vector<uint8_t>(T.begin() + 350, T.end()));
+    const RepeatOut ix2 = repeat_tier(view, rp, xt.data(), L, *ws, sc), iy2 = repeat_tier(view, rp, yt.data(), L, *ws, sc);
+    const Placement s2[2] = {place_single(Result(), 0, &ix2, L), place_single(Result(), 0, &iy2, L)};
+    const uint8_t* c2[2] = {xt.data(), yt.data()};
+    const RepeatOut* iv2[2] = {&ix2, &iy2};
+    Placement a[2], b[2];
+    const bool pa = place_pair(view, 850, 12, s2, iv2, c2, Ls, psc, contig_of, a);
+    const bool pb = place_pair(view, 850, 12, s2, iv2, c2, Ls, psc, contig_of, b, -1, &pv);
+    bool same = pa && pb;
+    for (int m = 0; m < 2; ++m)
+      same = same && a[m].r.ref_pos == b[m].r.ref_pos && a[m].r.tier == b[m].r.tier && a[m].mapq == b[m].mapq &&
+             a[m].xq == b[m].xq && a[m].pair_gap == b[m].pair_gap && a[m].r.score == 150 && a[m].pair_gap == 17;
+    CHECK(same && a[0].r.ref_pos == off + pT && a[1].r.ref_pos == off + pT + 350,
+          "pair votes: a pair at its mates' bests changes with the joint seeds (proper %d / %d)", pa, pb);
+  }
+
+  // Two copies of T: the pair fits both equally (gap 0, MAPQ 0). Which one a
+  // pair takes follows from its bases, so the same pair takes the same copy
+  // again, and pairs shifted along the fragment do not all take the same.
+  Reference ref2;
+  build(true, ref2);
+  Index ix2 = Index::build(ref2, 14, 1, 4);
+  const IndexView view2 = ix2.view(ref2);
+  const int64_t off2 = static_cast<int64_t>(ref2.offsets[0]);
+  auto contig_of2 = [&](int64_t pos) { return ref2.contig_of(pos); };
+  int first = 0, second = 0;
+  for (int s = 0; s < 16; ++s) {
+    const std::vector<uint8_t> xs(F.begin() + s, F.begin() + s + L),
+        ys = rc(std::vector<uint8_t>(F.begin() + 350 - s, F.begin() + 500 - s));
+    RepeatOut jx = repeat_tier(view2, rp, xs.data(), L, *ws, sc), jy = repeat_tier(view2, rp, ys.data(), L, *ws, sc);
+    jx.n_alt = jy.n_alt = 0;
+    const Placement s3[2] = {place_single(Result(), 0, &jx, L), place_single(Result(), 0, &jy, L)};
+    const uint8_t* c3[2] = {xs.data(), ys.data()};
+    const RepeatOut* iv3[2] = {&jx, &jy};
+    Placement o[2], again[2];
+    const bool p = place_pair(view2, 850, 12, s3, iv3, c3, Ls, psc, contig_of2, o, -1, &pv);
+    const bool q = place_pair(view2, 850, 12, s3, iv3, c3, Ls, psc, contig_of2, again, -1, &pv);
+    const bool t1 = p && o[0].r.ref_pos == off2 + pT + s && o[1].r.ref_pos == off2 + pT + 350 - s;
+    const bool t2 = p && o[0].r.ref_pos == off2 + pT2 + s && o[1].r.ref_pos == off2 + pT2 + 350 - s;
+    CHECK((t1 || t2) && o[0].r.score == 145 && o[1].r.score == 145 && o[0].pair_gap == 0 && o[0].mapq == 0 &&
+              o[1].mapq == 0,
+          "pair votes, two copies (shift %d): proper %d, x at %lld (%d), y at %lld (%d), gap %d", s, p,
+          static_cast<long long>(o[0].r.ref_pos - off2), o[0].r.score, static_cast<long long>(o[1].r.ref_pos - off2),
+          o[1].r.score, o[0].pair_gap);
+    CHECK(q == p && again[0].r.ref_pos == o[0].r.ref_pos && again[1].r.ref_pos == o[1].r.ref_pos,
+          "pair votes, two copies (shift %d): the same pair takes another copy the second time", s);
+    first += t1;
+    second += t2;
+  }
+  CHECK(first > 0 && second > 0, "pair votes, two copies: %d pairs take the first copy and %d the second", first, second);
+  std::fprintf(stderr, "pair votes: mates best at different copies (150 + 130) pair at the copy that fits both "
+                       "(145 + 145); of 16 pairs on two such copies, %d take the first and %d the second\n",
+               first, second);
 }
 
 // --mapq cal (interval.h cal_mapq): the cell of each record against a
@@ -776,7 +1289,32 @@ void test_pair_model() {
   CHECK(q1[0].mapq == q2[0].mapq && q1[1].mapq == q2[1].mapq && q1[0].mapq <= 60 && q1[1].mapq <= 60,
         "pair_model_mapq with T2T views");
   CHECK(same_alignment(q1[0].r, a.r) && q1[0].xq == a.xq, "pair_model_mapq changed more than MAPQ");
-  std::fprintf(stderr, "--mapq pair: inputs, T2T classes, tree walk and MAPQ thresholds checked\n");
+  // --mapq-scale bwa: the same model value, kept in phred, written through
+  // kBwaScale; the scale is monotone, 0 at 0 and 60 from its last entry.
+  CHECK(q1[0].phred == q1[0].mapq && q1[1].phred == q1[1].mapq, "pair_model_mapq: phred %d / %d, MAPQ %d / %d",
+        q1[0].phred, q1[1].phred, q1[0].mapq, q1[1].mapq);
+  Placement w1[2] = {a, b};
+  pair_model_mapq(w1, true, 350, tv, true);
+  for (int x = 0; x < 2; ++x)
+    CHECK(w1[x].phred == q1[x].phred && w1[x].mapq == kBwaScale[std::min(q1[x].phred, kBwaScaleMax)],
+          "--mapq-scale bwa, mate %d: phred %d, MAPQ %d (scale %d)", x, w1[x].phred, w1[x].mapq,
+          kBwaScale[std::min(q1[x].phred, kBwaScaleMax)]);
+  CHECK(kBwaScale[0] == 0 && kBwaScale[kBwaScaleMax] == 60 && bwa_scale(kBwaScaleMax + 5) == 60 && bwa_scale(-3) == 0,
+        "kBwaScale ends");
+  for (int m = 1; m <= kBwaScaleMax; ++m)
+    CHECK(kBwaScale[m] >= kBwaScale[m - 1] && kBwaScale[m] >= m, "kBwaScale at %d: %d after %d", m, kBwaScale[m],
+          kBwaScale[m - 1]);
+  // The levels against BWA-MEM's meaning on HG002 (VALIDATION_RESULTS.md,
+  // "The fitted MAPQ on BWA's scale"): Phred 5 is minibwa's 20-29 band,
+  // Phred 15 its 50-54 band, Phred 20 its 55-59 band, Phred 40 its 60.
+  CHECK(bwa_scale(5) >= 20 && bwa_scale(5) <= 29 && bwa_scale(15) >= 50 && bwa_scale(15) <= 54 && bwa_scale(20) >= 55 &&
+            bwa_scale(20) <= 59 && bwa_scale(40) == 60,
+        "kBwaScale levels: %d, %d, %d, %d", bwa_scale(5), bwa_scale(15), bwa_scale(20), bwa_scale(40));
+  Placement w2[2] = {a, u};
+  w2[1].mapq = 7;
+  pair_model_mapq(w2, false, 0, nullptr, true);
+  CHECK(w2[1].mapq == 7 && w2[1].phred == -1, "--mapq-scale bwa: an unmapped mate keeps its MAPQ and has no phred");
+  std::fprintf(stderr, "--mapq pair: inputs, T2T classes, tree walk, MAPQ thresholds and the BWA scale checked\n");
 }
 
 // The chain lift (src/chain.cpp, bench/lift_sam.py's rule) on a small chain
@@ -901,9 +1439,22 @@ int main(int argc, char** argv) {
     test_fastq_scan(gq);
   }
   test_iv_mapq();
+  test_pr_mapq();
   test_cal_mapq();
   test_pair_model();
   test_chain();
+  {
+    std::mt19937_64 gv(seed ^ 0x766f746573ULL);  // its own stream: the other tests' data stay as they were
+    test_tier_r_votes(gv);
+  }
+  {
+    std::mt19937_64 gp(seed ^ 0x616c7473ULL);  // its own stream
+    test_pair_alts(gp);
+  }
+  {
+    std::mt19937_64 gj(seed ^ 0x6a6f696e74ULL);  // its own stream
+    test_pair_votes(gj);
+  }
   Reference ref = make_reference(g);
   // Adversarial reads for tier SL, planted before the index is built:
   //  (a) the read has a mismatch in most parts at its true locus (so few or
@@ -1874,7 +2425,7 @@ int main(int argc, char** argv) {
     pp.max_dist = D;
     const Params cfgs[] = {{5, 256}, {5, 16}};
     std::vector<int> truth_pair(pairs.size(), INT32_MIN);
-    int checked = 0, sub_checked = 0;
+    int checked = 0, sub_checked = 0, found_n = 0, below_s2 = 0;
     // The mates single-end (the single-end term of a PR mate's XQ).
     ReadBatch mb;
     for (const auto& pr : pairs)
@@ -1918,6 +2469,17 @@ int main(int argc, char** argv) {
         ++sub_checked;
         CHECK(po.sub >= sub, "budget=%d pair %zu: S2 %d below the best other pair %d (R1 %d)", pc.budget, i, po.sub,
               sub, po.score);
+        // The best other pair found (the point MAPQ): one S2 bounds, and a
+        // proper pair other than R1's.
+        CHECK(r1.sub_found == r2.sub_found && r1.sub_found <= po.sub,
+              "budget=%d pair %zu: other pair found %d/%d, S2 %d", pc.budget, i, r1.sub_found, r2.sub_found, po.sub);
+        if (r1.sub_found != kNoSub) {
+          const int other = oracle_pair_other_start(R, pairs[i].a, pairs[i].b, D, r1, r2);
+          CHECK(r1.sub_found <= other, "budget=%d pair %zu: other pair found %d, but none scores above %d", pc.budget,
+                i, r1.sub_found, other);
+          ++found_n;
+        }
+        below_s2 += r1.sub_found < po.sub;
         const Result rr[2] = {r1, r2}, ss[2] = {se_res[2 * i], se_res[2 * i + 1]};
         const std::vector<uint8_t> mm[2] = {pairs[i].a, pairs[i].b};
         check_pr(checker4, rr, ss, mm, D, sub, "PR pair", i, prc);
@@ -1926,6 +2488,10 @@ int main(int argc, char** argv) {
     }
     std::fprintf(stderr, "PR scores checked against the proper-pair oracle for %d pairs; S2 against the other-pair oracle %d times\n",
                  checked, sub_checked);
+    // Most certified pairs have no other pair found within the margin, where
+    // S2 is a bound: the point MAPQ differs from the bound's there.
+    CHECK(found_n > 0 && below_s2 > 0, "other pairs found %d times, below S2 %d times", found_n, below_s2);
+    std::fprintf(stderr, "PR other pair found: %d pairs, below S2 for %d of %d\n", found_n, below_s2, sub_checked);
     std::fprintf(stderr, "checker on PR pairs: %d pairs, %d mates' XQ resting on XS, %d proven; %d of %d false pair claims rejected\n",
                  prc.pairs, prc.needed, prc.proven, prc.caught, prc.tampered);
   }
@@ -2076,6 +2642,19 @@ int main(int argc, char** argv) {
       plant(base + 450, change(yf, {6, 19, 31, 43, 55, 67, 79, 91, 103}));  // 65
       fam.push_back({'J', x, rcv(yf), 5});
     }
+    for (int n = 0; n < 3; ++n, base += 1300) {  // K: a second partner found (the point MAPQ)
+      // R1's x with two partners, as J, but the second scores above the
+      // window bound (65), so the window search returns it: 7 mismatches and
+      // a 1-bp deletion inside index part 2 (103 - 28 - 7 = 68; window part 8
+      // exact), the pair 178. No index part of either partner is exact, so no
+      // anchor realizes that pair: only "y elsewhere in R1's window" finds it.
+      const std::vector<uint8_t> x = random_seq(h, 110), yf = random_seq(h, 110);
+      plant(base, x);
+      plant(base + 290, change(yf, {6, 19, 31, 43, 55, 67, 79, 91}));  // 70
+      const std::vector<uint8_t> y2 = change(yf, {6, 19, 31, 43, 67, 79, 91});
+      plant(base + 450, cat(cat(sub(y2, 0, 50), random_seq(h, 1)), sub(y2, 50, 110)));  // 50M1D60M: 68
+      fam.push_back({'K', x, rcv(yf), 5});
+    }
     Index tix = Index::build(tr, 14, 4, 4);
     const IndexView tv = tix.view(tr);
     PairParams tp;
@@ -2094,7 +2673,8 @@ int main(int argc, char** argv) {
       const PairOut po = certify_pair(tv, tp, f.m1.data(), L1, f.m2.data(), L2, *w1, *w2, tsc, r1, r2);
       const int opt = oracle_pair(T, f.m1, f.m2, tp.max_dist);
       const int expect = f.kind == 'A' ? 260 : f.kind == 'B' ? 248 : f.kind == 'D' ? 180 : f.kind == 'F' ? 270
-                         : f.kind == 'G' || f.kind == 'H' ? 300 : f.kind == 'I' ? 270 : f.kind == 'J' ? 180 : 290;
+                         : f.kind == 'G' || f.kind == 'H' ? 300 : f.kind == 'I' ? 270
+                         : f.kind == 'J' || f.kind == 'K' ? 180 : 290;
       const bool designed = opt == expect && (f.kind == 'A' ? !po.certified : po.certified);
       as_designed += designed;
       if (!designed)
@@ -2105,6 +2685,17 @@ int main(int argc, char** argv) {
       CHECK(po.score == opt, "threshold pair %c%zu: PR score %d != oracle %d", f.kind, i, po.score, opt);
       const int sub2 = oracle_pair_sub(T, f.m1, f.m2, tp.max_dist, r1, r2);
       CHECK(po.sub >= sub2, "threshold pair %c%zu: S2 %d below the best other pair %d", f.kind, i, po.sub, sub2);
+      // The best other pair found, by the path designed: x elsewhere in R1's
+      // chain (F: a tie, I), y elsewhere in R1's window (K), another anchor
+      // (H); D's and J's other pairs score exactly the window bound, which
+      // the search never returns: S2 bounds them, none is found.
+      const int found = f.kind == 'F' ? 270 : f.kind == 'I' ? 265 : f.kind == 'K' ? 178 : f.kind == 'H' ? 291
+                        : f.kind == 'D' || f.kind == 'J' ? kNoSub : INT32_MIN;
+      CHECK(r1.sub_found == r2.sub_found && r1.sub_found <= po.sub, "threshold pair %c%zu: other pair found %d/%d, S2 %d",
+            f.kind, i, r1.sub_found, r2.sub_found, po.sub);
+      if (found != INT32_MIN)
+        CHECK(r1.sub_found == found, "threshold pair %c%zu: other pair found %d, designed %d (S2 %d)", f.kind, i,
+              r1.sub_found, found, po.sub);
       // The checker, with no single-end certificate: XQ rests on XS alone.
       const Result rr[2] = {r1, r2}, ss[2] = {Result{}, Result{}};
       const std::vector<uint8_t> mm[2] = {f.m1, f.m2};
@@ -2198,6 +2789,8 @@ int main(int argc, char** argv) {
       cfgs[c].lb_chains = 8;
     }
     cfgs[4].cmax = 8;  // most anchors unaffordable: the fallback samples
+    cfgs[3].vote_occ = 256;  // seed votes as certa map --intervals (cfg 4 without)
+    cfgs[3].vote_top = 8;
     std::unique_ptr<Workspace> ws(new Workspace);
     RepeatScratch sc;
     int checked = 0;
@@ -2274,6 +2867,8 @@ int main(int argc, char** argv) {
       ip.sub_margin = 20;
       ip.fallback_samples = 8;
       ip.lb_chains = 8;
+      ip.vote_occ = 256;  // as certa map --intervals
+      ip.vote_top = 8;
       PairScratch psc;
       int placed = 0, proper_n = 0, rescued = 0, pair_checked = 0, improper_cert = 0, repaired = 0, local_paired = 0;
       auto contig_of = [&](int64_t pos) { return ref.contig_of(pos); };
@@ -2687,6 +3282,8 @@ int main(int argc, char** argv) {
       ip.sub_margin = 20;
       ip.fallback_samples = 8;
       ip.lb_chains = 8;
+      ip.vote_occ = 256;  // as certa map --intervals
+      ip.vote_top = 8;
       int acc = 0, total = 0, tampered = 0, caught = 0, by_proof = 0;
       for (size_t i = 0; i < reads.size(); ++i) {
         if (i % 2 && !planted_bound(i)) continue;
