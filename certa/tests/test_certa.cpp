@@ -788,6 +788,100 @@ void test_tier_r_votes(std::mt19937_64& g) {
                        "exact %d / %d\n", n, opt_on, opt_off, raised, exact_on, exact_off);
 }
 
+// Tier R's wide band (RepeatParams::wide). Reads with an insertion or a
+// deletion of 9-40 bases at least 30 bases from either end.
+// - From a 400-bp element with 20 identical copies, no part is rare, so no
+//   chain spans the indel. The two sides lie on diagonals 9-40 apart, more
+//   than a sampled copy's band (+-8) or a vote group (+-16) holds, so without
+//   the wide band tier R's best alignment clips one side whenever they are
+//   more than 16 apart. With it lo reaches OPT, through the indel.
+// - From unique sequence, the chains of rare parts already span the indel.
+// Every read's bounds stay sound, hi is max(lo, hi without it), the parts are
+// the same, and every read the wide band raises has the indel in its CIGAR.
+void test_tier_r_wide(std::mt19937_64& g) {
+  std::vector<uint8_t> c1 = random_seq(g, 60000);
+  const std::vector<uint8_t> elem = random_seq(g, 400);
+  for (int r = 0; r < 20; ++r) std::copy(elem.begin(), elem.end(), c1.begin() + 20000 + r * 1000);
+  Reference ref;
+  ref.seq.owned.assign(kContigPad, 4);
+  ref.names.push_back("chr1");
+  ref.offsets.push_back(ref.seq.owned.size());
+  ref.lengths.push_back(c1.size());
+  ref.seq.owned.insert(ref.seq.owned.end(), c1.begin(), c1.end());
+  ref.seq.owned.insert(ref.seq.owned.end(), kContigPad, 4);
+  Index ix = Index::build(ref, 14, 1, 4);
+  const IndexView view = ix.view(ref);
+  const auto& R = ref.seq.owned;
+  RepeatParams off;  // interval mode's tier R, votes on, as certa map --intervals
+  off.tau = 8;
+  off.sub_margin = 20;
+  off.fallback_samples = 8;
+  off.lb_chains = 8;
+  off.vote_occ = 256;
+  off.vote_top = 8;
+  RepeatParams on = off;
+  on.wide = 1;
+  std::unique_ptr<Workspace> ws(new Workspace);
+  RepeatScratch sc;
+  int n = 0, nrep = 0, opt_off = 0, opt_on = 0, raised = 0, raised_indel = 0;
+  for (int k = 0; k < 160; ++k) {
+    const int L = 150, m = 9 + static_cast<int>(g() % 32);
+    const bool ins = g() % 2, rep = k >= 40;
+    const int p = 30 + static_cast<int>(g() % (L - 60 - m));
+    // In the element: the read and the bases it skips lie in one copy.
+    const int64_t start = static_cast<int64_t>(ref.offsets[0]) +
+                          (rep ? 20000 + 1000 * static_cast<int64_t>(g() % 20) + static_cast<int64_t>(g() % (400 - L - m))
+                               : 1000 + static_cast<int64_t>(g() % 15000));
+    std::vector<uint8_t> s(R.begin() + start, R.begin() + start + p);
+    if (ins) {
+      for (int i = 0; i < m; ++i) s.push_back(rand_base(g));
+      s.insert(s.end(), R.begin() + start + p, R.begin() + start + L - m);
+    } else {
+      s.insert(s.end(), R.begin() + start + p + m, R.begin() + start + L + m);
+    }
+    if (g() % 2) {
+      std::vector<uint8_t> rc(L);
+      for (int i = 0; i < L; ++i) rc[i] = s[L - 1 - i] < 4 ? 3 - s[L - 1 - i] : 4;
+      s.swap(rc);
+    }
+    const RepeatOut a = repeat_tier(view, off, s.data(), L, *ws, sc);
+    const RepeatOut b = repeat_tier(view, on, s.data(), L, *ws, sc);
+    if (!a.claim || !b.claim) continue;
+    const int opt = oracle_local(R, s.data(), L);
+    ++n;
+    for (const RepeatOut* o : {&a, &b}) {
+      CHECK(o->lo == kNoSub || (o->lo <= opt && opt <= o->hi), "wide read %d: OPT %d outside [%d, %d]", k, opt, o->lo,
+            o->hi);
+      CHECK(!o->exact || o->lo == opt, "wide read %d: exact %d but OPT %d", k, o->lo, opt);
+      CHECK(o->lo == kNoSub || (o->has_aln && rescore_affine(view, o->aln, s) == o->lo),
+            "wide read %d: lo %d without a CIGAR that scores it", k, o->lo);
+    }
+    CHECK(b.lo >= a.lo && b.hi == std::max(b.lo, a.hi), "wide read %d: the wide band gives [%d, %d], without [%d, %d]",
+          k, b.lo, b.hi, a.lo, a.hi);
+    CHECK(b.nparts == a.nparts && b.nocc == a.nocc, "wide read %d: the parts changed", k);
+    if (b.lo > a.lo) {
+      bool gap = false;
+      for (int i = 0; b.has_aln && i < b.aln.n_cigar; ++i) {
+        const uint32_t op = b.aln.cigar[i] & 0xF;
+        gap |= (op == kOpI || op == kOpD) && static_cast<int>(b.aln.cigar[i] >> 4) >= 9;
+      }
+      ++raised;
+      raised_indel += gap;
+    }
+    if (!rep) continue;
+    ++nrep;
+    opt_off += a.lo == opt;
+    opt_on += b.lo == opt;
+  }
+  CHECK(n >= 155 && nrep >= 115, "wide: only %d reads claimed (%d from the element)", n, nrep);
+  // Without the wide band, about the reads whose indel is at most 16 bases.
+  CHECK(opt_on * 100 >= 95 * nrep && opt_on > opt_off && raised_indel == raised,
+        "wide: lo = OPT on %d of %d element reads with the wide band, %d without; %d raised, %d through the indel",
+        opt_on, nrep, opt_off, raised, raised_indel);
+  std::fprintf(stderr, "tier R wide band: %d reads with a 9-40 bp indel (%d in a 20-copy element); lo = OPT on %d of "
+                       "those with it, %d without; %d raised, all through the indel\n", n, nrep, opt_on, opt_off, raised);
+}
+
 // The pair stage's use of tier R's alternatives (RepeatOut::alt, place_pair).
 // Mate x is a 90-bp piece P of an element plus 60 bases Q of its own. Copy A
 // of P is followed by other bases, so x aligns there 90M60S (85); copy B has
@@ -853,6 +947,7 @@ void test_pair_alts(std::mt19937_64& g) {
   rp.lb_chains = 8;
   rp.vote_occ = 256;
   rp.vote_top = 8;
+  rp.wide = 1;
   std::unique_ptr<Workspace> ws(new Workspace);
   RepeatScratch sc;
   const RepeatOut ivx = repeat_tier(view, rp, x.data(), 150, *ws, sc);
@@ -976,6 +1071,7 @@ void test_pair_votes(std::mt19937_64& g) {
   rp.lb_chains = 8;
   rp.vote_occ = 256;
   rp.vote_top = 8;
+  rp.wide = 1;
   PairVoteParams pv;  // as certa map --intervals
   pv.occ = 512;
   pv.top = 8;
@@ -1446,6 +1542,10 @@ int main(int argc, char** argv) {
   {
     std::mt19937_64 gv(seed ^ 0x766f746573ULL);  // its own stream: the other tests' data stay as they were
     test_tier_r_votes(gv);
+  }
+  {
+    std::mt19937_64 gw(seed ^ 0x77696465ULL);  // its own stream
+    test_tier_r_wide(gw);
   }
   {
     std::mt19937_64 gp(seed ^ 0x616c7473ULL);  // its own stream
@@ -2791,6 +2891,7 @@ int main(int argc, char** argv) {
     cfgs[4].cmax = 8;  // most anchors unaffordable: the fallback samples
     cfgs[3].vote_occ = 256;  // seed votes as certa map --intervals (cfg 4 without)
     cfgs[3].vote_top = 8;
+    cfgs[3].wide = 1;  // and the wide band
     std::unique_ptr<Workspace> ws(new Workspace);
     RepeatScratch sc;
     int checked = 0;
@@ -2869,6 +2970,7 @@ int main(int argc, char** argv) {
       ip.lb_chains = 8;
       ip.vote_occ = 256;  // as certa map --intervals
       ip.vote_top = 8;
+      ip.wide = 1;  // the wide band, as certa map --intervals
       PairScratch psc;
       int placed = 0, proper_n = 0, rescued = 0, pair_checked = 0, improper_cert = 0, repaired = 0, local_paired = 0;
       auto contig_of = [&](int64_t pos) { return ref.contig_of(pos); };
@@ -3284,6 +3386,7 @@ int main(int argc, char** argv) {
       ip.lb_chains = 8;
       ip.vote_occ = 256;  // as certa map --intervals
       ip.vote_top = 8;
+      ip.wide = 1;  // the wide band, as certa map --intervals
       int acc = 0, total = 0, tampered = 0, caught = 0, by_proof = 0;
       for (size_t i = 0; i < reads.size(); ++i) {
         if (i % 2 && !planted_bound(i)) continue;

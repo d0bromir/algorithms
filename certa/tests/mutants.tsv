@@ -243,3 +243,7 @@ PV5	include/certa/interval.h	s/        if (n == 0 || n > (uint32_t)pv.occ) conti
 PV6	include/certa/interval.h	s/      if (top.size() == ntop \&\& gf\[f\].votes + rmax < top.back().votes) break;/      if (!top.empty()) break;/	killed	pair_votes: the scan of forward groups stops after the first that joins a reverse group
 BS1	include/certa/pair_model.h	s/    pl\[x\].mapq = bwa ? bwa_scale(q\[x\]) : q\[x\];/    pl[x].mapq = q[x];/	killed	--mapq-scale bwa: the model's Phred written as MAPQ
 BS2	include/certa/pair_model.h	s/inline int bwa_scale(int m) { return kBwaScale\[clampi(m, 0, kBwaScaleMax)\]; }/inline int bwa_scale(int m) { return kBwaScale[clampi(m, 0, kBwaScaleMax - 1)]; }/	killed	--mapq-scale bwa: 60 never written
+WB1	include/certa/repeat.h	s/  if (rp.wide && lo != kNoSub && lo < Ueff && lo <= L \* kMatch - kWideLoss) {/  if (false) {/	killed	tier R wide band: never run
+WB2	include/certa/repeat.h	s/    const int64_t blo = lo_lo + lo_B \/ 2 - B \/ 2;/    const int64_t blo = lo_lo;/	killed	tier R wide band: not centred on the band of A*
+WB3	include/certa/repeat.h	s/    if (v > lo) { lo = v; lo_lo = blo; lo_B = B; }/    if (v > lo) { lo = v; lo_B = B; }/	killed	tier R wide band: lo raised without its band (A* aligned elsewhere)
+WB4	include/certa/repeat.h	s/constexpr int kWideLoss = 20;/constexpr int kWideLoss = 200;/	killed	tier R wide band: its threshold never met

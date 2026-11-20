@@ -6,15 +6,15 @@
 #   truth_pair.sh features BUILD_DIR HS1_CIDX CHAIN OUT_DIR
 #   truth_pair.sh fit OUT_DIR T2T_DIR
 #   truth_pair.sh check BUILD_DIR HS1_CIDX CHAIN OUT_DIR
-#   truth_pair.sh holdout BUILD_DIR HS1_CIDX CHAIN OUT_DIR H_PLACE_DIR
+#   truth_pair.sh holdout BUILD_DIR HS1_CIDX CHAIN OUT_DIR H_PLACE_DIR [PREV_DIR]
 # HS1_CIDX is `certa index hs1.fa -q 22 -s 1`; CHAIN is UCSC's
 # hs1ToHg38.over.chain.gz; T2T_DIR is truth_t2t.sh's OUT_DIR (the other
 # aligners' placements, X/*.npz); H_PLACE_DIR is truth_hg005.sh's
 # OUT_DIR/place.
 # - features: tests A, B and H with --t2t --feature-tags (X.f4.npz);
-# - fit: the two models, cross-validated on HG002 (even pairs, then the odd
-#   pairs at matched N: cv_A.md, cv_B.md) and on every pair
-#   (mapq_model.h, mapq_model_t2t.h, to copy to include/certa/);
+# - fit: the two models, with and without XM, cross-validated on HG002 (even
+#   pairs, then the odd pairs at matched N: cv_A.md, cv_B.md) and on every
+#   pair (mapq_model[_xm].h, mapq_model_t2t[_xm].h, to copy to include/certa/);
 # - check (a build with those headers): --mapq pair, with and without
 #   --t2t, on tests A and B: CERTA's MAPQ against the fit's replay;
 # - holdout (the same build, run once): HG005 with --mapq pair, with and
@@ -27,8 +27,12 @@ W=~/certa-truth; FAI=~/certa-bench/idx/ref.fa.fai; IDX=~/certa-bench/idx/grch38.
 export PATH=~/tools/env/truth/bin:$PATH
 PIN="taskset -c 0-63"; AUX="taskset -c 64-127"
 TV="/usr/bin/time -f %e\t%U\t%S\t%M"
-IV="--intervals --iv-mapq cert --iv-pair all -t 64 -o /dev/stdout"
+# The refit of 2026-11-20 is on the placements of the default build
+# (--iv-rescue local, the seed votes, tier R's alternatives, the joint
+# seeds); the models of 2026-11-05 were fitted without --iv-rescue local.
+IV="--intervals --iv-mapq cert --iv-pair all --iv-rescue local -t 64 -o /dev/stdout"
 P="$AUX python3 $T/truth_mapq_pair.py"
+INC=$T/../include/certa  # the models (and kBwaScale) of the build checked
 reads() { echo "$W/$1/${1}_1.fq $W/$1/${1}_2.fq"; }
 case $step in
 features)
@@ -40,53 +44,81 @@ features)
   done ;;
 fit)
   O=$(cd "$1" && pwd); TD=$(cd "$2" && pwd)
-  # Depth 4 (300 trees) and 6 (400) cross-validated; the rule fixed beforehand
-  # (depth 6 if it lowers test B's errors by >= 5 % at two of three N and
-  # raises none by > 5 %) chose 6 for the T2T model only, as fitted below.
+  # Depth: 4 (300 trees) for the pair model and 6 (400) for the T2T model, as
+  # the rule below chose on 2026-11-05 between depth 4 and 6. On 2026-11-20
+  # the same rule, fixed beforehand, decides for each model whether XM (--xm,
+  # the margin of a pair placed from the alignments found) is an input: yes
+  # if it lowers test B's misplaced mates per million at matched N (the odd
+  # pairs, cv_B.md) by >= 5 % at two of its three N and raises none by > 5 %.
+  # Both final fits of each model are made; the rule picks the one copied to
+  # include/certa/. TD (the other aligners' placements, X/*.npz) is optional
+  # context: the rows of the runs found there.
   echo "== $(date +%T) fits"
   D6="--depth 6 --rounds 400"
-  $P fit --cv $O/A.f4.npz $O/B.f4.npz > $O/cv_pair.h 2> $O/cv_pair.log &
-  $P fit --cv $D6 $O/A.f4.npz $O/B.f4.npz > $O/cv_pair_d6.h 2> $O/cv_pair_d6.log &
-  $P fit --cv --t2t $O/A.f4.npz $O/B.f4.npz > $O/cv_t2t.h 2> $O/cv_t2t.log &
-  $P fit --cv --t2t $D6 $O/A.f4.npz $O/B.f4.npz > $O/cv_t2t_d6.h 2> $O/cv_t2t_d6.log &
-  $P fit $O/A.f4.npz $O/B.f4.npz > $O/mapq_model.h 2> $O/mapq_model.log &
-  $P fit --t2t $D6 $O/A.f4.npz $O/B.f4.npz > $O/mapq_model_t2t.h 2> $O/mapq_model_t2t.log &
+  # The eight fits on the aligners' cores, idle in this step: 8 processes
+  # each (--workers 7, the same trees as a serial fit).
+  F="$PIN python3 $T/truth_mapq_pair.py fit --workers 7"
+  $F --cv $O/A.f4.npz $O/B.f4.npz > $O/cv_pair.h 2> $O/cv_pair.log &
+  $F --cv --xm $O/A.f4.npz $O/B.f4.npz > $O/cv_pair_xm.h 2> $O/cv_pair_xm.log &
+  $F --cv --t2t $D6 $O/A.f4.npz $O/B.f4.npz > $O/cv_t2t.h 2> $O/cv_t2t.log &
+  $F --cv --t2t --xm $D6 $O/A.f4.npz $O/B.f4.npz > $O/cv_t2t_xm.h 2> $O/cv_t2t_xm.log &
+  $F $O/A.f4.npz $O/B.f4.npz > $O/mapq_model.h 2> $O/mapq_model.log &
+  $F --xm $O/A.f4.npz $O/B.f4.npz > $O/mapq_model_xm.h 2> $O/mapq_model_xm.log &
+  $F --t2t $D6 $O/A.f4.npz $O/B.f4.npz > $O/mapq_model_t2t.h 2> $O/mapq_model_t2t.log &
+  $F --t2t --xm $D6 $O/A.f4.npz $O/B.f4.npz > $O/mapq_model_t2t_xm.h 2> $O/mapq_model_t2t_xm.log &
   wait
   for X in A B; do
     sh="0.9413,0.8310"; [ $X = B ] && sh="0.9975,0.9944,0.9558"
-    $P eval --half --shares $sh --model $O/cv_pair.h --model $O/cv_t2t.h --model $O/cv_pair_d6.h \
-      --model $O/cv_t2t_d6.h $W/$X/truth.npz $O/$X.f4.npz \
-      "certa --mapq cal=$TD/$X/ivcal.npz" "minibwa=$TD/$X/minibwa.npz" "bwa-mem2=$TD/$X/bwa-mem2.npz" \
-      "strobealign=$TD/$X/strobealign.npz" "minimap2=$TD/$X/minimap2.npz" > $O/cv_$X.md 2> $O/cv_$X.log &
+    runs=()
+    for r in "certa --mapq cal=ivcal" minibwa=minibwa bwa-mem2=bwa-mem2 strobealign=strobealign minimap2=minimap2; do
+      [ -s "$TD/$X/${r#*=}.npz" ] && runs+=("${r%%=*}=$TD/$X/${r#*=}.npz")
+    done
+    $P eval --half --shares $sh --model $O/cv_pair.h --model $O/cv_pair_xm.h --model $O/cv_t2t.h \
+      --model $O/cv_t2t_xm.h $W/$X/truth.npz $O/$X.f4.npz ${runs[@]+"${runs[@]}"} > $O/cv_$X.md 2> $O/cv_$X.log &
   done
   wait ;;
 check)
   C=$1/certa; T2T="--t2t $2 --t2t-chain $3"; O=$(cd "$4" && pwd)
   for X in A B; do
     echo "== $(date +%T) $X: replay"
-    $PIN $C map $IDX $(reads $X) $IV --mapq pair 2> $O/$X.pair.log \
-      | $P replay $T/../include/certa/mapq_model.h $O/$X.f4.npz | tee $O/$X.pair.replay
-    $PIN $C map $IDX $(reads $X) $IV --mapq pair $T2T 2> $O/$X.pairt2t.log \
-      | $P replay $T/../include/certa/mapq_model_t2t.h $O/$X.f4.npz | tee $O/$X.pairt2t.replay
+    $PIN $TV -o $O/$X.pair.time $C map $IDX $(reads $X) $IV --mapq pair 2> $O/$X.pair.log \
+      | $P replay --bwa $INC/pair_model.h $INC/mapq_model.h $O/$X.f4.npz | tee $O/$X.pair.replay
+    $PIN $TV -o $O/$X.pairt2t.time $C map $IDX $(reads $X) $IV --mapq pair $T2T 2> $O/$X.pairt2t.log \
+      | $P replay --bwa $INC/pair_model.h $INC/mapq_model_t2t.h $O/$X.f4.npz | tee $O/$X.pairt2t.replay
   done ;;
 holdout)
-  C=$1/certa; T2T="--t2t $2 --t2t-chain $3"; O=$(cd "$4" && pwd); HP=$(cd "$5" && pwd)
+  # PREV_DIR (optional): the same placements with the models before a refit,
+  # as truth_t2t.py place files H.fin.npz (the default MAPQ), H.fpair.npz and
+  # H.fpairt2t.npz, scored in the same table.
+  C=$1/certa; T2T="--t2t $2 --t2t-chain $3"; O=$(cd "$4" && pwd); HP=$(cd "$5" && pwd); PREV=${6:-}
   for run in pair pairt2t; do
     extra=""; [ $run = pairt2t ] && extra=$T2T
     echo "== $(date +%T) H: --mapq pair $extra"
     if [ ! -s $O/H.$run.npz ]; then
-      rm -f $O/H.$run.placed
+      rm -f $O/H.$run.placed $O/H.$run.xp.placed
+      # Placed twice, ranked by the MAPQ written (BWA-MEM's scale) and by XP
+      # (the model's Phred).
       $PIN $TV -o $O/H.$run.time $C map $IDX $(reads H) $IV --mapq pair $extra 2> $O/H.$run.log \
         | tee >($AUX python3 $T/truth_t2t.py place $W/H/truth.npz $FAI $O/H.$run.npz; touch $O/H.$run.placed) \
-        | $P replay $T/../include/certa/mapq_model$([ $run = pairt2t ] && echo _t2t).h $O/H.f4.npz | tee $O/H.$run.replay
-      while [ ! -e $O/H.$run.placed ]; do sleep 5; done  # bash does not wait for the process substitution
+              >($AUX python3 $T/truth_t2t.py place --xp $W/H/truth.npz $FAI $O/H.$run.xp.npz; touch $O/H.$run.xp.placed) \
+        | $P replay --bwa $INC/pair_model.h $INC/mapq_model$([ $run = pairt2t ] && echo _t2t).h $O/H.f4.npz \
+        | tee $O/H.$run.replay
+      # bash does not wait for the process substitutions
+      while [ ! -e $O/H.$run.placed ] || [ ! -e $O/H.$run.xp.placed ]; do sleep 5; done
     fi
   done
   for a in minibwa bwa-mem2; do
     $AUX python3 $T/truth_veto.py $HP/$a.npz $HP/t2t.npz $O/H.$a.veto.npz
   done
+  prev=()
+  if [ -n "$PREV" ]; then
+    prev=("certa, default MAPQ=$PREV/H.fin.npz" "certa --mapq pair, before the refit=$PREV/H.fpair.npz"
+          "certa --mapq pair --t2t, before the refit=$PREV/H.fpairt2t.npz")
+  fi
   $P eval --shares 0.9975,0.9929,0.98,0.95 $W/H/truth.npz $O/H.f4.npz \
-    "certa --mapq cal=$HP/ivcal.npz" "certa --mapq pair=$O/H.pair.npz" "certa --mapq pair --t2t=$O/H.pairt2t.npz" \
+    "certa --mapq cal=$HP/ivcal.npz" ${prev[@]+"${prev[@]}"} "certa --mapq pair=$O/H.pair.npz" \
+    "certa --mapq pair, by XP=$O/H.pair.xp.npz" "certa --mapq pair --t2t=$O/H.pairt2t.npz" \
+    "certa --mapq pair --t2t, by XP=$O/H.pairt2t.xp.npz" \
     "minibwa=$HP/minibwa.npz" "bwa-mem2=$HP/bwa-mem2.npz" "strobealign=$HP/strobealign.npz" \
     "minimap2=$HP/minimap2.npz" "minibwa, BWA-MEM2's T2T veto=$O/H.minibwa.veto.npz" \
     "bwa-mem2, BWA-MEM2's T2T veto=$O/H.bwa-mem2.veto.npz" > $O/holdout_H.md ;;

@@ -196,6 +196,11 @@ for tiers R, IV and MR, the reads the default certificate left.
   whether a mate in a repeat has a unique partner decides most of the
   ranking among the less confident mates
   ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#a-mapq-from-both-mates)).
+  The trees are fitted on the records of `--intervals --iv-pair all
+  --iv-rescue local` with the current placements (refitted 2026-11-20); held
+  out on HG005, `--mapq pair` misplaces fewer of its confident mates than
+  minibwa at every operating point
+  ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#the-pair-model-refit-on-the-default-builds-placements)).
 - `--mapq-scale bwa|phred` (with `--mapq pair`; `bwa` by default). The
   model's value is a Phred of its error rate. BWA-MEM's MAPQ uses the same
   numbers for something else: on HG002, the mates minibwa gives 60 are
@@ -234,7 +239,8 @@ for tiers R, IV and MR, the reads the default certificate left.
   placement as the trees read it.
 
 **Tier R options:** `--iv-tau 256`, `--iv-margin 20`, `--iv-chains 8`,
-`--iv-fallback 8`, `--iv-vote-occ 256`, `--iv-vote-top 8`, `--iv-vote-pad 16`.
+`--iv-fallback 8`, `--iv-vote-occ 256`, `--iv-vote-top 8`, `--iv-vote-pad 16`,
+`--iv-wide 1`.
 - **Seed votes** (`--iv-vote-*`, on by default; `--iv-vote-occ 0` turns
   them off). For a read tier R did not prove exact, every 22-mer with at
   most 256 hits votes for its diagonal. The 8 groups of nearby diagonals
@@ -243,6 +249,14 @@ for tiers R, IV and MR, the reads the default certificate left.
   parts while long exact runs remain: diverged repeat copies, haplotypes
   with clustered variants, clipped ends. Votes only raise XL, with
   alignments actually computed; XU and every certificate are unchanged.
+- **The wide band** (`--iv-wide 1`, on by default; `0` turns it off). Each
+  band above holds one run of diagonals (a sampled copy ±8, a chain, a vote
+  group), so in a repeat the two sides of an indel longer than that fall
+  into different bands, and each band's best alignment clips the other
+  side. For a read not proven exact whose best alignment scores at least 20
+  below a perfect match, tier R also aligns one band of 95 diagonals centred
+  on it, which holds an indel of up to 47 bases either way. Like the votes,
+  it only raises XL.
 - **Alternatives for the pair:** tier R keeps up to 4 of its best
   alignments at other loci (within 17 of the best, BWA-MEM's unpaired
   penalty). The pair stage pairs them with the other mate's placement and
@@ -433,25 +447,29 @@ alignments.
   Setting MAPQ 0 where T2T-CHM13 confidently places the read elsewhere
   removes about half of them on real reads, for every aligner alike
   ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#a-mapq-from-t2t-chm13)).
-- **Interval mode with `--iv-pair all --mapq pair`** (below, fitted on
-  HG002) is the most accurate aligner measured at every operating point,
-  held out on HG005. Of the 99.75, 99.29, 98 and 95 % most confident mates,
-  it misplaces 186, 60, 20 and 9 per million, against minibwa's 208, 80,
-  37 and 37 and BWA-MEM2's 202, 108, 108 and 108. With `--t2t` (T2T-CHM13
-  in the same pass) it is 93, 25, 7 and 3: 2–12× fewer than minibwa, and
-  ahead of minibwa with a T2T second opinion from BWA-MEM2 (167, 48, 22,
-  22). `--mapq cal` leads only at 98 % and below (22–33)
-  ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#a-mapq-from-both-mates)).
+- **Interval mode with `--iv-pair all --iv-rescue local --mapq pair`**
+  (below, fitted on HG002) is the most accurate aligner measured at every
+  operating point, held out on HG005. Of the 99.75, 99.29, 98 and 95 % most
+  confident mates, it misplaces 185, 61, 21 and 10 per million, against
+  minibwa's 208, 80, 37 and 37 and BWA-MEM2's 202, 108, 108 and 108. With
+  `--t2t` (T2T-CHM13 in the same pass) it is 95, 26, 7 and 3: 2.2–14× fewer
+  than minibwa, and ahead of minibwa with a T2T second opinion from
+  BWA-MEM2 (167, 48, 22, 22). `--mapq cal` leads only at 98 % and below
+  (22–33)
+  ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#the-pair-model-refit-on-the-default-builds-placements)).
 - **Variant calling needs the fitted MAPQ on BWA-MEM's scale.** Written as
   Phreds, the fitted MAPQs made DeepVariant (trained on BWA-MEM) miss
   variants: 3,214–6,052 SNV errors on 30× HG002 against minibwa's 1,745
   ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#variant-calling)).
   With `--mapq-scale bwa` (the default with `--mapq pair`) and the current
-  placements, `--mapq pair --t2t` gives 1,696 SNV errors on HG002 (minibwa
-  1,745, BWA-MEM2 1,761) and 555 on HG005, held out (minibwa 543,
-  BWA-MEM2 553); indels are level on HG002 (1,807 against 1,775) and behind
-  on HG005 (77 against 63)
-  ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#the-default-build-all-together)).
+  placements, `--mapq pair --t2t` gives fewer SNV errors than minibwa and
+  BWA-MEM2 on both genomes: 1,656 on HG002 (minibwa 1,745, BWA-MEM2 1,761)
+  and 534 on HG005, held out (minibwa 543, BWA-MEM2 553). Indels are close
+  on HG002 (1,790 against 1,775) and behind on HG005 (72 against 63), mostly
+  where BWA-MEM's single affine gap cost, which CERTA shares, clips a long
+  insertion. All errors together: HG002 3,446 against minibwa's 3,520 and
+  BWA-MEM2's 3,609; HG005 606 against 606 and 626
+  ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#tier-rs-wide-band)).
 - **How far from the limit:** on GRCh38 minibwa's placement is at the
   limit: what it misplaces, no aligner that maximizes the alignment score
   on GRCh38 can place right, apart from 0.05 % of simulated and 0.001 % of

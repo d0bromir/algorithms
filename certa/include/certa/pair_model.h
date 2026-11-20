@@ -81,7 +81,8 @@ inline void record_inputs(const Placement& p, int* f) {
 // A PR mate's pair margin: its AS plus the other mate's minus XS, the bound
 // on every other proper pair (0: not a PR mate with a mapped partner). The
 // margin of a pair placed by place_pair (XM, Placement::pair_gap) is not an
-// input: the models were fitted without it.
+// input: cross-validated on HG002 (truth_mapq_pair.py fit --xm, 2026-11-20),
+// it changed the held-out misplaced mates by under 2 % at every N.
 inline int pair_margin(const Placement& a, const Placement& b) {
   if (!a.mapped || !b.mapped || a.r.tier != kTierPR || a.r.sub_score <= -1000) return 0;
   return clampi(a.r.score + b.r.score - a.r.sub_score, 0, 40) + 1;

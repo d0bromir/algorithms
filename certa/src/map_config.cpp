@@ -119,8 +119,12 @@ MapConfig MapConfig::from_args(const Args& a) {
   rp.vote_occ = a.geti("--iv-vote-occ", 256);
   rp.vote_top = a.geti("--iv-vote-top", 8);
   rp.vote_pad = a.geti("--iv-vote-pad", 16);
+  // --iv-wide 1: a band of BMAX - 1 diagonals around tier R's best alignment
+  // when it may clip an indel (certa/repeat.h, RepeatParams::wide; 0: off).
+  rp.wide = a.geti("--iv-wide", 1);
   if (rp.tau < 0 || rp.cmax < 1 || rp.samples < 1 || rp.sub_margin < 0 || rp.fallback_samples < 0 ||
-      rp.lb_chains < 0 || rp.vote_occ < 0 || rp.vote_top < 0 || rp.vote_pad < 0 || rp.vote_pad > (BMAX - 1) / 2)
+      rp.lb_chains < 0 || rp.vote_occ < 0 || rp.vote_top < 0 || rp.vote_pad < 0 || rp.vote_pad > (BMAX - 1) / 2 ||
+      (rp.wide != 0 && rp.wide != 1))
     throw std::runtime_error("bad --iv-* parameters");
   // --mapq cal and --mapq pair were fitted on the records of --iv-mapq cert
   // (their MAPQ is an input), which they imply.
