@@ -1,6 +1,6 @@
 class: GalaxyWorkflow
 label: WES tertiary analysis from VCF (v2)
-release: "0.9"
+release: "0.10"
 license: MIT
 tags:
   - WES
@@ -249,6 +249,14 @@ inputs:
     optional: true
     doc: The father's per-target ratios from the Exome CNV calls tool.
     position: {left: 0, top: 3720}
+  "Previous report: findings (TSV)":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: >-
+      The "Clinical findings (table)" of an earlier run on the same sample: the report then lists what is new,
+      changed or no longer reported since, with the evidence that differs (reanalysis).
+    position: {left: 0, top: 3840}
 
 outputs:
   annotated_vcf:
@@ -646,7 +654,7 @@ steps:
       Human-readable clinical interpretation report and findings table (local tool tools/wes_clinical_report;
       install it on the Galaxy server, see README).
     tool_id: wes_clinical_report
-    tool_version: 0.9.0+galaxy0
+    tool_version: 0.10.0+galaxy0
     position: {left: 2380, top: 300}
     in:
       vcf: functional_annotation/snpeff_output
@@ -675,6 +683,7 @@ steps:
       clingen_regions: "ClinGen dosage regions (TSV)"
       mother_cnv: "Mother: CNV per-target ratios"
       father_cnv: "Father: CNV per-target ratios"
+      previous_tsv: "Previous report: findings (TSV)"
     state:
       max_af: 0.01
       min_ref_depth: 15

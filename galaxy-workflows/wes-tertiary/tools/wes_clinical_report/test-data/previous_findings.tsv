@@ -1,0 +1,28 @@
+sample	category	gene	chrom	pos	ref	alt	genotype	depth	alt_fraction	hgvs_c	hgvs_p	effect	gnomad_af	gnomad_grpmax_af	gnomad_faf95	gnomad_nhomalt	alphamissense	spliceai	clinvar	clinvar_review	clinvar_condition	qc_flags	confidence	note	acmg_class	acmg_points	acmg_codes
+TEST1	candidate	BRCA2	13	32340301	C	T	0/1	50	0.480	c.1234C>T	p.Gln412*	stop_gained	absent						Uncertain_significance	reviewed_by_expert_panel	Hereditary breast ovarian cancer syndrome		high	autosomal dominant: one allele is sufficient (penetrance may be incomplete)	uncertain significance	1	PM2_supporting
+TEST1	pathogenic_review	GENED	17	41000100	C	T	0/1	40	0.500	c.47C>T	p.Ala16Val	missense_variant	0.2						Pathogenic	criteria_provided,_multiple_submitters,_no_conflicts			high	ClinVar P/LP, but gnomAD frequency 0.2 is too common for a highly penetrant dominant disorder: a low-penetrance/risk allele, an outdated assertion or a mapping artefact	benign	0	BA1
+TEST1	pathogenic_review	GENEF	17	41000300	C	T	0/1	40	0.500	c.10C>T	p.Arg4Cys	missense_variant	0.0004	0.006	0.004	0			Pathogenic	criteria_provided,_single_submitter		gnomAD site filtered (EXOMES_FILTERED)	high	ClinVar P/LP, but gnomAD frequency 0.004 is too common for a highly penetrant dominant disorder: a low-penetrance/risk allele, an outdated assertion or a mapping artefact	likely benign	-4	BS1
+TEST1	pathogenic_review	ABCD1	X	153725300	G	A	0/1	38	0.500	c.796G>A	p.Gly266Arg	missense_variant	absent						Pathogenic	criteria_provided,_multiple_submitters,_no_conflicts	Adrenoleukodystrophy		high	X-linked gene, heterozygous female: usually a carrier of an X-linked recessive condition; affected if the condition is X-linked dominant or with skewed X-inactivation	uncertain significance	1	PM2_supporting
+TEST1	candidate	GENEM	17	41000200	G	A	1/1	35	1.000	c.300G>A	p.Trp100*	stop_gained	absent										high	recessive: homozygous; dominant/X-linked: LoF-tolerant gene (LOEUF 1.20); PVS1,PM2_supporting	likely pathogenic	9	PVS1,PM2_supporting
+TEST1	candidate	GENEX	1	1000100	C	T	0/1	40	0.500	c.100C>T	p.Gln34*	stop_gained	1e-05										high	dominant/X-linked; PVS1,PM2_supporting	likely pathogenic	9	PVS1,PM2_supporting
+TEST1	candidate	GENEP	2	2000100	G	A	0/1	40	0.500	c.200G>A	p.Arg67His	missense_variant	1e-05				0.995	0.02					high	dominant/X-linked; PM2_supporting,PP3_Strong	uncertain significance	5	PM2_supporting,PP3_Strong
+TEST1	candidate_inheritance_not_met	GENER	17	41000400	G	A	1/1	30	1.000	c.20G>A	p.Trp7*	stop_gained	0.0005			6							high	recessive: homozygous, but 6 homozygotes in gnomAD; PVS1,PM2_supporting,BS2_Supporting	likely pathogenic	8	PVS1,PM2_supporting,BS2_Supporting
+TEST1	candidate	GENES	2	2000500	T	C	0/1	40	0.500	c.300-25T>C		intron_variant	absent					0.71					high	dominant/X-linked; PM2_supporting,PP3_Supporting	uncertain significance	2	PM2_supporting,PP3_Supporting
+TEST1	acmg_sf_not	MUTYH	1	45331556	C	T	0/1	48	0.479	c.1187G>A	p.Gly396Asp	missense_variant	0.003						Pathogenic	criteria_provided,_multiple_submitters,_no_conflicts	MUTYH-associated polyposis		high	biallelic only	uncertain significance	0	
+TEST1	candidate	BRCA2	13	32340301	C	T	0/1	50	0.480	c.1234C>T	p.Gln412*	stop_gained	absent						Uncertain_significance	reviewed_by_expert_panel	Hereditary breast ovarian cancer syndrome		high	P/LP in ClinVar	uncertain significance	1	PM2_supporting
+TEST1	acmg_sf_not	ABCD1	X	153725300	G	A	0/1	38	0.500	c.796G>A	p.Gly266Arg	missense_variant	absent						Pathogenic	criteria_provided,_multiple_submitters,_no_conflicts	Adrenoleukodystrophy		high	hemizygous, homozygous or two heterozygous P/LP variants only	uncertain significance	1	PM2_supporting
+TEST1	carrier	MUTYH	1	45331556	C	T	0/1	48	0.479	c.1187G>A	p.Gly396Asp	missense_variant	0.003						Pathogenic	criteria_provided,_multiple_submitters,_no_conflicts	MUTYH-associated polyposis		high		uncertain significance	0	
+TEST1	carrier	PAH	12	102840474	T	C	0/1	57	0.474	c.1241A>G	p.Tyr414Cys	missense_variant	0.0003						Pathogenic	reviewed_by_expert_panel	Phenylketonuria		high		uncertain significance	1	PM2_supporting
+TEST1	pgx	CYP2C19					*2/*2																	Poor metabolizer			
+TEST1	pgx	CYP2C9					*1/*1																	Normal metabolizer (activity score 2)			
+TEST1	pgx	VKORC1					-1639GG																	typical warfarin dose requirement			
+TEST1	pgx	CYP4F2					*1/*1																	normal			
+TEST1	pgx	SLCO1B1					c.521TT																	Normal function			
+TEST1	pgx	DPYD					activity score 2																	Normal metabolizer			
+TEST1	pgx	TPMT					*1/*1																	Normal metabolizer			
+TEST1	pgx	NUDT15					*1/*1																	Normal metabolizer			
+TEST1	pgx	CYP3A5					*1/*1																	Normal metabolizer (CYP3A5 expresser)			
+TEST1	pgx	CYP2B6					516GG																	Normal metabolizer (for this allele)			
+TEST1	pgx	UGT1A1					*6 x0, *80 x0																	Normal metabolizer (likely)			
+TEST1	clinvar_drug_response	CYP2C19	10	94781859	G	A	1/1	45	1.000	c.681G>A	p.Pro227Pro	splice_region_variant&synonymous_variant	absent						drug_response	criteria_provided,_multiple_submitters,_no_conflicts			high				
+TEST1	apoe	APOE					e3/e3																				

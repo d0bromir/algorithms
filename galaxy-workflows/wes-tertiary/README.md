@@ -292,6 +292,7 @@ laboratory.
 | Pharmacogenomics | CYP2C19, CYP2C9, VKORC1, CYP4F2, SLCO1B1, DPYD, TPMT, NUDT15, CYP3A5, CYP2B6, UGT1A1 at fixed GRCh38 positions (checked against ClinVar and the reference). A missing variant counts as the reference allele only with ≥ 15 reads at the position (BAM in v1); otherwise the gene is *indeterminate*. CPIC phenotypes, ClinVar drug-response variants (≥ 1 star). Next to it, the PharmCAT 3.4.0 diplotypes and phenotypes (all defining positions of each star allele, with the positions missing from the VCF listed); PharmCAT's own HTML report carries the CPIC, DPWG and FDA recommendations |
 | Risk alleles | Factor V Leiden, prothrombin G20210A, HFE p.Cys282Tyr/p.His63Asp, APOE (flagged: disclose only with counselling and consent), ClinVar risk/association variants (≥ 1 star) |
 | Runs of homozygosity and uniparental disomy | Total length of runs ≥ 1 Mb (consanguinity), runs concentrated on one chromosome, homozygous findings inside runs. With both parents: **uniparental disomy** (whole chromosome or segment, maternal or paternal, isodisomy or heterodisomy) from common SNVs where the proband lacks one parent's alleles, with the imprinting disorder (chromosomes 6, 7, 11, 14, 15, 16, 20), a CNV deletion that would explain it, and homozygous findings that only one parent carries. The **parent of origin** of a chromosome gain and of the X chromosomes in a sex-chromosome aneuploidy appears beside the chromosome dosage (section 4) |
+| Changes since the previous report | With the findings TSV of an earlier report of the same sample (*Previous report: findings (TSV)*): the results that are **new**, **changed** or **no longer reported**, matched by variant, by gene for gene-level results (pharmacogenomics, APOE) and by ≥ 50 % reciprocal overlap for CNVs and UPD. Each change shows what both reports said and the evidence that differs: category, ClinVar classification and review status, automated ACMG class, genotype, gnomAD frequency, QC flags, or a variant no longer called. Results and findings to review (diagnostic, secondary findings, de novo, UPD, pathogenic CNVs; candidates, carrier status, pharmacogenomics) come first, other listed variants after. The TSV records the report version and the HPO, GenCC, ClinGen and SnpEff releases (`report_meta` rows), shown beside the previous report's. A **same-person check**: if < 65 % of the previous report's listed variants have the same genotype in the current calls, the section warns that the previous report is probably of another sample |
 | Coverage | Per-gene coding coverage at 10/20×; clinically relevant genes below 95 % at 20× are listed, because a negative result there is not reliable |
 | Limits | Lists what an exome pipeline cannot detect (small CNVs, SVs, repeat expansions, mtDNA, CYP2D6, HLA, pseudogene regions, mosaicism…) |
 
@@ -932,6 +933,69 @@ the real HG002 trio the report says "No uniparental disomy found".
 | Clinical report on the HG002 trio (parents' VCFs and BAMs, CNV, ROH; median of 3) | 0.9.0: 15.3 s; 0.8.0: 15.2 s | 1.70 GiB; 1.68 GiB |
 | Report 0.9.0 on the HG002 trio in Galaxy (workflows release 0.9, 0 upgrade messages on import) | 29 s; "No uniparental disomy found" | — |
 
+### Reanalysis: changes since a previous report (report 0.10.0, GIAB exomes)
+
+**Data.** The nine GIAB IDT exomes (HG001–HG007, NA12891, NA12892), with the inputs of each sample's last report
+job.
+- **Controlled test:** each annotated VCF was re-annotated with the ClinVar release of 2024-11-03 (bcftools: the
+  CLN* fields removed, then annotated from the archived release), and the report run on it. Then 0.10.0 ran on
+  the current VCF (ClinVar 2026-11-15) with that report as the previous one. Only ClinVar differs between the two
+  runs, so every change has a known cause.
+- **Real history:** reports from earlier pipeline and report versions in the Galaxy histories.
+
+[`tests/reanalysis_eval.py`](tests/reanalysis_eval.py) checks each diff independently of the tool's code. It
+expects:
+- every variant either report lists whose CLNSIG differs between the two VCFs;
+- every finding whose categories differ between the two reports.
+
+Every "ClinVar X (was Y)" reason must quote the two VCFs.
+
+| ClinVar 2024-11 → 2026-11, 9 exomes | Result |
+|---|---|
+| Expected changes found | **167 / 167** (0 missed, 0 not expected) |
+| ClinVar reasons matching both VCFs | **102 / 102** |
+| Same report given as the previous one: changes listed | **0** in 9 / 9 |
+| Changes to reported results (diagnostic, SF, de novo, UPD, P/LP CNV) | 5 (2 new diagnostic findings) |
+| Changes to findings to review | 38 |
+| Changes to other listed variants (associations, drug response, candidates not fitting the inheritance) | 124 |
+
+What two years of ClinVar changed:
+- **New diagnostic findings:** in NA12891, *GABRB3* p.Met136Val and *SPEN* p.Arg758* went from candidates to
+  diagnostic findings, as ClinVar classified them pathogenic.
+- **Dropped findings:** common variants with old pathogenic submissions without assertion criteria (*PERM1*
+  1:976215 in all nine exomes, *CDCA8*, *GBP1*, *ITPKB*) left the review tables, now benign or conflicting.
+- **Other changes:** classifications on HG002's de novo variants (*DNMT3A*, *STAB1*: now VUS). Each change states
+  its ClinVar values before and after.
+- **Variants ClinVar did not list in 2024:** 65 of the changes are new to ClinVar, mostly drug-response and
+  association records. They show as "not in the previous report", since a TSV holds only what a report listed.
+
+**Same-person check.** A previous report's listed variants were compared with the current calls, at the same
+genotype. There are 414 pairs (46 TSVs × 9 VCFs): 46 of the same person, including reports from earlier pipeline
+versions and an older HiSeq exome of HG001 (NIST7035), and 368 of other people. The threshold was set on the
+HG002 and HG005 families and tested on the HG001 family:
+
+| Pairs | Tuning (HG002, HG005 families) | Held out (HG001 family) |
+|---|---|---|
+| Same person: share with the same genotype | 0.72–1.00; 30 / 30 pass at ≥ 0.65 | 0.82–1.00; **16 / 16** pass |
+| Parent, child or unrelated | ≤ 0.58 (parent/child), ≤ 0.40 (unrelated); 240 / 240 flagged | ≤ 0.54; **128 / 128** flagged |
+
+Rare variants alone do not work: a report lists only 4–20, and a parent or child shares up to 75 % of them.
+
+**Real history.** The single-sample reports of 2026-11-14 and 2026-11-15 (earlier pipeline and report versions) as the previous report of today's reports:
+
+| Previous report | Results or findings to review: new / changed / dropped | Other changes | Same person |
+|---|---|---|---|
+| HG002, 2026-11-15 | 24 / 7 / 0 (the de novo and trio analysis, ACMG classes and PharmCAT came later) | 32 | 96 % |
+| HG005, 2026-11-15 | 13 / 10 / 0 | 71 | 75 % |
+| HG001, 2026-11-15 | 12 / 6 / 0 | 15 | 100 % |
+| HG001, NIST7035 HiSeq exome (2026-11-14) | 13 / 9 / 2 | 47 | 82 % |
+| HG005's report given for HG002 | warning: "probably of another sample" | — | 31 % |
+
+| Step | Time | Memory |
+|---|---|---|
+| Report on the HG002 trio, 0.9.0 → 0.10.0 → 0.10.0 with a previous report (mean of 2; host shared with a mapping job) | 18.9 s → 19.1 s → 19.3 s | 1.70 → 1.70 → 1.71 GiB |
+| Report 0.10.0 in Galaxy on HG002 with its 2026-11-15 report (workflows release 0.10, 0 upgrade messages on import) | 34 s; 24 new, 7 changed, 0 dropped | — |
+
 ## 8. Scope and limitations
 
 Germline SNVs and short indels in the exome targets, and CNVs of several exons from read depth (section 7).
@@ -943,5 +1007,5 @@ literature evidence) and is a draft for review, and the HPO ranking depends on t
 works on the variants the proband's caller found; de novo status at repeats, segmental duplications and other
 loci where calls are written differently stays *possibly de novo*, and a parent's low-level mosaicism (a single
 alt read among ≥ 15) is read as reference. UPD detection needs both parents; heterodisomic segments shorter than
-~30 Mb are usually missed, and a deletion of one parent's copy looks like isodisomy unless CNV calls are given. The reports support expert review; they are not a diagnosis. This is a research workflow,
+~30 Mb are usually missed, and a deletion of one parent's copy looks like isodisomy unless CNV calls are given. The comparison with a previous report sees only what that report listed: a variant called but not listed before shows as new without its earlier state, and the ClinVar release itself is not recorded in the annotated VCF. The reports support expert review; they are not a diagnosis. This is a research workflow,
 not a validated clinical pipeline.
