@@ -1,4 +1,4 @@
-<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.8.0+galaxy0" profile="23.0">
+<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.9.0+galaxy0" profile="23.0">
     <description>diagnostic, secondary, carrier, pharmacogenomic and risk findings in one human-readable report</description>
     <requirements>
         <requirement type="package" version="3.12">python</requirement>
@@ -244,6 +244,7 @@ python3 '$__tool_directory__/wes_clinical_report.py'
             <output name="report" ftype="html">
                 <assert_contents>
                     <has_text text="De novo variants (trio)"/>
+                    <has_text text="Uniparental disomy (trio)"/>
                 </assert_contents>
             </output>
             <output name="findings" ftype="tabular">
@@ -313,7 +314,10 @@ by the ClinGen SVI points, withheld if the parentage check fails), the parental 
 heterozygotes phased by origin, and dominant candidates inherited from a parent marked unaffected. Clusters of 3 or
 more parent-absent changes within 10 bp (paralogous reads) and heterozygous calls without reference reads (repeat or
 complex loci) stay *possibly de novo* without de novo points; a confirmed de novo variant with an alt fraction well
-below 0.5 is noted as possibly mosaic.
+below 0.5 is noted as possibly mosaic. With both parents, uniparental disomy is detected from common SNVs where
+the proband lacks one parent's alleles (whole chromosome or segment, isodisomy or heterodisomy, with the imprinting
+disorder of chromosomes 6, 7, 11, 14, 15, 16 and 20), and the parent of origin of a chromosome gain (allele balance
+at sites where the parents are opposite homozygotes) or of the X chromosomes in a sex-chromosome aneuploidy is given.
 
 4. Copy-number variants and chromosome dosage (with the *Exome CNV calls* outputs): CNVs of clinical interest
    with their genes, ClinGen dosage and the ACMG/ClinGen CNV points that read depth supports (2A whole established
@@ -330,7 +334,7 @@ below 0.5 is noted as possibly mosaic.
    DPYD, TPMT, NUDT15, CYP3A5, CYP2B6, UGT1A1), PharmCAT diplotypes and phenotypes when given, and ClinVar
    drug-response variants.
 8. Risk alleles (Factor V Leiden, prothrombin G20210A, HFE, APOE) and ClinVar risk/association variants.
-9. Runs of homozygosity (bcftools roh).
+9. Runs of homozygosity (bcftools roh) and uniparental disomy (trio).
 10. Coverage of clinically relevant genes.
 11. Methods and limitations.
 

@@ -1,6 +1,6 @@
 class: GalaxyWorkflow
 label: WES tertiary analysis from FASTQ (v1)
-release: "0.8"
+release: "0.9"
 license: MIT
 tags:
   - WES

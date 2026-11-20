@@ -578,3 +578,79 @@ def test_cnv_not_analysed():
     assert "Not analysed: not analysed: 1 panel samples" not in html and "at least 3 of the same kit" in html
     rows, html = run_report()
     assert "no copy-number calls given" in html
+
+
+def _upd_trio(event=None, seed=3, n=300, step=200_000, chroms=("1", "2", "7", "15", "21")):
+    """Synthetic trio of common SNVs (AF 0.3) spaced `step` apart. event: (chrom, kind, donor) with kind iso | het |
+    tri (two donor alleles plus one of the other parent). Returns (child variants, Trio, Covered)."""
+    import random
+    rng = random.Random(seed)
+    trio = rep.Trio()
+    trio.vcf = {"mother": {}, "father": {}}
+    kids, rows = [], []
+    for c in chroms:
+        for i in range(n):
+            pos = 1_000_000 + i * step
+            k = (c, pos, "A", "G")
+            g = {w: (rng.random() < 0.3) + (rng.random() < 0.3) for w in ("mother", "father")}
+            for w, a in g.items():
+                if a:
+                    trio.vcf[w][k] = ("hom" if a == 2 else "het", 40, a / 2, 60.0)
+            take = lambda w: rng.random() < g[w] / 2
+            if event and event[0] == c:
+                donor, other = event[2], rep.OTHER[event[2]]
+                alt, tot = {"iso": (2 * take(donor), 2), "het": (g[donor], 2),
+                            "tri": (g[donor] + take(other), 3)}[event[1]]
+            else:
+                alt, tot = take("mother") + take("father"), 2
+            rows.append((c, pos - 11, pos + 10, "t", {"20X": 21}))
+            if alt:
+                v = rep.Variant()
+                v.chrom, v.pos, v.ref, v.alt, v.af, v.qual, v.dp = c, pos, "A", "G", 0.3, 60.0, 40
+                v.zyg, v.ab, v.anns, v.gene = ("hom" if alt == tot else "het"), alt / tot, [], ""
+                kids.append(v)
+    return kids, trio, rep.Covered(rows)
+
+
+def test_upd_isodisomy_and_heterodisomy():
+    kids, trio, cov = _upd_trio()
+    assert rep.upd_scan(kids, trio, "male", cov)[0] == [], "a normal trio: no UPD"
+    kids, trio, cov = _upd_trio(("15", "iso", "mother"))
+    segs, _ = rep.upd_scan(kids, trio, "male", cov)
+    assert [(d["chrom"], d["from"], d["kind"]) for d in segs] == [("15", "mother", "isodisomy")]
+    assert segs[0]["disorder"].startswith("Prader-Willi") and segs[0]["end"] - segs[0]["start"] > 40_000_000
+    assert "maternal isodisomy of chromosome 15" in rep.upd_label(segs[0])
+    kids, trio, cov = _upd_trio(("7", "het", "father"))
+    segs, _ = rep.upd_scan(kids, trio, "male", cov)
+    assert [(d["chrom"], d["from"], d["kind"]) for d in segs] == [("7", "father", "heterodisomy")]
+    assert segs[0]["disorder"] == "", "paternal UPD7 has no known imprinting disorder"
+    kids, trio, cov = _upd_trio(("15", "iso", "mother"))
+    cnv = [{"chrom": "15", "start": 0, "end": 100_000_000, "type": "DEL", "confidence": "high"}]
+    assert rep.upd_scan(kids, trio, "male", cov, cnv)[0][0]["deletion"], "a CNV deletion explains it"
+
+
+def test_upd_ignores_error_clusters():
+    kids, trio, cov = _upd_trio()
+    for i in range(12):  # 12 Mendelian errors within 60 kb (a paralogous locus): one event, not UPD
+        v = rep.Variant()
+        v.chrom, v.pos, v.ref, v.alt, v.af, v.qual, v.dp = "2", 5_000_001 + 5000 * i, "C", "T", 0.3, 60.0, 40
+        v.zyg, v.ab, v.anns, v.gene = "hom", 1.0, [], ""
+        kids.append(v)
+    assert rep.upd_scan(kids, trio, "male", cov)[0] == []
+
+
+def test_aneuploidy_and_x_origin():
+    kids, trio, _cov = _upd_trio(("21", "tri", "mother"), n=400)
+    share, n = rep.gain_origin(kids, trio, "21")
+    assert 0.6 < share < 0.75 and n >= 10 and "extra copy maternal" in rep.gain_origin_text((share, n))
+    kids, trio, _cov = _upd_trio(("21", "tri", "father"), n=400)
+    assert "extra copy paternal" in rep.gain_origin_text(rep.gain_origin(kids, trio, "21"))
+    kids, trio, _cov = _upd_trio(n=400)
+    assert "unclear" in rep.gain_origin_text(rep.gain_origin(kids, trio, "21")), "two copies: allele balance 0.5"
+    assert "not determined" in rep.gain_origin_text(None)
+    kx, tx, cx = _upd_trio(chroms=("X",))
+    xp = rep.x_parents(kx, tx, cx)
+    assert xp["mother"][0] > 0.9 and xp["father"][0] > 0.9, "a female: one X from each parent"
+    male = [v for v in kx if not tx.vcf["father"].get((v.chrom, v.pos, v.ref, v.alt))
+            or tx.vcf["mother"].get((v.chrom, v.pos, v.ref, v.alt))]
+    assert "no X from the father" in rep.x_parents_text(rep.x_parents(male, tx, cx))
