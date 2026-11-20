@@ -1,4 +1,4 @@
-<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.9.0+galaxy0" profile="23.0">
+<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.10.0+galaxy0" profile="23.0">
     <description>diagnostic, secondary, carrier, pharmacogenomic and risk findings in one human-readable report</description>
     <requirements>
         <requirement type="package" version="3.12">python</requirement>
@@ -102,6 +102,12 @@ python3 '$__tool_directory__/wes_clinical_report.py'
     #if $coverage_summary:
         --coverage-summary '$coverage_summary'
     #end if
+    #if $previous_tsv:
+        #import re
+        #set $previous_name = re.sub(r"[^\w .,:()+-]", "_", str($previous_tsv.element_identifier))
+        --previous-tsv '$previous_tsv'
+        --previous-name '$previous_name'
+    #end if
     --max-af $max_af
     --min-ref-depth $min_ref_depth
     --max-candidates $max_candidates
@@ -169,6 +175,8 @@ python3 '$__tool_directory__/wes_clinical_report.py'
         <param name="target_coverage" type="data" format="bed" optional="true" label="Per-target coverage (mosdepth thresholds BED)"/>
         <param name="gene_coverage" type="data" format="bed" optional="true" label="Coding-exon coverage (mosdepth thresholds BED, gene in column 4)"/>
         <param name="coverage_summary" type="data" format="tabular" optional="true" label="Coverage summary (mosdepth summary)"/>
+        <param name="previous_tsv" type="data" format="tabular" optional="true" label="Previous report of this sample: findings (TSV)"
+               help="The findings TSV of an earlier run of this tool on the same sample. The report then lists what is new, what changed (ClinVar, ACMG class, category, genotype) and what is no longer reported, with the evidence that differs."/>
         <param name="max_af" type="float" value="0.01" min="0" max="1" label="Rare variant cut-off (population allele frequency)"
                help="Applied to the higher of the overall gnomAD AF and the grpmax filtering AF (FAF95)."/>
         <param name="min_ref_depth" type="integer" value="15" min="1" label="Reads needed to read an uncalled pharmacogenomic position as reference"/>
@@ -278,6 +286,25 @@ python3 '$__tool_directory__/wes_clinical_report.py'
                 </assert_contents>
             </output>
         </test>
+        <test expect_num_outputs="2">
+            <param name="vcf" value="annotated.vcf" ftype="vcf"/>
+            <param name="gencc" value="gencc.tsv" ftype="tabular"/>
+            <param name="constraint" value="constraint.tsv" ftype="tabular"/>
+            <param name="previous_tsv" value="previous_findings.tsv" ftype="tabular"/>
+            <output name="report" ftype="html">
+                <assert_contents>
+                    <has_text text="Changes since the previous report"/>
+                    <has_text text="ClinVar Pathogenic (was Uncertain significance)"/>
+                </assert_contents>
+            </output>
+            <output name="findings" ftype="tabular">
+                <assert_contents>
+                    <has_text_matching expression="	change_new	PLN	"/>
+                    <has_text_matching expression="	change_changed	BRCA2	"/>
+                    <has_text_matching expression="	report_meta	wes_clinical_report	"/>
+                </assert_contents>
+            </output>
+        </test>
     </tests>
     <help><![CDATA[
 **What it does**
@@ -337,6 +364,14 @@ at sites where the parents are opposite homozygotes) or of the X chromosomes in 
 9. Runs of homozygosity (bcftools roh) and uniparental disomy (trio).
 10. Coverage of clinically relevant genes.
 11. Methods and limitations.
+
+**Reanalysis.** Given the findings TSV of an earlier report of the same sample, a section after the summary
+lists the results that are new, changed or no longer reported, matched by variant, by gene for gene-level results
+and by 50% reciprocal overlap for CNVs and uniparental disomy, with what each report said and the evidence that
+differs (ClinVar classification or review status, ACMG class, genotype, gnomAD frequency, QC flags; a variant no
+longer called). The TSV records the report version and the releases of HPO, GenCC, ClinGen and SnpEff
+(category report_meta), shown side by side with the previous report's. If the current calls lack most of the
+previous report's rare variants, the report warns that the previous report is probably of another sample.
 
 Every flagged result must be confirmed by an orthogonal method in an accredited laboratory before clinical use.
     ]]></help>

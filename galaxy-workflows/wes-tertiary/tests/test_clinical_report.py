@@ -654,3 +654,56 @@ def test_aneuploidy_and_x_origin():
     male = [v for v in kx if not tx.vcf["father"].get((v.chrom, v.pos, v.ref, v.alt))
             or tx.vcf["mother"].get((v.chrom, v.pos, v.ref, v.alt))]
     assert "no X from the father" in rep.x_parents_text(rep.x_parents(male, tx, cx))
+
+
+def _write_tsv(rows, path):
+    cols = list(rows[0].keys())
+    with open(path, "w") as f:
+        f.write("\t".join(cols) + "\n")
+        for r in rows:
+            f.write("\t".join(r[c] for c in cols) + "\n")
+
+
+def test_reanalysis_changes():
+    rows, _ = run_report()
+    tmp = tempfile.mkdtemp()
+    same = os.path.join(tmp, "same.tsv")
+    _write_tsv(rows, same)
+    again, html = run_report(["--previous-tsv", same])
+    assert not [r for r in again if r["category"].startswith("change_")]  # same inputs: nothing changed
+    assert "0</b> new, <b>0</b> changed and <b>0</b> no longer" in html
+
+    prev = [dict(r) for r in rows if r["category"] != "report_meta"]
+    prev = [r for r in prev if r["gene"] != "PLN"]  # PLN: new diagnostic and secondary finding
+    for r in prev:
+        if r["gene"] == "BRCA2":  # BRCA2: previously a VUS in ClinVar, listed as a candidate
+            r.update(category="candidate", clinvar="Uncertain_significance")
+        if r["gene"] == "CYP2C9":
+            r["genotype"] = "*1/*3"
+    gone = dict(prev[0], gene="GENEZ", chrom="3", pos="3000100", ref="A", alt="G", category="diagnostic")
+    called = dict(prev[0], gene="GENEX", chrom="1", pos="1000100", ref="C", alt="T", category="diagnostic",
+                  clinvar="Likely_pathogenic")
+    prev = [r for r in prev if r["gene"] != "GENEX"] + [gone, called]
+    old = os.path.join(tmp, "old.tsv")
+    _write_tsv(prev, old)
+    cur, html = run_report(["--previous-tsv", old, "--previous-name", "report of 2025"])
+    ch = {(r["category"], r["gene"]): r["note"] for r in cur if r["category"].startswith("change_")}
+    assert ("change_new", "PLN") in ch and "tier 3" in ch[("change_new", "PLN")]
+    assert "ClinVar Pathogenic (was Uncertain significance)" in ch[("change_changed", "BRCA2")]
+    assert "genotype *1/*1 (was *1/*3)" in ch[("change_changed", "CYP2C9")]
+    assert "no longer in the variant calls" in ch[("change_removed", "GENEZ")]
+    assert "ClinVar not listed (was Likely pathogenic)" in ch[("change_changed", "GENEX")]
+    assert "Changes since the previous report" in html and "report of 2025" in html
+    assert "a version before 0.10.0" in html  # no report_meta rows in the old TSV
+    assert "another sample" not in html
+    assert len([k for k in ch if k[1] not in ("PLN", "BRCA2", "CYP2C9", "GENEZ", "GENEX")]) == 0
+
+
+def test_reanalysis_other_sample():
+    rows, _ = run_report()
+    tmp = tempfile.mkdtemp()
+    other = [dict(rows[3], pos=str(5_000_000 + i), gene=f"OTHER{i}", gnomad_af="absent") for i in range(24)]
+    path = os.path.join(tmp, "other.tsv")
+    _write_tsv(rows[:3] + other, path)
+    _, html = run_report(["--previous-tsv", path])
+    assert "the previous report is probably of another sample" in html

@@ -15,7 +15,8 @@ scores or in phenotype-matched genes, predicted splice-altering) with automated 
 diseases that best explain the patient's phenotype; ACMG SF v3.3 secondary findings; carrier status;
 pharmacogenomics (CPIC genes, single-nucleotide star alleles, PharmCAT); risk alleles and other ClinVar
 associations; runs of homozygosity; coverage of clinically relevant genes; limits. Gene cells carry GenCC,
-ClinGen dosage sensitivity and HPO disease features (onset, course, inheritance).
+ClinGen dosage sensitivity and HPO disease features (onset, course, inheritance). Given the findings TSV of an
+earlier report of the sample, a section lists what is new, changed or no longer reported since.
 
 Standard library only (Python >= 3.8).
 """
@@ -32,7 +33,7 @@ import statistics
 import subprocess
 import sys
 
-VERSION = "0.9.0"
+VERSION = "0.10.0"
 
 # --------------------------------------------------------------------------------------------- rules
 # ACMG secondary findings v3.3 (ACMG policy statement, Genet Med 2025;27:101454): the 81 genes of v3.2 (Miller et al.,
@@ -2135,6 +2136,351 @@ def cnv_evidence(c, K, constraint, regions, origin):
     return codes, notes
 
 
+# ------------------------------------------------------------------ reanalysis: changes since a previous report
+TSV_COLS = ["sample", "category", "gene", "chrom", "pos", "ref", "alt", "genotype", "depth", "alt_fraction", "hgvs_c",
+            "hgvs_p", "effect", "gnomad_af", "gnomad_grpmax_af", "gnomad_faf95", "gnomad_nhomalt", "alphamissense",
+            "spliceai", "clinvar", "clinvar_review", "clinvar_condition", "qc_flags", "confidence", "note",
+            "acmg_class", "acmg_points", "acmg_codes"]
+# how much a finding matters when it appears, changes or disappears: 3 reported result, 2 needs review, 1 listed,
+# 0 not compared (low-confidence CNVs are mostly artefacts and change with every panel)
+CHANGE_TIER = {"diagnostic": 3, "acmg_sf_reportable": 3, "de_novo": 3, "upd": 3, "cnv_pathogenic": 3,
+               "cnv_likely_pathogenic": 3, "pathogenic_review": 2, "acmg_sf_review": 2, "acmg_sf_not": 2,
+               "de_novo_possible": 2, "candidate": 2, "carrier": 2, "pgx": 2, "pgx_pharmcat": 2, "apoe": 2,
+               "cnv_uncertain_significance": 2, "cnv_low_confidence": 0}
+CHANGE_LABEL = {"diagnostic": "diagnostic finding", "pathogenic_review": "pathogenic, inheritance fit unclear",
+                "acmg_sf_reportable": "secondary finding", "acmg_sf_review": "secondary-finding gene, review",
+                "acmg_sf_not": "secondary-finding gene, not reportable", "de_novo": "de novo",
+                "de_novo_possible": "possibly de novo", "candidate": "candidate",
+                "candidate_inheritance_not_met": "candidate, inheritance not met", "carrier": "carrier",
+                "low_penetrance": "low-penetrance allele", "pgx": "pharmacogenomic genotype",
+                "pgx_pharmcat": "PharmCAT diplotype", "clinvar_drug_response": "ClinVar drug response",
+                "risk_allele": "risk allele", "apoe": "APOE genotype", "clinvar_association": "ClinVar association",
+                "phenotype_match": "phenotype-matched gene", "upd": "uniparental disomy",
+                "cnv_high_confidence": "high-confidence CNV, not of clinical interest"}
+CNV_MIN_OVERLAP = 0.5  # reciprocal overlap for a CNV or UPD segment to be the same event in both reports
+# share of the previous report's listed variants called with the same genotype now: GIAB exomes 0.72-1.00 for the
+# same person (re-called, another sequencing run), at most 0.58 for a parent or child and 0.40 for unrelated people
+SAME_SAMPLE_MIN = 0.65
+SAME_SAMPLE_SITES = 20
+
+
+def change_tier(cat):
+    return CHANGE_TIER.get(cat, 1)
+
+
+def change_label(cat):
+    if cat in CHANGE_LABEL:
+        return CHANGE_LABEL[cat]
+    if cat.startswith("cnv_"):
+        return "CNV, " + cat[4:].replace("_", " ")
+    return cat.replace("_", " ")
+
+
+def knowledge_releases(args, vcf_path):
+    """Release markers of the inputs, written to the TSV header so a later report can say what changed."""
+    rel = {}
+    try:
+        with opener(vcf_path) as f:
+            for line in f:
+                if not line.startswith("##"):
+                    break
+                if line.startswith("##SnpEffVersion="):
+                    rel["snpeff"] = line.split("=", 1)[1].strip().strip('"').split(" (")[0]
+                elif line.startswith("##SnpEffCmd=") and "snpeff" in rel:
+                    m = re.search(r"\s(GRCh\S+)\s", line)
+                    if m:
+                        rel["snpeff"] += " " + m.group(1)
+    except OSError:
+        pass
+    for key, path in (("hpo", args.hpo_annotations), ("hpo", args.hpo_genes)):
+        if path and key not in rel:
+            with opener(path) as f:
+                for line in f:
+                    if not line.startswith("#"):
+                        break
+                    m = re.match(r"#(?:version|date):\s*(\S+)", line)
+                    if m:
+                        rel[key] = m.group(1)
+    for key, path in (("clingen_dosage", args.clingen_dosage), ("clingen_regions", args.clingen_regions)):
+        if path:
+            with opener(path) as f:
+                for line in f:
+                    if not line.startswith("#"):
+                        break
+                    m = re.match(r"#(\d{1,2} \w+, ?\d{4})\s*$", line)
+                    if m:
+                        rel[key] = m.group(1)
+    if args.gencc:
+        with opener(args.gencc) as f:
+            header = [h.strip('"') for h in f.readline().rstrip("\n").split("\t")]
+            if "submitted_run_date" in header:
+                i, best = header.index("submitted_run_date"), ""
+                for line in f:
+                    t = line.split("\t")
+                    if len(t) > i and re.match(r'"?\d{4}-\d{2}-\d{2}', t[i]):
+                        best = max(best, t[i].strip('"')[:10])
+                if best:
+                    rel["gencc"] = best
+    return rel
+
+
+def load_previous(path):
+    """An earlier report's TSV -> (meta, rows). Reports before 0.10.0 have no report_meta rows."""
+    meta, rows, header = {}, [], None
+    with opener(path) as f:
+        for line in f:
+            line = line.rstrip("\r\n")
+            if header is None:
+                header = line.split("\t")
+                if "category" not in header or "gene" not in header:
+                    raise SystemExit("--previous-tsv is not a wes_clinical_report TSV (no category/gene columns)")
+            elif line:
+                t = line.split("\t")
+                r = dict(zip(header, t + [""] * (len(header) - len(t))))
+                if r["category"] == "report_meta":
+                    meta[r["gene"]] = r.get("note", "")
+                elif not r["category"].startswith("change_"):
+                    rows.append(r)
+    return meta, rows
+
+
+def finding_key(r):
+    """(kind, identity): a variant, a region (CNV/UPD; matched by overlap later) or a gene-level result."""
+    cat = r["category"]
+    if cat == "upd" or cat.startswith("cnv_"):
+        m = re.search(r"; end (\d+)$", r.get("note", ""))
+        end = int(m.group(1)) if m else int(r["pos"] or 0)
+        typ = (r.get("genotype") or r.get("alt", "")).split()[0].strip("<>")
+        return ("region", ("upd" if cat == "upd" else "cnv", norm_chrom(r["chrom"]), int(r["pos"] or 0), end, typ))
+    if r.get("pos"):
+        return ("var", (norm_chrom(r["chrom"]), int(r["pos"]), r["ref"], r["alt"]))
+    return ("gene", (cat, r["gene"]))
+
+
+def group_findings(rows):
+    """key -> {"cats": set, "row": highest-tier row}; rows of tier 0 are not compared."""
+    out = {}
+    for r in rows:
+        t = change_tier(r["category"])
+        if t == 0:
+            continue
+        k = finding_key(r)
+        e = out.setdefault(k, {"cats": set(), "row": r, "tier": t})
+        e["cats"].add(r["category"])
+        if t > e["tier"]:
+            e["row"], e["tier"] = r, t
+    return out
+
+
+def overlap_frac(a, b):
+    """Reciprocal overlap of two (start, end) intervals."""
+    ov = min(a[1], b[1]) - max(a[0], b[0])
+    if ov <= 0:
+        return 0.0
+    return min(ov / max(1, a[1] - a[0]), ov / max(1, b[1] - b[0]))
+
+
+def match_regions(prev, cur):
+    """Pairs previous to current region findings of the same kind and type by reciprocal overlap."""
+    pairs, used = {}, set()
+    for pk in [k for k in prev if k[0] == "region"]:
+        fam, c, s, e, typ = pk[1]
+        best, bo = None, CNV_MIN_OVERLAP
+        for ck in cur:
+            if ck[0] != "region" or ck in used:
+                continue
+            f2, c2, s2, e2, t2 = ck[1]
+            if (f2, c2, t2) == (fam, c, typ):
+                o = overlap_frac((s, e), (s2, e2))
+                if o >= bo:
+                    best, bo = ck, o
+        if best:
+            pairs[pk] = best
+            used.add(best)
+    return pairs
+
+
+def finding_name(k, r):
+    kind, ident = k
+    if kind == "var":
+        what = r.get("hgvs_p") or r.get("hgvs_c") or ""
+        return f"{r.get('gene', '')} {what} ({ident[0]}:{ident[1]} {ident[2]}>{ident[3]})".replace("  ", " ")
+    if kind == "region":
+        fam, c, s, e, typ = ident
+        genes = r.get("gene", "")
+        genes = genes if len(genes) <= 40 else genes[:40].rsplit(",", 1)[0] + ",..."
+        return f"{r.get('genotype', typ)} {c}:{s:,}-{e:,}" + (f" ({genes})" if genes else "")
+    return f"{r.get('gene', '')} ({change_label(r['category'])})"
+
+
+def finding_state(e):
+    """Short text of what a report said about a finding."""
+    if e is None:
+        return "not listed"
+    r = e["row"]
+    parts = [", ".join(change_label(c) for c in sorted(e["cats"], key=lambda c: -change_tier(c)))]
+    if r.get("pos") and r["category"] != "upd" and not r["category"].startswith("cnv_"):
+        parts.append(f"ClinVar {(r.get('clinvar') or 'not listed').replace('_', ' ')}"
+                     + (f" ({r['clinvar_review'].replace('_', ' ')})" if r.get("clinvar_review") else ""))
+        if r.get("acmg_class"):
+            parts.append(f"ACMG {r['acmg_class']} ({r.get('acmg_points', '')} points)")
+        if r.get("genotype"):
+            parts.append(r["genotype"])
+    elif r.get("genotype"):
+        g = r["genotype"] if len(r["genotype"]) <= 120 else r["genotype"][:120].rsplit(" OR ", 1)[0] + " OR ..."
+        parts.append(g + (f": {r['note']}" if r.get("note") and not r.get("pos") else ""))
+    return "; ".join(p for p in parts if p)
+
+
+def same_af(a, b):
+    try:
+        fa, fb = float(a or 0), float(b or 0)
+    except ValueError:
+        return a == b
+    return abs(fa - fb) <= max(1e-6, 0.1 * max(fa, fb))
+
+
+def change_reasons(pe, ce, v=None):
+    """Why a finding differs between the reports, from the fields the TSVs share (and the current call v)."""
+    p = pe["row"] if pe else None
+    c = ce["row"] if ce else None
+    out = []
+    if p is not None and c is None and p.get("pos") and finding_key(p)[0] == "var":
+        if v is None:
+            return ["no longer in the variant calls (not called, or removed by the QC filters)"]
+        c = {"clinvar": v.clnsig, "clinvar_review": v.revstat, "genotype": v.gt, "gnomad_af": fmt_af(v.af),
+             "qc_flags": ";".join(v.flags)}
+    if p is None or c is None:
+        return out
+    if pe and ce and pe["cats"] != ce["cats"]:
+        add, drop = ce["cats"] - pe["cats"], pe["cats"] - ce["cats"]
+        out.append("; ".join(([f"now {', '.join(change_label(x) for x in sorted(add))}"] if add else [])
+                             + ([f"no longer {', '.join(change_label(x) for x in sorted(drop))}"] if drop else [])))
+    if (p.get("clinvar") or "") != (c.get("clinvar") or ""):
+        out.append(f"ClinVar {(c.get('clinvar') or 'not listed').replace('_', ' ')} "
+                   f"(was {(p.get('clinvar') or 'not listed').replace('_', ' ')})")
+    elif (p.get("clinvar_review") or "") != (c.get("clinvar_review") or "") and p.get("clinvar"):
+        out.append(f"ClinVar review {c.get('clinvar_review', '').replace('_', ' ')} "
+                   f"(was {p.get('clinvar_review', '').replace('_', ' ')})")
+    if "acmg_class" in c and (p.get("acmg_class") or "") != (c.get("acmg_class") or "") \
+            and (p.get("acmg_class") or c.get("acmg_class")):
+        out.append(f"ACMG class {c.get('acmg_class') or 'none'} (was {p.get('acmg_class') or 'none'})")
+    if (p.get("genotype") or "") != (c.get("genotype") or "") and p.get("genotype") and c.get("genotype"):
+        out.append(f"genotype {c['genotype']} (was {p['genotype']})")
+    if p.get("pos") and not same_af(p.get("gnomad_af"), c.get("gnomad_af")):
+        out.append(f"gnomAD frequency {c.get('gnomad_af') or 'absent'} (was {p.get('gnomad_af') or 'absent'})")
+    if (p.get("qc_flags") or "") != (c.get("qc_flags") or ""):
+        out.append(f"QC flags {c.get('qc_flags') or 'none'} (was {p.get('qc_flags') or 'none'})")
+    if not p.get("pos") and (p.get("note") or "") != (c.get("note") or "") and c.get("note") is not None:
+        out.append("interpretation text changed")
+    return out
+
+
+def reanalysis(prev_meta, prev_rows, cur_rows, variants, cur_meta):
+    """Compares an earlier report's findings with this one's -> (changes, check), changes sorted most important
+    first: dicts with kind (new/changed/removed), tier, name, before, now, why, row (for the TSV)."""
+    prev, cur = group_findings(prev_rows), group_findings(cur_rows)
+    by_key = {(norm_chrom(v.chrom), v.pos, v.ref, v.alt): v for v in variants}
+    gts = {k: e["row"].get("genotype", "").replace("|", "/") for k, e in prev.items() if k[0] == "var"}
+    pairs = match_regions(prev, cur)
+    for pk, ck in pairs.items():  # matched regions share the current key
+        prev[ck] = prev.pop(pk)
+    changes = []
+    for k in sorted(set(prev) | set(cur), key=str):
+        pe, ce = prev.get(k), cur.get(k)
+        v = by_key.get(k[1]) if k[0] == "var" else None
+        if pe and ce:
+            cat_change = pe["cats"] != ce["cats"]
+            why = change_reasons(pe, ce)
+            if not cat_change and not [w for w in why if not w.startswith(("QC flags", "gnomAD frequency",
+                                                                            "ClinVar review"))]:
+                continue
+            kind = "changed"
+        else:
+            kind = "new" if ce else "removed"
+            why = change_reasons(pe, ce, v) if pe else []
+        if kind == "removed" and not why:
+            why = ["the evidence in both reports is the same: the report's rules or a knowledge file changed "
+                   "(gene-disease validity, phenotype, dosage)"]
+        if kind == "new" and k[0] == "var" and v is not None and not why:
+            why = ["not in the previous report"]
+        tier = max(pe["tier"] if pe else 0, ce["tier"] if ce else 0)
+        e = ce or pe
+        changes.append({"kind": kind, "tier": tier, "key": k, "name": finding_name(k, e["row"]),
+                        "before": finding_state(pe), "now": finding_state(ce), "why": "; ".join(why),
+                        "row": e["row"]})
+    order = {"new": 0, "changed": 1, "removed": 2}
+    changes.sort(key=lambda x: (-x["tier"], order[x["kind"]], x["name"]))
+    # same person? The previous report's variants should nearly all be called now, with the same genotype
+    found = sum(1 for k, g in gts.items() if k[1] in by_key and by_key[k[1]].gt.replace("|", "/") == g)
+    check = {"sites": len(gts), "found": found,
+             "same_sample": None if len(gts) < SAME_SAMPLE_SITES else found / len(gts) >= SAME_SAMPLE_MIN}
+    return changes, check
+
+
+def reanalysis_html(changes, check, prev_meta, cur_meta, prev_name):
+    """(summary bullet, section) for the report."""
+    n = collections.Counter(c["kind"] for c in changes if c["tier"] >= 2)
+    n_all = collections.Counter(c["kind"] for c in changes)
+    when = prev_meta.get("date", "")
+    pv = prev_meta.get("wes_clinical_report", "")
+    ident = f"version {pv}, {when}" if pv else "a version before 0.10.0, date not recorded"
+    top = [c for c in changes if c["tier"] == 3]
+    bullet = (f"<li><b>Reanalysis</b> (previous report {esc(ident)}): <b>{n['new']}</b> new, <b>{n['changed']}</b> "
+              f"changed and <b>{n['removed']}</b> no longer reported results or findings to review"
+              + (": " + ", ".join(f"{esc(c['kind'])} {esc(c['name'])}" for c in top[:6]) if top else "")
+              + f"; {sum(n_all.values()) - sum(n.values())} lower-tier changes"
+              + ("; <b>the previous report may be of another sample</b>" if check["same_sample"] is False else "")
+              + "</li>")
+    s = ["<h2>Changes since the previous report</h2>"]
+    s.append(f"<p class='small'>Compared with {esc(prev_name or 'the previous report')} ({esc(ident)}). Findings are "
+             "matched by variant, by gene for gene-level results, and by at least 50% reciprocal overlap for CNVs and "
+             "uniparental disomy. A change lists what each report said and the evidence that differs; when the "
+             "evidence is the same, the report's rules or the gene-level knowledge changed. Low-confidence CNVs are "
+             "not compared.</p>")
+    if check["same_sample"] is False:
+        s.append(f"<div class='box alert'>Only {check['found']} of the previous report's {check['sites']} listed "
+                 f"variants ({check['found'] / check['sites']:.0%}) have the same genotype in the current calls: the "
+                 "previous report is probably of another sample (a relative shares at most about 60%, the same person "
+                 "re-sequenced more than 70%). The changes below are not a reanalysis.</div>")
+    elif check["same_sample"] is None:
+        s.append(f"<p class='small'>The previous report lists {check['sites']} variants, too few to check that it is "
+                 "of the same person.</p>")
+    else:
+        s.append(f"<p class='small'>Same person: {check['found']} of the previous report's {check['sites']} listed "
+                 f"variants ({check['found'] / check['sites']:.0%}) have the same genotype in the current calls.</p>")
+    keys = ["wes_clinical_report", "date", "snpeff", "hpo", "gencc", "clingen_dosage", "clingen_regions"]
+    names = {"wes_clinical_report": "Report version", "date": "Date", "snpeff": "SnpEff database", "hpo": "HPO",
+             "gencc": "GenCC (latest submission)", "clingen_dosage": "ClinGen dosage list",
+             "clingen_regions": "ClinGen region list"}
+    vrows = [[esc(names[k]), esc(prev_meta.get(k, "not recorded")), esc(cur_meta.get(k, "not given"))
+              + ("" if prev_meta.get(k) == cur_meta.get(k) or not prev_meta.get(k) else " <b>(changed)</b>")]
+             for k in keys if prev_meta.get(k) or cur_meta.get(k)]
+    s.append("<table class='small'><thead><tr><th>Input</th><th>Previous</th><th>Now</th></tr></thead><tbody>"
+             + "".join("<tr>" + "".join(f"<td>{x}</td>" for x in r) + "</tr>" for r in vrows) + "</tbody></table>"
+             "<p class='small'>The ClinVar release is not recorded in the annotated VCF; ClinVar changes show per "
+             "variant below.</p>")
+    kind_tag = {"new": "t-red", "changed": "t-amb", "removed": "t-blu"}
+
+    def table(rows):
+        if not rows:
+            return "<p class='none'>None.</p>"
+        return ("<table><thead><tr><th>Change</th><th>Finding</th><th>Previous report</th><th>This report</th>"
+                "<th>What differs</th></tr></thead><tbody>"
+                + "".join(f"<tr><td>{tag(c['kind'], kind_tag[c['kind']])}</td><td><b>{esc(c['name'])}</b></td>"
+                          f"<td>{esc(c['before'])}</td><td>{esc(c['now'])}</td><td>{esc(c['why'])}</td></tr>"
+                          for c in rows) + "</tbody></table>")
+    main = [c for c in changes if c["tier"] >= 2]
+    s.append(f"<h3>Results and findings to review ({len(main)})</h3>")
+    s.append(table(main))
+    low = [c for c in changes if c["tier"] == 1]
+    s.append(f"<h3>Other listed variants and associations ({len(low)})</h3>")
+    s.append(table(low[:40]))
+    if len(low) > 40:
+        s.append(f"<p class='small'>{len(low) - 40} more in the TSV output (category change_*).</p>")
+    return bullet, "\n".join(s)
+
+
 def build(args):
     sample, contigs, variants, prefix = parse_vcf(args.vcf)
     sample = args.sample_name or sample or "sample"
@@ -2764,7 +3110,9 @@ def build(args):
             f"{len(hpo_match)} genes associated</li>")
     else:
         R.h("<li><b>Phenotype</b>: no HPO terms given; candidates are not phenotype-ranked</li>")
+    mark_summary = len(R.parts)
     R.h("</ul></div>")
+    mark_section = len(R.parts)
 
     # sample QC
     R.h("<h2>1. Sample and data quality</h2><ul class='kv'>")
@@ -3343,39 +3691,71 @@ def build(args):
         "ClinGen VCEP rules and the literature are not used, so a variant can move by several points on manual "
         "review; a likely pathogenic or pathogenic class needs that review before it is reported.</li>")
     R.h("<li>ClinVar classifications change: findings should be re-evaluated against the current ClinVar release "
-        "before reporting, and the data periodically reanalysed.</li></ul>")
+        "before reporting, and the data periodically reanalysed.</li>")
+    if args.previous_tsv:
+        R.h("<li>The comparison with a previous report sees only what that report listed: a variant that was "
+            "called but not listed before shows as new without its earlier state.</li>")
+    R.h("</ul>")
+    R.meta = {"wes_clinical_report": VERSION, "date": today, "sample": sample}
+    R.meta.update(knowledge_releases(args, args.vcf))
+    if args.previous_tsv:
+        prev_meta, prev_rows = load_previous(args.previous_tsv)
+        changes, check = reanalysis(prev_meta, prev_rows, [dict(zip(TSV_COLS, rec)) for rec in tsv_records(R, sample)],
+                                    variants, R.meta)
+        bullet, section = reanalysis_html(changes, check, prev_meta, R.meta, args.previous_name)
+        R.parts.insert(mark_section, section)
+        R.parts.insert(mark_summary, bullet)
+        R.change_rows = change_records(changes, sample)
     R.h("</body></html>")
     return R, sample
 
 
+def tsv_records(R, sample):
+    """R.rows -> TSV records (lists of TSV_COLS strings)."""
+    out = []
+    acmg = getattr(R, "acmg", {})
+    for cat, v, note in R.rows:
+        if v is None and len(note) == 4:  # CNV: (genes, type and copy number, note, (chrom, start, end))
+            genes, genotype, txt, (chrom, start, end) = note
+            out.append([sample, cat, genes, chrom, str(start), "", f"<{genotype.split()[0]}>", genotype]
+                       + [""] * 15 + [txt.split("; ")[2] if txt.count("; ") >= 2 else "",
+                                      txt.replace("\t", " ") + f"; end {end}", "", "", ""])
+            continue
+        if v is None:  # gene-level result: (gene, genotype, phenotype)
+            gene, genotype, pheno = note
+            out.append([sample, cat, gene, "", "", "", "", genotype] + [""] * 16 + [pheno, "", "", ""])
+            continue
+        lc = low_confidence(v)
+        out.append([str(x) for x in (
+            sample, cat, v.gene, v.chrom, v.pos, v.ref, v.alt, v.gt, v.dp if v.dp is not None else "",
+            f"{v.ab:.3f}" if v.ab is not None else "", v.hgvs_c, v.hgvs_p, v.effect, fmt_af(v.af),
+            fmt_af(v.grpmax_af) if v.grpmax_af is not None else "", fmt_af(v.faf) if v.faf is not None else "",
+            int(v.nhomalt) if v.nhomalt is not None else "",
+            f"{v.am:.3f}" if v.am is not None else "", f"{v.sai:.2f}" if v.sai is not None else "", v.clnsig,
+            v.revstat, v.clndn, ";".join(v.flags), "low: " + ", ".join(lc) if lc else "high",
+            note.replace("\t", " "))]
+            + ([acmg[id(v)][0], str(acmg[id(v)][1]), ",".join(acmg[id(v)][2])] if id(v) in acmg else ["", "", ""]))
+    return out
+
+
+def change_records(changes, sample):
+    """Reanalysis changes as TSV records (category change_new / change_changed / change_removed)."""
+    out = []
+    for c in changes:
+        r = c["row"]
+        rec = [sample, "change_" + c["kind"]] + [r.get(k, "") for k in TSV_COLS[2:24]] \
+            + [f"tier {c['tier']}; previous: {c['before']}; now: {c['now']}; {c['why']}".replace("\t", " "),
+               "", "", ""]
+        out.append(rec)
+    return out
+
+
 def write_tsv(R, path, sample):
     with open(path, "w") as f:
-        f.write("sample\tcategory\tgene\tchrom\tpos\tref\talt\tgenotype\tdepth\talt_fraction\thgvs_c\thgvs_p\teffect\t"
-                "gnomad_af\tgnomad_grpmax_af\tgnomad_faf95\tgnomad_nhomalt\talphamissense\tspliceai\tclinvar\t"
-                "clinvar_review\tclinvar_condition\tqc_flags\tconfidence\tnote\tacmg_class\tacmg_points\tacmg_codes\n")
-        acmg = getattr(R, "acmg", {})
-        for cat, v, note in R.rows:
-            if v is None and len(note) == 4:  # CNV: (genes, type and copy number, note, (chrom, start, end))
-                genes, genotype, txt, (chrom, start, end) = note
-                f.write("\t".join([sample, cat, genes, chrom, str(start), "", f"<{genotype.split()[0]}>", genotype]
-                                  + [""] * 15 + [txt.split("; ")[2] if txt.count("; ") >= 2 else "",
-                                                 txt.replace("\t", " ") + f"; end {end}", "", "", ""]) + "\n")
-                continue
-            if v is None:  # gene-level result: (gene, genotype, phenotype)
-                gene, genotype, pheno = note
-                f.write("\t".join([sample, cat, gene, "", "", "", "", genotype] + [""] * 16 + [pheno, "", "", ""]) + "\n")
-                continue
-            lc = low_confidence(v)
-            f.write("\t".join(str(x) for x in (
-                sample, cat, v.gene, v.chrom, v.pos, v.ref, v.alt, v.gt, v.dp if v.dp is not None else "",
-                f"{v.ab:.3f}" if v.ab is not None else "", v.hgvs_c, v.hgvs_p, v.effect, fmt_af(v.af),
-                fmt_af(v.grpmax_af) if v.grpmax_af is not None else "", fmt_af(v.faf) if v.faf is not None else "",
-                int(v.nhomalt) if v.nhomalt is not None else "",
-                f"{v.am:.3f}" if v.am is not None else "", f"{v.sai:.2f}" if v.sai is not None else "", v.clnsig,
-                v.revstat, v.clndn, ";".join(v.flags), "low: " + ", ".join(lc) if lc else "high",
-                note.replace("\t", " "))) + "\t"
-                + ("\t".join([acmg[id(v)][0], str(acmg[id(v)][1]), ",".join(acmg[id(v)][2])]) if id(v) in acmg else "\t\t")
-                + "\n")
+        f.write("\t".join(TSV_COLS) + "\n")
+        meta = [[sample, "report_meta", k] + [""] * 21 + [str(val), "", "", ""] for k, val in getattr(R, "meta", {}).items()]
+        for rec in meta + tsv_records(R, sample) + getattr(R, "change_rows", []):
+            f.write("\t".join(rec) + "\n")
 
 
 def main(argv=None):
@@ -3411,6 +3791,8 @@ def main(argv=None):
     ap.add_argument("--reference", help="indexed reference FASTA: repeat context of reported variants (needs samtools)")
     ap.add_argument("--min-ref-depth", type=int, default=15,
                     help="reads needed to read an uncalled pharmacogenomic/risk position as reference")
+    ap.add_argument("--previous-tsv", help="TSV output of an earlier report of the same sample: lists what changed")
+    ap.add_argument("--previous-name", help="name of the earlier report shown in the comparison")
     ap.add_argument("--max-af", type=float, default=0.01, help="rare-variant cut-off, applied to the higher of gnomAD AF and grpmax FAF95")
     ap.add_argument("--max-candidates", type=int, default=60)
     ap.add_argument("--html", required=True)
