@@ -291,7 +291,7 @@ laboratory.
 | Copy-number variants (with the CNV calls) | Deletions and duplications from target read depth (`wes_cnv`), **high confidence** with ≥ 3 targets, mostly outside segmental duplications, not seen in the panel and log10 Bayes factor ≥ 5. Each CNV gets its genes (coding exons covered / of the gene), ClinGen dosage and GenCC diseases, and the ACMG/ClinGen CNV points read depth can support (Riggs et al. 2020): **2A** all coding exons of a ClinGen haploinsufficient (loss) or triplosensitive (gain) gene, or ≥ 80 % of a ClinGen HI/TS-3 region (+1.0); **2E** part of a haploinsufficient gene (+0.45); **2I** intragenic duplication in a haploinsufficient gene (+0.45); **2H** LOEUF < 0.35 (+0.15); **2F** inside a ClinGen population region with dosage sensitivity unlikely (−1.0); **3B/3C** 25/35 genes for losses, 35/50 for gains (+0.45/+0.9); **5A** de novo (+0.15, +0.45 with a phenotype match); **5B** inherited from an unaffected parent (−0.3); ≥ 0.99 pathogenic, 0.90–0.98 likely pathogenic. Inheritance fit: heterozygous loss of a dominant gene where loss of function causes disease; homozygous loss in a recessive gene, hemizygous on a male X; a heterozygous deletion in a recessive gene plus a P/LP or candidate small variant (compound heterozygote; the small variant is hemizygous, so in trans, when it lies inside the deletion and looks homozygous); a carrier otherwise; duplication of a triplosensitive dominant gene. The parents' read depth decides inherited (2 consecutive targets shifted by ≥ 0.2, or the mean by ≥ 0.25) vs de novo (both parents normal, and a strong call: log10 BF ≥ 10, ≥ 5 targets). Immunoglobulin and T-cell receptor loci are marked low confidence (somatic V(D)J deletions in blood and cell lines). **Chromosome dosage**: median ratio per chromosome (≥ 1.35 trisomy, 1.10–1.35 mosaic gain or large duplication, and the losses likewise) and the sex-chromosome complement (XX, XY, XXY, 45,X, XXX, XYY), named (Down, Edwards, Patau, Klinefelter, Turner syndromes) |
 | Pharmacogenomics | CYP2C19, CYP2C9, VKORC1, CYP4F2, SLCO1B1, DPYD, TPMT, NUDT15, CYP3A5, CYP2B6, UGT1A1 at fixed GRCh38 positions (checked against ClinVar and the reference). A missing variant counts as the reference allele only with ≥ 15 reads at the position (BAM in v1); otherwise the gene is *indeterminate*. CPIC phenotypes, ClinVar drug-response variants (≥ 1 star). Next to it, the PharmCAT 3.4.0 diplotypes and phenotypes (all defining positions of each star allele, with the positions missing from the VCF listed); PharmCAT's own HTML report carries the CPIC, DPWG and FDA recommendations |
 | Risk alleles | Factor V Leiden, prothrombin G20210A, HFE p.Cys282Tyr/p.His63Asp, APOE (flagged: disclose only with counselling and consent), ClinVar risk/association variants (≥ 1 star) |
-| Runs of homozygosity | Total length of runs ≥ 1 Mb (consanguinity), runs concentrated on one chromosome (uniparental disomy), homozygous findings inside runs |
+| Runs of homozygosity and uniparental disomy | Total length of runs ≥ 1 Mb (consanguinity), runs concentrated on one chromosome, homozygous findings inside runs. With both parents: **uniparental disomy** (whole chromosome or segment, maternal or paternal, isodisomy or heterodisomy) from common SNVs where the proband lacks one parent's alleles, with the imprinting disorder (chromosomes 6, 7, 11, 14, 15, 16, 20), a CNV deletion that would explain it, and homozygous findings that only one parent carries. The **parent of origin** of a chromosome gain and of the X chromosomes in a sex-chromosome aneuploidy appears beside the chromosome dosage (section 4) |
 | Coverage | Per-gene coding coverage at 10/20×; clinically relevant genes below 95 % at 20× are listed, because a negative result there is not reliable |
 | Limits | Lists what an exome pipeline cannot detect (small CNVs, SVs, repeat expansions, mtDNA, CYP2D6, HLA, pseudogene regions, mosaicism…) |
 
@@ -872,6 +872,66 @@ segregation) is not in a VCF.
 In the HG002 Galaxy report, the automated class and its codes appear for every candidate, review and carrier
 finding: 6 LP, 12 VUS.
 
+### Uniparental disomy and parental origin (report 0.9.0, GIAB trios)
+
+**Method.** UPD leaves the proband without one parent's alleles over a chromosome or segment. The report counts
+the common SNVs (gnomAD ≥ 1 %, QUAL ≥ 30, depth ≥ 20) where the proband lacks a parent's allele:
+- the proband is homozygous for an allele that parent lacks; or
+- in targets the proband covers at ≥ 20×, the parent is homozygous for an allele the proband lacks.
+
+A maximum-scoring run per chromosome and parent is tested against the trio's genome-wide Mendelian-error rate. The
+exclusion rate is 30 % for isodisomy and 10 % for heterodisomy, and the better of the two is kept. A run is
+reported when it has log10 LR ≥ 10, ≥ 5 excluding sites and spans ≥ 2 Mb.
+
+**Data.** The three GIAB trios of the trio validation (HG002, HG005, HG001), with the children's annotated VCFs and
+the parents' FreeBayes calls. Simulations replaced the proband's genotypes, inside the proband's ≥ 20× targets,
+with genotypes drawn from the parents' real calls:
+- **isodisomy:** homozygous for a random allele of the donor parent at each site;
+- **heterodisomy:** the donor parent's genotype;
+- **trisomy:** both donor alleles plus one allele of the other parent, with the read fraction drawn at depth 40.
+
+Odd chromosomes and X were used for tuning and even chromosomes held out. Scripts:
+[`tests/upd_trio_sim.py`](tests/upd_trio_sim.py), [`tests/upd_sim_vcf.py`](tests/upd_sim_vcf.py).
+
+| Simulated event (2 donors × 3 trios) | Tuning half | Held-out half |
+|---|---|---|
+| Whole-chromosome isodisomy (tuning: 1, 7, 11, 15; held out: 2, 6, 14, 16, 20, 22) | 24 / 24 | **36 / 36** |
+| Whole-chromosome heterodisomy | 24 / 24 | **36 / 36** |
+| Isodisomic segment, 8–31 Mb (11p15, 15q11–q13; 6q24, 14q32, 20q13) | 12 / 12 | **18 / 18** |
+| Heterodisomic segment, 8–31 Mb | 4 / 12 | 3 / 18 |
+| Trisomy, parent of the extra copy (tuning: 13, 15, 21; held out: 16, 18, 22) | 18 / 18 | **18 / 18** |
+| Calls on other chromosomes during the simulations | 0 | 0 |
+| **Real trios: UPD calls** (highest background log10 LR 3.9; threshold 10) | 0 of 3 | |
+
+- **Trisomy origin:** the proband's read fraction of the mother's allele was 0.65–0.70 for an extra maternal copy
+  and 0.32–0.35 for an extra paternal one. Unchanged chromosomes gave 0.48–0.52, reported as "unclear".
+- **X origin:** both males (HG002, HG005) carry an X only from the mother (97–100 % of informative sites, 0 % for the
+  father); HG001 carries one from each parent (100 %, 99 %).
+- **Short heterodisomic segments** are the limit: inside them a parent's allele is missing at only ~10 % of
+  informative sites.
+
+**Tuning.** Before tuning, the real HG002 trio gave 5 false UPD runs (log10 LR 10–43). All were dense clusters of
+Mendelian errors at a single locus: HLA-DRB at 6p21, IGH at 14q32, protocadherins at 5q31, and inherited deletion
+polymorphisms, each spanning 0–0.7 Mb. Two changes removed them:
+- excluding sites within 100 kb of the previous one now count once;
+- a run must span ≥ 2 Mb.
+
+That costs no detection of whole chromosomes or of isodisomic segments. A second model at a 10 % exclusion rate was
+then added for heterodisomy. In HG002's tuning run it had missed whole-chromosome maternal heterodisomy 15; with the
+second model no whole-chromosome event was missed.
+
+**End-to-end.** The report CLI was run on HG002's VCF with maternal isodisomy 15 imposed from HG004's calls, with
+both parents' VCFs and BAMs, CNV calls and ROH. The summary, section 9 and the TSV reported
+"maternal isodisomy of chromosome 15, 20.5–101.7 Mb (Prader-Willi syndrome)", log10 LR 127, and nothing else. On
+the real HG002 trio the report says "No uniparental disomy found".
+
+| Step | Time | Memory |
+|---|---|---|
+| UPD scan, one trio (after the VCFs are loaded) | 0.3 s | — |
+| Loading the trio and the coverage for the scan | 8.3–8.9 s | 1.25 GiB |
+| Clinical report on the HG002 trio (parents' VCFs and BAMs, CNV, ROH; median of 3) | 0.9.0: 15.3 s; 0.8.0: 15.2 s | 1.70 GiB; 1.68 GiB |
+| Report 0.9.0 on the HG002 trio in Galaxy (workflows release 0.9, 0 upgrade messages on import) | 29 s; "No uniparental disomy found" | — |
+
 ## 8. Scope and limitations
 
 Germline SNVs and short indels in the exome targets, and CNVs of several exons from read depth (section 7).
@@ -882,5 +942,6 @@ events, and relatives in the same run share their inherited CNVs. The automated 
 literature evidence) and is a draft for review, and the HPO ranking depends on the terms given. Trio analysis needs the parents' calls on the same reference and
 works on the variants the proband's caller found; de novo status at repeats, segmental duplications and other
 loci where calls are written differently stays *possibly de novo*, and a parent's low-level mosaicism (a single
-alt read among ≥ 15) is read as reference. The reports support expert review; they are not a diagnosis. This is a research workflow,
+alt read among ≥ 15) is read as reference. UPD detection needs both parents; heterodisomic segments shorter than
+~30 Mb are usually missed, and a deletion of one parent's copy looks like isodisomy unless CNV calls are given. The reports support expert review; they are not a diagnosis. This is a research workflow,
 not a validated clinical pipeline.

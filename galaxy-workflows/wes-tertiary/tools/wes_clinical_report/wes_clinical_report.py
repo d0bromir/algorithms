@@ -20,6 +20,7 @@ ClinGen dosage sensitivity and HPO disease features (onset, course, inheritance)
 Standard library only (Python >= 3.8).
 """
 import argparse
+import bisect
 import collections
 import datetime
 import gzip
@@ -27,10 +28,11 @@ import html
 import json
 import math
 import re
+import statistics
 import subprocess
 import sys
 
-VERSION = "0.8.0"
+VERSION = "0.9.0"
 
 # --------------------------------------------------------------------------------------------- rules
 # ACMG secondary findings v3.3 (ACMG policy statement, Genet Med 2025;27:101454): the 81 genes of v3.2 (Miller et al.,
@@ -1654,6 +1656,244 @@ def de_novo_codes(o, pheno_match, pheno_given, parentage_ok=True):
     return ["PS2_Moderate"] if o == "de novo" else (["PM6_Supporting"] if o == "possible de novo" else [])
 
 
+# ---------------------------------------------------------------- uniparental disomy and parental origin (trio)
+# (chromosome, parent who gave both copies) -> imprinting disorder (Eggermann et al., Clin Epigenetics 2015; Nakka et
+# al., Am J Hum Genet 2019)
+IMPRINTING_UPD = {
+    ("6", "father"): "transient neonatal diabetes mellitus (6q24)",
+    ("7", "mother"): "Silver-Russell syndrome",
+    ("11", "father"): "Beckwith-Wiedemann syndrome (11p15)",
+    ("11", "mother"): "Silver-Russell syndrome (11p15, rare)",
+    ("14", "mother"): "Temple syndrome (14q32)",
+    ("14", "father"): "Kagami-Ogata syndrome (14q32)",
+    ("15", "mother"): "Prader-Willi syndrome",
+    ("15", "father"): "Angelman syndrome",
+    ("16", "mother"): "growth restriction (often with confined placental trisomy 16)",
+    ("20", "father"): "pseudohypoparathyroidism type 1B (20q13)",
+    ("20", "mother"): "Mulchandani-Bhoj-Conlin syndrome",
+}
+UPD_P = (0.3, 0.1)  # exclusion rates of a parent's alleles inside an isodisomy and a heterodisomy (common SNVs)
+UPD_MIN_LOD = 10.0  # log10 likelihood ratio of the segment against the genome-wide error rate
+UPD_MIN_EXCL = 5   # excluding sites in the segment
+UPD_MIN_SPAN = 2_000_000  # UPD spans many genes; shorter runs are inherited deletions or paralogous loci
+UPD_CLUSTER_BP = 100_000  # excluding sites within this distance of the previous one count once (HLA, IGH, deletions)
+OTHER = {"mother": "father", "father": "mother"}
+
+
+class Covered:
+    """Targets with >= 80 % of bases at >= 20x in the proband (mosdepth thresholds): where a missing call means the
+    proband carries no ALT allele."""
+
+    def __init__(self, rows):
+        by = collections.defaultdict(list)
+        for c, s, e, _n, th in rows:
+            if th.get("20X", 0) >= 0.8 * (e - s):
+                by[c].append((s, e))
+        self.iv = {c: sorted(v) for c, v in by.items()}
+        self.starts = {c: [s for s, _e in v] for c, v in self.iv.items()}
+
+    def __contains__(self, cp):
+        c, p = cp
+        st = self.starts.get(c)
+        if not st:
+            return False
+        i = bisect.bisect_right(st, p - 1) - 1  # 0-based start < p (1-based position)
+        return i >= 0 and self.iv[c][i][1] >= p
+
+    def __bool__(self):
+        return bool(self.iv)
+
+
+def upd_chromosomes(sex):
+    return [str(i) for i in range(1, 23)] + (["X"] if sex == "female" else [])
+
+
+def upd_sites(variants, trio, sex, covered=None):
+    """Informative common SNVs for parent-of-origin, per chromosome and parent: [(pos, excluded)] where excluded means
+    the proband did not get that parent's allele (further excluding sites within UPD_CLUSTER_BP count once): (a) the proband is homozygous for an ALT allele (gnomAD AF >= 1 %)
+    that the parent's calls lack; (b) the parent is homozygous for an ALT allele that the proband, covered at >= 20x
+    there, does not carry. Calls with QUAL >= 30 and depth >= 20 only; X only for a female proband (outside PAR)."""
+    chroms = set(upd_chromosomes(sex))
+    sites = collections.defaultdict(list)
+    child = {}
+    for v in variants:
+        if v.chrom in chroms and len(v.ref) == 1 and len(v.alt) == 1:
+            child[(v.chrom, v.pos, v.ref, v.alt)] = v
+    par = [(10001, 2781479), (155701383, 156030895)]
+    for who in ("mother", "father"):
+        calls = trio.vcf.get(who)
+        if calls is None:
+            continue
+        for k, v in child.items():  # (a)
+            if v.zyg == "hom" and (v.af or 0) >= 0.01 and (v.qual or 0) >= 30 and (v.dp or 0) >= 20:
+                if k[0] == "X" and any(a <= k[1] <= b for a, b in par):
+                    continue
+                sites[(k[0], who)].append((k[1], k not in calls))
+        if covered:
+            for k, (zyg, dp, _ab, q) in calls.items():  # (b)
+                if zyg != "hom" or k[0] not in chroms or len(k[2]) != 1 or len(k[3]) != 1:
+                    continue
+                if (q or 0) < 30 or (dp or 0) < 20 or (k[0], k[1]) not in covered:
+                    continue
+                if k[0] == "X" and any(a <= k[1] <= b for a, b in par):
+                    continue
+                sites[(k[0], who)].append((k[1], k not in child))
+    for key, s in sites.items():
+        s.sort()
+        kept, last = [], -UPD_CLUSTER_BP
+        for p, x in s:
+            if x and p - last < UPD_CLUSTER_BP:
+                continue  # one locus with several Mendelian errors (a deletion, a paralog) counts once
+            if x:
+                last = p
+            kept.append((p, x))
+        sites[key] = kept
+    return sites
+
+
+def best_segment(xs, p0, p1s=UPD_P):
+    """Maximum-scoring run (Kadane) of a 0/1 exclusion series: (log10 LR, i, j) for xs[i..j], the best over the
+    isodisomy and heterodisomy exclusion rates."""
+    return max(_kadane(xs, p0, p1) for p1 in p1s)
+
+
+def _kadane(xs, p0, p1):
+    hit, miss = math.log10(p1 / p0), math.log10((1 - p1) / (1 - p0))
+    best, cur, start, bi, bj = 0.0, 0.0, 0, 0, -1
+    for k, x in enumerate(xs):
+        s = hit if x else miss
+        if cur <= 0:
+            cur, start = s, k
+        else:
+            cur += s
+        if cur > best:
+            best, bi, bj = cur, start, k
+    return best, bi, bj
+
+
+def upd_scan(variants, trio, sex, covered=None, cnv_calls=(), roh=()):
+    """Uniparental disomy from a trio: per chromosome and parent, the run of informative sites where the proband
+    lacks that parent's alleles most often, against that parent's genome-wide (median per-chromosome) rate of such
+    Mendelian errors. Returns (segments, rates); each segment is a dict with chrom, start, end, from (the parent who
+    gave both copies), missing (the other parent), excluded, sites, lod, het (proband heterozygosity in the segment
+    relative to the rest of the genome), kind (isodisomy / heterodisomy / mixed), deletion (a CNV loss call
+    covering it), roh_mb."""
+    if trio is None or any(trio.vcf.get(w) is None for w in ("mother", "father")):
+        return [], {}
+    sites = upd_sites(variants, trio, sex, covered)
+    rates = {}
+    for who in ("mother", "father"):
+        per = [sum(x for _p, x in s) / len(s) for (c, w), s in sites.items() if w == who and len(s) >= 50]
+        rates[who] = max(statistics.median(per) if per else 0.01, 0.002)
+    common = collections.defaultdict(lambda: [0, 0])  # chrom -> [het, all] common SNV calls of the proband
+    het_pos = collections.defaultdict(list)
+    for v in variants:
+        if len(v.ref) == 1 and len(v.alt) == 1 and (v.af or 0) >= 0.01 and (v.qual or 0) >= 30 and (v.dp or 0) >= 20:
+            het_pos[v.chrom].append((v.pos, v.zyg == "het"))
+    for c in het_pos:
+        het_pos[c].sort()
+    allhet = [x for c in upd_chromosomes(sex) for _p, x in het_pos.get(c, [])]
+    base_het = sum(allhet) / len(allhet) if allhet else None
+    segs = []
+    for (c, who), s in sites.items():
+        lod, i, j = best_segment([x for _p, x in s], rates[who])
+        n_ex = sum(x for _p, x in s[i:j + 1]) if j >= i else 0
+        start, end = (s[i][0], s[j][0]) if j >= i else (0, 0)
+        if lod < UPD_MIN_LOD or n_ex < UPD_MIN_EXCL or end - start < UPD_MIN_SPAN:
+            continue
+        inside = [x for p, x in het_pos.get(c, []) if start <= p <= end]
+        het = (sum(inside) / len(inside) / base_het) if inside and base_het else None
+        roh_bp = sum(max(0, min(e, end) - max(b, start)) for rc, b, e, *_ in roh if rc == c)
+        iso = roh_bp / max(end - start, 1)
+        kind = ("isodisomy" if (het is not None and het < 0.15) or iso > 0.8 else
+                "heterodisomy" if (het is None or het > 0.6) and iso < 0.2 else "mixed iso- and heterodisomy")
+        dele = [x for x in cnv_calls if x["chrom"] == c and x["type"] == "DEL" and x["confidence"] == "high"
+                and min(x["end"], end) - max(x["start"], start) > 0.5 * (end - start)]
+        segs.append({"chrom": c, "start": start, "end": end, "from": OTHER[who], "missing": who, "excluded": n_ex,
+                     "sites": j - i + 1, "lod": lod, "het": het, "kind": kind, "deletion": dele,
+                     "roh_mb": roh_bp / 1e6, "rate": rates[who],
+                     "disorder": IMPRINTING_UPD.get((c, OTHER[who]), "")})
+    order = {c: n for n, c in enumerate(upd_chromosomes(sex))}
+    segs.sort(key=lambda d: (order.get(d["chrom"], 99), d["start"]))
+    return segs, rates
+
+
+def upd_label(d):
+    """'maternal isodisomy of chromosome 15 (Prader-Willi syndrome)', with the region for a segment"""
+    seg = f" {d['start'] / 1e6:.1f}-{d['end'] / 1e6:.1f} Mb"
+    return (f"{'maternal' if d['from'] == 'mother' else 'paternal'} {d['kind']} of chromosome {d['chrom']}{seg}"
+            + (f" ({d['disorder']})" if d["disorder"] else "")
+            + (" or a deletion of the " + d["missing"] + "'s copy" if d["deletion"] else ""))
+
+
+def in_segments(v, segs):
+    return next((d for d in segs if d["chrom"] == v.chrom and d["start"] <= v.pos <= d["end"]), None)
+
+
+def gain_origin(variants, trio, chrom):
+    """Parent of origin of an extra copy of a chromosome: at SNVs where one parent is homozygous ALT and the other's
+    calls lack the ALT, the share of the proband's reads from the mother's allele is ~0.5 with two copies, ~0.67 with
+    an extra maternal copy and ~0.33 with an extra paternal one. Returns (median maternal share, sites) or None."""
+    if trio is None or any(trio.vcf.get(w) is None for w in ("mother", "father")):
+        return None
+    fm = []
+    for v in variants:
+        if v.chrom != chrom or v.zyg != "het" or v.ab is None or (v.dp or 0) < 20 or len(v.ref) != 1 or len(v.alt) != 1:
+            continue
+        k = (v.chrom, v.pos, v.ref, v.alt)
+        m, f = trio.vcf["mother"].get(k), trio.vcf["father"].get(k)
+        if m and m[0] == "hom" and not f:
+            fm.append(v.ab)
+        elif f and f[0] == "hom" and not m:
+            fm.append(1 - v.ab)
+    return (statistics.median(fm), len(fm)) if len(fm) >= 10 else None
+
+
+def gain_origin_text(o):
+    if o is None:
+        return "parent of origin not determined (fewer than 10 informative sites)"
+    share, n = o
+    who = "maternal" if share >= 0.6 else ("paternal" if share <= 0.4 else "unclear (allele balance near 0.5: "
+                                                                            "mosaic, or not a whole-copy gain)")
+    return f"extra copy {who} (proband reads from the mother's allele {share:.2f}, {n} sites)"
+
+
+def x_parents(variants, trio, covered=None):
+    """Which parents' X chromosomes the proband carries (outside PAR), from sites where only one parent has the ALT
+    and is homozygous (hemizygous in the father): share of such sites where the proband carries it, per parent.
+    A typical female carries both (~1, ~1); a male, 45,X or maternal XXY only the mother's; paternal XXY both."""
+    if trio is None or any(trio.vcf.get(w) is None for w in ("mother", "father")):
+        return {}
+    child = {(v.chrom, v.pos, v.ref, v.alt) for v in variants if v.chrom == "X"}
+    par = [(10001, 2781479), (155701383, 156030895)]
+    out = {}
+    for who in ("mother", "father"):
+        got = n = 0
+        for k, (zyg, dp, _ab, q) in trio.vcf[who].items():
+            if k[0] != "X" or zyg != "hom" or len(k[2]) != 1 or len(k[3]) != 1 or (q or 0) < 30 or (dp or 0) < 10:
+                continue
+            if any(a <= k[1] <= b for a, b in par) or k in trio.vcf[OTHER[who]]:
+                continue
+            if k in child:
+                got += 1
+            elif covered and ("X", k[1]) in covered:
+                pass
+            else:
+                continue
+            n += 1
+        out[who] = (got / n if n else None, n)
+    return out
+
+
+def x_parents_text(xp):
+    parts = []
+    for who in ("mother", "father"):
+        r, n = xp.get(who, (None, 0))
+        if r is not None and n >= 10:
+            parts.append(f"{'an X from the ' + who if r >= 0.5 else 'no X from the ' + who} ({r:.0%} of {n} sites)")
+    return "; ".join(parts) if parts else "not determined (too few informative X sites)"
+
+
 CLUSTER_TEXT = "3 or more parent-absent changes within 10 bp, typical of reads from a paralogous copy"
 NOREF_TEXT = ("no reference reads in a heterozygous call: the other allele is another variant at this locus (a "
               "repeat or complex site the parents' calls may write differently)")
@@ -2423,6 +2663,20 @@ def build(args):
     cnv_report = [x for x in cnv_high if x[5] in ("pathogenic", "likely pathogenic") or x[6]]
     cnv_sex = cnv_summ.get("sex_complement")
     cnv_aneu = cnv_summ.get("aneuploidy", [])
+    covered = Covered(target_cov) if target_cov else None
+    both_parents = bool(trio) and all(trio.vcf.get(w) is not None for w in ("mother", "father"))
+    upd_segs, upd_rates = upd_scan(variants, trio, sex, covered, cnv_calls, roh) if both_parents else ([], {})
+
+    def aneu_origin(text):
+        """parent of origin of a reported chromosome gain or sex-chromosome aneuploidy (trio)"""
+        if not both_parents:
+            return ""
+        m = re.match(r"chromosome (\w+): (gain|partial gain)", text)
+        if m:
+            return gain_origin_text(gain_origin(variants, trio, m.group(1)))
+        if text.startswith("sex chromosomes") or re.match(r"chromosome X: ", text):
+            return "X chromosomes: " + x_parents_text(x_parents(variants, trio, covered))
+        return ""
 
     def aneu_name(text):
         m = re.match(r"chromosome (\w+): gain of a whole copy", text)
@@ -2491,7 +2745,8 @@ def build(args):
                                     for x in cnv_report[:5]) if cnv_report else "")
                 + f"; {len(cnv_high)} high-confidence and {len(cnv_calls) - len(cnv_high)} low-confidence calls in all</li>")
         if cnv_aneu:
-            R.h("<li><b>Chromosome dosage</b>: <b>" + "; ".join(esc(a + (f" ({aneu_name(a)})" if aneu_name(a) else ""))
+            R.h("<li><b>Chromosome dosage</b>: <b>" + "; ".join(esc(a + (f" ({aneu_name(a)})" if aneu_name(a) else "")
+                                                                    + (f"; {aneu_origin(a)}" if aneu_origin(a) else ""))
                                                       for a in cnv_aneu) + "</b></li>")
     if trio:
         conf = sum(1 for d in denovo if d[3] == "de novo")
@@ -2500,6 +2755,10 @@ def build(args):
                + (": " + ", ".join(short(d[1]) for d in denovo[:6]) if denovo else "")
                if len(trio.present()) == 2 else "one parent only, no de novo analysis")
             + ("" if trio.parentage_ok or not trio.qc else "; <b>parentage check failed</b>") + "</li>")
+        if both_parents:
+            R.h("<li><b>Uniparental disomy</b> (trio, section 9): "
+                + ("<b>" + "; ".join(esc(upd_label(d)) for d in upd_segs) + "</b>" if upd_segs else "none found")
+                + "</li>")
     if hpo_terms:
         R.h(f"<li><b>Phenotype</b>: {', '.join(esc(t + ' ' + hpo_names.get(t, '(unknown term)')) for t in sorted(hpo_terms))}; "
             f"{len(hpo_match)} genes associated</li>")
@@ -2701,7 +2960,8 @@ def build(args):
         dos = sm.get("chromosome_dosage", {})
         if cnv_aneu:
             R.h("<div class='box alert'><b>Chromosome dosage</b>: " + "<br>".join(
-                esc(a) + (f" &rarr; <b>{esc(aneu_name(a))}</b>" if aneu_name(a) else "") for a in cnv_aneu)
+                esc(a) + (f" &rarr; <b>{esc(aneu_name(a))}</b>" if aneu_name(a) else "")
+                + (f"; {esc(aneu_origin(a))}" if aneu_origin(a) else "") for a in cnv_aneu)
                 + "<br><span class='small'>From exome read depth: confirm by karyotype or chromosomal microarray. A "
                   "partial change can be mosaicism or a large CNV.</span></div>")
         elif dos:
@@ -2885,7 +3145,7 @@ def build(args):
             R.rows.append(("clinvar_association", v, ""))
 
     # ROH
-    R.h("<h2>9. Runs of homozygosity</h2>")
+    R.h("<h2>9. Runs of homozygosity and uniparental disomy</h2>")
     if roh:
         big = sorted([s for s in roh if s[3] >= 1_000_000], key=lambda s: -s[3])
         total = sum(s[3] for s in big)
@@ -2909,6 +3169,57 @@ def build(args):
                 + ", ".join(esc(f"{v.gene} {v.hgvs_p or v.hgvs_c}") for v in rhom) + "</p>")
     else:
         R.h("<p class='none'>Not computed (no bcftools roh output given).</p>")
+    R.h("<h3>Uniparental disomy (trio)</h3>")
+    if not both_parents:
+        R.h("<p class='none'>Needs both parents' calls.</p>")
+    else:
+        R.h("<p class='small'>Common SNVs (gnomAD &ge; 1 %, QUAL &ge; 30, depth &ge; 20) where the proband lacks a "
+            "parent's allele: homozygous for an allele that parent lacks, or (in targets the proband covers at "
+            "&ge; 20x) without an allele the parent is homozygous for. Each chromosome is scanned for the run where "
+            "such sites are most frequent, against the trio's genome-wide rate (mother "
+            f"{upd_rates.get('mother', 0):.2%}, father {upd_rates.get('father', 0):.2%}); a run of &ge; 2 Mb with "
+            f"&ge; {UPD_MIN_EXCL} such sites and log10 likelihood ratio &ge; {UPD_MIN_LOD:.0f} is reported. "
+            "Isodisomy (two copies of one parental homologue) leaves the run homozygous; heterodisomy (both "
+            "homologues of one parent) does not. In validation with simulated UPD in three GIAB trios, whole-chromosome "
+            "iso- and heterodisomy and isodisomic segments of 8-30 Mb were all found; heterodisomic segments under ~30 Mb "
+            "mostly were not. A deletion of one parent's copy looks like isodisomy: copy number tells them apart. "
+            "Confirm by methylation or microsatellite analysis.</p>")
+        if not upd_segs:
+            R.h("<p class='none'>No uniparental disomy found.</p>")
+        else:
+            rows = []
+            for d in upd_segs:
+                notes = []
+                if d["deletion"]:
+                    notes.append("a high-confidence CNV deletion covers it: more likely a deletion of the "
+                                 f"{d['missing']}'s copy than UPD")
+                elif not args.cnv_calls:
+                    notes.append("no copy-number data: a deletion of the " + d["missing"] + "'s copy would look "
+                                 "the same")
+                if d["roh_mb"]:
+                    notes.append(f"{d['roh_mb']:.1f} Mb in runs of homozygosity")
+                inside = [v for v in variants if v.zyg == "hom" and in_segments(v, [d]) and
+                          (is_plp(v) or any(c[1] is v for c in cands))]
+                if inside:
+                    notes.append("homozygous diagnostic or candidate variants here (only the " + d["from"]
+                                 + " carries them, low recurrence risk): " + ", ".join(
+                                     f"{v.gene} {v.hgvs_p or v.hgvs_c}" for v in inside[:6]))
+                rows.append([f"<b>{esc(d['chrom'])}</b>", f"{d['start']:,}-{d['end']:,} "
+                             f"({(d['end'] - d['start']) / 1e6:.1f} Mb)", f"<b>{esc(d['from'])}</b>", esc(d["kind"]),
+                             f"{d['excluded']} of {d['sites']} sites lack the {esc(d['missing'])}'s allele; "
+                             f"log10 LR {d['lod']:.0f}"
+                             + (f"; heterozygosity {d['het']:.0%} of the genome's" if d["het"] is not None else ""),
+                             f"<b>{esc(d['disorder'])}</b>" if d["disorder"] else "no imprinting disorder known",
+                             esc("; ".join(notes))])
+                R.rows.append(("upd", None, ("",
+                                             f"UPD({'mat' if d['from'] == 'mother' else 'pat'}) {d['kind']}",
+                                             f"both copies from the {d['from']}, {d['excluded']}/{d['sites']} sites, "
+                                             f"log10 LR {d['lod']:.0f}"
+                                             + (f", {d['disorder']}" if d["disorder"] else "")
+                                             + (", " + ", ".join(notes) if notes else ""),
+                                             (d["chrom"], d["start"], d["end"]))))
+            R.table(["Chromosome", "Region", "Both copies from", "Type", "Evidence", "Imprinting disorder", "Notes"],
+                    rows)
 
     # coverage
     R.h("<h2>10. Coverage of clinically relevant genes</h2>")
@@ -3006,7 +3317,14 @@ def build(args):
             "inherited from a parent reported unaffected is kept but marked (reduced penetrance or not causal); such "
             "a candidate does not count as fitting the inheritance. De novo evidence follows the ClinGen SVI "
             "recommendation (confirmed de novo, phenotype consistent with the gene: PS2_Moderate; assumed: "
-            "PM6_Supporting) and is withheld when the parentage check fails.</li>")
+            "PM6_Supporting) and is withheld when the parentage check fails."
+            + (" Uniparental disomy (section 9): for each chromosome and parent, the maximum-scoring run (log10 "
+               "likelihood ratio, exclusion rate 30 % for isodisomy or 10 % for heterodisomy against the trio's "
+               "genome-wide Mendelian-error rate) of common SNVs where the proband lacks that parent's allele; errors "
+               "within 100 kb of each other count once. Parent of origin of a chromosome gain: the proband's read "
+               "fraction of the mother's allele where one parent is homozygous ALT and the other lacks it (0.5 two "
+               "copies, ~0.67 extra maternal, ~0.33 extra paternal copy); of the X chromosomes: whether the proband "
+               "carries alleles only the mother or only the father has." if both_parents else "") + "</li>")
     if args.cnv_calls and not cnv_status:
         R.h("<li>Copy-number variants (section 4): wes_cnv read-depth calls (GC- and length-corrected target depth "
             "against a same-kit panel, one principal component of the panel removed, Student-t hidden Markov model). "
