@@ -850,3 +850,9 @@ def test_cnv_gnomad_frequency():
     assert "4O -1.00" in cnv["PAH"]["note"], "40 of 3,000 NFE exomes (1.3 %): common, benign evidence"
     assert "2 of 464,000 carriers" in cnv["BRCA2"]["note"] and "4O" not in cnv["BRCA2"]["note"]
     assert "not among the rare gnomAD v4.1 exome CNVs" in cnv["GENEX"]["note"]
+
+
+def test_uniprot_features():
+    _, html = run_report(["--uniprot-features", os.path.join(DATA, "uniprot_features.tsv")])
+    assert "UniProt P51587: domain BRC repeat test (410-420); region Interaction with NPM1 (300-500)" in html, \
+        "BRCA2 p.Gln412*: the narrower domain first"

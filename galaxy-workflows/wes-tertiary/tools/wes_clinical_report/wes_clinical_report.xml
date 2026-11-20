@@ -114,6 +114,9 @@ python3 '$__tool_directory__/wes_clinical_report.py'
     #if $erepo:
         --erepo '$erepo'
     #end if
+    #if $uniprot_features:
+        --uniprot-features '$uniprot_features'
+    #end if
     #if $gnomad_cnv:
         --gnomad-cnv '$gnomad_cnv'
     #end if
@@ -210,6 +213,8 @@ python3 '$__tool_directory__/wes_clinical_report.py'
                help="Built with data/build_vcep.py: gene-specific allele-frequency cut-offs, criteria and strengths of the ClinGen variant curation expert panels."/>
         <param name="erepo" type="data" format="tabular,tsv,txt" optional="true" label="ClinGen expert-panel classifications (ERepo)"
                help="Built with data/build_vcep.py from the ClinGen Evidence Repository: the panel's own classification of a variant, shown next to ClinVar."/>
+        <param name="uniprot_features" type="data" format="tabular,tsv,txt" optional="true" label="Protein features (UniProt)"
+               help="Built with data/build_uniprot_features.py from UniProtKB/Swiss-Prot (CC BY 4.0): the domain, region or site at each variant's residue."/>
         <param name="gnomad_cnv" type="data" format="vcf,vcf_bgzip" optional="true" label="gnomAD v4.1 exome CNVs (VCF)"
                help="gnomad.v4.1.cnv.all.vcf.gz (CC0): population frequency of each CNV call; benign evidence 4O when an ancestry group has it at 1 % or more."/>
         <param name="collins_dosage" type="data" format="tabular,tsv,txt" optional="true" label="Predicted dosage sensitivity (Collins et al. 2022)"

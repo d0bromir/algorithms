@@ -567,6 +567,33 @@ def refseq_names(v, a):
     return s
 
 
+UNIPROT = {}  # unversioned ENST -> [(start, end, type, note, accession)]; set by build() from --uniprot-features
+FEATURE_RANK = {"active site": 0, "binding site": 1, "DNA binding": 2, "zinc finger": 3, "motif": 4, "domain": 5,
+                "repeat": 6, "region": 7, "coiled coil": 8}
+
+
+def load_uniprot(path, transcripts):
+    """data/build_uniprot_features.py table, for the given (unversioned) transcripts only."""
+    UNIPROT.clear()
+    if not path:
+        return
+    with opener(path) as f:
+        for line in f:
+            t = line.rstrip("\n").split("\t")
+            if len(t) >= 7 and t[0] in transcripts:
+                UNIPROT.setdefault(t[0], []).append((int(t[3]), int(t[4]), t[5], t[6], t[2]))
+
+
+def protein_features(v):
+    """UniProt features at the variant's residue on its MANE transcript (canonical isoform positions)."""
+    m = re.match(r"p\.[A-Z][a-z]{2}(\d+)", v.hgvs_p or "")
+    if not m or not v.feature:
+        return []
+    pos = int(m.group(1))
+    hits = [f for f in UNIPROT.get(v.feature.split(".")[0], ()) if f[0] <= pos <= f[1]]
+    return sorted(hits, key=lambda f: (FEATURE_RANK.get(f[2], 9), f[1] - f[0]))
+
+
 def apply_main_annotation(v):
     """Show each variant on its gene's principal transcript (MANE Select where known), not on SnpEff's first one."""
     if not v.anns:
@@ -1787,6 +1814,10 @@ def var_cell(v):
         s += f"<br>{esc(v.refseq)}"
     if v.hgvs_g:
         s += f"<br>{esc(v.hgvs_g)}"
+    pf = protein_features(v) if UNIPROT else []
+    if pf:
+        s += "<br>UniProt " + esc(pf[0][4]) + ": " + "; ".join(
+            esc(f"{ty} {note} ({a}-{b})" if a != b else f"{ty} {note}".strip()) for a, b, ty, note, _acc in pf[:3])
     s += "</span>"
     return s
 
@@ -3130,6 +3161,7 @@ def build(args):
     MANE.clear()
     MANE.update(load_mane(args.mane))
     mito_rows, mito_sum = load_mito(args.mito_tsv, args.mito_json)
+    load_uniprot(args.uniprot_features, {a[6].split(".")[0] for v in variants for a in v.anns if len(a) > 6})
     gd, gd_sources = load_gene_disease(args.gene_disease)
     CURATED.clear()
     CURATED.update(gd)
@@ -4685,6 +4717,8 @@ def main(argv=None):
                     "registry): gene-specific frequency cut-offs, codes and strengths")
     ap.add_argument("--erepo", help="ClinGen expert-panel classifications (data/build_vcep.py from the Evidence "
                     "Repository), shown next to ClinVar")
+    ap.add_argument("--uniprot-features", help="protein features by Ensembl transcript (data/build_uniprot_features.py): "
+                    "the UniProt domain, region or site at each variant's residue")
     ap.add_argument("--gnomad-cnv", help="gnomAD v4.1 exome CNVs (gnomad.v4.1.cnv.all.vcf.gz): population frequency "
                     "of each CNV call; 4O when common")
     ap.add_argument("--collins-dosage", help="Collins et al. 2022 dosage sensitivity scores "

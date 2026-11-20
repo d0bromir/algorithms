@@ -301,6 +301,14 @@ inputs:
     doc: >-
       gnomad.v4.1.cnv.all.vcf.gz (rare CNVs of 464,297 exomes, CC0): the population frequency of each CNV call.
     position: {left: 0, top: 5020}
+  "Protein features (UniProt TSV)":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: >-
+      UniProtKB/Swiss-Prot domains, regions, motifs and sites by Ensembl transcript, built by
+      data/build_uniprot_features.py (CC BY 4.0): shown at each variant's residue.
+    position: {left: 0, top: 5140}
 
 outputs:
   multiqc_report:
@@ -698,6 +706,7 @@ steps:
       "Mitochondrial calls (wes_mito TSV)": mito_calling/calls
       "Mitochondrial summary (wes_mito JSON)": mito_calling/summary
       "Population CNVs (gnomAD exome CNV VCF)": "Population CNVs (gnomAD exome CNV VCF)"
+      "Protein features (UniProt TSV)": "Protein features (UniProt TSV)"
 
   multiqc:
     doc: One QC report for all samples.

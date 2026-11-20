@@ -333,6 +333,12 @@ stage_data() {
     manifest gnomad.v3.1.chrM.vcf.gz vcf_bgzip "gnomAD v3.1 chrM sites (CC0), renamed to the reference's mitochondrial contig"
     fetch https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/exome_cnv/gnomad.v4.1.cnv.all.vcf.gz gnomad.v4.1.cnv.all.vcf.gz
     manifest gnomad.v4.1.cnv.all.vcf.gz vcf_bgzip "gnomAD v4.1 exome CNVs (CC0)"
+    if [[ ! -s uniprot_features.tsv.gz ]]; then
+        fetch "https://rest.uniprot.org/uniprotkb/stream?query=organism_id:9606+AND+reviewed:true&format=tsv&fields=accession,gene_primary,length,xref_ensembl,ft_domain,ft_region,ft_motif,ft_zn_fing,ft_dna_bind,ft_act_site,ft_binding,ft_repeat,ft_coiled" uniprot_human.tsv
+        python3 "$HERE/data/build_uniprot_features.py" uniprot_human.tsv uniprot_features.tsv && gzip -f uniprot_features.tsv
+        rm -f uniprot_human.tsv
+    fi
+    manifest uniprot_features.tsv.gz tabular "UniProtKB/Swiss-Prot human (CC BY 4.0) via data/build_uniprot_features.py"
     manifest gene_disease.tsv tabular "ClinGen gene-disease validity (CC0), G2P (CC0), Orphanet (CC BY 4.0) via data/build_gene_disease.py"
     local GS=https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/genome-stratifications/v3.6/GRCh38@all
     if [[ ! -s GRCh38_segdups.bed ]]; then  # Ensembl names, like the reference
