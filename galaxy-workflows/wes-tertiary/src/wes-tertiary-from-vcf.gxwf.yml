@@ -291,6 +291,22 @@ inputs:
       ClinGen Evidence Repository classifications built by data/build_vcep.py, shown with their met criteria next to
       ClinVar.
     position: {left: 0, top: 4320}
+  "Predicted dosage sensitivity (Collins TSV)":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: >-
+      Collins et al. 2022 pHaplo/pTriplo scores (Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz, CC BY 4.0):
+      predicted haploinsufficient and triplosensitive genes in a copy-number variant.
+    position: {left: 0, top: 4440}
+  "Functional assays (MaveDB TSV)":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: >-
+      Calibrated multiplexed functional assays from MaveDB (CC0), built by data/build_mavedb.py: PS3/BS3 at the
+      calibrated strength for the variants an assay measured.
+    position: {left: 0, top: 4560}
 
 outputs:
   annotated_vcf:
@@ -722,6 +738,8 @@ steps:
       gene_disease: "Curated gene-disease table"
       vcep_rules: "ClinGen expert-panel rules (VCEP)"
       erepo: "ClinGen expert-panel classifications (ERepo)"
+      collins_dosage: "Predicted dosage sensitivity (Collins TSV)"
+      mave: "Functional assays (MaveDB TSV)"
     state:
       max_af: 0.01
       min_ref_depth: 15

@@ -811,3 +811,20 @@ def test_missense_policy():
     assert rep.missense_code(v, "concordant") is None, "disagreeing predictors give no PP3/BP4"
     v.revel = None
     assert rep.missense_code(v, "concordant") == "PP3_Strong", "one score alone counts as itself"
+
+
+def test_cnv_collins_dosage():
+    d = tempfile.mkdtemp()
+    rows, _ = run_report(_cnv_inputs(d) + ["--collins-dosage", os.path.join(DATA, "collins_dosage.tsv")])
+    pah = next(r for r in rows if r["category"].startswith("cnv") and r["gene"] == "PAH")
+    assert "Collins et al. 2022 pHaplo): PAH 0.91" in pah["note"]
+    brca2 = next(r for r in rows if r["category"].startswith("cnv") and r["gene"] == "BRCA2")
+    assert "Collins" not in brca2["note"], "pHaplo 0.42 is below the 0.86 cut-off"
+
+
+def test_mavedb_functional_evidence():
+    rows, html = run_report(["--mave", os.path.join(DATA, "mave_evidence.tsv")])
+    brca2 = next(r for r in rows if r["gene"] == "BRCA2" and r["acmg_codes"])
+    assert "PS3_Moderate" in brca2["acmg_codes"] and "PS3_Strong" not in brca2["acmg_codes"], \
+        "the clinical calibration is scored; the research-only one is shown, not scored"
+    assert "MaveDB PS3 Strong (research only)" in html

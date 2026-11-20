@@ -208,6 +208,8 @@ def freq_cell(v):
         det.append(f"max {esc(v.grpmax)} {fmt_af(v.grpmax_af)}")
     if v.faf is not None:
         det.append(f"FAF95 {fmt_af(v.faf)}" + (f" ({esc(v.faf_grp)})" if v.faf_grp else ""))
+    if overall is not None and v.an:
+        det.append(f"AC {round(overall * v.an):,}/{int(v.an):,}")
     if v.nhomalt:
         det.append(f"{int(v.nhomalt)} hom")
     if det:
@@ -754,6 +756,74 @@ def curated_rows_sorted(gene):
                                                          src.get(r["source"], 3), r["disease"]))
 
 
+# ------------------------------------------------------------------ functional assays (MaveDB, PS3/BS3)
+MAVE = {}  # (variant key, gene) -> [evidence row]; set by build() from --mave
+MAVE_SRC = [""]
+
+
+def mave_keys(v):
+    """MaveDB lookup names of a variant: its genomic HGVS (single-nucleotide and adjacent changes need no shifting)
+    and its MANE RefSeq protein change (NP_...:p.X, exact and without the version)."""
+    keys = []
+    g = hgvs_g(v)
+    if not g.endswith("shifted)"):
+        keys.append(g)
+    m = re.search(r"\((NP_\d+)\.(\d+):(p\.[^)]+)\)", v.refseq or "")
+    if m and "check the numbering" not in v.refseq:
+        keys += [f"{m.group(1)}.{m.group(2)}:{m.group(3)}", f"{m.group(1)}:{m.group(3)}"]
+    return keys
+
+
+def load_mave(path, variants):
+    """data/build_mavedb.py evidence for the given variants only (the table has ~600,000 rows)."""
+    MAVE.clear()
+    if not path:
+        return
+    want = {}
+    for v in variants:
+        for k in mave_keys(v):
+            want.setdefault(k, []).append(v)
+    with opener(path) as f:
+        for line in f:
+            if line.startswith("# source"):
+                MAVE_SRC[0] = " ".join(line.rstrip("\n").split("\t")[1:3])
+                continue
+            t = line.rstrip("\n").split("\t")
+            if len(t) < 8 or t[0] == "key":
+                continue
+            k = t[0]
+            ks = [k] + ([re.sub(r"^(NP_\d+)\.\d+:", r"\1:", k)] if k.startswith("NP_") else [])
+            for kk in ks:
+                for v in want.get(kk, ()):
+                    r = {"key": k, "gene": t[1], "urn": t[2], "score": t[3], "code": t[4], "calibration": t[5],
+                         "research": t[6] == "1", "title": t[7], "exact": kk == k}
+                    lst = MAVE.setdefault(v.key(), [])
+                    if not any(x["urn"] == r["urn"] and x["calibration"] == r["calibration"] for x in lst):
+                        lst.append(r)
+
+
+def mave_code(v):
+    """PS3/BS3 from clinically calibrated MaveDB assays (research-use-only calibrations are shown, not scored): the
+    strongest code when all calibrated assays agree in direction; none when they disagree."""
+    rs = [r for r in MAVE.get(v.key(), ()) if not r["research"]]
+    if not rs or len({r["code"][:3] for r in rs}) > 1:
+        return None
+    order = ["Supporting", "Moderate", "Strong", "VeryStrong"]
+    return max((r["code"] for r in rs), key=lambda c: order.index(c.split("_")[1]) if c.split("_")[1] in order else 0)
+
+
+def mave_text(v):
+    rs = MAVE.get(v.key(), ())
+    if not rs:
+        return ""
+    return "<br>" + "<br>".join(
+        tag(f"MaveDB {r['code'].replace('_', ' ')}" + (" (research only)" if r["research"] else ""),
+            "t-amb" if r["research"] else ("t-red" if r["code"].startswith("PS3") else "t-grn"))
+        + f"<span class='small'> {esc(r['title'][:60])}: score {esc(r['score'])}, {esc(r['calibration'][:50])} "
+          f"<a href='https://www.mavedb.org/score-sets/{esc(r['urn'])}'>{esc(r['urn'].split(':')[-1])}</a>"
+        + ("" if r["exact"] else " (protein version differs)") + "</span>" for r in rs[:3])
+
+
 # ------------------------------------------------------------------ ClinGen expert panel (VCEP) rules and classifications
 VCEP = collections.defaultdict(list)  # gene -> specifications; set by build() from --vcep-rules
 EREPO = {}  # genomic HGVS -> [expert classification]; set by build() from --erepo
@@ -882,6 +952,8 @@ def vcep_label(gene):
 def erepo_cell(v):
     """The ClinGen expert panel's own classification of this exact variant, if any (matched by genomic HGVS)."""
     rs = EREPO.get(v.hgvs_g.split(" ")[0]) if v.hgvs_g else None
+    if not rs and len(v.ref) != len(v.alt):  # some records name an indel at its left-aligned (5') position
+        rs = EREPO.get(hgvs_g(v).split(" ")[0])
     if not rs:
         return ""
     return "<br>" + "<br>".join(
@@ -1605,6 +1677,9 @@ def acmg_evidence(v, gene, moi, constraint, hpo_hit, max_af, dosage=None, protei
         codes += pc
     if hpo_hit:
         codes.append("PP4")
+    mc = mave_code(v) if MAVE else None
+    if mc:
+        codes.append(mc)
     if VCEP.get(gene):
         codes, notes = vcep_adjust(gene, codes, p, (gene, a[9]) in BA1_EXCEPTIONS)
         VCEP_NOTES[(v.key(), gene)] = notes
@@ -1775,15 +1850,35 @@ def clinvar_cell(v):
     return s
 
 
+# Collins et al., Cell 2022: genes with pHaplo >= 0.86 or pTriplo >= 0.94 are as dosage sensitive as the ClinGen
+# curated ones (their recommended cut-offs; CC BY 4.0, https://zenodo.org/records/6347673)
+COLLINS_HAPLO, COLLINS_TRIPLO = 0.86, 0.94
+
+
+def load_collins(path):
+    """Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz -> gene -> (pHaplo, pTriplo)."""
+    out = {}
+    if not path:
+        return out
+    with opener(path) as f:
+        for line in f:
+            t = line.rstrip("\n").split("\t")
+            if line.startswith("#") or len(t) < 3:
+                continue
+            out[t[0]] = (fnum(t[1]) or 0.0, fnum(t[2]) or 0.0)
+    return out
+
+
 class Knowledge:
     """Gene- and disease-level knowledge bases given to the report."""
 
-    def __init__(self, gencc=None, disputed=None, pheno=None, hpoa=None, dosage=None):
+    def __init__(self, gencc=None, disputed=None, pheno=None, hpoa=None, dosage=None, collins=None):
         self.gencc = gencc or {}
         self.disputed = disputed or {}
         self.pheno = pheno or Phenotype()
         self.hpoa = hpoa or {}
         self.dosage = dosage or {}
+        self.collins = collins or {}
 
 
 def disease_features(d, info):
@@ -2560,6 +2655,15 @@ def cnv_evidence(c, K, constraint, regions, origin):
                 g = min(names, key=lambda g: constraint.get(g, (9,))[0] or 9)
                 codes.append(("2H", 0.15, f"{g} is loss-of-function intolerant (gnomAD LOEUF "
                                           f"{constraint[g][0]:.2f})"))
+            elif loss and any(K.collins.get(g, (0, 0))[0] >= COLLINS_HAPLO for g in names):
+                g = max(names, key=lambda g: K.collins.get(g, (0, 0))[0])
+                codes.append(("2H", 0.15, f"{g} is predicted haploinsufficient (Collins et al. 2022 pHaplo "
+                                          f"{K.collins[g][0]:.2f})"))
+    sens = sorted(((K.collins[g][0 if loss else 1], g) for g in names if g in K.collins), reverse=True)
+    top = [f"{g} {x:.2f}" for x, g in sens if x >= (COLLINS_HAPLO if loss else COLLINS_TRIPLO)]
+    if top:
+        notes.append(f"predicted {'haploinsufficient' if loss else 'triplosensitive'} genes (Collins et al. 2022 "
+                     f"{'pHaplo' if loss else 'pTriplo'}): " + ", ".join(top[:6]) + (" ..." if len(top) > 6 else ""))
     n_genes = len(names)
     lim = (25, 35) if loss else (35, 50)
     if n_genes >= lim[1]:
@@ -2659,6 +2763,10 @@ def knowledge_releases(args, vcf_path):
         with opener(args.erepo) as f:
             first = f.readline().rstrip("\n").split("\t")
         rel["erepo"] = " ".join(first[1:3])[:80] if first[0] == "# source" else os.path.basename(args.erepo)
+    if getattr(args, "mave", None):
+        with opener(args.mave) as f:
+            first = f.readline().rstrip("\n").split("\t")
+        rel["mave"] = " ".join(first[1:3])[:80] if first[0] == "# source" else os.path.basename(args.mave)
     if getattr(args, "gene_disease", None):
         _gd, src = load_gene_disease(args.gene_disease)
         rel["gene_disease"] = "; ".join(f"{k} {v.replace('sha256:', '')[:12]}" for k, v in src.items())
@@ -2946,7 +3054,7 @@ def build(args):
     hpoa = load_hpoa(args.hpo_annotations)
     dosage = load_dosage(args.clingen_dosage)
     cvp = load_clinvar_protein(args.clinvar_protein)
-    K = Knowledge(gencc, load_gencc_disputed(args.gencc), pheno, hpoa, dosage)
+    K = Knowledge(gencc, load_gencc_disputed(args.gencc), pheno, hpoa, dosage, load_collins(args.collins_dosage))
     MANE.clear()
     MANE.update(load_mane(args.mane))
     gd, gd_sources = load_gene_disease(args.gene_disease)
@@ -2960,6 +3068,7 @@ def build(args):
     VCEP_NOTES.clear()
     EREPO.clear()
     EREPO.update(load_erepo(args.erepo))
+    load_mave(args.mave, [v for v in variants if v.impact in ("HIGH", "MODERATE", "LOW") or v.clnsig])
     roh = load_roh(args.roh)
     target_cov = load_thresholds(args.target_coverage)
     gene_cov_rows = load_thresholds(args.gene_coverage)
@@ -3200,7 +3309,7 @@ def build(args):
         g = v.gene
         o = origin(v)[0] if trio else None
         ev, _pn, cls, pts = classify(v, g, dn_codes(v, o, g))
-        s = clinvar_cell(v) + "<br><span class='small'>automated: </span>" + acmg_tag(cls, pts)
+        s = clinvar_cell(v) + "<br><span class='small'>automated: </span>" + acmg_tag(cls, pts) + mave_text(v)
         if VCEP.get(g):
             nt = VCEP_NOTES.get((v.key(), g), [])
             s += (f"<br><span class='small'>ClinGen VCEP rules: {esc(vcep_label(g))}"
@@ -4183,6 +4292,11 @@ def build(args):
             "domains), and codes stronger than the panel allows are reduced. Panel rules that need data a VCF lacks "
             "(functional domains, case counts, segregation) are not applied; the automated class says which rules "
             "changed it.</li>")
+    if args.mave:
+        R.h(f"<li>Functional assays: MaveDB score sets with ACMG score calibrations ({esc(MAVE_SRC[0])}); a variant "
+            "matched by its genomic name or its MANE RefSeq protein change gets PS3 or BS3 at the calibrated strength "
+            "when all clinically calibrated assays agree; calibrations MaveDB marks research-use-only (e.g. ExCALIBR) "
+            f"are shown and not scored. {len(MAVE)} variants of this sample have assay data.</li>")
     if EREPO:
         R.h(f"<li>ClinGen Evidence Repository: {sum(len(x) for x in EREPO.values()):,} expert-panel classifications "
             "matched by genomic HGVS name and shown with their met criteria next to ClinVar.</li>")
@@ -4268,7 +4382,7 @@ def build(args):
         "and pseudogene regions (e.g. SMN1/SMN2, CYP21A2, PMS2 exons 11-15, GBA1), and genes or exons with low coverage. "
         "A negative report does not exclude a genetic diagnosis.</li>")
     R.h("<li>The automated ACMG/AMP class uses only the evidence a VCF and the knowledge files support. Functional "
-        "studies (PS3/BS3), case counts (PS4), segregation (PP1/BS4), an alternative cause (BP5)"
+        "studies (PS3/BS3)" + (" other than calibrated MaveDB assays" if args.mave else "") + ", case counts (PS4), segregation (PP1/BS4), an alternative cause (BP5)"
         + (", the parts of ClinGen VCEP rules that need such data" if VCEP else ", gene-specific ClinGen VCEP rules")
         + " and the literature are not used, so a variant can move by several points on manual "
         "review; a likely pathogenic or pathogenic class needs that review before it is reported.</li>")
@@ -4417,6 +4531,11 @@ def main(argv=None):
                     "registry): gene-specific frequency cut-offs, codes and strengths")
     ap.add_argument("--erepo", help="ClinGen expert-panel classifications (data/build_vcep.py from the Evidence "
                     "Repository), shown next to ClinVar")
+    ap.add_argument("--collins-dosage", help="Collins et al. 2022 dosage sensitivity scores "
+                    "(Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz): predicted haploinsufficient and "
+                    "triplosensitive genes in a CNV")
+    ap.add_argument("--mave", help="calibrated functional-assay evidence (data/build_mavedb.py from the MaveDB dump): "
+                    "PS3/BS3 at the calibrated strength")
     ap.add_argument("--previous-tsv", help="TSV output of an earlier report of the same sample: lists what changed")
     ap.add_argument("--previous-name", help="name of the earlier report shown in the comparison")
     ap.add_argument("--max-af", type=float, default=0.01, help="rare-variant cut-off, applied to the higher of gnomAD AF and grpmax FAF95")

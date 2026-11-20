@@ -2,6 +2,7 @@
 
     python3 tests/acmg_clinvar_eval.py ANNOTATED.vcf clinvar_truth.tsv REF_DIR [--split tune|holdout|all] [--tsv OUT]
         [--mane MANE.summary.txt.gz] [--gene-disease gene_disease.tsv] [--vcep-rules vcep_rules.tsv]
+        [--mave mave_evidence.tsv.gz] [--missense-policy alphamissense|revel|concordant]
 
 ANNOTATED.vcf is the VCF workflow's annotated_vcf for tests/acmg_clinvar_set.py's pseudo-sample; REF_DIR holds the
 reference files install.sh downloads (GenCC, gnomAD constraint, ClinGen dosage, ClinVar residue table, FASTA).
@@ -18,6 +19,7 @@ ap.add_argument("--mane", help="MANE summary: classify on MANE transcripts (repo
 ap.add_argument("--gene-disease", help="data/build_gene_disease.py table: curated inheritance and mechanism")
 ap.add_argument("--missense-policy", choices=("alphamissense", "revel", "concordant"),
                 help="how AlphaMissense and REVEL are combined (default: the report's MISSENSE_POLICY)")
+ap.add_argument("--mave", help="data/build_mavedb.py evidence: calibrated PS3/BS3 (needs --mane for protein matches)")
 ap.add_argument("--vcep-rules", help="data/build_vcep.py rules: ClinGen expert-panel cut-offs, codes and strengths")
 a = ap.parse_args()
 t0 = time.time()
@@ -44,6 +46,9 @@ def half(c):
 
 
 variants = [v for v in variants if (v.chrom, v.pos, v.ref, v.alt) in truth and (a.split == "all" or half(v.chrom) == a.split)]
+for v in variants:
+    R.apply_main_annotation(v)
+R.load_mave(a.mave, variants)
 inframe = [v for v in variants if any(e in (v.anns[0][1] if v.anns else "") for e in R.INFRAME_EFFECTS)]
 ctx = R.reference_contexts(f"{a.ref}/GRCh38.ensembl115.primary_assembly.fa", prefix, inframe)
 for v in inframe:

@@ -114,6 +114,12 @@ python3 '$__tool_directory__/wes_clinical_report.py'
     #if $erepo:
         --erepo '$erepo'
     #end if
+    #if $collins_dosage:
+        --collins-dosage '$collins_dosage'
+    #end if
+    #if $mave:
+        --mave '$mave'
+    #end if
     #if $previous_tsv:
         #import re
         #set $previous_name = re.sub(r"[^\w .,:()+-]", "_", str($previous_tsv.element_identifier))
@@ -195,6 +201,10 @@ python3 '$__tool_directory__/wes_clinical_report.py'
                help="Built with data/build_vcep.py: gene-specific allele-frequency cut-offs, criteria and strengths of the ClinGen variant curation expert panels."/>
         <param name="erepo" type="data" format="tabular,tsv,txt" optional="true" label="ClinGen expert-panel classifications (ERepo)"
                help="Built with data/build_vcep.py from the ClinGen Evidence Repository: the panel's own classification of a variant, shown next to ClinVar."/>
+        <param name="collins_dosage" type="data" format="tabular,tsv,txt" optional="true" label="Predicted dosage sensitivity (Collins et al. 2022)"
+               help="Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz (https://zenodo.org/records/6347673, CC BY 4.0): pHaplo/pTriplo of the genes in a copy-number variant."/>
+        <param name="mave" type="data" format="tabular,tsv,txt" optional="true" label="Functional assays (MaveDB, calibrated)"
+               help="Built with data/build_mavedb.py from the MaveDB bulk download (CC0): PS3/BS3 at the strength of the assay's ACMG calibration."/>
         <param name="previous_tsv" type="data" format="tabular" optional="true" label="Previous report of this sample: findings (TSV)"
                help="The findings TSV of an earlier run of this tool on the same sample. The report then lists what is new, what changed (ClinVar, ACMG class, category, genotype) and what is no longer reported, with the evidence that differs."/>
         <param name="max_af" type="float" value="0.01" min="0" max="1" label="Rare variant cut-off (population allele frequency)"

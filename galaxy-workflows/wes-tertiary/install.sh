@@ -315,6 +315,15 @@ stage_data() {
     fi
     manifest vcep_rules.tsv tabular "ClinGen CSpec registry via data/build_vcep.py (ClinGen terms of use)"
     manifest erepo_variants.tsv tabular "ClinGen Evidence Repository via data/build_vcep.py (ClinGen terms of use)"
+    fetch https://zenodo.org/records/6347673/files/Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz         Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz
+    manifest Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz tabular "https://zenodo.org/records/6347673 (CC BY 4.0)"
+    if [[ ! -s mave_evidence.tsv.gz ]]; then
+        local MV; MV="$(curl -fsL https://zenodo.org/api/records/20840937 | python3 -c 'import json,sys; print([f["links"]["self"] for f in json.load(sys.stdin)["files"] if f["key"].endswith(".tar.gz")][0])')"
+        fetch "$MV" mavedb.tar.gz
+        python3 "$HERE/data/build_mavedb.py" mavedb.tar.gz mave_evidence.tsv && gzip -f mave_evidence.tsv
+        rm -f mavedb.tar.gz
+    fi
+    manifest mave_evidence.tsv.gz tabular "MaveDB bulk download (CC0, Zenodo 20840937) via data/build_mavedb.py"
     manifest gene_disease.tsv tabular "ClinGen gene-disease validity (CC0), G2P (CC0), Orphanet (CC BY 4.0) via data/build_gene_disease.py"
     local GS=https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/genome-stratifications/v3.6/GRCh38@all
     if [[ ! -s GRCh38_segdups.bed ]]; then  # Ensembl names, like the reference
