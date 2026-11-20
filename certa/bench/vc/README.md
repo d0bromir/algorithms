@@ -52,3 +52,32 @@ third machine relays the records as CRAM.
      [swap_lost.py](swap_lost.py) gives the reads CERTA loses minibwa's
      records (with `--mapq`, also minibwa's MAPQ where CERTA places a read
      at its locus): how much of the gap to minibwa they explain.
+   - [pr_mapq.sh](pr_mapq.sh) `BUILD_DIR` (a2): the subsets with PR mates'
+     MAPQ from the pairs found; [same_records.py](same_records.py) checks
+     that only MAPQ and XQ differ from the build before
+     ([VALIDATION_RESULTS.md](../VALIDATION_RESULTS.md#the-mapq-of-mates-placed-by-the-pair)).
+   - [t2t_feat.sh](t2t_feat.sh) `BUILD` (galaxy): the subsets mapped with
+     `--t2t --feature-tags`, one TSV of T2T classes per genome (relayed to
+     a2's `~/vc/diag`); [t2t_gate.py](t2t_gate.py) (a2) writes the BAMs of
+     the T2T-gated MAPQ rules for call.sh. [errors_table.py](errors_table.py)
+     `DIR EVAL NAME=LABEL...`: FN and FP per run, in all, segdups and the
+     difficult regions.
+   - [lost_run.sh](lost_run.sh) (a2): the reads minibwa places with MAPQ
+     ≥ 20 that CERTA puts elsewhere, re-mapped with `--feature-tags
+     --witness`; [lost_diag.py](lost_diag.py) re-scores minibwa's alignment
+     under CERTA's objective against CERTA's interval and parts (search
+     miss, scored as well, or above XU).
+     [vote_sweep.sh](vote_sweep.sh): the lost pairs with seed votes off and
+     at several settings ([VALIDATION_RESULTS.md](../VALIDATION_RESULTS.md#reads-certa-lost)).
+   - [dv_map.sh](dv_map.sh) `BUILD_DIR TAG OPTIONS...` (galaxy): the
+     subsets mapped there (a2's disk is nearly full) into `S_TAG.bam`;
+     [dv_relay.sh](dv_relay.sh) `TAG` (the relay machine) copies them to a2
+     and calls them.
+   - [bwscale.sh](bwscale.sh) `GENOME IN OUT TABLE` (a2): a BAM or CRAM with
+     every MAPQ rewritten through a table, for the fitted MAPQ on BWA-MEM's
+     scale ([VALIDATION_RESULTS.md](../VALIDATION_RESULTS.md#the-fitted-mapq-on-bwas-scale)).
+   - [dv_final.sh](dv_final.sh) `BUILD_DIR TAG=OPTIONS...` (galaxy): the
+     subsets mapped with several option sets, the reads extracted once, as
+     CRAM (a third of the BAM, for the 3 MB/s relay);
+     [dv_relay_cram.sh](dv_relay_cram.sh) `TAG...` (the relay machine)
+     copies them to a2, checks their md5 and starts call.sh there.

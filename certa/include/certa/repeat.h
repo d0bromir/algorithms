@@ -73,7 +73,28 @@ struct RepeatParams {
   // although their bound cannot beat U_eff (diverged repeats, where every
   // part but a few is absent and the sampled copies align poorly).
   int lb_chains = 0;
+  // Lower bound only, for a read not proven exact: every q-mer of the read
+  // with 1..vote_occ hits votes for its diagonal, and the vote_top groups of
+  // nearby diagonals with the most votes, per strand, are aligned in a band
+  // of +-vote_pad around them (0 = off). Parts are disjoint and placed
+  // greedily, so a read whose differences from its locus fall in every part
+  // (a diverged copy, a haplotype with clustered variants, a clipped end)
+  // has no exact part there, while long exact runs remain; the sampled
+  // copies, ranked by their exact match from a part's start, then favour
+  // other copies of a repeat. Votes rank a locus by its exact q-mers over
+  // the whole read.
+  int vote_occ = 0;
+  int vote_top = 0;
+  int vote_pad = 16;
 };
+
+// Tier R's other alignments for the pair stage (RepeatOut::alt): at most
+// kRepAlt, at loci away from A*, scoring at least kRepAltMin (BWA-MEM -T)
+// and more than lo - kRepAltDrop (BWA-MEM -U, the unpaired penalty: a lower
+// one can never make a pair that beats the mates' single-end bests).
+constexpr int kRepAlt = 4;
+constexpr int kRepAltMin = 30;
+constexpr int kRepAltDrop = 17;
 
 struct RepeatOut {
   bool claim = false;  // false: read not handled (bad length, index with s > 1)
@@ -90,6 +111,12 @@ struct RepeatOut {
   Result aln;            // A*
   int sub_lo = kNoSub;   // SUB >= sub_lo (an alignment at another locus)
   int sub_hi = 0;        // SUB <= sub_hi
+  // Bands evaluated at other loci whose best alignment scores near lo, best
+  // first, one per locus (same strand, band starts < L apart): the pair
+  // stage aligns them again (affine_align over [lo, lo + B)) and pairs them.
+  struct Alt { int score, strand; int64_t lo; int B; };
+  int n_alt = 0;
+  Alt alt[kRepAlt];
 };
 
 struct RepeatScratch {
@@ -114,6 +141,13 @@ struct RepeatScratch {
   std::vector<uint64_t> mkeys, mlo;          // ... their keys and ranges
   std::vector<uint8_t> mok;
   std::vector<uint32_t> mcnt;
+  // Seed votes (RepeatParams::vote_occ): each strand's q-mer ranges, the
+  // voted diagonals and their groups.
+  std::vector<uint64_t> vlo[2];
+  std::vector<uint32_t> vcnt[2];
+  std::vector<int64_t> vdiag;
+  struct VGroup { int votes; int64_t dmin, dmax; };
+  std::vector<VGroup> vgroups;
 };
 
 namespace repeat_detail {
@@ -301,6 +335,10 @@ inline RepeatOut repeat_tier(const IndexView& ix, const RepeatParams& rp, const 
       sc.chi[i] = sc.clo[i] + sc.kcnt[i];
       if (sc.kok[i]) known_put(sc, sc.keys[i], sc.clo[i], sc.kcnt[i]);
     }
+    if (rp.vote_occ > 0 && rp.vote_top > 0) {
+      sc.vlo[st].assign(sc.clo.begin(), sc.clo.begin() + nq);
+      sc.vcnt[st].assign(sc.kcnt.begin(), sc.kcnt.begin() + nq);
+    }
     auto cnt = [&](int i) { return sc.chi[i] - sc.clo[i]; };
     for (int i = 0; i < nq; ++i)
       if (cnt(i) > 0 && (fb_i[st] < 0 || cnt(i) < fb_n[st])) { fb_i[st] = i; fb_n[st] = cnt(i); fb_lo[st] = sc.clo[i]; }
@@ -440,6 +478,46 @@ inline RepeatOut repeat_tier(const IndexView& ix, const RepeatParams& rp, const 
     if (v != kNoSub) sc.evals.push_back({v, cl.strand, blo, B});
     if (v > lo) { lo = v; lo_st = cl.strand; lo_lo = blo; lo_B = B; }
   }
+  // Seed votes (RepeatParams::vote_occ), for a read not proven exact. Only
+  // lo rises, with alignments computed; hi and the parts are unchanged.
+  if (rp.vote_occ > 0 && rp.vote_top > 0 && (lo == kNoSub || lo < Ueff)) {
+    const int vpad = std::max(0, std::min(rp.vote_pad, (BMAX - 1) / 2));
+    const int64_t span_max = BMAX - 2 * vpad - 1;  // a group's diagonals fit one band
+    for (int st = 0; st < 2; ++st) {
+      if ((int)sc.vcnt[st].size() != nq) continue;
+      sc.vdiag.clear();
+      for (int i = 0; i < nq; ++i) {
+        const uint32_t n = sc.vcnt[st][i];
+        if (n == 0 || n > (uint32_t)rp.vote_occ) continue;
+        for (uint64_t e = sc.vlo[st][i]; e < sc.vlo[st][i] + n; ++e) sc.vdiag.push_back((int64_t)ix.pos[e] - i);
+      }
+      if (sc.vdiag.empty()) continue;
+      std::sort(sc.vdiag.begin(), sc.vdiag.end());
+      // Groups: runs of diagonals at most vpad apart, within span_max.
+      sc.vgroups.clear();
+      size_t a = 0;
+      while (a < sc.vdiag.size()) {
+        size_t e = a + 1;
+        while (e < sc.vdiag.size() && sc.vdiag[e] - sc.vdiag[e - 1] <= vpad && sc.vdiag[e] - sc.vdiag[a] <= span_max)
+          ++e;
+        sc.vgroups.push_back({(int)(e - a), sc.vdiag[a], sc.vdiag[e - 1]});
+        a = e;
+      }
+      const size_t top = std::min(sc.vgroups.size(), (size_t)rp.vote_top);
+      auto more = [](const RepeatScratch::VGroup& x, const RepeatScratch::VGroup& y) {
+        return x.votes != y.votes ? x.votes > y.votes : x.dmin < y.dmin;
+      };
+      std::partial_sort(sc.vgroups.begin(), sc.vgroups.begin() + top, sc.vgroups.end(), more);
+      for (size_t g = 0; g < top; ++g) {
+        const int64_t blo = sc.vgroups[g].dmin - vpad;
+        const int B = (int)(sc.vgroups[g].dmax - sc.vgroups[g].dmin) + 2 * vpad + 1;
+        if (B > BMAX) continue;  // cannot happen (span_max); the DP rows hold BMAX diagonals
+        const int v = band_score(ix, ws.seq[st], L, blo, B);
+        if (v != kNoSub) sc.evals.push_back({v, st, blo, B});
+        if (v > lo) { lo = v; lo_st = st; lo_lo = blo; lo_B = B; }
+      }
+    }
+  }
   out.hi = std::max(lo, Ueff);
   out.lo = lo;
   out.exact = lo != kNoSub && lo >= Ueff;
@@ -471,6 +549,26 @@ inline RepeatOut repeat_tier(const IndexView& ix, const RepeatParams& rp, const 
   };
   for (const auto& e : sc.evals)
     if (away(e.strand, e.lo, e.B) && e.score > out.sub_lo) out.sub_lo = e.score;
+  // The alternatives for the pair stage: the best band per other locus.
+  for (const auto& e : sc.evals) {
+    if (!away(e.strand, e.lo, e.B) || e.score < kRepAltMin || e.score <= lo - kRepAltDrop) continue;
+    const RepeatOut::Alt c = {e.score, e.strand, e.lo, e.B};
+    auto before = [](const RepeatOut::Alt& x, const RepeatOut::Alt& y) {
+      return x.score != y.score ? x.score > y.score : x.strand != y.strand ? x.strand < y.strand : x.lo < y.lo;
+    };
+    int k = 0;
+    while (k < out.n_alt && !(out.alt[k].strand == c.strand && std::llabs(out.alt[k].lo - c.lo) < L)) ++k;
+    if (k < out.n_alt) {  // the same locus: keep the better band
+      if (before(c, out.alt[k])) out.alt[k] = c;
+    } else if (out.n_alt < kRepAlt) {
+      out.alt[out.n_alt++] = c;
+    } else if (before(c, out.alt[kRepAlt - 1])) {
+      out.alt[kRepAlt - 1] = c;
+    } else {
+      continue;
+    }
+    std::sort(out.alt, out.alt + out.n_alt, before);
+  }
   if (out.copies >= 2) out.sub_lo = lo;
   if (!out.exact) return out;  // sub_hi = hi
   if (out.copies >= 2 || rp.sub_margin <= 0) {

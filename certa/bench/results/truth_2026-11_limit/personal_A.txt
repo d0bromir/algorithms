@@ -1,0 +1,23 @@
+truth_personal.py score (test A; minibwa 0.7-r421 on each HG002 haplotype genome, mat_Y_EBV_MT and pat_X_EBV_MT;
+per pair the haplotype whose two records score more; projected to GRCh38 through GIAB's dipcall blocks):
+
+Mates with a truth: 18,818,766. Mapped to the sample's own genome and projected: at the truth 18,556,879 (98.608 %); away from it 178,898 (9,506 per million), not projected 82,989 (4,410 per million).
+Settled pairs (MAPQ >= 40, the haplotypes agree or one scores 10 more): 18,147,709 mates (96.434 %); away from the truth 55 (3.0 per million of them).
+
+minibwa: of each class of its mates away from the truth, those the sample's own genome places at the truth (and settled):
+  missed: 9,668 -> 6,769 (70.0 %), settled 2,253 (23.3 %)
+  tie: 139,864 -> 70,900 (50.7 %), settled 13,436 (9.6 %)
+  reference: 262,385 -> 120,796 (46.0 %), settled 34,252 (13.1 %)
+
+bwa-mem2: of each class of its mates away from the truth, those the sample's own genome places at the truth (and settled):
+  missed: 2,797 -> 2,236 (79.9 %), settled 1,074 (38.4 %)
+  tie: 138,979 -> 71,011 (51.1 %), settled 13,294 (9.6 %)
+  reference: 266,949 -> 122,967 (46.1 %), settled 34,998 (13.1 %)
+
+certa (the seed votes, PR 20 + votes + alternatives; point MAPQ): of each class of its mates away from the truth, those the sample's own genome places at the truth (and settled):
+  missed: 22,647 -> 13,559 (59.9 %), settled 2,848 (12.6 %)
+  tie: 134,486 -> 66,760 (49.6 %), settled 12,260 (9.1 %)
+  reference: 256,299 -> 119,417 (46.6 %), settled 34,026 (13.3 %)
+
+minibwa on GRCh38 by MAPQ band (test A; cumulative from MAPQ 60 down: share of the mates with a truth, misplaced per million):
+  60: 92.951 %, 261.7; 55-59: 93.965 %, 384.9; 50-54: 95.560 %, 997.0; 45-49: 96.508 %, 1,702.3; 40-44: 96.631 %, 1,876.5

@@ -23,7 +23,17 @@ struct OutputOptions {
   bool iv_rescue_local = false;  // --iv-rescue local: a mate the window search misses is aligned locally there
   bool mapq_cal = false;      // --mapq cal: paired interval records get the fitted MAPQ (cal_mapq)
   bool mapq_pair = false;     // --mapq pair: paired interval records get the pair model's MAPQ (pair_model.h)
-  bool feature_tags = false;  // --feature-tags: interval records carry XO and XN (and XC with --t2t)
+  // PR mates' point MAPQ from S2, the certified bound on every other pair
+  // (the default; what --mapq cal and --mapq pair, and the T2T placements
+  // they read, were fitted on), instead of the best other pair found
+  // (--pr-mapq found).
+  bool pr_mapq_bound = true;
+  bool feature_tags = false;  // --feature-tags: interval records carry XO, XN and XM (and XC with --t2t)
+  // --mapq-scale bwa (the default with --mapq pair): the pair model's MAPQ is
+  // written on BWA-MEM's scale (pair_model.h kBwaScale), and the model's own
+  // value, a Phred, in XP.
+  bool mapq_bwa = false;
+  PairVoteParams pair_votes;  // --iv-pair-votes: joint seeds of both mates in place_pair (occ 0: off)
 };
 
 // The records of some reads, one string per output.

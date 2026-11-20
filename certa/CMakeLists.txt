@@ -83,6 +83,9 @@ target_link_libraries(bio_score PRIVATE certa_core)
 # Why --bio certifies a read or falls back, and what it costs (per read).
 add_executable(bio_probe tools/bio_probe.cpp)
 target_link_libraries(bio_probe PRIVATE certa_core)
+# The best local score of a read at given loci (bench/truth_oracle.py; shares no code with the mapper).
+add_executable(truth_oracle tools/truth_oracle.cpp)
+target_link_libraries(truth_oracle PRIVATE Threads::Threads)
 # The long-read certificates against a brute-force DP (planted SVs).
 add_executable(test_longread tests/test_longread.cpp)
 target_link_libraries(test_longread PRIVATE certa_core)

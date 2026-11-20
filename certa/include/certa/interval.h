@@ -106,6 +106,7 @@ inline Result alignment_only(const Result& a, int strand, uint8_t tier) {
   o.d2x = -1;
   o.sub_score = kNoSub;
   o.sub_hi = kNoSub;
+  o.sub_found = kNoSub;
   return o;
 }
 
@@ -169,6 +170,13 @@ struct Placement {
   int q_pe = -1;
   bool pr_xh = false;
   Witness pw;  // PR mates: the pair certificate's parts, which prove S2
+  // A pair placed by place_pair: its score minus the best other pair found
+  // or the unpaired alternative, whichever is higher (> 0, at most 255; -1
+  // for other records). An input of the pair model (XM with --feature-tags).
+  int pair_gap = -1;
+  // --mapq pair: the model's MAPQ, a Phred (XP when MAPQ is written on
+  // BWA-MEM's scale, --mapq-scale bwa); -1 without the model.
+  int phred = -1;
 };
 
 // What interval mode writes as MAPQ (--iv-mapq).
@@ -268,6 +276,35 @@ inline bool same_alignment(const Result& a, const Result& b) {
   for (int i = 0; i < a.n_cigar; ++i)
     if (a.cigar[i] != b.cigar[i]) return false;
   return true;
+}
+
+// The MAPQ of a PR mate r (mate: the other mate's alignment; q_se: r's
+// single-end MAPQ, 0 without a certified single-end result). BWA-MEM's
+// pairing rule, max(q_se, min(q_pe, q_se + 40)), with q_pe from the pair's
+// margin over the best other pair found (sub_found) or the best unpaired
+// alternative `un` (the mates' best single-end scores minus kPenUnpaired),
+// whichever is higher, as BWA-MEM takes it. With `bound`, q_pe is from S2,
+// the certified bound on every other pair (0 for a tie): the MAPQ that
+// --mapq cal and --mapq pair were fitted on, and XQ's pair term.
+inline int pr_mapq(const Result& r, const Result& mate, int q_se, int un, bool bound) {
+  const int pair = r.score + mate.score;
+  int q_pe;
+  if (bound) {
+    q_pe = r.n_best == 1 ? mapq_margin(pair - r.sub_score) : 0;
+  } else {
+    const int subo = std::max<int>(r.sub_found, un);
+    q_pe = subo >= pair ? 0 : mapq_margin(pair - subo);
+  }
+  return q_pe > q_se ? std::min(q_pe, q_se + 40) : q_se;
+}
+
+// pr_mapq's unpaired alternative for a PR pair (r, mate; se, se_mate: their
+// single-end results): each mate's best single-end score known (its pair
+// alignment's, or its certified single-end optimum), minus kPenUnpaired.
+inline int pr_unpaired(const Result& r, const Result& mate, const Result& se, const Result& se_mate) {
+  const int b0 = se.certified == 1 ? std::max<int>(r.score, se.score) : r.score;
+  const int b1 = se_mate.certified == 1 ? std::max<int>(mate.score, se_mate.score) : mate.score;
+  return b0 + b1 - kPenUnpaired;
 }
 
 // A PR mate r (mate: the other mate's alignment; se: its single-end result,
@@ -409,6 +446,177 @@ inline bool rescue_mate_local(const IndexView& ix, int max_dist, const Result& x
   return true;
 }
 
+// Joint seeds of a pair (place_pair; --iv-pair-votes). The window searches
+// look for a mate beside the other mate's single-end placement (and its
+// proven copy). When both mates lie in a repeat, the copy where the two
+// align best together is often beside neither: each mate's placement is one
+// copy among several that score as well or better. BWA-MEM pairs every hit
+// of one mate with every hit of the other; here the two mates' exact q-mers
+// find those loci.
+struct PairVoteParams {
+  int occ = 0;   // a q-mer with 1..occ hits votes for its diagonal (0: off)
+  int top = 8;   // joint loci aligned, most votes first (at most kPairVoteTop)
+  int pad = 16;  // band half-width around a group's diagonals
+  // Diagonals per mate and strand: the rarest q-mers vote first, and a q-mer
+  // whose hits would pass the budget ends the votes. The rare q-mers are the
+  // ones that tell the copies of a repeat apart (they cover the sites where
+  // the copies differ); a q-mer every copy holds votes for all of them alike.
+  int budget = 8192;
+};
+constexpr int kPairVoteTop = 16;
+// A pair this far below the best one changes neither the pair chosen nor its
+// MAPQ (mapq_margin(10) is 60).
+constexpr int kPairVoteMargin = 10;
+// Joint loci examined per pair: bounds the work in tandem arrays.
+constexpr int kPairVoteWork = 1 << 18;
+// A certified unique mate with at least this point MAPQ anchors its pair
+// (place_pair skips the joint seeds).
+constexpr int kPairVoteAnchorMapq = 20;
+
+// Every q-mer of a mate with 1..pv.occ hits votes for its diagonal, on each
+// strand; runs of diagonals at most pv.pad apart (within one band) form
+// groups, as tier R's seed votes do. A joint locus is a group of one mate on
+// the forward strand and a group of the other on the reverse strand whose
+// diagonals allow a proper pair (the reverse mate's within [-pad, max_dist +
+// pad] of the forward mate's). The pv.top joint loci with the most votes of
+// both mates are aligned, each mate in the band of its group; pairs scoring
+// above `need`, both mates at least kMinScore, go to add(mate 0's alignment,
+// mate 1's). Only candidates are produced: place_pair checks that a pair is
+// proper and chooses among all it has.
+template <class Add>
+inline void pair_votes(const IndexView& ix, const PairVoteParams& pv, int max_dist, const uint8_t* const* codes,
+                       const int* L, int need, PairScratch& sc, Add add) {
+  const int q = ix.q;
+  if (pv.occ <= 0 || pv.top <= 0 || ix.s != 1) return;
+  for (int m = 0; m < 2; ++m)
+    if (L[m] < q || L[m] > LMAX) return;
+  const int vpad = std::max(0, std::min(pv.pad, (BMAX - 1) / 2));
+  const int64_t span_max = BMAX - 2 * vpad - 1;  // a group's diagonals fit one band
+  uint8_t rd[2][2][LMAX];                        // [mate][strand]
+  for (int m = 0; m < 2; ++m) {
+    for (int i = 0; i < L[m]; ++i) {
+      rd[m][0][i] = codes[m][i];
+      const uint8_t c = codes[m][L[m] - 1 - i];
+      rd[m][1][i] = c < 4 ? (uint8_t)(3 - c) : (uint8_t)4;
+    }
+    const int nq = L[m] - q + 1;
+    sc.vkey.resize(nq);
+    sc.vok.resize(nq);
+    sc.vlo.resize(nq);
+    sc.vcnt.resize(nq);
+    for (int st = 0; st < 2; ++st) {
+      qmer_keys(rd[m][st], L[m], q, sc.vkey.data(), sc.vok.data());
+      lookup_batch(ix, sc.vkey.data(), sc.vok.data(), nq, sc.vlo.data(), sc.vcnt.data());
+      // The voting q-mers, rarest first (then by position), within the budget.
+      std::vector<uint64_t>& ord = sc.vord;
+      ord.clear();
+      for (int i = 0; i < nq; ++i) {
+        const uint32_t n = sc.vcnt[i];
+        if (n == 0 || n > (uint32_t)pv.occ) continue;
+        ord.push_back((uint64_t)n << 32 | (uint32_t)i);
+      }
+      std::sort(ord.begin(), ord.end());
+      std::vector<int64_t>& d = sc.vdiag;
+      d.clear();
+      for (uint64_t k : ord) {
+        const uint32_t n = (uint32_t)(k >> 32);
+        const int i = (int)(uint32_t)k;
+        if (d.size() + n > (size_t)pv.budget) break;
+        for (uint64_t e = sc.vlo[i]; e < sc.vlo[i] + n; ++e) d.push_back((int64_t)ix.pos[e] - i);
+      }
+      std::sort(d.begin(), d.end());
+      std::vector<PairScratch::VGroup>& g = sc.vgrp[m][st];
+      g.clear();
+      size_t a = 0;
+      while (a < d.size()) {
+        size_t e = a + 1;
+        while (e < d.size() && d[e] - d[e - 1] <= vpad && d[e] - d[a] <= span_max) ++e;
+        g.push_back({(int)(e - a), d[a], d[e - 1]});
+        a = e;
+      }
+    }
+  }
+  // The joint loci with the most votes. Loci with the same votes are ordered
+  // by a hash of the pair's bases and the locus, not by position: among the
+  // copies of a repeat that fit a pair equally well, each pair then takes
+  // its own, instead of every pair the first copy of the reference. The
+  // order is fixed by the reads alone (no thread timing). Groups are in
+  // diagonal order and disjoint, so the reverse groups in reach of a forward
+  // group are a range that only moves forward.
+  typedef PairScratch::VJoint J;
+  uint64_t seed = 1469598103934665603ull;  // FNV-1a over both mates' bases
+  for (int m = 0; m < 2; ++m)
+    for (int i = 0; i < L[m]; ++i) seed = (seed ^ codes[m][i]) * 1099511628211ull;
+  auto key_of = [seed](int o, size_t f, size_t r) {
+    uint64_t h = seed ^ ((uint64_t)o << 62) ^ ((uint64_t)f << 31) ^ (uint64_t)r;
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdull;
+    h ^= h >> 33;
+    return (uint32_t)h;
+  };
+  auto before = [](const J& x, const J& y) {
+    if (x.votes != y.votes) return x.votes > y.votes;
+    if (x.key != y.key) return x.key < y.key;
+    if (x.o != y.o) return x.o < y.o;
+    if (x.f != y.f) return x.f < y.f;
+    return x.r < y.r;
+  };
+  std::vector<J>& top = sc.vjoint;
+  top.clear();
+  const size_t ntop = (size_t)std::min(pv.top, kPairVoteTop);
+  int work = kPairVoteWork;
+  for (int o = 0; o < 2 && work > 0; ++o) {
+    const std::vector<PairScratch::VGroup>& gf = sc.vgrp[o][0];      // mate o forward
+    const std::vector<PairScratch::VGroup>& gr = sc.vgrp[1 - o][1];  // the other mate reverse
+    if (gf.empty() || gr.empty()) continue;
+    int rmax = 0;
+    for (const PairScratch::VGroup& x : gr) rmax = std::max(rmax, x.votes);
+    // Forward groups with the most votes first: once one cannot reach the
+    // last of the top loci even with the best reverse group, none after it
+    // can. `before` is a strict total order, so the top loci are those of a
+    // scan of every group (unless kPairVoteWork ends the scan first).
+    std::vector<uint64_t>& fo = sc.vord;
+    fo.clear();
+    for (size_t f = 0; f < gf.size(); ++f) fo.push_back((uint64_t)(0x7fffffff - gf[f].votes) << 32 | (uint32_t)f);
+    std::sort(fo.begin(), fo.end());
+    for (uint64_t k : fo) {
+      if (work <= 0) break;
+      const size_t f = (uint32_t)k;
+      if (top.size() == ntop && gf[f].votes + rmax < top.back().votes) break;
+      const int64_t lo = gf[f].dmin - vpad, hi = gf[f].dmax + max_dist + vpad;
+      // Groups are disjoint and in diagonal order: dmax increases with dmin.
+      size_t r = std::lower_bound(gr.begin(), gr.end(), lo, [](const PairScratch::VGroup& g, int64_t v) {
+                   return g.dmax < v;
+                 }) - gr.begin();
+      for (; r < gr.size() && gr[r].dmin <= hi && work > 0; ++r, --work) {
+        const J j{gf[f].votes + gr[r].votes, key_of(o, f, r), o, (int)f, (int)r};
+        if (top.size() < ntop) top.push_back(j);
+        else if (before(j, top.back())) top.back() = j;
+        else continue;
+        for (size_t x = top.size() - 1; x > 0 && before(top[x], top[x - 1]); --x) std::swap(top[x], top[x - 1]);
+      }
+    }
+  }
+  for (const J& j : top) {
+    const int mf = j.o, mr = 1 - j.o;
+    const PairScratch::VGroup& F = sc.vgrp[mf][0][j.f];
+    const PairScratch::VGroup& R = sc.vgrp[mr][1][j.r];
+    const int64_t flo = F.dmin - vpad, rlo = R.dmin - vpad;
+    const int fB = (int)(F.dmax - F.dmin) + 2 * vpad + 1, rB = (int)(R.dmax - R.dmin) + 2 * vpad + 1;
+    const int sf = band_score(ix, rd[mf][0], L[mf], flo, fB);
+    // The other mate scores at most L: a pair that cannot pass `need` even so is not aligned.
+    if (sf == kNoSub || sf < kMinScore || sf + L[mr] * kMatch <= need) continue;
+    const int sr = band_score(ix, rd[mr][1], L[mr], rlo, rB);
+    if (sr == kNoSub || sr < kMinScore || sf + sr <= need) continue;
+    Result af, ar;
+    if (!affine_align(ix, rd[mf][0], L[mf], flo, fB, *sc.ws, af) || af.score != sf) continue;
+    if (!affine_align(ix, rd[mr][1], L[mr], rlo, rB, *sc.ws, ar) || ar.score != sr) continue;
+    const Result xf = alignment_only(af, 0, kTierMR), xr = alignment_only(ar, 1, kTierMR);
+    if (mf == 0) add(xf, xr);
+    else add(xr, xf);
+  }
+}
+
 // Places a pair in which at least one mate is not certified. se[x]: the
 // single-end placements; iv[x]: tier R's output for mate x, or null.
 // contig_of(pos) gives a reference position's contig. Returns true for a
@@ -421,17 +629,22 @@ inline bool rescue_mate_local(const IndexView& ix, int max_dist, const Result& x
 // to end (which may have moved a certified mate), and never moves a
 // certified mate itself. The window search is exhaustive above its
 // threshold thr, so it runs only when thr > the score the pair needs.
+// pv (--iv-pair-votes): when no pair found so far scores the sum of the
+// mates' best single-end scores (so a better pair may exist elsewhere), the
+// other mate is also searched in the window of each alternative of a mate,
+// and the loci where both mates have exact q-mers are aligned (pair_votes).
 template <class ContigOf>
 inline bool place_pair(const IndexView& ix, int max_dist, int wq, const Placement* se, const RepeatOut* const* iv,
                        const uint8_t* const* codes, const int* L, PairScratch& sc, ContigOf contig_of,
-                       Placement* out, int local_q = -1) {
+                       Placement* out, int local_q = -1, const PairVoteParams* pv = nullptr) {
   out[0] = se[0];
   out[1] = se[1];
   struct Cand { Result a[2]; int score; };
-  Cand cand[8];
+  constexpr int kMaxCand = 8 + 2 * kRepAlt + kRepAlt * kRepAlt + 2 * kRepAlt + kPairVoteTop;
+  Cand cand[kMaxCand];
   int nc = 0;
   auto add = [&](const Result& a0, const Result& a1) {
-    if (nc == 8 || a0.strand == a1.strand) return;
+    if (nc == kMaxCand || a0.strand == a1.strand) return;
     const Result& f = a0.strand ? a1 : a0;
     const Result& r = a0.strand ? a0 : a1;
     if (r.ref_pos < f.ref_pos || r.ref_pos - f.ref_pos > max_dist) return;
@@ -487,6 +700,87 @@ inline bool place_pair(const IndexView& ix, int max_dist, int wq, const Placemen
       }
     }
   }
+  // Tier R's other alignments (RepeatOut::alt) of a mate placed by tier R,
+  // paired with the other mate's placement and its alternatives: BWA-MEM
+  // pairs every alignment it found of one mate with every one of the other,
+  // so a repeat mate goes to the copy beside its partner when that pair beats
+  // the single-end bests minus the unpaired penalty. Alternatives also count
+  // as other pairs for the pair's MAPQ. Added after the local rescue, which
+  // runs only when nothing above was found, so they never suppress it.
+  Result alt[2][kRepAlt];
+  int nalt[2] = {0, 0};
+  for (int x = 0; x < 2; ++x) {
+    if (!se[x].mapped || !iv[x] || !iv[x]->has_aln || (se[x].r.tier != kTierR && se[x].r.tier != kTierIV) ||
+        L[x] > LMAX)
+      continue;
+    for (int k = 0; k < iv[x]->n_alt; ++k) {
+      const RepeatOut::Alt& v = iv[x]->alt[k];
+      uint8_t rd[LMAX];
+      for (int i = 0; i < L[x]; ++i) {
+        const uint8_t c = codes[x][v.strand ? L[x] - 1 - i : i];
+        rd[i] = v.strand ? (c < 4 ? (uint8_t)(3 - c) : (uint8_t)4) : c;
+      }
+      Result a;
+      if (!affine_align(ix, rd, L[x], v.lo, v.B, *sc.ws, a) || a.score != v.score) continue;
+      const int c = contig_of(a.ref_pos);
+      if (c < 0 || contig_of(a.ref_pos + ref_span_of(a) - 1) != c) continue;
+      alt[x][nalt[x]++] = alignment_only(a, v.strand, kTierIV);
+    }
+  }
+  for (int x = 0; x < 2; ++x) {
+    const int y = 1 - x;
+    for (int k = 0; k < nalt[x]; ++k) {
+      if (se[y].mapped) {
+        if (x == 0) add(alt[x][k], se[y].r);
+        else add(se[y].r, alt[x][k]);
+      }
+      if (x == 0)
+        for (int j = 0; j < nalt[1]; ++j) add(alt[0][k], alt[1][j]);
+    }
+  }
+  if (pv && pv->occ > 0 && pv->top > 0) {
+    // A pair scores at most the sum of its mates' best single-end scores:
+    // once a pair found attains that sum (as known here), no other can beat
+    // it, and nothing more is searched.
+    int bs[2], bestc = -BIG;
+    for (int x = 0; x < 2; ++x) {
+      bs[x] = se[x].mapped ? se[x].r.score : -BIG;
+      for (int c = 0; c < nc; ++c) bs[x] = std::max(bs[x], (int)cand[c].a[x].score);
+    }
+    for (int c = 0; c < nc; ++c) bestc = std::max(bestc, cand[c].score);
+    const bool known = bs[0] > -BIG && bs[1] > -BIG;
+    // A mate certified unique with a confident point MAPQ (the second locus
+    // two or more edits away) anchors the pair: the window searches around
+    // it are the search that matters. It is not searched for beside the
+    // other mate's alternatives, and the joint seeds are skipped. Both
+    // mates' repeats are what they are for.
+    bool anch[2];
+    for (int x = 0; x < 2; ++x)
+      anch[x] = se[x].mapped && se[x].r.certified == 1 && se[x].r.n_best == 1 &&
+                (se[x].r.tier == kTierS0 || se[x].r.tier == kTierS1 || se[x].r.tier == kTierSL) &&
+                se[x].mapq >= kPairVoteAnchorMapq;
+    const bool anchored = anch[0] || anch[1];
+    if (!(nc > 0 && known && bestc >= bs[0] + bs[1])) {
+      // Only a pair above the unpaired alternative can be taken, and only one
+      // within kPairVoteMargin of the best can change its MAPQ.
+      const int need = std::max(std::max(known ? bs[0] + bs[1] - kPenUnpaired : -BIG,
+                                         bestc > -BIG ? bestc - kPairVoteMargin : -BIG),
+                                2 * kMinScore - 1);
+      // The other mate in the window of each alternative, as in the window
+      // of a single-end placement above (not an anchored mate).
+      for (int x = 0; x < 2; ++x) {
+        const int y = 1 - x;
+        for (int k = 0; k < nalt[x] && !anch[y]; ++k) {
+          Result w;
+          const int need_y = std::max(need - (int)alt[x][k].score, kMinScore - 1);
+          if (!rescue_mate(ix, max_dist, wq, alt[x][k], codes[y], L[y], need_y, sc, w)) continue;
+          if (x == 0) add(alt[x][k], w);
+          else add(w, alt[x][k]);
+        }
+      }
+      if (!anchored) pair_votes(ix, *pv, max_dist, codes, L, need, sc, add);
+    }
+  }
   if (nc == 0) return false;
   int b = 0;
   for (int c = 1; c < nc; ++c)
@@ -503,8 +797,9 @@ inline bool place_pair(const IndexView& ix, int max_dist, int wq, const Placemen
     if (c != b && (!same_locus(cand[c].a[0], cand[b].a[0]) || !same_locus(cand[c].a[1], cand[b].a[1])))
       subo = std::max(subo, cand[c].score);
   // BWA-MEM pairs every alignment it found of one mate with every one of the
-  // other; here a repeat mate contributes one alignment (and one copy), so
-  // the other pairs of a duplicated region are mostly unseen. The pair is
+  // other; here a repeat mate contributes one alignment, one copy and at
+  // most kRepAlt alternatives, so many other pairs of a duplicated region
+  // stay unseen. The pair is
   // therefore trusted no more than its more confident mate: a unique mate
   // vouches for its partner's window, two repeat mates vouch for nothing.
   // A mate stays at its single-end placement only when the pair uses that very
@@ -536,6 +831,7 @@ inline bool place_pair(const IndexView& ix, int max_dist, int wq, const Placemen
       o.xq = 0;
     }
     o.mapq = std::max(q_se[x], std::min(q_pe, q_se[x] + 40));
+    o.pair_gap = std::min(cand[b].score - subo, 255);
   }
   return true;
 }

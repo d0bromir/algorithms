@@ -38,6 +38,17 @@ MapConfig MapConfig::from_args(const Args& a) {
     throw std::runtime_error("--mapq must be point, cal or pair");
   c.out.mapq_cal = mapq_model == "cal";
   c.out.mapq_pair = mapq_model == "pair";
+  // PR mates' point MAPQ: from S2, the certified bound on every other pair
+  // (bound, the default; what --mapq cal and --mapq pair were fitted on), or
+  // from the best other pair found (found: BWA-MEM's rule; DeepVariant
+  // misses fewer variants with it, but on HG002 tests A and B it nearly
+  // doubles the misplaced mates among the confident ones;
+  // bench/VALIDATION_RESULTS.md, "The MAPQ of mates placed by the pair").
+  const std::string pr_mapq = a.get("--pr-mapq", "bound");
+  if (pr_mapq != "bound" && pr_mapq != "found") throw std::runtime_error("--pr-mapq must be bound or found");
+  if (pr_mapq == "found" && (c.out.mapq_cal || c.out.mapq_pair))
+    throw std::runtime_error("--pr-mapq found does not combine with --mapq cal or pair (fitted on bound)");
+  c.out.pr_mapq_bound = pr_mapq == "bound";
   // MAPQ only: the second-best estimate beyond the certified radius, up to
   // this many edits (0 = off).
   p.mapq_limit = a.geti("--mapq-limit", c.out.mapq_cal || c.out.mapq_pair ? 10 : 8);
@@ -105,12 +116,20 @@ MapConfig MapConfig::from_args(const Args& a) {
   rp.sub_margin = a.geti("--iv-margin", 20);
   rp.fallback_samples = a.geti("--iv-fallback", 8);
   rp.lb_chains = a.geti("--iv-chains", 8);
+  rp.vote_occ = a.geti("--iv-vote-occ", 256);
+  rp.vote_top = a.geti("--iv-vote-top", 8);
+  rp.vote_pad = a.geti("--iv-vote-pad", 16);
   if (rp.tau < 0 || rp.cmax < 1 || rp.samples < 1 || rp.sub_margin < 0 || rp.fallback_samples < 0 ||
-      rp.lb_chains < 0)
+      rp.lb_chains < 0 || rp.vote_occ < 0 || rp.vote_top < 0 || rp.vote_pad < 0 || rp.vote_pad > (BMAX - 1) / 2)
     throw std::runtime_error("bad --iv-* parameters");
-  const std::string mapq_mode = a.get("--iv-mapq", "point");
+  // --mapq cal and --mapq pair were fitted on the records of --iv-mapq cert
+  // (their MAPQ is an input), which they imply.
+  const bool fitted = c.out.mapq_cal || c.out.mapq_pair;
+  const std::string mapq_mode = a.get("--iv-mapq", fitted ? "cert" : "point");
   if (mapq_mode != "point" && mapq_mode != "cons" && mapq_mode != "cert")
     throw std::runtime_error("--iv-mapq must be point, cons or cert");
+  if (fitted && mapq_mode != "cert")
+    throw std::runtime_error("--mapq cal and --mapq pair were fitted with --iv-mapq cert: drop --iv-mapq " + mapq_mode);
   c.out.iv_mapq = mapq_mode == "cons" ? IvMapq::kCons : mapq_mode == "cert" ? IvMapq::kCert : IvMapq::kPoint;
   const std::string pair_mode = a.get("--iv-pair", "uncert");
   if (pair_mode != "uncert" && pair_mode != "all") throw std::runtime_error("--iv-pair must be uncert or all");
@@ -121,6 +140,27 @@ MapConfig MapConfig::from_args(const Args& a) {
   const std::string rescue_mode = a.get("--iv-rescue", "e2e");
   if (rescue_mode != "e2e" && rescue_mode != "local") throw std::runtime_error("--iv-rescue must be e2e or local");
   c.out.iv_rescue_local = rescue_mode == "local";
+  // --iv-pair-votes N: when the pair found does not score the sum of the
+  // mates' best single-end scores, the N loci where both mates have the most
+  // exact q-mers (those with at most --iv-pair-vote-occ hits) are aligned and
+  // paired too, as BWA-MEM pairs every hit of both mates (certa/interval.h,
+  // pair_votes). 0 turns it off.
+  c.out.pair_votes.top = a.geti("--iv-pair-votes", 8);
+  c.out.pair_votes.occ = c.out.pair_votes.top > 0 ? a.geti("--iv-pair-vote-occ", 4096) : 0;
+  c.out.pair_votes.budget = a.geti("--iv-pair-vote-budget", 8192);
+  c.out.pair_votes.pad = rp.vote_pad;
+  if (c.out.pair_votes.top < 0 || c.out.pair_votes.top > kPairVoteTop || c.out.pair_votes.occ < 0 ||
+      c.out.pair_votes.occ > 4096 || c.out.pair_votes.budget < 1 || c.out.pair_votes.budget > (1 << 20))
+    throw std::runtime_error(
+        "--iv-pair-votes must be in [0, 16], --iv-pair-vote-occ in [0, 4096], --iv-pair-vote-budget in [1, 2^20]");
+  // --mapq-scale: what --mapq pair writes as MAPQ. bwa (the default): the
+  // model's value on BWA-MEM's scale, which variant callers expect, with the
+  // model's own value in XP; phred: the model's value, the Phred of its
+  // misplacement probability (certa/pair_model.h, kBwaScale).
+  const std::string scale = a.get("--mapq-scale", "bwa");
+  if (scale != "bwa" && scale != "phred") throw std::runtime_error("--mapq-scale must be bwa or phred");
+  if (a.has("--mapq-scale") && !c.out.mapq_pair) throw std::runtime_error("--mapq-scale needs --mapq pair");
+  c.out.mapq_bwa = c.out.mapq_pair && scale == "bwa";
   c.out.witness = a.has("--witness");
   if (c.out.witness && !c.intervals) throw std::runtime_error("--witness needs --intervals");
   c.out.feature_tags = a.has("--feature-tags");

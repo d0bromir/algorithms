@@ -215,3 +215,31 @@ W10	include/certa/pair.h	s/h - splat(clip_end) : vneg/h : vneg/	killed	window_fi
 W11	include/certa/pair.h	s/(cv <= vcmax)/(cv <= vcmax + splat(1))/	killed	window_fill_vec16: an alignment starts one past the window
 W12	include/certa/interval.h	s/if (nc == 0 \&\& local_q >= 0) {/if (local_q >= 0) {/	killed	--iv-rescue local: competes with a pair found end to end
 W13	include/certa/interval.h	s/iv_mapq(se\[x\], IvMapq::kCert) < local_q/se[x].mapq < local_q/	killed	--iv-rescue local: a partner without a certificate vouches by its point MAPQ
+F1	include/certa/pair.h	s/        found.push_back({R1, {locus(best\[0\], id_strand), locus(best\[1\], 1 - id_strand)}});/        (void)0;/	killed	PR point MAPQ: a realized pair that R1 replaced is not counted as found
+F2	include/certa/pair.h	s/      found.push_back({r, {locus(a1, s1), locus(a2, 1 - s1)}});/      (void)0;/	killed	PR point MAPQ: a pair realized by another anchor is not counted as found
+F3	include/certa/pair.h	s/if (!overlaps(f.m\[0\], r1l\[0\]) || !overlaps(f.m\[1\], r1l\[1\]))/if (true)/	killed	PR point MAPQ: a realized pair overlapping R1's in both mates counts as another pair
+F4	include/certa/pair.h	s/      if (overlaps(locus(yo, ly.strand), ly)) return -1;/      (void)0;/	killed	PR point MAPQ: a shifted copy of R1's y counts as another partner
+F5	include/certa/pair.h	s/      return pairs_with(ax.ref_pos, yo.ref_pos) ? 1 : 0;/      return 1;/	killed	PR point MAPQ: a partner outside R1's x's partner range counts as a pair
+F6	include/certa/pair.h	s/      if (got >= 0) return;/      return;/	killed	PR point MAPQ: no partner searched before R1's y when the best there overlaps it
+F7	include/certa/pair.h	s/      if (overlaps(locus(xr, lx.strand), lx)) return -1;/      (void)0;/	killed	PR point MAPQ: a shifted copy of R1's x counts as another placement of x
+F8	include/certa/pair.h	s/      return pairs_with(xr.ref_pos, ay.ref_pos) ? 1 : 0;/      return 1;/	killed	PR point MAPQ: an x whose partner range misses R1's y counts as a pair
+F9	include/certa/pair.h	s/  if (S2f <= R1 - pp.mapq_margin) S2f = kNoSub;/  (void)0;/	killed	PR point MAPQ: a pair found a margin or more below R1 is reported
+F10	include/certa/interval.h	s/    const int subo = std::max<int>(r.sub_found, un);/    const int subo = r.sub_found;/	killed	pr_mapq: the unpaired alternative is ignored
+F11	include/certa/interval.h	s/    const int subo = std::max<int>(r.sub_found, un);/    const int subo = std::max<int>(r.sub_score, un);/	killed	pr_mapq: the point estimate takes S2 (the bound) for the best other pair found
+F12	include/certa/interval.h	s/  const int b0 = se.certified == 1 ? std::max<int>(r.score, se.score) : r.score;/  const int b0 = std::max<int>(r.score, se.score);/	killed	pr_unpaired: an uncertified single-end score counts
+RV1	include/certa/repeat.h	s/  if (rp.vote_occ > 0 && rp.vote_top > 0 && (lo == kNoSub || lo < Ueff)) {/  if (false) {/	killed	tier R seed votes: never run
+RV2	include/certa/repeat.h	s/x.votes > y.votes : x.dmin/x.votes < y.votes : x.dmin/	killed	tier R seed votes: the groups with the fewest votes aligned
+RV3	include/certa/repeat.h	s/        if (v > lo) { lo = v; lo_st = st; lo_lo = blo; lo_B = B; }/        if (v > lo) { lo = v; lo_st = st; lo_B = B; }/	killed	tier R seed votes: lo raised without its band (A* aligned elsewhere)
+RV4	include/certa/repeat.h	s/e < sc.vlo\[st\]\[i\] + n; ++e/e < sc.vlo[st][i] + 1; ++e/	killed	tier R seed votes: a q-mer votes for its first hit only
+RV5	include/certa/repeat.h	s/e.score <= lo - kRepAltDrop) continue;/e.score < lo) continue;/	killed	tier R alternatives: none below lo
+RA1	include/certa/interval.h	s/      alt\[x\]\[nalt\[x\]++\] = alignment_only(a, v.strand, kTierIV);/      (void)a;/	killed	place_pair: tier R's alternatives dropped
+RA2	include/certa/interval.h	s/        if (x == 0) add(alt\[x\]\[k\], se\[y\].r);/        if (x == 0) (void)0;/	killed	place_pair: mate 1's alternatives not paired with mate 2's placement
+RA3	include/certa/interval.h	s/        for (int j = 0; j < nalt\[1\]; ++j) add(alt\[0\]\[k\], alt\[1\]\[j\]);/        (void)0;/	killed	place_pair: two repeat mates' alternatives not paired with each other
+PV1	include/certa/interval.h	s/  if (pv \&\& pv->occ > 0 \&\& pv->top > 0) {/  if (false) {/	killed	place_pair: no joint seeds and no window search around tier R's alternatives
+PV2	include/certa/interval.h	s/hi = gf\[f\].dmax + max_dist + vpad;/hi = gf[f].dmax + vpad;/	killed	pair_votes: the reverse mate looked for only on the forward mate's diagonal, not in its proper-pair window
+PV3	include/certa/interval.h	s/          if (!rescue_mate(ix, max_dist, wq, alt\[x\]\[k\], codes\[y\], L\[y\], need_y, sc, w)) continue;/          continue;/	killed	place_pair: the other mate not searched in the window of a mate's alternative
+PV4	include/certa/interval.h	s/    if (x.key != y.key) return x.key < y.key;/    (void)0;/	killed	pair_votes: ties between joint loci go to the first copy of the reference, not by the pair's bases
+PV5	include/certa/interval.h	s/        if (n == 0 || n > (uint32_t)pv.occ) continue;/        if (n == 0 || n > 1) continue;/	killed	pair_votes: only unique q-mers vote
+PV6	include/certa/interval.h	s/      if (top.size() == ntop \&\& gf\[f\].votes + rmax < top.back().votes) break;/      if (!top.empty()) break;/	killed	pair_votes: the scan of forward groups stops after the first that joins a reverse group
+BS1	include/certa/pair_model.h	s/    pl\[x\].mapq = bwa ? bwa_scale(q\[x\]) : q\[x\];/    pl[x].mapq = q[x];/	killed	--mapq-scale bwa: the model's Phred written as MAPQ
+BS2	include/certa/pair_model.h	s/inline int bwa_scale(int m) { return kBwaScale\[clampi(m, 0, kBwaScaleMax)\]; }/inline int bwa_scale(int m) { return kBwaScale[clampi(m, 0, kBwaScaleMax - 1)]; }/	killed	--mapq-scale bwa: 60 never written

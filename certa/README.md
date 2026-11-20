@@ -196,11 +196,26 @@ for tiers R, IV and MR, the reads the default certificate left.
   whether a mate in a repeat has a unique partner decides most of the
   ranking among the less confident mates
   ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#a-mapq-from-both-mates)).
-- `cal` and `pair` rank misplaced reads better, but they cost variant calls.
-  Each edit lowers MAPQ, the sample's own variants included, so with
-  DeepVariant they give 1.6–3.1× the SNV errors of `point`
+- `--mapq-scale bwa|phred` (with `--mapq pair`; `bwa` by default). The
+  model's value is a Phred of its error rate. BWA-MEM's MAPQ uses the same
+  numbers for something else: on HG002, the mates minibwa gives 60 are
+  misplaced at Phred 36–43, those it gives 50–54 at Phred 14–19, those at
+  20–29 at Phred 5–6. DeepVariant was trained on BWA-MEM, so a Phred of 35
+  ("3 in 10,000") reads to it as a doubtful alignment. `bwa` writes the
+  model's value on BWA-MEM's scale (`kBwaScale` in
+  `include/certa/pair_model.h`: 60 from Phred 40, four Phred per level
+  down to 55 at Phred 20, and minibwa's measured levels below that) and
+  the Phred in `XP`. With it, DeepVariant makes fewer errors on CERTA's
+  records than with the default MAPQ, and with `--t2t` as many SNV errors
+  as on minibwa's (HG002 1,748 against 1,745)
+  ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#the-fitted-mapq-on-bwas-scale)).
+  The scale merges the top levels, so rank reads by `XP`.
+- `--mapq cal` and `--mapq pair --mapq-scale phred` write Phreds: they rank
+  misplaced reads better, but DeepVariant makes 1.6–3.1× the SNV errors of
+  `point` with them
   ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#variant-calling)).
-  Use `point` (the default) for variant calling.
+- `--mapq cal` and `--mapq pair` were fitted on the records of `--iv-mapq
+  cert`, which they now imply (another `--iv-mapq` is refused).
 - `--t2t T2T.cidx --t2t-chain T2TToRef.over.chain.gz`: every pair is also
   mapped, the same way, on an index of T2T-CHM13 in the same pass, and each
   mate's T2T placement is lifted to the reference through the chain (UCSC
@@ -212,12 +227,63 @@ for tiers R, IV and MR, the reads the default certificate left.
   changes. It needs both indexes in memory (46 GiB for GRCh38 and hs1) and
   about doubles the mapping time.
 - `--feature-tags` adds `XO` (the best other candidate's distance) and `XN`
-  (clusters verified), the fits' inputs not in other tags; with `--t2t`
-  also `XC:Z:class,tier,MAPQ,XE,XD,XO`, the mate's T2T placement as the
-  trees read it.
+  (clusters verified), the fits' inputs not in other tags, and `XM`, the
+  margin of a pair placed from the alignments found over the best other
+  pair or the unpaired alternative (not an input of the current models);
+  with `--t2t` also `XC:Z:class,tier,MAPQ,XE,XD,XO`, the mate's T2T
+  placement as the trees read it.
 
 **Tier R options:** `--iv-tau 256`, `--iv-margin 20`, `--iv-chains 8`,
-`--iv-fallback 8`.
+`--iv-fallback 8`, `--iv-vote-occ 256`, `--iv-vote-top 8`, `--iv-vote-pad 16`.
+- **Seed votes** (`--iv-vote-*`, on by default; `--iv-vote-occ 0` turns
+  them off). For a read tier R did not prove exact, every 22-mer with at
+  most 256 hits votes for its diagonal. The 8 groups of nearby diagonals
+  with the most votes, per strand, are aligned in a band of ±16. This finds
+  reads whose differences from their locus fall in every one of tier R's
+  parts while long exact runs remain: diverged repeat copies, haplotypes
+  with clustered variants, clipped ends. Votes only raise XL, with
+  alignments actually computed; XU and every certificate are unchanged.
+- **Alternatives for the pair:** tier R keeps up to 4 of its best
+  alignments at other loci (within 17 of the best, BWA-MEM's unpaired
+  penalty). The pair stage pairs them with the other mate's placement and
+  alternatives, as BWA-MEM pairs every alignment it finds, so a repeat
+  mate goes to the copy beside its partner.
+- On HG002 these lower the misplaced mates among the most confident by
+  4–8 % (test B, `point`: 179.6 / 142.9 / 88.0 → 170.9 / 134.9 / 81.0 per
+  million). Of the reads minibwa places confidently, they lose 45 % fewer,
+  for 20–31 % more CPU (more on repeat-rich read sets)
+  ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#reads-certa-lost)).
+
+**Joint seeds of a pair** (`--iv-pair-votes 8`, on by default; `0` turns
+it off; `--iv-pair-vote-occ 4096`, `--iv-pair-vote-budget 8192`). When a
+pair has no mate certified unique with a confident MAPQ, and the pair found
+does not score the sum of the mates' best single-end scores, the pair stage
+also:
+- searches the other mate in the proper-pair window of each of tier R's
+  alternatives;
+- lets every 22-mer of both mates with at most 4,096 hits vote for its
+  diagonal (the rarest first, up to 8,192 diagonals per mate and strand),
+  and aligns the 8 loci where a group of one mate's votes and a group of
+  the other's fit a proper pair.
+
+This finds the copy of a repeat that fits both mates when each mate alone
+fits other copies better, the case where CERTA missed pairs that a search
+of every alignment would have found
+([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#joint-seeds-of-a-pair)).
+Joint loci with equal votes are ordered by a hash of the pair, so the pairs
+of a repeat spread over its copies; the output stays deterministic, and a
+moved mate is tier MR with XQ 0. On HG002, CERTA then places more mates at
+their locus than minibwa and BWA-MEM2 (simulated 97.846 % against 97.811 %
+and 97.828 %; real 99.913 % against 99.909 % and 99.908 %), for about 45 %
+more CPU in interval mode, which brings it to minibwa's CPU time (real
+reads: 3,521 s against 2,433 s without, minibwa 3,367 s).
+
+**PR mates' MAPQ:** `--pr-mapq bound` (default) takes a properly paired
+mate's point MAPQ from S2, the certified bound on every other pair.
+`--pr-mapq found` takes it from the best other pair found, BWA-MEM's rule.
+DeepVariant misses fewer variants with it, but on HG002 it nearly doubles
+the misplaced mates among the confident ones
+([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#the-mapq-of-mates-placed-by-the-pair)).
 
 Results: [EXACT_ALIGNMENT_PROPOSAL.md §6.3](../EXACT_ALIGNMENT_PROPOSAL.md).
 
@@ -376,13 +442,25 @@ alignments.
   ahead of minibwa with a T2T second opinion from BWA-MEM2 (167, 48, 22,
   22). `--mapq cal` leads only at 98 % and below (22–33)
   ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#a-mapq-from-both-mates)).
-- **But not for variant calling yet.** The fitted MAPQs give the reads that
-  show a sample's variant a lower MAPQ than their neighbours, so DeepVariant
-  misses variants:
-  - with them, CERTA's records on 30× HG002 give 3,214–6,052 SNV errors,
-    against minibwa's 1,745;
-  - with the default MAPQ, the same placements give 1,956
-    ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#variant-calling)).
+- **Variant calling needs the fitted MAPQ on BWA-MEM's scale.** Written as
+  Phreds, the fitted MAPQs made DeepVariant (trained on BWA-MEM) miss
+  variants: 3,214–6,052 SNV errors on 30× HG002 against minibwa's 1,745
+  ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#variant-calling)).
+  With `--mapq-scale bwa` (the default with `--mapq pair`) and the current
+  placements, `--mapq pair --t2t` gives 1,696 SNV errors on HG002 (minibwa
+  1,745, BWA-MEM2 1,761) and 555 on HG005, held out (minibwa 543,
+  BWA-MEM2 553); indels are level on HG002 (1,807 against 1,775) and behind
+  on HG005 (77 against 63)
+  ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#the-default-build-all-together)).
+- **How far from the limit:** on GRCh38 minibwa's placement is at the
+  limit: what it misplaces, no aligner that maximizes the alignment score
+  on GRCh38 can place right, apart from 0.05 % of simulated and 0.001 % of
+  real mates its search misses. CERTA, with the joint seeds of a pair,
+  now misses fewer than minibwa and places the most mates at their locus.
+  The real limit is far below: on the sample's own genome, 3 per million
+  of the 96 % most confident simulated mates are misplaced, against 1,702
+  for minibwa on GRCh38
+  ([VALIDATION_RESULTS.md](bench/VALIDATION_RESULTS.md#how-far-from-the-limit)).
 - **MAPQ of the fallback:** minibwa misplaces 6–7 % of the fallback mates
   it gives MAPQ ≥ 40. Divided by 4 (`drop_certified_mates.awk -v div=4`),
   their MAPQ comes within 4× of their error rates
@@ -538,6 +616,7 @@ tools/lr_ceiling.cpp       long reads: Lemma L ceiling vs best known alignment; 
 tools/payoff.cpp           part choices taken from the slow mappers, certified on CERTA's uncertified reads
 tools/bio_score.cpp        the --bio model's penalty of any aligner's SAM alignments (soundness at scale)
 tools/bio_probe.cpp        per read: why --bio certifies or falls back, and the work (parts, horizon, bands, time)
+tools/truth_oracle.cpp     a read's best local score at given loci (full DP), for bench/truth_oracle.py's limit analysis
 bench/truth_*.py, *.sh     truth on GRCh38 for HG002 reads (Q100 haplotypes, GIAB alignments), scoring, reports
 scripts/                   build.sh, demo.sh
 THEORY.md                  the proofs, with code, tests and mutants per statement

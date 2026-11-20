@@ -192,6 +192,10 @@ struct Result {
   // Certified tiers: an upper bound on SUB, the best local score at a locus
   // not overlapping the reported one (interval output, Aim 3), or kNoSub.
   int16_t sub_hi;
+  // Tier PR: the best other proper pair actually found (a pair score; the
+  // point MAPQ), or kNoSub (none within PairParams::mapq_margin of the
+  // pair's). sub_score is S2, the bound on every other pair.
+  int16_t sub_found;
   // Witness (Theorem V): the parts enumerated per strand (bit j = part j)
   // and the support t of the certificate that used them.
   uint16_t probes[2];
@@ -2147,7 +2151,7 @@ CERTA_HD inline void process_read(const IndexView& ix, const Params& p,
   r.ref_pos = -1; r.n_cigar = 0; r.certified = 0; r.tier = kTierS0; r.strand = 0;
   r.reason = kOk; r.radius = -1; r.d1 = -1; r.d2 = -1; r.n_best = 0;
   r.n_clusters = 0; r.parts = 0; r.used = 0; r.nm = 0; r.score = 0; r.d2x = -1;
-  r.sub_score = kNoSub; r.floor = 0; r.ncand = 0; r.sub_hi = kNoSub;
+  r.sub_score = kNoSub; r.floor = 0; r.ncand = 0; r.sub_hi = kNoSub; r.sub_found = kNoSub;
   r.probes[0] = r.probes[1] = 0; r.support = 0;
 
   const int P = L <= LMAX ? part_count(L, ix.q, ix.s) : 0;
