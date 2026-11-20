@@ -2508,6 +2508,21 @@ def load_cnv(path):
     return calls, status
 
 
+def load_mito(tsv, js):
+    """wes_mito outputs -> (rows as dicts, summary dict)."""
+    rows, summ = [], {}
+    if tsv:
+        with opener(tsv) as f:
+            head = f.readline().rstrip("\n").split("\t")
+            for line in f:
+                t = line.rstrip("\n").split("\t")
+                rows.append(dict(zip(head, t + [""] * (len(head) - len(t)))))
+    if js:
+        with opener(js) as f:
+            summ = json.load(f)
+    return rows, summ
+
+
 def load_cnv_summary(path):
     if not path:
         return {}
@@ -3057,6 +3072,7 @@ def build(args):
     K = Knowledge(gencc, load_gencc_disputed(args.gencc), pheno, hpoa, dosage, load_collins(args.collins_dosage))
     MANE.clear()
     MANE.update(load_mane(args.mane))
+    mito_rows, mito_sum = load_mito(args.mito_tsv, args.mito_json)
     gd, gd_sources = load_gene_disease(args.gene_disease)
     CURATED.clear()
     CURATED.update(gd)
@@ -3740,7 +3756,7 @@ def build(args):
         warn.append("Many heterozygous calls with low alt fraction: possible sample contamination or mosaicism.")
     if qc.get("pct_20X") is not None and qc["pct_20X"] < 90:
         warn.append(f"Only {qc['pct_20X']:.0f}% of target bases reach 20x (clinical exomes usually require >= 90-95%): "
-                    "absence of findings is not reliable in poorly covered genes (see section 11).")
+                    "absence of findings is not reliable in poorly covered genes (see section 12).")
     if warn:
         R.h("<div class='box warn'>" + "<br>".join(esc(w) for w in warn) + "</div>")
 
@@ -3780,7 +3796,7 @@ def build(args):
         + (" and rare missense variants at a residue where ClinVar has a pathogenic missense variant (PS1/PM5)" if cvp else "")
         + ". Each variant gets an automated ACMG/AMP class from the evidence codes a VCF supports, combined by the "
         "point system (pathogenic &ge; 10 points, likely pathogenic 6-9, uncertain 0-5, likely benign -1 to -6, benign "
-        "&le; -7; methods in section 12). It is a draft for the analyst: segregation, functional, case-count and "
+        "&le; -7; methods in section 13). It is a draft for the analyst: segregation, functional, case-count and "
         "literature evidence are missing, and PM3/PP4/PS2 depend on the phenotype terms given. Rows are ranked by "
         "phenotype match, inheritance fit and variant consequence, then by points.</p>")
     rows = []
@@ -4017,7 +4033,9 @@ def build(args):
         rows.append([f"<b>{esc(gene)}</b>", "<br>".join(det), esc(dip), tag(ph, kind), esc(PGX_DRUGS.get(gene, ""))])
         R.rows.append(("pgx", None, (gene, dip, ph)))
     R.table(["Gene", "Alleles tested", "Genotype", "Predicted phenotype", "Affected drugs"], rows)
-    R.h(f"<p class='small'><b>Not assessed by this exome pipeline:</b> {esc(NOT_ASSESSED_PGX)}.</p>")
+    na_pgx = NOT_ASSESSED_PGX.replace("MT-RNR1 (aminoglycosides; mitochondrial genome), ", "") if mito_sum         else NOT_ASSESSED_PGX
+    R.h(f"<p class='small'><b>Not assessed by this exome pipeline:</b> {esc(na_pgx)}"
+        + (" (MT-RNR1: section 10)" if mito_sum else "") + ".</p>")
     pharmcat = load_pharmcat(args.pharmcat)
     if args.pharmcat:
         R.h(f"<h3>PharmCAT {esc(pharmcat['version'])}</h3><p class='small'>Diplotypes from PharmCAT's named-allele "
@@ -4158,8 +4176,87 @@ def build(args):
             R.table(["Chromosome", "Region", "Both copies from", "Type", "Evidence", "Imprinting disorder", "Notes"],
                     rows)
 
+    # ---------------------------------------------------------------- mitochondrial DNA
+    R.h("<h2>10. Mitochondrial DNA</h2>")
+    if not mito_rows and not mito_sum:
+        R.h("<p class='none'>Not analysed: no mitochondrial calls given (wes_mito on the aligned reads). Exomes carry "
+            "enough off-target mtDNA reads for homoplasmic variants in most samples.</p>")
+    else:
+        ms = mito_sum
+        R.h("<p>" + (f"Reads on chrM: mean {ms.get('mean_depth', '?')}x, median {ms.get('median_depth', '?')}x; "
+                     f"{100 * ms.get('fraction_ge_5x', 0):.0f}% of the 16,569 bp at &ge; 5x, "
+                     f"{100 * ms.get('fraction_ge_20x', 0):.0f}% at &ge; 20x. "
+                     f"Homoplasmic variants: {ms.get('homoplasmic', 0)}; heteroplasmic (&ge; "
+                     f"{100 * ms.get('min_hl', 0.1):.0f}%, &ge; 20x): {ms.get('heteroplasmic', 0)}. "
+                     f"Heteroplasmy below about {100 * ms.get('detection_limit_at_median', 0.25):.0f}% is not detectable "
+                     "at the median depth." if ms else "") + "</p>")
+        if ms.get("mixture"):
+            R.h(f"<div class='box warn'><b>mtDNA quality:</b> {esc(ms['mixture'])}. Low heteroplasmy in this sample "
+                "is unreliable (NUMT reads captured with the exome, or contamination); confirm any heteroplasmic "
+                "finding in another tissue or by a dedicated mtDNA assay.</div>")
+
+        def mt_rare(r):
+            f = (fnum(r.get("gnomad_af_hom")) or 0) + (fnum(r.get("gnomad_af_het")) or 0)
+            return f < 0.002
+
+        plp_mt = [r for r in mito_rows if "athogenic" in r["clinvar"] and "onflicting" not in r["clinvar"]]
+        trna = [r for r in mito_rows if r not in plp_mt and mt_rare(r)
+                and re.search(r"(MitoTIP (likely )?pathogenic|PON-mt-tRNA (likely )?pathogenic)", r["trna_prediction"], re.I)]
+        rare_other = [r for r in mito_rows if r not in plp_mt and r not in trna and mt_rare(r)
+                      and not r.get("haplogroup_defining")]
+
+        def mt_row(r):
+            hl = float(r["heteroplasmy"])
+            return [f"m.{esc(r['pos'])}{esc(r['ref'])}&gt;{esc(r['alt'])}<br><span class='small'>{esc(r['gene'])}</span>",
+                    f"{esc(r['call'])} {100 * hl:.0f}%<br><span class='small'>{esc(r['alt_reads'])}/{esc(r['depth'])} "
+                    f"reads (+{esc(r['alt_fwd'])}/-{esc(r['alt_rev'])})</span>",
+                    esc(r["clinvar"].replace("_", " ") or "not in ClinVar")
+                    + (f"<br><span class='small'>{esc(r['clinvar_condition'][:120])}</span>" if r["clinvar_condition"] else ""),
+                    (f"homoplasmic {fmt_af(fnum(r['gnomad_af_hom']))}, heteroplasmic {fmt_af(fnum(r['gnomad_af_het']))}"
+                     if r["gnomad_af_hom"] != "" else "absent")
+                    + (f"<br><span class='small'>max heteroplasmy seen {esc(r['gnomad_max_hl'])}</span>"
+                       if r["gnomad_max_hl"] else ""),
+                    esc(r["trna_prediction"]) + ("<br>" + "".join(tag(x, "t-amb") for x in r["flags"].split("; ") if x)
+                                                 if r["flags"] else "")]
+        R.h("<h3>Pathogenic or likely pathogenic in ClinVar</h3><p class='small'>Clinical relevance depends on the "
+            "heteroplasmy level in the affected tissue: blood levels of some variants (e.g. m.3243A&gt;G) fall with age, "
+            "so a low level in blood does not exclude disease.</p>")
+        R.table(["Variant", "Level", "ClinVar", "gnomAD (56,434 genomes)", "Predictions, flags"],
+                [mt_row(r) for r in plp_mt])
+        for r in plp_mt:
+            R.rows.append(("mito_pathogenic", None, (r["gene"], f"m.{r['pos']}{r['ref']}>{r['alt']} "
+                                                     f"{r['call']} {float(r['heteroplasmy']):.2f}", r["clinvar"])))
+        R.h("<h3>Rare tRNA variants predicted pathogenic</h3>")
+        R.table(["Variant", "Level", "ClinVar", "gnomAD (56,434 genomes)", "Predictions, flags"], [mt_row(r) for r in trna])
+        for r in trna:
+            R.rows.append(("mito_candidate", None, (r["gene"], f"m.{r['pos']}{r['ref']}>{r['alt']} "
+                                                    f"{r['call']} {float(r['heteroplasmy']):.2f}", r["trna_prediction"])))
+        if rare_other:
+            R.h("<p class='small'>Other rare variants (gnomAD &lt; 0.2%, not haplogroup-defining): "
+                + ", ".join(esc(f"m.{r['pos']}{r['ref']}>{r['alt']} ({r['gene']}, {float(r['heteroplasmy']):.0%})")
+                            for r in rare_other[:20]) + ("" if len(rare_other) <= 20 else " ...") + "</p>")
+        R.h("<h3>MT-RNR1 and aminoglycosides (CPIC)</h3>")
+        mt_pgx = []
+        for pos, (ref, alt) in ((1555, ("A", "G")), (1494, ("C", "T")), (1095, ("T", "C"))):
+            hit = next((r for r in mito_rows if r["pos"] == str(pos) and r["ref"] == ref and r["alt"] == alt), None)
+            d = (ms.get("pgx_depth") or {}).get(str(pos))
+            if hit:
+                st = tag(f"carried, {float(hit['heteroplasmy']):.0%}", "t-red") + " increased risk of aminoglycoside-"                      "induced hearing loss: avoid aminoglycosides unless the infection is severe and no alternative exists"
+            elif d is not None and d >= 5:
+                st = f"not carried ({d} reads)"
+            else:
+                st = tag(f"not assessable ({d or 0} reads)", "t-amb")
+            mt_pgx.append([f"m.{pos}{ref}&gt;{alt}", st])
+            if hit:
+                R.rows.append(("pgx", None, ("MT-RNR1", f"m.{pos}{ref}>{alt} {hit['call']}",
+                                             "aminoglycoside-induced hearing loss risk (CPIC)")))
+        R.table(["Variant", "Status"], mt_pgx)
+        nhap = sum(1 for r in mito_rows if r.get("haplogroup_defining"))
+        R.h(f"<p class='small'>{nhap} of the variants define haplogroups (PhyloTree 17), as expected for any person. "
+            "Not assessed: large mtDNA deletions, nuclear genes of mitochondrial disease are in the sections above.</p>")
+
     # ---------------------------------------------------------------- disease context of the reported genes
-    R.h("<h2>10. Disease context of the reported genes</h2>")
+    R.h("<h2>11. Disease context of the reported genes</h2>")
     ctx_cats = ("diagnostic", "pathogenic_review", "candidate", "candidate_inheritance_not_met", "de_novo",
                 "de_novo_possible", "carrier")
     ctx_genes = collections.OrderedDict()
@@ -4233,7 +4330,7 @@ def build(args):
                     "table.</p>")
 
     # coverage
-    R.h("<h2>11. Coverage of clinically relevant genes</h2>")
+    R.h("<h2>12. Coverage of clinically relevant genes</h2>")
     if gene_cov:
         rel = set(ACMG_SF) | set(pgx) | set(g for g in hpo_match) | {v.gene for v, _ in diag}
         rows = []
@@ -4253,7 +4350,7 @@ def build(args):
             "cannot be distinguished from missing coverage.</p>")
 
     # methods & limits
-    R.h("<h2>12. Methods, data sources and limitations</h2><ul>")
+    R.h("<h2>13. Methods, data sources and limitations</h2><ul>")
     R.h("<li>Variant annotation: SnpEff (consequence, HGVS), ClinVar (clinical significance and review status), "
         "gnomAD (population allele frequency) as provided to the workflow.</li>")
     R.h("<li>Frequency rules use the higher of the overall gnomAD allele frequency and the highest filtering allele "
@@ -4283,7 +4380,7 @@ def build(args):
             "Orphanet. Their inheritance (moderate or stronger; Orphanet only where one mode is given for the disease) "
             "adds to GenCC's, and loss of function is not taken as a mechanism (no PVS1) where the curated diseases "
             "name only gain-of-function or dominant-negative mechanisms and ClinGen does not score haploinsufficiency "
-            "3. Section 10 lists each disease of a reported gene with the patient's genotype fit.</li>")
+            "3. Section 11 lists each disease of a reported gene with the patient's genotype fit.</li>")
     if VCEP:
         R.h(f"<li>ClinGen expert-panel (VCEP) specifications for {len(VCEP)} genes ({esc(vcep_src)}): the panel's "
             "allele-frequency cut-offs replace the default BA1/BS1/PM2 rules (taken from the panel's text by "
@@ -4536,6 +4633,8 @@ def main(argv=None):
                     "triplosensitive genes in a CNV")
     ap.add_argument("--mave", help="calibrated functional-assay evidence (data/build_mavedb.py from the MaveDB dump): "
                     "PS3/BS3 at the calibrated strength")
+    ap.add_argument("--mito-tsv", help="mitochondrial calls of wes_mito (TSV)")
+    ap.add_argument("--mito-json", help="wes_mito summary (JSON): chrM coverage, detection limit, mixture check")
     ap.add_argument("--previous-tsv", help="TSV output of an earlier report of the same sample: lists what changed")
     ap.add_argument("--previous-name", help="name of the earlier report shown in the comparison")
     ap.add_argument("--max-af", type=float, default=0.01, help="rare-variant cut-off, applied to the higher of gnomAD AF and grpmax FAF95")

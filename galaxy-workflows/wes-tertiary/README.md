@@ -334,9 +334,10 @@ laboratory.
 | Pharmacogenomics | CYP2C19, CYP2C9, VKORC1, CYP4F2, SLCO1B1, DPYD, TPMT, NUDT15, CYP3A5, CYP2B6, UGT1A1 at fixed GRCh38 positions (checked against ClinVar and the reference). A missing variant counts as the reference allele only with ≥ 15 reads at the position (BAM in v1); otherwise the gene is *indeterminate*. CPIC phenotypes, ClinVar drug-response variants (≥ 1 star). Next to it, the PharmCAT 3.4.0 diplotypes and phenotypes (all defining positions of each star allele, with the positions missing from the VCF listed); PharmCAT's own HTML report carries the CPIC, DPWG and FDA recommendations |
 | Risk alleles | Factor V Leiden, prothrombin G20210A, HFE p.Cys282Tyr/p.His63Asp, APOE (flagged: disclose only with counselling and consent), ClinVar risk/association variants (≥ 1 star) |
 | Runs of homozygosity and uniparental disomy | Total length of runs ≥ 1 Mb (consanguinity), runs concentrated on one chromosome, homozygous findings inside runs. With both parents: **uniparental disomy** (whole chromosome or segment, maternal or paternal, isodisomy or heterodisomy) from common SNVs where the proband lacks one parent's alleles, with the imprinting disorder (chromosomes 6, 7, 11, 14, 15, 16, 20), a CNV deletion that would explain it, and homozygous findings that only one parent carries. The **parent of origin** of a chromosome gain and of the X chromosomes in a sex-chromosome aneuploidy appears beside the chromosome dosage (section 4) |
+| Mitochondrial DNA (with the *Mitochondrial calls/summary* of `wes_mito`) | Homoplasmic (≥ 90 % of ≥ 5 reads) and heteroplasmic (≥ 10 % of ≥ 20 reads, ≥ 3 reads) mtDNA variants from the exome's off-target chrM reads: chrM coverage and the heteroplasmy detectable at the median depth; ClinVar pathogenic/likely pathogenic variants with their level; rare tRNA variants predicted pathogenic by MitoTIP or PON-mt-tRNA; gnomAD v3.1 homoplasmic/heteroplasmic frequencies; MT-RNR1 m.1555A>G, m.1494C>T, m.1095T>C for aminoglycosides (CPIC), with the read depth so that *not carried* is told apart from *not covered*; a mixture check (heteroplasmy at ≥ 3 common variants of other haplogroups: contamination or nuclear mitochondrial segments) |
 | Changes since the previous report | With the findings TSV of an earlier report of the same sample (*Previous report: findings (TSV)*): the results that are **new**, **changed** or **no longer reported**, matched by variant, by gene for gene-level results (pharmacogenomics, APOE) and by ≥ 50 % reciprocal overlap for CNVs and UPD. Each change shows what both reports said and the evidence that differs: category, ClinVar classification and review status, automated ACMG class, genotype, gnomAD frequency, QC flags, or a variant no longer called. Results and findings to review (diagnostic, secondary findings, de novo, UPD, pathogenic CNVs; candidates, carrier status, pharmacogenomics) come first, other listed variants after. The TSV records the report version and the HPO, GenCC, ClinGen and SnpEff releases (`report_meta` rows), shown beside the previous report's. A **same-person check**: if < 65 % of the previous report's listed variants have the same genotype in the current calls, the section warns that the previous report is probably of another sample |
 | Coverage | Per-gene coding coverage at 10/20×; clinically relevant genes below 95 % at 20× are listed, because a negative result there is not reliable |
-| Limits | Lists what an exome pipeline cannot detect (small CNVs, SVs, repeat expansions, mtDNA, CYP2D6, HLA, pseudogene regions, mosaicism…) |
+| Limits | Lists what an exome pipeline cannot detect (small CNVs, SVs, repeat expansions, mtDNA deletions, CYP2D6, HLA, pseudogene regions, mosaicism…) |
 
 **Population frequency.** Every frequency rule (BA1 > 5 %, BS1 above the cut-off, PM2_supporting below 0.01 %
 for dominant and 0.1 % for recessive genes, "too common for a penetrant disorder", the candidate cut-off) uses the
@@ -1037,6 +1038,35 @@ Rare variants alone do not work: a report lists only 4–20, and a parent or chi
 |---|---|---|
 | Report on the HG002 trio, 0.9.0 → 0.10.0 → 0.10.0 with a previous report (mean of 2; host shared with a mapping job) | 18.9 s → 19.1 s → 19.3 s | 1.70 → 1.70 → 1.71 GiB |
 | Report 0.10.0 in Galaxy on HG002 with its 2026-11-15 report (workflows release 0.10, 0 upgrade messages on import) | 34 s; 24 new, 7 changed, 0 dropped | — |
+
+### Mitochondrial DNA from exome reads (wes_mito 0.1.0, report 0.11.0, GIAB IDT exomes)
+
+`wes_mito` was run on the duplicate-marked BAMs of the seven GIAB exomes still on the server: one process
+per sample (pinned to cores 64-127), 11 s and 27 MB each.
+
+| Sample | Median chrM depth | ≥ 20× | Homoplasmic | Heteroplasmic | Mixture check (sites) | Time | Memory |
+|---|---|---|---|---|---|---|---|
+| HG001 | 14× | 14 % | 14 | 0 | — (0) | 11.1 s | 0.03 GiB |
+| NA12891 (HG001's father) | 121× | 100 % | 16 | 7 | flagged (3) | 11.7 s | 0.03 GiB |
+| NA12892 (HG001's mother) | 49× | 100 % | 15 | 10 | flagged (7) | 11.0 s | 0.03 GiB |
+| HG003 | 12× | 13 % | 36 | 0 | — (0) | 11.0 s | 0.03 GiB |
+| HG004 | 11× | 8 % | 11 | 0 | — (0) | 10.9 s | 0.03 GiB |
+| HG006 | 39× | 98 % | 41 | 6 | — (1) | 11.2 s | 0.03 GiB |
+| HG007 | 82× | 100 % | 26 | 28 | flagged (17) | 11.4 s | 0.03 GiB |
+
+The chrM depth follows the two library batches of these exomes (HG001-HG004 low, HG006/HG007/NA12891/NA12892 high).
+
+**Maternal inheritance.** mtDNA comes from the mother only, which checks the homoplasmic calls without a truth set:
+- all 14 homoplasmic variants of HG001 are in her mother NA12892;
+- 14 of the mother's 15 homoplasmic variants are called in HG001. The other, m.8860A>G, is in 6 of HG001's 7 reads
+  (86 %): below the 90 % homoplasmic cut-off, and too few reads for a heteroplasmic call;
+- the father NA12891 shares only 6 of his 16 with HG001, all of them common to both parents' haplogroups.
+
+**Mixture check.** HG007 has heteroplasmy at 17 positions that are common homoplasmic variants of other haplogroups
+(and a group of calls near 88 %): a second mtDNA lineage, most likely from nuclear mitochondrial segments in its
+deeper off-target reads, or contamination. NA12891/NA12892 have 3 and 7 such sites. The report then warns that low
+heteroplasmy is unreliable in the sample. There is no mtDNA truth set for these cell lines, so heteroplasmy calls
+are not benchmarked.
 
 ## 8. Scope and limitations
 

@@ -54,7 +54,7 @@ CONFIGURE=0
 DRY=0
 VENV="${VENV:-$HOME/wes-venv}"
 PREFIX="${PREFIX:-$HOME/wes-env}"
-LOCAL_TOOL_IDS=(wes_clinical_report spliceai_score pharmcat_pgx wes_cnv)
+LOCAL_TOOL_IDS=(wes_clinical_report spliceai_score pharmcat_pgx wes_cnv wes_mito)
 
 die() { echo "install.sh: $*" >&2; exit 1; }
 say() { printf '\n== %s\n' "$*"; }
@@ -324,6 +324,13 @@ stage_data() {
         rm -f mavedb.tar.gz
     fi
     manifest mave_evidence.tsv.gz tabular "MaveDB bulk download (CC0, Zenodo 20840937) via data/build_mavedb.py"
+    if [[ ! -s gnomad.v3.1.chrM.vcf.gz ]]; then  # chrM -> the reference's mitochondrial name (Ensembl: MT)
+        fetch https://storage.googleapis.com/gcp-public-data--gnomad/release/3.1/vcf/genomes/gnomad.genomes.v3.1.sites.chrM.vcf.bgz gnomad.chrM.vcf.bgz
+        local mt; mt="$(cut -f1 "$FA.fai" | grep -m1 -xE 'MT|chrM')"
+        gzip -dc gnomad.chrM.vcf.bgz | sed -e "s/^chrM\t/$mt\t/" -e "s/^##contig=<ID=chrM,/##contig=<ID=$mt,/" | bgzip > gnomad.v3.1.chrM.vcf.gz
+        rm -f gnomad.chrM.vcf.bgz
+    fi
+    manifest gnomad.v3.1.chrM.vcf.gz vcf_bgzip "gnomAD v3.1 chrM sites (CC0), renamed to the reference's mitochondrial contig"
     manifest gene_disease.tsv tabular "ClinGen gene-disease validity (CC0), G2P (CC0), Orphanet (CC BY 4.0) via data/build_gene_disease.py"
     local GS=https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/genome-stratifications/v3.6/GRCh38@all
     if [[ ! -s GRCh38_segdups.bed ]]; then  # Ensembl names, like the reference

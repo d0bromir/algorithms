@@ -286,6 +286,14 @@ inputs:
       Calibrated multiplexed functional assays from MaveDB (CC0), built by data/build_mavedb.py: PS3/BS3 at the
       calibrated strength for the variants an assay measured.
     position: {left: 0, top: 4780}
+  "Mitochondrial frequencies (gnomAD chrM VCF)":
+    type: data
+    format: [vcf_bgzip, vcf]
+    optional: true
+    doc: >-
+      gnomad.genomes.v3.1.sites.chrM.vcf.bgz (CC0) with chrM renamed to the reference's name (install.sh does this):
+      mtDNA frequencies, haplogroup-defining flags and tRNA predictions for the mitochondrial calls.
+    position: {left: 0, top: 4900}
 
 outputs:
   multiqc_report:
@@ -302,6 +310,10 @@ outputs:
     outputSource: target_coverage/output_thresholds_bed
   target_mean_depth:
     outputSource: target_coverage/output_regions_bed
+  mito_calls:
+    outputSource: mito_calling/calls
+  mito_summary:
+    outputSource: mito_calling/summary
   cnv_calls:
     outputSource: cnv_calling/calls
   cnv_targets:
@@ -611,6 +623,26 @@ steps:
     out:
       output_vcf: {rename: "Raw variant calls (FreeBayes)"}
 
+  mito_calling:
+    doc: >-
+      Mitochondrial DNA variants and heteroplasmy from the off-target chrM reads (local tool tools/wes_mito).
+    tool_id: wes_mito
+    tool_version: 0.1.0+galaxy0
+    position: {left: 1340, top: 820}
+    in:
+      bam: mark_duplicates/outFile
+      reference: "Reference genome (FASTA)"
+      gnomad_mt: "Mitochondrial frequencies (gnomAD chrM VCF)"
+      clinvar: "ClinVar (VCF)"
+    state:
+      min_hl: 0.1
+      min_alt: 3
+      min_depth: 20
+      min_depth_hom: 5
+    out:
+      calls: {rename: "Mitochondrial calls"}
+      summary: {rename: "Mitochondrial summary"}
+
   tertiary:
     doc: Tertiary analysis of each sample's VCF (embedded workflow "WES tertiary analysis from VCF (v2)").
     position: {left: 1600, top: 220}
@@ -656,6 +688,8 @@ steps:
       "ClinGen expert-panel classifications (ERepo)": "ClinGen expert-panel classifications (ERepo)"
       "Predicted dosage sensitivity (Collins TSV)": "Predicted dosage sensitivity (Collins TSV)"
       "Functional assays (MaveDB TSV)": "Functional assays (MaveDB TSV)"
+      "Mitochondrial calls (wes_mito TSV)": mito_calling/calls
+      "Mitochondrial summary (wes_mito JSON)": mito_calling/summary
 
   multiqc:
     doc: One QC report for all samples.

@@ -307,6 +307,18 @@ inputs:
       Calibrated multiplexed functional assays from MaveDB (CC0), built by data/build_mavedb.py: PS3/BS3 at the
       calibrated strength for the variants an assay measured.
     position: {left: 0, top: 4560}
+  "Mitochondrial calls (wes_mito TSV)":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: The calls table of the Mitochondrial DNA variants tool (wes_mito) on the sample's reads.
+    position: {left: 0, top: 4680}
+  "Mitochondrial summary (wes_mito JSON)":
+    type: data
+    format: [json]
+    optional: true
+    doc: The summary of wes_mito (chrM coverage, detection limit, mixture check, MT-RNR1 depth).
+    position: {left: 0, top: 4800}
 
 outputs:
   annotated_vcf:
@@ -740,6 +752,8 @@ steps:
       erepo: "ClinGen expert-panel classifications (ERepo)"
       collins_dosage: "Predicted dosage sensitivity (Collins TSV)"
       mave: "Functional assays (MaveDB TSV)"
+      mito_tsv: "Mitochondrial calls (wes_mito TSV)"
+      mito_json: "Mitochondrial summary (wes_mito JSON)"
     state:
       max_af: 0.01
       min_ref_depth: 15

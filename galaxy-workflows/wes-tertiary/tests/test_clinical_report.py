@@ -564,7 +564,7 @@ def test_cnv_interpretation():
     assert cnv["CLEC18B"]["category"] == "cnv_low_confidence"
     assert "<h2>4. Copy-number variants and chromosome dosage</h2>" in html
     assert "Down syndrome" in html and "Chromosome dosage</b>: <b>chromosome 21" in html
-    assert "<h2>5. Secondary findings" in html and "<h2>12. Methods" in html
+    assert "<h2>5. Secondary findings" in html and "<h2>13. Methods" in html
 
 
 def test_cnv_not_analysed():
@@ -741,7 +741,7 @@ def test_mane_and_disease_context():
     assert pah and all("check the numbering" in r["hgvs_refseq"] for r in pah), \
         "MANE pairs TXP.2, SnpEff annotated TXP: the RefSeq name carries a warning"
     assert brca2["hgvs_g"] == "NC_000013.11:g.32340301C>T"
-    assert "<h2>10. Disease context of the reported genes</h2>" in html
+    assert "<h2>11. Disease context of the reported genes</h2>" in html
     assert "BRCA2-related Fanconi anemia" in html and "MONDO:0013697" in html
     assert "autosomal recessive: one allele found" in html, "BRCA2 het: carrier for Fanconi anemia"
     gener = next(r for r in rows if r["gene"] == "GENER")
@@ -828,3 +828,16 @@ def test_mavedb_functional_evidence():
     assert "PS3_Moderate" in brca2["acmg_codes"] and "PS3_Strong" not in brca2["acmg_codes"], \
         "the clinical calibration is scored; the research-only one is shown, not scored"
     assert "MaveDB PS3 Strong (research only)" in html
+
+
+def test_mitochondrial_section():
+    rows, html = run_report(["--mito-tsv", os.path.join(DATA, "mito_calls.tsv"),
+                             "--mito-json", os.path.join(DATA, "mito_summary.json")])
+    assert "<h2>10. Mitochondrial DNA</h2>" in html
+    assert "m.3243A&gt;G" in html and "MELAS" in html, "ClinVar pathogenic heteroplasmic variant listed"
+    assert "carried, 100%" in html and "not assessable (2 reads)" in html and "not carried (33 reads)" in html
+    cats = {(r["category"], r["gene"]) for r in rows}
+    assert ("mito_pathogenic", "MT-TL1") in cats and ("pgx", "MT-RNR1") in cats
+    assert "MT-RNR1 (aminoglycosides" not in html.split("<h2>8.")[0], "MT-RNR1 no longer listed as not assessed"
+    _, html0 = run_report()
+    assert "Not analysed: no mitochondrial calls given" in html0

@@ -1,0 +1,90 @@
+<tool id="wes_mito" name="Mitochondrial DNA variants" version="0.1.0+galaxy0" profile="23.0">
+    <description>homoplasmic and heteroplasmic mtDNA variants from the off-target reads of an exome</description>
+    <requirements>
+        <requirement type="package" version="3.12">python</requirement>
+        <requirement type="package" version="1.22">samtools</requirement>
+    </requirements>
+    <version_command>python3 '$__tool_directory__/wes_mito.py' --help | head -1</version_command>
+    <command detect_errors="exit_code"><![CDATA[
+ln -s '$bam' input.bam &&
+ln -s '${bam.metadata.bam_index}' input.bam.bai &&
+ln -s '$reference' reference.fa &&
+samtools faidx reference.fa &&
+python3 '$__tool_directory__/wes_mito.py'
+    --bam input.bam
+    --reference reference.fa
+    #if $gnomad_mt:
+        --gnomad-mt '$gnomad_mt'
+    #end if
+    #if $clinvar:
+        --clinvar '$clinvar'
+    #end if
+    --min-hl $min_hl
+    --min-alt $min_alt
+    --min-depth $min_depth
+    --min-depth-hom $min_depth_hom
+    --tsv '$calls'
+    --json '$summary'
+    ]]></command>
+    <inputs>
+        <param name="bam" type="data" format="bam" label="Aligned reads (BAM)" help="Duplicate-marked reads of the sample, aligned to a reference with the mitochondrial genome (MT or chrM, rCRS)."/>
+        <param name="reference" type="data" format="fasta" label="Reference genome (FASTA)"/>
+        <param name="gnomad_mt" type="data" format="vcf,vcf_bgzip" optional="true" label="gnomAD v3.1 chrM sites (VCF)"
+               help="gnomad.genomes.v3.1.sites.chrM.vcf.bgz (CC0): homoplasmic/heteroplasmic frequencies, haplogroup-defining flag, MitoTIP and PON-mt-tRNA."/>
+        <param name="clinvar" type="data" format="vcf,vcf_bgzip" optional="true" label="ClinVar (VCF)" help="The ClinVar VCF of the workflow (its MT records are used)."/>
+        <param name="min_hl" type="float" value="0.10" min="0.01" max="0.9" label="Lowest heteroplasmy reported"/>
+        <param name="min_alt" type="integer" value="3" min="1" label="Reads needed for a heteroplasmic call"/>
+        <param name="min_depth" type="integer" value="20" min="1" label="Depth needed for a heteroplasmic call"/>
+        <param name="min_depth_hom" type="integer" value="5" min="1" label="Depth needed for a homoplasmic call (at least 90 % of reads)"/>
+    </inputs>
+    <outputs>
+        <data name="calls" format="tabular" label="${tool.name} on ${on_string}: calls"/>
+        <data name="summary" format="json" label="${tool.name} on ${on_string}: summary"/>
+    </outputs>
+    <tests>
+        <test expect_num_outputs="2">
+            <param name="bam" value="mt.bam" ftype="bam"/>
+            <param name="reference" value="rcrs.fa" ftype="fasta"/>
+            <param name="gnomad_mt" value="gnomad_chrM.vcf.gz" ftype="vcf_bgzip"/>
+            <param name="clinvar" value="clinvar_mt.vcf.gz" ftype="vcf_bgzip"/>
+            <output name="calls" ftype="tabular">
+                <assert_contents>
+                    <has_n_lines n="37"/>
+                    <has_text_matching expression="2706\tA\tG\tMT-RNR2\t1086\t1084"/>
+                    <has_text_matching expression="4769\tA\tG\tMT-ND2\t8\t8\t3\t5\t1.000\thomoplasmic"/>
+                </assert_contents>
+            </output>
+            <output name="summary" ftype="json">
+                <assert_contents>
+                    <has_text text="&quot;homoplasmic&quot;: 36"/>
+                    <has_text text="&quot;median_depth&quot;: 12"/>
+                </assert_contents>
+            </output>
+        </test>
+    </tests>
+    <help><![CDATA[
+**What it does**
+
+Calls mitochondrial DNA variants from the reads of an exome (or genome). Exome captures pull in many mtDNA reads off
+target: in the GIAB IDT exomes the median depth on chrM was 11-14x in one library batch and 39-121x in the other.
+The reads are piled up with samtools (MAPQ >= 20, which removes most reads of nuclear mitochondrial segments, base
+quality >= 20). An allele is called **homoplasmic** when it is in >= 90 % of >= 5 reads and **heteroplasmic** when it
+is in >= 10 % of >= 20 reads with >= 3 supporting reads (all adjustable).
+
+Each call is annotated with ClinVar, the gnomAD v3.1 mitochondrial frequencies (homoplasmic and heteroplasmic among
+56,434 genomes, highest heteroplasmy seen, haplogroup-defining flag), MitoTIP and PON-mt-tRNA predictions for tRNA
+variants, and the rCRS gene. Flags: one strand only, the artefact-prone homopolymers (302-316, 513-525,
+16182-16194), and heteroplasmy below 50 %.
+
+**Mixture check.** A second mtDNA lineage, from contamination or from nuclear mitochondrial segments captured with the
+exome, shows as heteroplasmy at positions that are common homoplasmic variants of other haplogroups (gnomAD >= 1 %).
+Three or more such sites are reported in the summary; low heteroplasmy is then unreliable in that sample.
+
+**Outputs**: a table of calls and a JSON summary (coverage, the heteroplasmy detectable at the median depth, counts,
+the mixture check, and the depth at the CPIC MT-RNR1 positions 1095, 1494 and 1555). The clinical report shows them
+in its mitochondrial section.
+    ]]></help>
+    <citations>
+        <citation type="doi">10.1101/gr.276013.121</citation>
+    </citations>
+</tool>
