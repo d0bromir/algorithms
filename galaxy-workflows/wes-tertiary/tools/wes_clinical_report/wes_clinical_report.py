@@ -30,7 +30,7 @@ import re
 import subprocess
 import sys
 
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 
 # --------------------------------------------------------------------------------------------- rules
 # ACMG secondary findings v3.3 (ACMG policy statement, Genet Med 2025;27:101454): the 81 genes of v3.2 (Miller et al.,
@@ -215,7 +215,10 @@ class Variant:
                  "zyg", "gene", "effect", "impact", "hgvs_c", "hgvs_p", "feature", "af", "clnsig", "revstat",
                  "clndn", "stars", "rs", "ab", "flags",
                  "an", "nhomalt", "grpmax", "grpmax_af", "faf", "faf_grp", "gfilter", "gdisc", "artefact",
-                 "am", "sai", "sai_gene")
+                 "am", "sai", "sai_gene", "repeat")
+
+    def __init__(self):
+        self.repeat = None  # repeat context of an in-frame change (repeat_flag), set when the reference is given
 
     def key(self):
         return f"{self.chrom}:{self.pos}:{self.ref}>{self.alt}"
@@ -377,6 +380,8 @@ def predictor_codes(v, gene):
         return [max(pp3, key=CODE_RANK.get)]
     if am and am.startswith("BP4") and (v.sai is None or v.sai <= 0.1):
         return [am]
+    if sp and not is_missense(v, gene) and not is_lof(v, gene):
+        return [sp]  # BP4 from SpliceAI alone for a variant whose only predicted effect would be on splicing
     return []
 
 
@@ -411,6 +416,23 @@ def ann_for_gene(v, gene):
         if a[3] == gene:
             return a
     return None
+
+
+def main_ann(v, gene):
+    """The gene's annotation on its principal transcript, approximated as the longest protein among the transcripts the
+    variant hits (SnpEff field AA.pos/AA.length; Ensembl canonical/MANE Select is the longest isoform for most genes).
+    SnpEff lists the most severe consequence first, often on a minor isoform; ACMG codes use this one instead.
+    Without protein lengths (intronic and splice-site hits) the most severe annotation is kept."""
+    best, best_len = None, 0
+    for a in v.anns:
+        if a[3] != gene:
+            continue
+        if best is None:
+            best = a
+        m = re.match(r"\d+/(\d+)", a[13]) if len(a) > 13 else None
+        if m and int(m.group(1)) > best_len:
+            best, best_len = a, int(m.group(1))
+    return best
 
 
 def is_lof(v, gene=None):
@@ -728,6 +750,7 @@ def load_clinvar_protein(path):
     return out
 
 
+PM1_MIN_PATHOGENIC = 3  # pathogenic ClinVar missense variants at other residues within the window for PM1
 PROTEIN_CHANGE = re.compile(r"^p\.([A-Z][a-z]{2})(\d+)([A-Z][a-z]{2})$")
 
 
@@ -761,12 +784,17 @@ def protein_evidence(v, gene, cvp, window=5):
     benign_same = [x for x in here if x[1] == alt_aa and x[2] == "B" and x[3] >= 1]
     if benign_same:
         notes.append(f"same amino-acid change benign in ClinVar (VCV{int(benign_same[0][4]):09d})")
-    n_p = n_b = 0
+    n_p = n_b = n_p_near = 0
     for r in range(res - window, res + window + 1):
         for x in cvp.get((gene, r), []):
             if x[3] >= 1:
                 n_p += x[2] == "P"
                 n_b += x[2] == "B"
+                n_p_near += x[2] == "P" and r != res
+    if n_p_near >= PM1_MIN_PATHOGENIC and n_b == 0:
+        # PM1 (mutational hot spot), Supporting: pathogenic missense at other residues nearby and no benign one; the
+        # variant's own residue is left to PS1/PM5 so that the same ClinVar entries are not counted twice
+        codes.append("PM1_Supporting")
     if n_p >= 3:
         notes.append(f"ClinVar missense within {window} residues: {n_p} pathogenic, {n_b} benign"
                      + (" (pathogenic cluster)" if n_b == 0 else ""))
@@ -1067,31 +1095,131 @@ def lof_mechanism(gene, moi, constraint, dosage):
     return hi != 40 and loeuf is not None and loeuf < 0.6
 
 
+def nmd_predicted(v, gene):
+    """SnpEff's NMD prediction (INFO/NMD lists the genes whose transcripts are predicted to undergo NMD)."""
+    nmd = v.info.get("NMD")
+    if nmd in (None, True):
+        return nmd is True
+    return any(e.strip("()").split("|")[0] == gene for e in str(nmd).split(","))
+
+
+def nmd_by_exon(a):
+    """NMD expected from the exon of the stop (SnpEff field Rank/Total): a premature stop before the penultimate exon
+    is > 50 nt upstream of the last exon junction. Stops in the last two exons and single-exon genes are left to the
+    protein-fraction rule (the 3' end of the penultimate exon escapes NMD, and the exon boundaries are not in the VCF)."""
+    m = re.match(r"(\d+)/(\d+)", a[8]) if len(a) > 8 else None
+    return bool(m) and int(m.group(1)) < int(m.group(2)) - 1
+
+
+def protein_fraction_lost(a):
+    """Share of the protein after a truncating variant, from SnpEff's AA.pos / AA.length, or None."""
+    m = re.match(r"(\d+)/(\d+)", a[13]) if len(a) > 13 else None
+    if not m or int(m.group(2)) == 0:
+        return None
+    return 1 - int(m.group(1)) / int(m.group(2))
+
+
+def pvs1_code(v, gene):
+    """PVS1 strength after the ClinGen SVI decision tree (Abou Tayoun et al., Hum Mutat 2018), the parts that a VCF
+    supports: nonsense/frameshift predicted to undergo NMD, canonical splice-site, exon or transcript loss: Very strong;
+    nonsense/frameshift escaping NMD (last exon, end of the penultimate exon) that removes > 10 % of the protein:
+    Strong, otherwise Moderate; start loss: Moderate (another in-frame start codon may be used)."""
+    a = main_ann(v, gene) or v.anns[0]
+    eff = a[1]
+    if "start_lost" in eff and not any(e in eff for e in ("stop_gained", "frameshift", "splice_")):
+        return "PVS1_Moderate"
+    if ("stop_gained" in eff or "frameshift" in eff) and "splice_" not in eff and not nmd_predicted(v, gene) \
+            and not nmd_by_exon(a):
+        lost = protein_fraction_lost(a)
+        return "PVS1_Strong" if lost is None or lost > 0.10 else "PVS1_Moderate"
+    return "PVS1"
+
+
+# Variants excluded from BA1 by the ClinGen SVI (Ghosh et al., Hum Mutat 2018): common, but pathogenic
+BA1_EXCEPTIONS = {("ACAD9", "c.-44_-41dupTAAG"), ("BTD", "c.1330G>C"), ("GJB2", "c.-23+1G>A"), ("GJB2", "c.109G>A"),
+                  ("HFE", "c.187C>G"), ("HFE", "c.845G>A"), ("MEFV", "c.1105C>T"), ("MEFV", "c.1223G>A"),
+                  ("PIBF1", "c.1214G>A")}
+INFRAME_EFFECTS = ("inframe_insertion", "inframe_deletion", "disruptive_inframe_insertion",
+                   "disruptive_inframe_deletion", "stop_lost")
+BS1_DOMINANT = 1e-3  # BS1 cut-off for genes with only dominant disorders (the report's 'too common for dominant')
+
+
 def acmg_evidence(v, gene, moi, constraint, hpo_hit, max_af, dosage=None, protein_codes=()):
-    """Automated subset of ACMG/AMP 2015 evidence codes (provisional; for triage, not classification)."""
+    """Automated ACMG/AMP 2015 evidence codes with the ClinGen SVI strength modifications, the subset a single VCF
+    with population, predictor and ClinVar-residue data supports (no functional, segregation or case-count evidence).
+    v.repeat (set by the caller from the reference sequence) separates PM4 from BP3 for in-frame changes."""
     codes = []
-    if is_lof(v, gene) and lof_mechanism(gene, moi, constraint, dosage or {}):
-        ann = ann_for_gene(v, gene)
-        nmd = "NMD" in v.info
-        codes.append("PVS1" if (nmd or "splice" in ann[1] or "start_lost" in ann[1] or "exon_loss" in ann[1]
-                                or "stop_gained" in ann[1] or "frameshift" in ann[1]) else "PVS1_moderate")
+    a = main_ann(v, gene) or (v.anns[0] if v.anns else [""] * 16)
+    utr_splice = "splice_" in a[1] and a[9].startswith(("c.-", "c.*"))  # splice site of an intron in a UTR
+    if any(e in a[1] for e in LOF_EFFECTS) and not utr_splice and lof_mechanism(gene, moi, constraint, dosage or {}):
+        codes.append(pvs1_code(v, gene))
     p = freq(v)
-    if p is None or p < (1e-4 if ("AD" in moi and "AR" not in moi) else 1e-3):
+    dominant_only = bool(moi) and not ({"AR", "XL"} & moi)
+    if p is None or p < (1e-4 if dominant_only else 1e-3):
         codes.append("PM2_supporting")
-    if p is not None and p > 0.05:
+    if p is not None and p > 0.05 and (gene, a[9]) not in BA1_EXCEPTIONS:
         codes.append("BA1")
-    elif p is not None and p > max_af:
+    elif p is not None and (p > max_af or (dominant_only and p > BS1_DOMINANT)) and (gene, a[9]) not in BA1_EXCEPTIONS:
         codes.append("BS1")
+    if v.nhomalt and v.nhomalt >= 2 and moi == {"AR"} and v.chrom != "X":
+        codes.append("BS2_Supporting")  # homozygotes in gnomAD for a recessive disorder (penetrance unknown)
     codes += list(protein_codes)
+    if any(e in a[1] for e in INFRAME_EFFECTS) and not is_lof(v, gene):
+        codes.append("BP3" if getattr(v, "repeat", None) and "stop_lost" not in a[1] else "PM4")
     if is_missense(v, gene):
         z = constraint.get(gene, (None, None, None))[2]
         if z is not None and z > 3.09:
             codes.append("PP2")
     if not any(c.startswith("PVS1") for c in codes):  # PP3 is not combined with PVS1
-        codes += predictor_codes(v, gene)
+        pc = predictor_codes(v, gene)
+        if "synonymous_variant" in a[1] and pc == ["BP4_Supporting"]:
+            pc = ["BP7"]  # synonymous, no predicted splice effect (Walker et al. 2023: BP7 instead of BP4)
+        codes += pc
     if hpo_hit:
         codes.append("PP4")
     return codes
+
+
+# Points of the ACMG/AMP criteria (Tavtigian et al., Genet Med 2018; Hum Mutat 2020): Supporting 1, Moderate 2,
+# Strong 4, Very strong 8, benign criteria negative; BA1 is stand-alone benign
+STRENGTH_POINTS = {"supporting": 1, "moderate": 2, "strong": 4, "verystrong": 8}
+DEFAULT_STRENGTH = {"PVS": "verystrong", "PS": "strong", "PM": "moderate", "PP": "supporting", "BS": "strong",
+                    "BP": "supporting"}
+ACMG_CLASSES = [(10, "pathogenic"), (6, "likely pathogenic"), (0, "uncertain significance"), (-6, "likely benign")]
+
+
+def code_points(code):
+    """Points of one evidence code such as PVS1, PM2_supporting or PP3_Strong (None for BA1)."""
+    base, _, strength = code.partition("_")
+    if base == "BA1":
+        return None
+    pts = STRENGTH_POINTS[strength.lower().replace("_", "") or DEFAULT_STRENGTH[base[:-1] if base[:3] != "PVS" else "PVS"]]
+    return -pts if base.startswith("B") else pts
+
+
+def acmg_classify(codes):
+    """(class, points) from evidence codes by the point system. PM1 and PP3 together count at most 4 points (Strong;
+    Pejaver et al. 2022). BA1 alone makes a variant benign; a variant with BA1 and pathogenic codes is not benign."""
+    codes = list(dict.fromkeys(codes))
+    pts = {c: code_points(c) for c in codes if c != "BA1"}
+    pm1 = sum(p for c, p in pts.items() if c.startswith("PM1"))
+    pp3 = sum(p for c, p in pts.items() if c.startswith("PP3"))
+    total = sum(pts.values()) - max(0, pm1 + pp3 - 4) if pm1 and pp3 else sum(pts.values())
+    if "BA1" in codes:
+        return ("benign", total) if total <= 0 or not any(p > 0 for p in pts.values()) else ("conflicting (BA1)", total)
+    for t, name in ACMG_CLASSES:
+        if total >= t:
+            return name, total
+    return "benign", total
+
+
+ACMG_ABBR = {"pathogenic": "P", "likely pathogenic": "LP", "uncertain significance": "VUS", "likely benign": "LB",
+             "benign": "B", "conflicting (BA1)": "VUS"}
+
+
+def acmg_tag(cls, pts):
+    kind = "t-red" if cls in ("pathogenic", "likely pathogenic") else ("t-grn" if "benign" in cls and "BA1" not in cls else "t-amb")
+    return tag(f"{cls[0].upper() + cls[1:]} ({pts:+d})", kind)
 
 
 # --------------------------------------------------------------------------------------- report
@@ -1972,6 +2100,56 @@ def build(args):
             review.append((v, "gene with both dominant and recessive disorders: a heterozygote is affected only by "
                               "the dominant one; check which condition the ClinVar assertion refers to"))
 
+    # ---------------------------------------------------------------- automated ACMG classification
+    # repeat context of the rare in-frame changes (PM4 outside repeats, BP3 inside)
+    inframe = [v for v in variants if (freq(v) is None or freq(v) <= 0.05)
+               and any(e in (v.anns[0][1] if v.anns else "") for e in INFRAME_EFFECTS)]
+    if args.reference and inframe:
+        ictx = reference_contexts(args.reference, prefix, inframe)
+        for v in inframe:
+            if v.key() in ictx:
+                v.repeat = repeat_flag(ictx[v.key()][0], ictx[v.key()][1], len(v.ref))
+
+    def pm3_codes(v, g, moi):
+        """ClinGen SVI PM3 points (v1.0) for a recessive gene in a patient whose phenotype matches it: in trans with a
+        ClinVar pathogenic variant 1.0 (likely pathogenic 0.5), phase unknown 0.5 (0.25), homozygous 0.5; 1 point is
+        PM3 (Moderate), 0.5 PM3_Supporting."""
+        if "AR" not in moi or not hpo_match.get(g):
+            return []
+        best = 0.5 if v.zyg == "hom" and not (v.nhomalt or 0) >= 2 else 0.0
+        for x in by_gene_plp.get(g, []):
+            if x is v or x.key() == v.key() or x.zyg == "hom":
+                continue
+            full = "pathogenic" in clin_terms(x)
+            ph = trio_phase(trio, v, x, sex)
+            if ph is None and phase(v, x):
+                ph = phase(v, x)[0]
+            pts = (1.0 if full else 0.5) if ph == "trans" else (0.0 if ph == "cis" else (0.5 if full else 0.25))
+            best = max(best, pts)
+        return ["PM3"] if best >= 1 else (["PM3_Supporting"] if best >= 0.5 else [])
+
+    R.acmg = {}
+
+    def classify(v, g, extra=()):
+        """Evidence codes and class of variant v in gene g; kept for the findings table."""
+        moi = moi_of(g)
+        pc, pn = protein_evidence(v, g, cvp)
+        ev = acmg_evidence(v, g, moi, constraint, bool(hpo_match.get(g)), args.max_af, dosage,
+                           pc + list(extra) + pm3_codes(v, g, moi))
+        cls, pts = acmg_classify(ev)
+        R.acmg[id(v)] = (cls, pts, ev)
+        return ev, pn, cls, pts
+
+    def auto_cell(v):
+        """ClinVar cell with the automated classification under it (a cross-check of the ClinVar assertion)."""
+        g = v.gene
+        o = origin(v)[0] if trio else None
+        ev, _pn, cls, pts = classify(v, g, dn_codes(v, o, g))
+        s = clinvar_cell(v) + "<br><span class='small'>automated: </span>" + acmg_tag(cls, pts)
+        if "benign" in cls and "BA1" not in cls:
+            s += "<br><span class='small'>disagrees with ClinVar: " + esc(",".join(ev)) + "</span>"
+        return s
+
     # ---------------------------------------------------------------- candidates not in ClinVar
     cands = []
     rare_by_gene = collections.defaultdict(list)
@@ -1985,7 +2163,7 @@ def build(args):
                 if (is_lof(v, g) or (is_missense(v, g) and hpo_match.get(g))
                         or (is_missense(v, g) and CODE_RANK.get(am_code(v.am), 0) >= 2)
                         or splice_candidate(v, g, bool(hpo_match.get(g)))
-                        or protein_evidence(v, g, cvp)[0]):
+                        or {"PS1", "PM5"} & set(protein_evidence(v, g, cvp)[0])):
                     rare_by_gene[g].append(v)
                 break
     for g, vs in rare_by_gene.items():
@@ -2034,12 +2212,10 @@ def build(args):
                     r += f": inherited from the affected {who}"
                 reasons.append(r)
             why = "; ".join(reasons)
-            pcodes, pnotes = protein_evidence(v, g, cvp)
             o = origin(v)[0] if trio else None
-            pcodes = pcodes + dn_codes(v, o, g)
+            ev, pnotes, cls, pts = classify(v, g, dn_codes(v, o, g))
             if id(v) in doubt:
                 o = None  # no de novo score
-            ev = acmg_evidence(v, g, moi, constraint, bool(hpo_match.get(g)), args.max_af, dosage, pcodes)
             best = pheno.best_diseases(g, 1)
             score = (2 if hpo_match.get(g) else 0) + (1 if best and best[0][0] >= 0.5 else 0) + \
                 (2 if consistent else 0) + (1 if lof else 0) + \
@@ -2047,8 +2223,8 @@ def build(args):
                 (2 if "PS1" in ev else (1 if "PM5" in ev else 0)) + \
                 (3 if o == "de novo" and (not moi or {"AD", "XL"} & moi) else (1 if o == "possible de novo" else 0)) - \
                 (1 if v.flags and any("depth" in f or "balance" in f for f in v.flags) else 0)
-            cands.append((score, v, g, consistent, why, ev, pnotes))
-    cands.sort(key=lambda x: (-x[0], x[2], x[1].pos))
+            cands.append((score, v, g, consistent, why, ev, pnotes, cls, pts))
+    cands.sort(key=lambda x: (-x[0], -x[8], x[2], x[1].pos))
 
     # ---------------------------------------------------------------- de novo variants (trio)
     denovo, n_denovo_any, n_denovo_cluster = [], len(screened), 0
@@ -2066,11 +2242,10 @@ def build(args):
         n_denovo_cluster += clustered
         g = next((x for x in genes_of(v)[:3] if x in gencc), v.gene)
         moi = moi_of(g)
-        pc, pn = protein_evidence(v, g, cvp)
-        ev = acmg_evidence(v, g, moi, constraint, bool(hpo_match.get(g)), args.max_af, dosage, pc + dn_codes(v, o, g))
+        ev, pn, cls, pts = classify(v, g, dn_codes(v, o, g))
         rank = -10 if clustered else (2 if o == "de novo" else 0) + (
             2 if g in gencc and (not moi or {"AD", "XL"} & moi) else (1 if g in gencc else 0)) +             (2 if hpo_match.get(g) else 0) + (1 if v.impact == "HIGH" else 0)
-        denovo.append((rank, v, g, o, txt, ev, pn))
+        denovo.append((rank, v, g, o, txt, ev, pn, cls, pts))
     denovo.sort(key=lambda x: (-x[0], x[2], x[1].pos))
 
     # ---------------------------------------------------------------- ACMG SF
@@ -2288,8 +2463,10 @@ def build(args):
         f"<b>{len(diag)}</b>" + (": " + ", ".join(short(v) for v, _ in diag) if diag else "") + "</li>")
     R.h(f"<li><b>Pathogenic variants with unclear inheritance fit</b> (review): <b>{len(review)}</b>"
         + (": " + ", ".join(short(v) for v, _ in review) if review else "") + "</li>")
+    n_lp = [c for c in cands if c[7] in ("pathogenic", "likely pathogenic")]
     R.h(f"<li><b>Candidate variants needing review</b> (not classified in ClinVar): <b>{sum(1 for c in cands if c[3])}</b> "
-        f"inheritance-consistent of {len(cands)}</li>")
+        f"inheritance-consistent of {len(cands)}; automated ACMG class pathogenic or likely pathogenic: <b>{len(n_lp)}</b>"
+        + (" (" + ", ".join(short(c[1]) for c in n_lp[:6]) + ")" if n_lp else "") + "</li>")
     R.h(f"<li><b>Secondary findings ({ACMG_SF_VERSION})</b>: <b>{len(sf_rep)}</b> reportable"
         + (": " + ", ".join(short(v) for v, *_ in sf_rep) if sf_rep else "") + "</li>")
     R.h(f"<li><b>Carrier status</b> (one P/LP allele in a recessive gene): <b>{len(carrier)}</b>"
@@ -2377,7 +2554,7 @@ def build(args):
         "genes, two alleles in recessive genes. Whether a finding explains the patient's condition depends on the "
         "clinical picture.</p>")
     R.table(["Variant", "Genotype", "ClinVar", "gnomAD frequency", "Gene-disease (GenCC)", "Interpretation"],
-            [[var_cell(v), gt_cell(v), clinvar_cell(v), freq_cell(v),
+            [[var_cell(v), gt_cell(v), auto_cell(v), freq_cell(v),
               disease_cell(v.gene, K), esc(with_origin(v, why, "autosomal dominant" in why or "X-linked" in why))]
              for v, why in diag])
     for v, why in diag:
@@ -2386,7 +2563,7 @@ def build(args):
         "both dominant and recessive disorders, X-linked genes in heterozygous females, and genes without an "
         "established disease association in GenCC.</p>")
     R.table(["Variant", "Genotype", "ClinVar", "gnomAD frequency", "Gene-disease (GenCC)", "Why review"],
-            [[var_cell(v), gt_cell(v), clinvar_cell(v), freq_cell(v),
+            [[var_cell(v), gt_cell(v), auto_cell(v), freq_cell(v),
               disease_cell(v.gene, K), esc(with_origin(v, why))] for v, why in review])
     for v, why in review:
         R.rows.append(("pathogenic_review", v, with_origin(v, why)))
@@ -2405,26 +2582,30 @@ def build(args):
         + ", rare missense variants with AlphaMissense at PP3_Moderate or stronger (>= 0.906) and rare variants "
         "predicted to alter splicing outside the canonical sites (SpliceAI >= 0.5; >= 0.2 in phenotype-matched genes)"
         + (" and rare missense variants at a residue where ClinVar has a pathogenic missense variant (PS1/PM5)" if cvp else "")
-        + ". Evidence codes are an automated subset of the ACMG/AMP 2015 criteria (PVS1, PS1, PM2, PM5, BA1, BS1, PP2, "
-        "PP3, BP4, PP4) for triage; they are not a classification. Rows are ranked by phenotype match, inheritance fit "
-        "and variant consequence.</p>")
+        + ". Each variant gets an automated ACMG/AMP class from the evidence codes a VCF supports, combined by the "
+        "point system (pathogenic &ge; 10 points, likely pathogenic 6-9, uncertain 0-5, likely benign -1 to -6, benign "
+        "&le; -7; methods in section 11). It is a draft for the analyst: segregation, functional, case-count and "
+        "literature evidence are missing, and PM3/PP4/PS2 depend on the phenotype terms given. Rows are ranked by "
+        "phenotype match, inheritance fit and variant consequence, then by points.</p>")
     rows = []
-    for score, v, g, consistent, why, ev, pnotes in cands[:args.max_candidates]:
+    for score, v, g, consistent, why, ev, pnotes, cls, pts in cands[:args.max_candidates]:
         a = ann_for_gene(v, g) or v.anns[0]
         loeuf = constraint.get(g, (None, None, None))[0]
         rows.append([var_cell(v).replace(f"<b>{esc(v.gene)}</b>", f"<b>{esc(g)}</b>"), gt_cell(v),
                      esc(a[1].replace("&", " & ")) + (f"<br><span class='small'>LOEUF {loeuf:.2f}</span>" if loeuf is not None else ""),
                      freq_cell(v), disease_cell(g, K),
                      ("" if consistent else tag("inheritance not met", "t-grn") + "<br>") + esc(why),
-                     " ".join(tag(c, "t-red" if c.startswith(("PVS", "PS")) else ("t-grn" if c.startswith("B") else "")) for c in ev)
+                     acmg_tag(cls, pts) + "<br>"
+                     + " ".join(tag(c, "t-red" if c.startswith(("PVS", "PS")) else ("t-grn" if c.startswith("B") else "")) for c in ev)
                      + (f"<br><span class='small'>{esc(predictor_text(v))}</span>" if predictor_text(v) else "")
                      + "".join(f"<br><span class='small'>{esc(n)}</span>" for n in pnotes)])
         R.rows.append(("candidate" if consistent else "candidate_inheritance_not_met", v,
                        with_origin(v, "; ".join([why, ",".join(ev)] + pnotes))))
-    R.table(["Variant", "Genotype", "Consequence", "gnomAD frequency", "Gene-disease (GenCC)", "Inheritance fit", "Evidence"], rows)
+    R.table(["Variant", "Genotype", "Consequence", "gnomAD frequency", "Gene-disease (GenCC)", "Inheritance fit",
+             "ACMG class (automated) and evidence"], rows)
     if len(cands) > args.max_candidates:
         R.h(f"<p class='small'>{len(cands) - args.max_candidates} more candidates in the TSV output.</p>")
-        for score, v, g, consistent, why, ev, pnotes in cands[args.max_candidates:]:
+        for score, v, g, consistent, why, ev, pnotes, cls, pts in cands[args.max_candidates:]:
             R.rows.append(("candidate" if consistent else "candidate_inheritance_not_met", v,
                            with_origin(v, "; ".join([why, ",".join(ev)] + pnotes))))
 
@@ -2484,17 +2665,18 @@ def build(args):
                    "call (a repeat or complex locus the parents' calls may write differently): they are listed last, "
                    "as possibly de novo, without de novo points." if n_denovo_cluster else "") + "</p>")
             rows = []
-            for rank, v, g, o, txt, ev, pn in denovo:
+            for rank, v, g, o, txt, ev, pn, cls, pts in denovo:
                 a = ann_for_gene(v, g) or (v.anns[0] if v.anns else [""] * 11)
                 rows.append([var_cell(v).replace(f"<b>{esc(v.gene)}</b>", f"<b>{esc(g)}</b>"), call_cell(v, sex),
                              esc(a[1].replace("&", " & ")), freq_cell(v), disease_cell(g, K),
                              tag(ORIGIN_TEXT[o], "t-red" if o == "de novo" else "t-amb") + f"<br><span class='small'>{esc(txt)}</span>",
-                             " ".join(tag(c, "t-red" if c.startswith(("PVS", "PS")) else ("t-grn" if c.startswith("B") else ""))
-                                      for c in ev) + "".join(f"<br><span class='small'>{esc(n)}</span>" for n in pn)])
+                             acmg_tag(cls, pts) + "<br>"
+                             + " ".join(tag(c, "t-red" if c.startswith(("PVS", "PS")) else ("t-grn" if c.startswith("B") else ""))
+                                        for c in ev) + "".join(f"<br><span class='small'>{esc(n)}</span>" for n in pn)])
                 R.rows.append(("de_novo" if o == "de novo" else "de_novo_possible", v,
                                "; ".join([ORIGIN_TEXT[o], txt, ",".join(ev)] + pn)))
             R.table(["Variant", "Genotype", "Consequence", "gnomAD frequency", "Gene-disease (GenCC)", "Parents",
-                     "Evidence"], rows)
+                     "ACMG class (automated) and evidence"], rows)
 
     # copy-number variants and chromosome dosage
     R.h("<h2>4. Copy-number variants and chromosome dosage</h2>")
@@ -2590,7 +2772,7 @@ def build(args):
         "p.Cys282Tyr homozygotes only; TTN truncating variants only.</p>")
     if sf:
         R.table(["Variant", "Genotype", "ClinVar", "gnomAD frequency", "Category", "Status"],
-                [[var_cell(v), gt_cell(v), clinvar_cell(v), freq_cell(v), esc(ACMG_SF_CATEGORY.get(g, "")),
+                [[var_cell(v), gt_cell(v), auto_cell(v), freq_cell(v), esc(ACMG_SF_CATEGORY.get(g, "")),
                   tag(st, "t-red" if st == "reportable" else "t-amb") + "<br>" + esc(note)] for v, g, st, note in sf])
         for v, g, st, note in sf:
             R.rows.append(("acmg_sf_" + st.split()[0], v, with_origin(v, note)))
@@ -2611,7 +2793,7 @@ def build(args):
         "matters for reproductive risk if a partner carries a pathogenic variant in the same gene.</p>")
     R.table(["Variant", "Genotype", "ClinVar", "gnomAD frequency", "Condition (GenCC)"],
             [[var_cell(v), gt_cell(v) + (f"<br>{tag(carrier_note[v.key()], 't-blu')}" if v.key() in carrier_note else ""),
-              clinvar_cell(v), freq_cell(v), disease_cell(v.gene, K, phenotype=False)]
+              auto_cell(v), freq_cell(v), disease_cell(v.gene, K, phenotype=False)]
              for v in carrier])
     for v in carrier:
         R.rows.append(("carrier", v, with_origin(v, carrier_note.get(v.key(), ""))))
@@ -2790,8 +2972,21 @@ def build(args):
     else:
         R.h("<li>No recurrent-artefact list was provided: recurrent false calls of the assay (e.g. in GC-rich targets) "
             "are not recognised.</li>")
-    R.h("<li>Rules: ACMG SF v3.3 gene list and reporting rules (Genet Med 2025;27:101454); automated ACMG/AMP 2015 evidence "
-        "subset (Richards et al. 2015; PVS1 after Abou Tayoun et al. 2018, simplified); CPIC allele-function and "
+    R.h("<li>Rules: ACMG SF v3.3 gene list and reporting rules (Genet Med 2025;27:101454); automated ACMG/AMP 2015 "
+        "classification (Richards et al. 2015) with the ClinGen SVI modifications, combined by points (Tavtigian et "
+        "al. 2018, 2020): PVS1 by the Abou Tayoun et al. 2018 decision tree as far as SnpEff supports it, on the principal "
+        "transcript (longest protein among those hit; NMD when the stop is before the penultimate exon or SnpEff "
+        "predicts it): nonsense/frameshift with NMD, canonical splice sites outside UTR introns and exon loss Very "
+        "strong; NMD-escaping truncation Strong if it removes &gt; 10 % of the protein, else Moderate; start loss "
+        "Moderate); PM2_Supporting (gnomAD &lt; 0.01 % for "
+        "dominant-only genes, &lt; 0.1 % otherwise); BA1 &gt; 5 % (ClinGen exception list excepted), BS1 above the "
+        "rare-variant cut-off (0.1 % for dominant-only genes); BS2_Supporting for &ge; 2 gnomAD homozygotes in a "
+        "recessive-only autosomal gene; PS1, PM5 and PM1_Supporting (&ge; 3 pathogenic and no benign ClinVar missense "
+        "variants at other residues within 5 residues; with PP3 at most 4 points) from the ClinVar residue table; PM4 "
+        "for in-frame changes and stop loss outside repeats, BP3 inside repeats; PP2 (missense Z &gt; 3.09); PP3/BP4 "
+        "and BP7 (synonymous, SpliceAI &le; 0.1) from the calibrated predictors; PM3 (ClinGen SVI points; in trans, "
+        "phase unknown or homozygous with a ClinVar pathogenic variant), PS2/PM6 and PP4 only when phenotype terms "
+        "match the gene; CPIC allele-function and "
         "phenotype assignments for single-nucleotide alleles.</li>")
     n_am = sum(1 for v in variants if v.am is not None)
     n_sai = sum(1 for v in variants if v.sai is not None)
@@ -2825,8 +3020,10 @@ def build(args):
         "regulatory variants, low-level mosaicism, methylation/imprinting defects, variants in segmental duplications "
         "and pseudogene regions (e.g. SMN1/SMN2, CYP21A2, PMS2 exons 11-15, GBA1), and genes or exons with low coverage. "
         "A negative report does not exclude a genetic diagnosis.</li>")
-    R.h("<li>Candidate variants without a ClinVar classification need manual ACMG/AMP classification with all evidence "
-        "types (segregation, de novo status, functional data, computational predictions, literature).</li>")
+    R.h("<li>The automated ACMG/AMP class uses only the evidence a VCF and the knowledge files support. Functional "
+        "studies (PS3/BS3), case counts (PS4), segregation (PP1/BS4), an alternative cause (BP5), gene-specific "
+        "ClinGen VCEP rules and the literature are not used, so a variant can move by several points on manual "
+        "review; a likely pathogenic or pathogenic class needs that review before it is reported.</li>")
     R.h("<li>ClinVar classifications change: findings should be re-evaluated against the current ClinVar release "
         "before reporting, and the data periodically reanalysed.</li></ul>")
     R.h("</body></html>")
@@ -2837,17 +3034,18 @@ def write_tsv(R, path, sample):
     with open(path, "w") as f:
         f.write("sample\tcategory\tgene\tchrom\tpos\tref\talt\tgenotype\tdepth\talt_fraction\thgvs_c\thgvs_p\teffect\t"
                 "gnomad_af\tgnomad_grpmax_af\tgnomad_faf95\tgnomad_nhomalt\talphamissense\tspliceai\tclinvar\t"
-                "clinvar_review\tclinvar_condition\tqc_flags\tconfidence\tnote\n")
+                "clinvar_review\tclinvar_condition\tqc_flags\tconfidence\tnote\tacmg_class\tacmg_points\tacmg_codes\n")
+        acmg = getattr(R, "acmg", {})
         for cat, v, note in R.rows:
             if v is None and len(note) == 4:  # CNV: (genes, type and copy number, note, (chrom, start, end))
                 genes, genotype, txt, (chrom, start, end) = note
                 f.write("\t".join([sample, cat, genes, chrom, str(start), "", f"<{genotype.split()[0]}>", genotype]
                                   + [""] * 15 + [txt.split("; ")[2] if txt.count("; ") >= 2 else "",
-                                                 txt.replace("\t", " ") + f"; end {end}"]) + "\n")
+                                                 txt.replace("\t", " ") + f"; end {end}", "", "", ""]) + "\n")
                 continue
             if v is None:  # gene-level result: (gene, genotype, phenotype)
                 gene, genotype, pheno = note
-                f.write("\t".join([sample, cat, gene, "", "", "", "", genotype] + [""] * 16 + [pheno]) + "\n")
+                f.write("\t".join([sample, cat, gene, "", "", "", "", genotype] + [""] * 16 + [pheno, "", "", ""]) + "\n")
                 continue
             lc = low_confidence(v)
             f.write("\t".join(str(x) for x in (
@@ -2857,7 +3055,9 @@ def write_tsv(R, path, sample):
                 int(v.nhomalt) if v.nhomalt is not None else "",
                 f"{v.am:.3f}" if v.am is not None else "", f"{v.sai:.2f}" if v.sai is not None else "", v.clnsig,
                 v.revstat, v.clndn, ";".join(v.flags), "low: " + ", ".join(lc) if lc else "high",
-                note.replace("\t", " "))) + "\n")
+                note.replace("\t", " "))) + "\t"
+                + ("\t".join([acmg[id(v)][0], str(acmg[id(v)][1]), ",".join(acmg[id(v)][2])]) if id(v) in acmg else "\t\t")
+                + "\n")
 
 
 def main(argv=None):

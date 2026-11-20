@@ -1,4 +1,4 @@
-<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.7.0+galaxy0" profile="23.0">
+<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.8.0+galaxy0" profile="23.0">
     <description>diagnostic, secondary, carrier, pharmacogenomic and risk findings in one human-readable report</description>
     <requirements>
         <requirement type="package" version="3.12">python</requirement>
@@ -294,9 +294,14 @@ Sections:
 3. Candidate variants not classified in ClinVar: rare predicted loss-of-function variants in established disease
    genes, rare missense variants with AlphaMissense at PP3_Moderate or stronger, in phenotype-matched genes or at a
    residue with a pathogenic ClinVar missense variant, and rare variants predicted by SpliceAI to alter splicing,
-   with automated ACMG/AMP evidence codes for triage (PP3/BP4 at the ClinGen-calibrated strengths when the VCF
-   carries INFO/AM_score and INFO/SpliceAI; PS1/PM5 from the ClinVar residue table; PVS1 only where ClinGen dosage,
-   inheritance or constraint shows loss of function to be a disease mechanism). With patient HPO terms, a table of
+   with an automated ACMG/AMP classification: the evidence codes a VCF supports (PVS1 by the ClinGen SVI decision
+   tree as far as SnpEff supports it, and only where ClinGen dosage, inheritance or constraint shows loss of function
+   to be a disease mechanism; PM2, BA1, BS1, BS2 from gnomAD; PS1, PM5 and PM1 from the ClinVar residue table; PM4/BP3;
+   PP2; PP3/BP4/BP7 at the ClinGen-calibrated strengths when the VCF carries INFO/AM_score and INFO/SpliceAI; PM3,
+   PS2/PM6 and PP4 with matching phenotype terms) combined by the Bayesian point system (Tavtigian et al. 2020) into
+   pathogenic, likely pathogenic, uncertain, likely benign or benign. The class is a draft for the analyst (no
+   functional, segregation, case-count or literature evidence). ClinVar pathogenic findings show the automated class
+   beside the ClinVar one, flagged when it is benign. With patient HPO terms, a table of
    the diseases that best explain the phenotype in the genes with findings.
 
 Gene-disease cells also show GenCC disputed/refuted assertions, ClinGen dosage sensitivity, and (from the HPO

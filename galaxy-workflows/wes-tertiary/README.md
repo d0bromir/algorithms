@@ -281,8 +281,9 @@ laboratory.
 |---|---|
 | Sample and data quality | Ts/Tv, het/hom, het allele-fraction distribution (contamination hint), genetic sex from chrX heterozygosity and chrY coverage, target coverage at 10/20/30× |
 | Diagnostic findings | ClinVar pathogenic/likely pathogenic (not conflicting) **and** a genotype that fits the gene's mode of inheritance in GenCC: one allele for dominant genes, hemizygous for X-linked genes in males, two alleles for recessive genes. Genes with both dominant and recessive disorders, X-linked heterozygous females and genes without a GenCC entry go to a *review* table |
-| Candidate variants | Not classified in ClinVar (or VUS/conflicting), gnomAD frequency below the cut-off (default 1 %), in a GenCC gene: predicted loss-of-function; missense with AlphaMissense ≥ 0.906 (PP3_Moderate or stronger); missense at a residue with a pathogenic ClinVar missense variant (PS1/PM5); predicted splice-altering outside the canonical sites (SpliceAI ≥ 0.5, or ≥ 0.2 in genes matching the HPO terms); missense/in-frame variants in genes matching the HPO terms. Automated ACMG/AMP evidence codes (PVS1, PS1, PM2_supporting, PM5, BA1, BS1, PP2, PP3, BP4, PP4) for triage, inheritance fit (incl. compound heterozygotes, phased from the reads where possible) and ranking by phenotype match, disease-level phenotype match and evidence |
+| Candidate variants | Not classified in ClinVar (or VUS/conflicting), gnomAD frequency below the cut-off (default 1 %), in a GenCC gene: predicted loss-of-function; missense with AlphaMissense ≥ 0.906 (PP3_Moderate or stronger); missense at a residue with a pathogenic ClinVar missense variant (PS1/PM5); predicted splice-altering outside the canonical sites (SpliceAI ≥ 0.5, or ≥ 0.2 in genes matching the HPO terms); missense/in-frame variants in genes matching the HPO terms. An automated ACMG/AMP class (next row), inheritance fit (incl. compound heterozygotes, phased from the reads where possible) and ranking by phenotype match, disease-level phenotype match and evidence |
 | Phenotype match by disease | With HPO terms: for every gene with a finding, the HPO-annotated disease that explains the largest share of the patient's terms, each term weighted by its information content; which terms it explains and which it does not, with the disease's onset, course and inheritance |
+| Automated ACMG/AMP class | For every candidate and de novo variant, and beside the ClinVar class of every P/LP finding (flagged when the automated class is benign): the evidence codes a VCF supports, combined by the Bayesian point system (Tavtigian et al. 2018, 2020; Supporting 1, Moderate 2, Strong 4, Very strong 8 points; pathogenic ≥ 10, likely pathogenic 6–9, uncertain 0–5, likely benign −1 to −6, benign ≤ −7; BA1 alone is benign). **PVS1** by the ClinGen SVI decision tree as far as SnpEff supports it, on the principal transcript (the longest protein the variant hits; SnpEff lists minor isoforms first) (nonsense/frameshift before the penultimate exon or SnpEff-predicted NMD, canonical splice site outside UTR introns, exon loss: Very strong; NMD-escaping truncation removing > 10 % of the protein: Strong, else Moderate; start loss: Moderate), only where loss of function is a disease mechanism. **PM2_Supporting**, **BA1** (> 5 %, except the ClinGen BA1 exception list), **BS1** (above the rare-variant cut-off; 0.1 % for genes with only dominant disorders), **BS2_Supporting** (≥ 2 gnomAD homozygotes, recessive-only autosomal gene). **PS1**, **PM5** and **PM1_Supporting** (≥ 3 pathogenic and no benign ClinVar missense variants at other residues within 5; PM1 + PP3 ≤ 4 points) from the ClinVar residue table. **PM4** (in-frame indel or stop loss outside a repeat) / **BP3** (in a repeat). **PP2** (missense Z > 3.09). **PP3/BP4** (AlphaMissense, SpliceAI; calibrated strengths) and **BP7** (synonymous, SpliceAI ≤ 0.1). With HPO terms matching the gene: **PP4**, **PM3** (ClinGen SVI points: in trans, phase unknown or homozygous with a ClinVar P/LP variant) and **PS2/PM6** (trio). Not used: functional data, case counts, segregation, VCEP gene-specific rules, literature. A draft for the analyst, validated against ClinVar in section 7 |
 | Gene knowledge | Next to every gene: GenCC diseases, GenCC disputed/refuted/no-known-relationship assertions, ClinGen haploinsufficiency and triplosensitivity, and (HPO) onset, course and inheritance of its diseases |
 | ACMG SF v3.3 | 84 genes (v3.2 plus ABCD1, CYP27A1, PLN; Genet Med 2025;27:101454); biallelic only for MUTYH, ATP7B, BTD, GAA, RPE65, CYP27A1; ABCD1 hemizygous, homozygous or two heterozygous variants (not a single heterozygous variant in a female); HFE p.Cys282Tyr homozygotes only; TTN truncating only. Rare loss-of-function variants not in ClinVar are listed as *review* |
 | Carrier status | One P/LP allele in a recessive gene; two P/LP variants shown by the parents or the reads to be in cis count as one allele |
@@ -793,14 +794,92 @@ The settings (`p_cnv` 1e-4, Student-t df 10, one principal component) favour pre
 found 3-target heterozygous deletions about twice as often but added 25 non-inherited 1–2-target deletions in
 HG001.
 
+### Automated ACMG/AMP classification (report 0.8.0, ClinVar ≥ 2 stars)
+
+**Test set.** 30,000 ClinVar (2026-11) SNVs and indels ≤ 50 bp on 1–22 and X, with review status ≥ 2 stars:
+- 15,000 pathogenic/likely pathogenic and 15,000 benign/likely benign;
+- up to 5,000 of each side from expert panels or practice guidelines (3–4 stars).
+
+**Method.** The variants were written as one heterozygous pseudo-sample and run through the VCF workflow (release
+0.8: SnpEff, gnomAD, AlphaMissense, SpliceAI).
+- 27,393 remained after the workflow's target and quality filters.
+- They were classified without phenotype terms, so PP4, PM3 and PS2/PM6 are unused.
+- The classifier never sees the variant's own ClinVar class. PS1, PM5 and PM1 do use other ClinVar records at the
+  same or nearby residues, as in a real run.
+- Odd chromosomes and X were used for tuning; even chromosomes were held out.
+
+Scripts: [`tests/acmg_clinvar_set.py`](tests/acmg_clinvar_set.py), [`tests/acmg_clinvar_eval.py`](tests/acmg_clinvar_eval.py).
+
+| Variants | ClinVar P/LP (n) | → P/LP | → VUS | → LB/B | ClinVar B/LB (n) | → LB/B | → VUS | → P/LP | Time | Memory |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Tuning half (odd, X) | 9,721 | 72.7 % | 27.2 % | 0.1 % | 8,081 | 37.1 % | 62.8 % | 0.1 % | 5 s | 0.80 GiB |
+| **Held-out half (even)** | 5,021 | **71.8 %** | 28.1 % | 0.1 % | 4,570 | **43.2 %** | 56.7 % | **0.1 %** | 5 s | 0.80 GiB |
+| Held out, 3–4 stars | 1,080 | 60.5 % | 39.4 % | 0.2 % | 704 | 57.1 % | 42.8 % | 0.1 % | | |
+| All | 14,742 | 72.4 % | 27.5 % | 0.1 % | 12,651 | 39.3 % | 60.6 % | 0.1 % | 5 s | 0.80 GiB |
+
+Time and memory cover classifying the whole set on one core, including loading GenCC, constraint, dosage and
+the ClinVar residue table.
+
+**By consequence.** Held-out variants with gnomAD < 1 % or absent; the cells give the share called on the correct
+side and, after the slash, the wrong side:
+
+| Consequence | ClinVar P/LP | → P/LP / → LB/B | ClinVar B/LB | → LB/B / → P/LP |
+|---|---|---|---|---|
+| Loss of function | 3,570 | 88.2 % / 0 % | 17 | 17.6 % / 17.6 % |
+| Missense | 1,292 | 35.1 % / 0.5 % | 633 | 50.1 % / 0.2 % |
+| In-frame indel, stop loss | 51 | 0 % / 0 % | 30 | 30.0 % / 0 % |
+| Synonymous | 11 | 0 % / 0 % | 2,160 | 19.4 % / 0 % |
+| Intronic, splice region | 81 | 0 % / 0 % | 657 | 28.2 % / 0 % |
+| UTR, non-coding | 14 | 0 % / 0 % | 28 | 39.3 % / 0 % |
+
+Common benign variants (gnomAD ≥ 1 %) were called LB/B by BA1 or BS1: 98 % of the 1,045 held-out ones.
+
+**Evidence codes on the held-out half.** Each code's likelihood ratio is its share of P/LP divided by its share of
+B/LB. Tavtigian's scale expects about 2.1 for Supporting, 4.3 Moderate, 19 Strong and 350 Very strong.
+
+| Group | Likelihood ratios |
+|---|---|
+| Pathogenic, at or above their strength | PVS1 478; PVS1_Strong 196; PVS1_Moderate 34; PP3_Strong 350; PP3_Moderate 15; PP3_Supporting 3.7; PM5 59; PM1_Supporting 73; PS1 (no B/LB) |
+| Pathogenic, weaker than their strength | PM2_Supporting 1.9; PM4 1.5; PP2 1.4 |
+| Benign | BP4_Supporting 0.05; BP4_Moderate 0.03; BS2_Supporting 0.01; BP7, BS1 and BA1 0 (no P/LP) |
+
+PM4 is weak mainly because of two benign regions that gene-specific rules exclude: the MECP2 C-terminal in-frame
+deletions and RPGR exon ORF15. PM4 and PP2 cannot make a variant LP without other evidence.
+
+**Tuning: the transcript for PVS1.** At first the classifier used SnpEff's first annotation, which is often a minor
+isoform. It also relied on SnpEff's INFO/NMD, which is rarely written. The classifier now:
+- takes the principal transcript (the longest protein the variant hits);
+- predicts NMD for stops before the penultimate exon;
+- skips splice sites of UTR introns.
+
+On the tuning half this raised P/LP called P/LP from 41.6 % to 72.7 %. B/LB called P/LP fell from 0.2 % to 0.1 %.
+
+**Remaining errors.** Most benign LoF variants that still reach LP are known PVS1 exceptions, which need gene-specific
+VCEP rules or RNA evidence:
+- BRCA1 c.594-2A>C: exon 10 is skipped in frame;
+- a NOTCH2 exon 1 frameshift;
+- a frameshift near the end of RYR1.
+
+Pathogenic missense variants mostly stay VUS: the evidence that would lift them (functional assays, case counts,
+segregation) is not in a VCF.
+
+| Step | Time | Memory |
+|---|---|---|
+| Annotating the 30,000 variants in Galaxy | SpliceAI 4,970 s on CPU (16 slots; GPUs busy); SnpEff 137 s; bcftools 38 s | — |
+| Clinical report on HG002, all inputs (median of 3) | 0.8.0: 12.0 s; 0.7.0: 11.8 s | 1.55 GiB, both |
+| Report 0.8.0 on HG002 in Galaxy | 26 s | — |
+
+In the HG002 Galaxy report, the automated class and its codes appear for every candidate, review and carrier
+finding: 6 LP, 12 VUS.
+
 ## 8. Scope and limitations
 
 Germline SNVs and short indels in the exome targets, and CNVs of several exons from read depth (section 7).
 Not covered: CNVs of one or two exons (rarely detected at 50×), balanced and other structural variants, CNV
 breakpoints, CNVs in segmental duplications (marked low confidence), mitochondrial variants and repeat
 expansions. CNV calls need ≥ 3 other samples of the same kit; with a small or mixed-batch panel they miss small
-events, and relatives in the same run share their inherited CNVs. The ACMG/AMP evidence codes are an automated subset for triage, not a classification, and
-the HPO ranking depends on the terms given. Trio analysis needs the parents' calls on the same reference and
+events, and relatives in the same run share their inherited CNVs. The automated ACMG/AMP class uses only the evidence a VCF supports (no functional, segregation, case-count or
+literature evidence) and is a draft for review, and the HPO ranking depends on the terms given. Trio analysis needs the parents' calls on the same reference and
 works on the variants the proband's caller found; de novo status at repeats, segmental duplications and other
 loci where calls are written differently stays *possibly de novo*, and a parent's low-level mosaicism (a single
 alt read among ≥ 15) is read as reference. The reports support expert review; they are not a diagnosis. This is a research workflow,
