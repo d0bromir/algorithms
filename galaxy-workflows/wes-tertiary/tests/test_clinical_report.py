@@ -777,8 +777,14 @@ def test_vcep_rules():
     rep.VCEP.update(rep.load_vcep_rules(os.path.join(DATA, "vcep_rules.tsv"))[0])
     try:
         adj = rep.vcep_adjust
-        assert adj("BRCA2", ["PM2_supporting", "PP2", "PP3_Strong"], None)[0] == ["PM2_supporting", "PP3_Supporting"], \
-            "PP2 not used by the panel; PP3 capped at Supporting"
+        assert adj("BRCA2", ["PM2_supporting", "PP2", "PP3_Strong"], None)[0] == ["PM2_supporting", "PP3_Strong"], \
+            "PP2 not used by the panel; the calibrated PP3 strength is kept (VCEP_KEEP_STRENGTH)"
+        keep = rep.VCEP_KEEP_STRENGTH
+        rep.VCEP_KEEP_STRENGTH = set()
+        try:
+            assert adj("BRCA2", ["PP3_Strong"], None)[0] == ["PP3_Supporting"], "with caps applied: Supporting only"
+        finally:
+            rep.VCEP_KEEP_STRENGTH = keep
         assert adj("BRCA2", ["PM2_supporting"], 0.0005)[0] == ["BS1"], "panel BS1 cut-off 0.0001"
         assert adj("BRCA2", ["BS1"], 0.002)[0] == ["BA1"], "panel BA1 cut-off 0.001 (default 5 %)"
         assert adj("GENER", ["PVS1", "PM2_supporting"], None)[0] == ["PM2_supporting"]
@@ -811,6 +817,8 @@ def test_missense_policy():
     assert rep.missense_code(v, "concordant") is None, "disagreeing predictors give no PP3/BP4"
     v.revel = None
     assert rep.missense_code(v, "concordant") == "PP3_Strong", "one score alone counts as itself"
+    v.revel = 0.80
+    assert rep.missense_code(v) == "PP3_Moderate", "default policy: REVEL first"
 
 
 def test_cnv_collins_dosage():

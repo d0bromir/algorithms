@@ -20,6 +20,8 @@ ap.add_argument("--gene-disease", help="data/build_gene_disease.py table: curate
 ap.add_argument("--missense-policy", choices=("alphamissense", "revel", "concordant"),
                 help="how AlphaMissense and REVEL are combined (default: the report's MISSENSE_POLICY)")
 ap.add_argument("--mave", help="data/build_mavedb.py evidence: calibrated PS3/BS3 (needs --mane for protein matches)")
+ap.add_argument("--vcep-keep", default=None, help="comma-separated codes whose strength VCEP caps do not reduce "
+                "(default: the report's VCEP_KEEP_STRENGTH; '' = apply all caps)")
 ap.add_argument("--vcep-rules", help="data/build_vcep.py rules: ClinGen expert-panel cut-offs, codes and strengths")
 a = ap.parse_args()
 t0 = time.time()
@@ -35,6 +37,8 @@ cvp = R.load_clinvar_protein(f"{a.ref}/clinvar_protein.tsv.gz")
 R.MANE.update(R.load_mane(a.mane))
 R.CURATED.update(R.load_gene_disease(a.gene_disease)[0])
 R.VCEP.update(R.load_vcep_rules(a.vcep_rules)[0])
+if a.vcep_keep is not None:
+    R.VCEP_KEEP_STRENGTH = {c for c in a.vcep_keep.split(",") if c}
 if a.missense_policy:
     R.MISSENSE_POLICY = a.missense_policy
 _s, _c, variants, prefix = R.parse_vcf(a.vcf)

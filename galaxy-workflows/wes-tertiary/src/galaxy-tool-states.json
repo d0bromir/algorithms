@@ -237,6 +237,30 @@
     },
     "tool_version": "3.1.1.0"
   },
+  "WES tertiary analysis from FASTQ (v1)/mito_calling": {
+    "tool_id": "wes_mito",
+    "tool_state": {
+      "__page__": 0,
+      "__rerun_remap_job_id__": null,
+      "bam": {
+        "__class__": "ConnectedValue"
+      },
+      "clinvar": {
+        "__class__": "ConnectedValue"
+      },
+      "gnomad_mt": {
+        "__class__": "ConnectedValue"
+      },
+      "min_alt": "3",
+      "min_depth": "20",
+      "min_depth_hom": "5",
+      "min_hl": "0.1",
+      "reference": {
+        "__class__": "ConnectedValue"
+      }
+    },
+    "tool_version": "0.1.0+galaxy0"
+  },
   "WES tertiary analysis from FASTQ (v1)/multiqc": {
     "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/multiqc/multiqc/1.35+galaxy5",
     "tool_state": {
@@ -466,10 +490,16 @@
       "cnv_summary": {
         "__class__": "ConnectedValue"
       },
+      "collins_dosage": {
+        "__class__": "ConnectedValue"
+      },
       "constraint": {
         "__class__": "ConnectedValue"
       },
       "coverage_summary": {
+        "__class__": "ConnectedValue"
+      },
+      "erepo": {
         "__class__": "ConnectedValue"
       },
       "father_bam": {
@@ -487,6 +517,12 @@
       "gene_coverage": {
         "__class__": "ConnectedValue"
       },
+      "gene_disease": {
+        "__class__": "ConnectedValue"
+      },
+      "gnomad_cnv": {
+        "__class__": "ConnectedValue"
+      },
       "hpo_annotations": {
         "__class__": "ConnectedValue"
       },
@@ -496,9 +532,21 @@
       "hpo_terms": {
         "__class__": "ConnectedValue"
       },
+      "mane": {
+        "__class__": "ConnectedValue"
+      },
+      "mave": {
+        "__class__": "ConnectedValue"
+      },
       "max_af": "0.01",
       "max_candidates": "60",
       "min_ref_depth": "15",
+      "mito_json": {
+        "__class__": "ConnectedValue"
+      },
+      "mito_tsv": {
+        "__class__": "ConnectedValue"
+      },
       "mother_bam": {
         "__class__": "ConnectedValue"
       },
@@ -524,11 +572,17 @@
       "target_coverage": {
         "__class__": "ConnectedValue"
       },
+      "uniprot_features": {
+        "__class__": "ConnectedValue"
+      },
+      "vcep_rules": {
+        "__class__": "ConnectedValue"
+      },
       "vcf": {
         "__class__": "ConnectedValue"
       }
     },
-    "tool_version": "0.10.0+galaxy0"
+    "tool_version": "0.11.0+galaxy0"
   },
   "WES tertiary analysis from FASTQ (v1)/tertiary/clinvar_annotation": {
     "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
@@ -642,7 +696,7 @@
             "__class__": "ConnectedValue"
           }
         },
-        "columns": "AM_score",
+        "columns": "INFO",
         "mark_sites": "",
         "min_overlap": "",
         "set_id": ""
@@ -1210,10 +1264,16 @@
       "cnv_summary": {
         "__class__": "ConnectedValue"
       },
+      "collins_dosage": {
+        "__class__": "ConnectedValue"
+      },
       "constraint": {
         "__class__": "ConnectedValue"
       },
       "coverage_summary": {
+        "__class__": "ConnectedValue"
+      },
+      "erepo": {
         "__class__": "ConnectedValue"
       },
       "father_bam": {
@@ -1231,6 +1291,12 @@
       "gene_coverage": {
         "__class__": "ConnectedValue"
       },
+      "gene_disease": {
+        "__class__": "ConnectedValue"
+      },
+      "gnomad_cnv": {
+        "__class__": "ConnectedValue"
+      },
       "hpo_annotations": {
         "__class__": "ConnectedValue"
       },
@@ -1240,9 +1306,21 @@
       "hpo_terms": {
         "__class__": "ConnectedValue"
       },
+      "mane": {
+        "__class__": "ConnectedValue"
+      },
+      "mave": {
+        "__class__": "ConnectedValue"
+      },
       "max_af": "0.01",
       "max_candidates": "60",
       "min_ref_depth": "15",
+      "mito_json": {
+        "__class__": "ConnectedValue"
+      },
+      "mito_tsv": {
+        "__class__": "ConnectedValue"
+      },
       "mother_bam": {
         "__class__": "ConnectedValue"
       },
@@ -1268,11 +1346,17 @@
       "target_coverage": {
         "__class__": "ConnectedValue"
       },
+      "uniprot_features": {
+        "__class__": "ConnectedValue"
+      },
+      "vcep_rules": {
+        "__class__": "ConnectedValue"
+      },
       "vcf": {
         "__class__": "ConnectedValue"
       }
     },
-    "tool_version": "0.10.0+galaxy0"
+    "tool_version": "0.11.0+galaxy0"
   },
   "WES tertiary analysis from VCF (v2)/clinvar_annotation": {
     "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
@@ -1386,7 +1470,7 @@
             "__class__": "ConnectedValue"
           }
         },
-        "columns": "AM_score",
+        "columns": "INFO",
         "mark_sites": "",
         "min_overlap": "",
         "set_id": ""

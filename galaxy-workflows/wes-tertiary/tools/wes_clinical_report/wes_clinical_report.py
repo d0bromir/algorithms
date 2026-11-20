@@ -365,7 +365,7 @@ BP4_RANK = {"BP4_Supporting": 1, "BP4_Moderate": 2, "BP4_Strong": 3}
 # How the two calibrated missense predictors are combined (one predictor per variant, ClinGen SVI):
 #   "alphamissense": AlphaMissense only (report <= 0.10); "revel": REVEL, AlphaMissense where REVEL has no score;
 #   "concordant": both must point the same way and the weaker strength is used (one score alone counts as itself).
-MISSENSE_POLICY = "concordant"
+MISSENSE_POLICY = "revel"  # chosen on the tuning half (README section 7)
 
 
 def am_code(score):
@@ -855,6 +855,11 @@ def mave_text(v):
 VCEP = collections.defaultdict(list)  # gene -> specifications; set by build() from --vcep-rules
 EREPO = {}  # genomic HGVS -> [expert classification]; set by build() from --erepo
 VCEP_NOTES = {}  # (variant key, gene) -> what the panel's rules changed (filled by acmg_evidence)
+# Codes whose strength the panel's caps do not reduce (they are still removed where the panel does not use them at
+# all). Chosen on the tuning half of the ClinVar benchmark (README section 7): many specifications predate the ClinGen
+# calibration of computational predictors (Pejaver et al. 2022) and allow PP3/BP4 only at Supporting, and define PM1
+# by their own domains at Moderate; applying those caps lost 4 points of pathogenic recall for 0.4 of benign.
+VCEP_KEEP_STRENGTH = {"PP3", "BP4", "PM1"}  # PM1 here is the report's own ClinVar-hotspot PM1_Supporting
 STRENGTH_OF = {"supporting": "Supporting", "moderate": "Moderate", "strong": "Strong", "verystrong": "Very Strong"}
 STRENGTH_ORDER = ["Supporting", "Moderate", "Strong", "Very Strong"]
 SUFFIX_OF = {"Supporting": "Supporting", "Moderate": "Moderate", "Strong": "Strong", "Very Strong": "VeryStrong"}
@@ -959,7 +964,7 @@ def vcep_adjust(gene, codes, p, ba1_exception=False):
             final.append(c)  # code not covered by the specification
         elif not allowed:
             notes.append(f"{c} not used for {gene}")
-        elif st in allowed or st == "Stand Alone":
+        elif st in allowed or st == "Stand Alone" or base in VCEP_KEEP_STRENGTH:
             final.append(c)
         else:
             lower = [s for s in STRENGTH_ORDER[:STRENGTH_ORDER.index(st)] if s in allowed] if st in STRENGTH_ORDER else []
