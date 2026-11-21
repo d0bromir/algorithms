@@ -23,6 +23,8 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
+TAB = "\t"
+
 
 def read_vcf(path):
     head, recs = [], []
@@ -113,29 +115,34 @@ def main():
                         "--carrier-genes", a.carrier_genes, "--html", os.path.join(d, "couple.html"),
                         "--tsv", os.path.join(d, "couple.tsv"), "--a-sex", "female", "--b-sex", "male"],
                        check=True, capture_output=True)
-        found = {r["gene"] for r in csv.DictReader(open(os.path.join(d, "couple.tsv")), delimiter="\t")
-                 if r["category"] == "both_carriers"}
+        cats = collections.defaultdict(set)
+        for r in csv.DictReader(open(os.path.join(d, "couple.tsv")), delimiter=TAB):
+            cats[r["category"]].add(r["gene"])
         rep = {}
         for p in "AB":
-            rows = list(csv.DictReader(open(os.path.join(d, f"{p}.tsv")), delimiter="\t"))
+            rows = list(csv.DictReader(open(os.path.join(d, f"{p}.tsv")), delimiter=TAB))
             rep[p] = {r["gene"] for r in rows if r.get("pos")}
-        return i, gs, found, rep
+        return i, gs, cats, rep
 
     with ThreadPoolExecutor(a.jobs) as ex:
         res = list(ex.map(lambda x: run(*x), trials))
-    n = hit = 0
+    n = hit = conf = 0
     miss = collections.Counter()
-    extra_found = 0
-    for i, gs, found, rep in res:
+    extra = extra_conf = 0
+    for i, gs, cats, rep in res:
         for g in gs:
             n += 1
-            if g in found:
+            if g in cats["both_carriers"]:
                 hit += 1
+            elif g in cats["both_carriers_confirm"]:
+                conf += 1
             else:
                 miss["A not listed" if g not in rep["A"] else ("B not listed" if g not in rep["B"] else "listed, not P/LP")] += 1
-        extra_found += len(found - set(gs))
-    print(f"mode {a.mode}: {hit}/{n} spiked couple genes found ({100 * hit / n:.1f} %); missed: {dict(miss)}; "
-          f"other both-carrier genes (from the real exomes): {extra_found} over {len(res)} trials")
+        extra += len(cats["both_carriers"] - set(gs))
+        extra_conf += len(cats["both_carriers_confirm"] - set(gs))
+    print(f"mode {a.mode}: {hit}/{n} spiked couple genes found ({100 * hit / n:.1f} %), {conf} more to confirm "
+          f"({100 * (hit + conf) / n:.1f} % in all); missed: {dict(miss)}; other couple genes from the real exomes: "
+          f"{extra} found, {extra_conf} to confirm, over {len(res)} trials")
 
 
 if __name__ == "__main__":

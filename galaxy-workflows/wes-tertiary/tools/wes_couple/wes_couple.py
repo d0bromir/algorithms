@@ -159,6 +159,14 @@ def main(argv=None):
         if "AR" in moi:
             if g in A and g in B:
                 two = any(len(P[p][g]) > 1 or P[p][g][0]["zyg"] == "hom" for p in "AB")
+                same = {x["key"] for x in A[g]} & {x["key"] for x in B[g]}
+                rare_same = [k for k in same if (fnum(next(x["gnomad"] for x in A[g] if x["key"] == k)) or 0) < 1e-4]
+                if rare_same:
+                    for p in "AB":
+                        for x in P[p][g]:
+                            if x["key"] in rare_same:
+                                x["evidence"] += ("; CHECK: the same allele, absent or < 0.01 % in gnomAD, in both "
+                                                  "partners: a recurrent artefact of the assay, or relatedness")
                 couple.append((g, "1 in 2" if two else "1 in 4"))
             else:
                 p = "A" if g in A else "B"
@@ -167,6 +175,13 @@ def main(argv=None):
                 resid = (cf or 0) * a.miss
                 single.append((g, p, cfo, cf, gr["max_group"], resid))
     single.sort(key=lambda x: -x[5])
+
+    # a couple risk resting on a low-confidence call or on the identical rare allele in both partners is shown
+    # separately: confirm it before counselling
+    def doubtful(g):
+        return any(("CONFIRM" in x["evidence"] or "CHECK" in x["evidence"]) for p in "AB" for x in P[p].get(g, []))
+    confirm = [c for c in couple if doubtful(c[0])]
+    couple = [c for c in couple if not doubtful(c[0])]
     today = datetime.date.today().isoformat()
     out = [f"<!doctype html><html><head><meta charset='utf-8'><title>Couple carrier screening: {esc(name['A'])} and "
            f"{esc(name['B'])}</title><style>body{{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;"
@@ -179,7 +194,9 @@ def main(argv=None):
            f"{esc(name['B'])} ({esc(sex['B'] or 'sex unknown')}) &middot; {today} &middot; wes_couple {VERSION}</p>"]
     risky = couple + [x for x in xl if sex[x[1]] == "female"]
     out.append(f"<div class='box{' alert' if risky else ''}'><b>{len(couple)}</b> autosomal recessive gene(s) where both "
-               f"partners carry a pathogenic allele; <b>{len([x for x in xl if sex[x[1]] == 'female'])}</b> X-linked "
+               f"partners carry a pathogenic allele"
+               + (f" (and {len(confirm)} more to confirm first: a low-confidence call or the same rare allele in both)"
+                  if confirm else "") + f"; <b>{len([x for x in xl if sex[x[1]] == 'female'])}</b> X-linked "
                f"gene(s) carried by the female partner; {len(single)} gene(s) carried by one partner only.</div>")
 
     def alle(p, g):
@@ -194,6 +211,16 @@ def main(argv=None):
     out.append("<table><tr><th>Gene, condition</th><th>" + esc(name["A"]) + "</th><th>" + esc(name["B"])
                + "</th><th>Risk of an affected child</th><th>Treatable</th></tr>" + "".join(rows) + "</table>"
                if rows else "<p class='small'>None.</p>")
+    if confirm:
+        out.append("<h3>To confirm before counselling</h3><p class='small'>One allele is a low-confidence call "
+                   "(paralogous gene, low allele fraction, repeat) or both partners carry the same allele that is absent "
+                   "or very rare in gnomAD, the signature of a recurrent artefact of the assay. Confirm it by an "
+                   "orthogonal method first.</p>")
+        out.append("<table><tr><th>Gene, condition</th><th>" + esc(name["A"]) + "</th><th>" + esc(name["B"])
+                   + "</th><th>Risk if confirmed</th><th>Treatable</th></tr>" + "".join(
+                       f"<tr><td><b>{esc(g)}</b><br><span class='small'>{esc(genes[g]['conditions'])}</span></td><td>"
+                       f"{alle('A', g)}</td><td>{alle('B', g)}</td><td>{risk} per pregnancy</td><td>"
+                       f"{esc(treatable(genes[g])) or '—'}</td></tr>" for g, risk in confirm) + "</table>")
     out.append("<h2>2. X-linked</h2>")
     rows = []
     for g, p in xl:
@@ -238,6 +265,9 @@ def main(argv=None):
         for g, risk in couple:
             f.write("\t".join(["both_carriers", g, "A+B", " | ".join(x["name"] for p in "AB" for x in P[p][g]), risk, "",
                                "", treatable(genes[g]), genes[g]["conditions"]]) + "\n")
+        for g, risk in confirm:
+            f.write("\t".join(["both_carriers_confirm", g, "A+B", " | ".join(x["name"] for p in "AB" for x in P[p][g]),
+                               risk, "", "", treatable(genes[g]), genes[g]["conditions"]]) + "\n")
         for g, p in xl:
             f.write("\t".join(["x_linked", g, p, " | ".join(x["name"] for x in P[p][g]),
                                "1 in 2 sons" if sex[p] == "female" else "daughters carriers", "", "",
@@ -245,7 +275,7 @@ def main(argv=None):
         for g, p, cfo, cf, grp, resid in single:
             f.write("\t".join(["one_carrier", g, p, " | ".join(x["name"] for x in P[p][g]), "", f"{cf or 0:.3g}",
                                f"{resid:.3g}", treatable(genes[g]), genes[g]["conditions"]]) + "\n")
-    print(f"{len(couple)} shared recessive genes, {len(xl)} X-linked, {len(single)} single-carrier genes", file=sys.stderr)
+    print(f"{len(couple)} shared recessive genes ({len(confirm)} more to confirm), {len(xl)} X-linked, {len(single)} single-carrier genes", file=sys.stderr)
 
 
 if __name__ == "__main__":

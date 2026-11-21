@@ -44,3 +44,22 @@ def test_sex_override_and_residual():
     by = {(r["category"], r["gene"]): r for r in rows}
     assert by[("x_linked", "DMD")]["risk"] == "daughters carriers"
     assert abs(float(by[("one_carrier", "GJB2")]["residual"]) - 0.04) < 1e-9, "0.2 carrier frequency x 0.2 missed"
+
+
+def test_identical_rare_allele_flag(tmp_path=None):
+    d = tempfile.mkdtemp()
+    b2 = os.path.join(d, "B2.tsv")
+    with open(os.path.join(DATA, "partnerB.tsv")) as f, open(b2, "w", newline="\n") as o:
+        for line in f:
+            o.write(line)
+    with open(os.path.join(DATA, "partnerA.tsv")) as f:
+        cftr = [l for l in f if "\tCFTR\t" in l][0]
+    with open(b2, "a", newline="\n") as o:
+        o.write(cftr.replace("ANNA", "BEN").replace("practice guideline", "").replace("\t\t\t\t", "\t\t\t\t", 1))
+    h, t = os.path.join(d, "c.html"), os.path.join(d, "c.tsv")
+    couple.main(["--a", os.path.join(DATA, "partnerA.tsv"), "--b", b2, "--carrier-genes",
+                 os.path.join(DATA, "carrier_genes.tsv"), "--html", h, "--tsv", t])
+    html = open(h).read()
+    assert "the same allele, absent or &lt; 0.01 % in gnomAD, in both partners" in html
+    rows = list(csv.DictReader(open(t), delimiter="\t"))
+    assert [r["category"] for r in rows if r["gene"] == "CFTR"] == ["both_carriers_confirm"]

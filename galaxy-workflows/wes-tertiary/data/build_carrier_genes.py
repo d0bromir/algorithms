@@ -60,7 +60,7 @@ def main(gd_path, act_path, out_path):
         t = line.rstrip("\n").split("\t")
         if t[0] == "gene" or len(t) < 6:
             continue
-        valid = (t[1] == "Orphanet" and t[5] == "assessed" and "germline" in t[7]) or \
+        valid = (t[1] == "Orphanet" and t[5] == "assessed" and t[7].startswith("Disease-causing germline")) or \
             t[5] in ("definitive", "strong", "moderate")
         mois = t[4].split(",")
         if not valid or (t[1] == "Orphanet" and len(mois) > 1):
