@@ -1,0 +1,6 @@
+sample	category	gene	chrom	pos	ref	alt	genotype	depth	alt_fraction	hgvs_c	hgvs_p	effect	gnomad_af	gnomad_grpmax_af	gnomad_faf95	gnomad_nhomalt	alphamissense	spliceai	clinvar	clinvar_review	clinvar_condition	qc_flags	confidence	note	acmg_class	acmg_points	acmg_codes	transcript	hgvs_refseq	hgvs_g
+BEN	report_meta	sample																					high	BEN						
+BEN	report_meta	sex																					high	male						
+BEN	carrier	CFTR	7	117530975	G	A	0/1				p.Gly542*								Pathogenic				high							
+BEN	cnv_high_confidence	PAH,OTHER	12	102860000			DEL copy number 1																high							
+BEN	carrier	GJB2	13	20189500	G	A	0/1				p.Val37Ile								Pathogenic/Likely_pathogenic|risk_factor				high							

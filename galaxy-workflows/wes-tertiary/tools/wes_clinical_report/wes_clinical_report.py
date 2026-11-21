@@ -39,7 +39,7 @@ import statistics
 import subprocess
 import sys
 
-VERSION = "0.12.0"
+VERSION = "0.13.0"
 
 # --------------------------------------------------------------------------------------------- rules
 # ACMG secondary findings v3.3 (ACMG policy statement, Genet Med 2025;27:101454): the 81 genes of v3.2 (Miller et al.,
@@ -613,6 +613,10 @@ def apply_main_annotation(v):
     """Show each variant on its gene's principal transcript (MANE Select where known), not on SnpEff's first one."""
     if not v.anns:
         return
+    if MANE and not any(mane_of(x) for x in v.anns if x[3] == v.gene):
+        on_mane = [x for x in v.anns if mane_of(x)]
+        if on_mane:  # SnpEff listed an overlapping gene without a MANE transcript (often a new Ensembl lncRNA) first
+            v.gene = on_mane[0][3]
     a = main_ann(v, v.gene) or v.anns[0]
     v.effect, v.impact, v.feature, v.hgvs_c, v.hgvs_p = a[1], a[2], a[6], a[9], a[10]
     v.mane = (mane_of(a) or {}).get("status", "")
@@ -4675,7 +4679,7 @@ def build(args):
     R.table(["Input", "File", "Size", "SHA-256"],
             [[esc(k), esc(name), f"{size:,}", f"<code>{esc(h[:16])}</code>" if h else "not hashed"]
              for k, name, size, h in prov])
-    R.meta = {"wes_clinical_report": VERSION, "date": today, "sample": sample, "fingerprint": fingerprint}
+    R.meta = {"wes_clinical_report": VERSION, "date": today, "sample": sample, "fingerprint": fingerprint, "sex": sex}
     R.meta.update(knowledge_releases(args, args.vcf))
     if args.previous_tsv:
         prev_meta, prev_rows = load_previous(args.previous_tsv)
