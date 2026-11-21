@@ -1,6 +1,6 @@
 class: GalaxyWorkflow
 label: WES tertiary analysis from VCF (v2)
-release: "0.15"
+release: "0.16"
 license: MIT
 tags:
   - WES
@@ -374,6 +374,14 @@ inputs:
       The summary (JSON) of the Y-chromosome haplogroup tool (wes_yhaplo) on the sample's reads: shown with the genetic
       sex (paternal lineage), with a warning when the Y result and the sex disagree.
     position: {left: 0, top: 5640}
+  "KIR genes (wes_kir summary)":
+    type: data
+    format: [json]
+    optional: true
+    doc: >-
+      The summary (JSON) of the KIR tool (wes_kir) on the sample's reads: KIR gene content, A/B genotype, B-content
+      group and KIR-HLA ligand pairs for the report.
+    position: {left: 0, top: 5760}
 
 outputs:
   annotated_vcf:
@@ -773,7 +781,7 @@ steps:
       Human-readable clinical interpretation report and findings table (local tool tools/wes_clinical_report;
       install it on the Galaxy server, see README).
     tool_id: wes_clinical_report
-    tool_version: 0.15.0+galaxy0
+    tool_version: 0.16.0+galaxy0
     position: {left: 2380, top: 300}
     in:
       vcf: functional_annotation/snpeff_output
@@ -817,6 +825,7 @@ steps:
       pext: "Exon expression, pext (runs)"
       hla: "HLA types (wes_hla summary)"
       yhaplo: "Y haplogroup (wes_yhaplo summary)"
+      kir: "KIR genes (wes_kir summary)"
     state:
       max_af: 0.01
       min_ref_depth: 15

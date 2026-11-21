@@ -1,6 +1,6 @@
 class: GalaxyWorkflow
 label: WES tertiary analysis from FASTQ (v1)
-release: "0.15"
+release: "0.16"
 license: MIT
 tags:
   - WES
@@ -334,6 +334,15 @@ inputs:
       install script's data stage downloads it): HLA typing of the sample's reads with T1K. Without it the HLA genes
       are not typed.
     position: {left: 0, top: 5500}
+  "KIR alleles (IPD-KIR kir.dat)":
+    type: data
+    format: [txt]
+    optional: true
+    doc: >-
+      kir.dat of an IPD-KIR release (https://ftp.ebi.ac.uk/pub/databases/ipd/kir/, CC BY-ND 4.0; the install script's
+      data stage downloads it): KIR gene content of the sample's reads with T1K. Without it the KIR genes are not
+      typed.
+    position: {left: 0, top: 5620}
 
 outputs:
   multiqc_report:
@@ -360,6 +369,10 @@ outputs:
     outputSource: hla_typing/summary
   yhaplo_summary:
     outputSource: y_haplogroup/summary
+  kir_genes:
+    outputSource: kir_typing/genes
+  kir_summary:
+    outputSource: kir_typing/summary
   yhaplo_lineage:
     outputSource: y_haplogroup/lineage
   cnv_calls:
@@ -698,7 +711,7 @@ steps:
       HLA class I and II alleles from the reads of the HLA genes and the unmapped reads with T1K (local tool
       tools/wes_hla): CPIC pharmacogenomic HLA alleles, HLA disease associations, and PharmCAT outside calls.
     tool_id: wes_hla
-    tool_version: 0.1.0+galaxy0
+    tool_version: 0.2.0+galaxy0
     position: {left: 1340, top: 1060}
     in:
       bam: mark_duplicates/outFile
@@ -709,6 +722,24 @@ steps:
       types: {rename: "HLA types"}
       summary: {rename: "HLA summary"}
       outside_calls: {rename: "HLA outside calls (PharmCAT)"}
+
+  kir_typing:
+    doc: >-
+      KIR gene content, alleles, A/B genotype, B-content group and KIR-HLA ligand pairs from the reads of the KIR
+      region and the unmapped reads with T1K (local tool tools/wes_kir).
+    tool_id: wes_kir
+    tool_version: 0.1.0+galaxy0
+    position: {left: 1340, top: 1540}
+    in:
+      bam: mark_duplicates/outFile
+      kir_dat: "KIR alleles (IPD-KIR kir.dat)"
+      hla: hla_typing/summary
+    state:
+      min_quality: 0
+      min_abundance: 0.1
+    out:
+      genes: {rename: "KIR genes"}
+      summary: {rename: "KIR summary"}
 
   y_haplogroup:
     doc: >-
@@ -782,6 +813,7 @@ steps:
       "HLA types (wes_hla summary)": hla_typing/summary
       "HLA outside calls (PharmCAT TSV)": hla_typing/outside_calls
       "Y haplogroup (wes_yhaplo summary)": y_haplogroup/summary
+      "KIR genes (wes_kir summary)": kir_typing/summary
 
   multiqc:
     doc: One QC report for all samples.

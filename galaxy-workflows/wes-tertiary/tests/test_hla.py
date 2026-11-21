@@ -26,12 +26,12 @@ def test_names_and_order():
 def test_ars_sequences_and_grouping():
     d = tempfile.mkdtemp()
     fa = os.path.join(d, "ref.fa")
-    # exon 2 = positions 4-7 (0-based, inclusive end as in t1k-build.pl headers): 02:01 and 02:198 share it
+    # exon 2 = positions 5-8 (1-based, inclusive end as in t1k-build.pl headers): 02:01 and 02:198 share it
     with open(fa, "w") as f:
-        f.write(">HLA-DQB1*02:01:01:01 3 0 3 4 7 8 11\nAAAACCCCGGGG\n"
-                ">HLA-DQB1*02:198 3 0 3 4 7 8 11\nTTTTCCCCGGGG\n"
-                ">HLA-DQB1*02:163N 3 0 3 4 7 8 11\nAAAACCCCTTTT\n"
-                ">HLA-DQB1*05:01:01:01 3 0 3 4 7 8 11\nAAAAGGGGGGGG\n")
+        f.write(">HLA-DQB1*02:01:01:01 3 1 4 5 8 9 12\nAAAACCCCGGGG\n"
+                ">HLA-DQB1*02:198 3 1 4 5 8 9 12\nTTTTCCCCGGGG\n"
+                ">HLA-DQB1*02:163N 3 1 4 5 8 9 12\nAAAACCCCTTTT\n"
+                ">HLA-DQB1*05:01:01:01 3 1 4 5 8 9 12\nAAAAGGGGGGGG\n")
     ars = hla.ars_sequences(fa, ["HLA-DQB1*02:01:01", "HLA-DQB1*02:198", "HLA-DQB1*02:163N", "HLA-DQB1*05:01:01"])
     assert ars["HLA-DQB1*02:01:01"] == ars["HLA-DQB1*02:198"] == "CCCC" != ars["HLA-DQB1*05:01:01"]
     call1, cands, groups, eq = hla.resolve("HLA-DQB1*02:163N,HLA-DQB1*02:198,HLA-DQB1*02:01:01", ars)
@@ -105,3 +105,27 @@ def test_dr_haplotypes_and_celiac_from_dqb1():
     calls["HLA-DQB1"]["a2"] = "HLA-DQB1*03:02:01"
     a = {x["condition"]: x for x in hla.associations(hla.genotypes(calls, 20))}
     assert a["celiac disease"]["status"] == "not determined", "DQB1*03:02 with an uncertain DQA1"
+
+
+def exon2_with(res76_83):
+    """A 270-nt synthetic class I exon 2 whose residues 76-83 are the given amino acids (one codon each)."""
+    codon = {"V": "GTG", "E": "GAG", "N": "AAC", "S": "AGC", "L": "CTG", "R": "CGC", "I": "ATC", "T": "ACC",
+             "A": "GCC", "G": "GGC", "K": "AAG", "D": "GAC"}
+    return "GCC" * 75 + "".join(codon[a] for a in res76_83) + "GCC" * 7
+
+
+def test_kir_ligands():
+    assert hla.residues(exon2_with("ENLRIALR"), 76, 83) == "ENLRIALR"
+    assert hla.kir_ligand("HLA-B", exon2_with("ENLRIALR")) == "Bw4-80I", "B*57:01-like"
+    assert hla.kir_ligand("HLA-B", exon2_with("EDLRTLLR")) == "Bw4-80T", "B*27:05-like"
+    assert hla.kir_ligand("HLA-B", exon2_with("ESLRNLRG")) == "Bw6", "B*08:01-like: Glu76 Asn80, no C1"
+    assert hla.kir_ligand("HLA-B", exon2_with("VSLRNLRG")) == "C1", "B*46:01-like: Val76 Asn80"
+    assert hla.kir_ligand("HLA-C", exon2_with("VSLRNLRG")) == "C1"
+    assert hla.kir_ligand("HLA-C", exon2_with("VNLRKLRG")) == "C2"
+    assert hla.kir_ligand("HLA-A", exon2_with("ENLRIALR")) == "Bw4-80I", "A*24:02-like"
+    assert hla.kir_ligand("HLA-A", exon2_with("EDLRTLRG")) == ""
+    assert hla.kir_ligand("HLA-DRB1", exon2_with("ENLRIALR")) == "" and hla.kir_ligand("HLA-B", "") == ""
+    rows = hla.genotypes({"HLA-C": call(2, "HLA-C*06:02:01", 50, "HLA-C*07:01:01", 50)}, 20,
+                         {"HLA-C*06:02:01": exon2_with("VNLRKLRG") + "|", "HLA-C*07:01:01": exon2_with("VSLRNLRG") + "|"})
+    c = {r["gene"]: r for r in rows}["HLA-C"]
+    assert (c["allele1"], c["kir_ligand1"], c["allele2"], c["kir_ligand2"]) == ("C*06:02", "C2", "C*07:01", "C1")

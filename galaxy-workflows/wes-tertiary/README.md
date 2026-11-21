@@ -57,7 +57,7 @@ licences and the release that added it:
 | `system` | Installs bcftools, bedtools, samtools, tabix, curl, gawk and python3-venv with apt (`--conda`: into a conda environment instead) |
 | `venv` | Creates a Python environment with Ephemeris and BioBlend (`$VENV`, default `~/wes-venv`) |
 | `tools` | Installs the [`tools.yml`](tools.yml) repositories with Ephemeris; already-installed repositories are skipped |
-| `local-tools` | Copies the eight local tools to the local tool directory and checks `local_tool_conf.xml`, `galaxy.yml` and the HTML allowlist. Then Galaxy installs the tools' Conda dependencies |
+| `local-tools` | Copies the nine local tools to the local tool directory and checks `local_tool_conf.xml`, `galaxy.yml` and the HTML allowlist. Then Galaxy installs the tools' Conda dependencies |
 | `workflows` | Imports both `.ga` files; with `--update`, adds a new version to workflows already present |
 | `data` | Downloads and builds the section 2 files into `--data-dir`, with a `MANIFEST.tsv` (source, date, size) |
 | `upload` | Uploads the `MANIFEST.tsv` files into a new history and runs *SnpEff download* there |
@@ -176,6 +176,8 @@ and VCFs. A naming mismatch does not raise an error. ClinVar/gnomAD annotations 
 | **Exon expression, pext (runs)** (optional) | Built with `data/build_gnomad_sites.py pext` from gnomAD's GTEx v10 base-level pext (198 MB streamed, 33 MB out, CC0) | The share of the gene's expression that includes the base (mean over tissues and the highest tissue) next to loss-of-function variants. Not scored (`PEXT_LOW = None`; see section 7). |
 | **Mitochondrial frequencies (gnomAD chrM VCF)** (FASTQ workflow, optional) | `gnomad.genomes.v3.1.sites.chrM.vcf.bgz` (5 MB, CC0) with `chrM` renamed to the reference's name (`install.sh data` does it) | mtDNA frequencies, haplogroup-defining flags and tRNA predictions for `wes_mito`. |
 | **HLA alleles (IPD-IMGT/HLA hla.dat)** (FASTQ workflow, optional) | [`hla.dat`](https://ftp.ebi.ac.uk/pub/databases/ipd/imgt/hla/) of the current IPD-IMGT/HLA release (350 MB, CC BY-ND 4.0; `install.sh data` downloads it and records the release) | HLA typing of the reads with T1K (`wes_hla`, section 4c). Without it the HLA genes are not typed. |
+| **KIR alleles (IPD-KIR kir.dat)** (FASTQ workflow, optional) | [`kir.dat`](https://ftp.ebi.ac.uk/pub/databases/ipd/kir/) of the current IPD-KIR release (37 MB, CC BY-ND 4.0; `install.sh data` downloads it and records the release) | KIR gene content of the reads with T1K (`wes_kir`, section 4e). Without it the KIR genes are not typed. |
+| **KIR genes (wes_kir summary)** (VCF workflow, optional) | The *KIR summary* of `wes_kir` on the sample's reads (the FASTQ workflow connects it) | KIR genes, A/B genotype, B content and KIR-HLA ligand pairs in the report. |
 | **HLA types (wes_hla summary)**, **HLA outside calls (PharmCAT TSV)** (VCF workflow, optional) | The *HLA summary* and *HLA outside calls (PharmCAT)* of `wes_hla` on the sample's reads (the FASTQ workflow connects them) | HLA alleles and associations in the report; HLA-A/B drug recommendations in PharmCAT. |
 
 The gnomAD file is built once with [`data/build_gnomad_extract.sh`](data/build_gnomad_extract.sh) on any Linux
@@ -316,6 +318,7 @@ The tables show the genotype columns of the first sample (`GEN[0]`); change them
 | `target_mean_depth` | ✔ | | Mean depth per target (mosdepth regions): the input of the CNV calls; collect these as the laboratory's CNV reference panel |
 | `hla_types`, `hla_summary` | ✔ | | HLA class I and II alleles (two fields, quality, G-group equivalents), CPIC pharmacogenomic HLA alleles, HLA disease associations (section 4c) |
 | `mito_calls`, `mito_summary` | ✔ | | mtDNA variants and heteroplasmy; the summary also holds the **mtDNA haplogroup** (HaploGrep3, section 4d) |
+| `kir_genes`, `kir_summary` | ✔ | | **KIR genes**: presence, alleles (three digits), A/B genotype, centromeric/telomeric motifs, B-content group, KIR-HLA ligand pairs (section 4e) |
 | `yhaplo_summary`, `yhaplo_lineage` | ✔ | | **Y-chromosome haplogroup** (Yleaf: YFull and ISOGG names, markers, QC) and the derived nodes from the root (section 4d) |
 | `cnv_calls`, `cnv_targets`, `cnv_summary` | ✔ | | Copy-number calls (deletions, duplications with genes, confidence), per-target ratios (for plots and as a parent's input) and a JSON summary (noise, chromosome dosage, sex chromosomes) |
 
@@ -348,6 +351,7 @@ laboratory.
 | Runs of homozygosity and uniparental disomy | Total length of runs ≥ 1 Mb (consanguinity), runs concentrated on one chromosome, homozygous findings inside runs. With both parents: **uniparental disomy** (whole chromosome or segment, maternal or paternal, isodisomy or heterodisomy) from common SNVs where the proband lacks one parent's alleles, with the imprinting disorder (chromosomes 6, 7, 11, 14, 15, 16, 20), a CNV deletion that would explain it, and homozygous findings that only one parent carries. The **parent of origin** of a chromosome gain and of the X chromosomes in a sex-chromosome aneuploidy appears beside the chromosome dosage (section 4) |
 | Mitochondrial DNA (with the *Mitochondrial calls/summary* of `wes_mito`) | Homoplasmic (≥ 90 % of ≥ 5 reads) and heteroplasmic (≥ 10 % of ≥ 20 reads, ≥ 3 reads) mtDNA variants from the exome's off-target chrM reads: chrM coverage and the heteroplasmy detectable at the median depth; ClinVar pathogenic/likely pathogenic variants with their level; rare tRNA variants predicted pathogenic by MitoTIP or PON-mt-tRNA; gnomAD v3.1 homoplasmic/heteroplasmic frequencies; MT-RNR1 m.1555A>G, m.1494C>T, m.1095T>C for aminoglycosides (CPIC), with the read depth so that *not carried* is told apart from *not covered*; a mixture check (heteroplasmy at ≥ 3 common variants of other haplogroups: contamination or nuclear mitochondrial segments); with `wes_mito` 0.2 the haplogroup with its quality, coverage, the next best haplogroups, the expected variants not found and the private variants |
 | HLA (with the *HLA summary* of `wes_hla`), in the pharmacogenomics section | The two alleles of HLA-A, -B, -C, -DRB1, -DRB3/4/5, -DQA1, -DQB1, -DPA1, -DPB1 with confidence; the CPIC pharmacogenomic alleles HLA-B\*57:01 (abacavir), HLA-B\*15:02 (carbamazepine, oxcarbazepine, phenytoin), HLA-A\*31:01 (carbamazepine), HLA-B\*58:01 (allopurinol); disease associations HLA-B\*27, HLA-B\*51, HLA-DQB1\*06:02 and the celiac-disease heterodimers DQ2.5/DQ2.2/DQ8 (their absence makes celiac disease very unlikely). With the *HLA outside calls*, PharmCAT adds the CPIC/DPWG/FDA recommendations for these drugs |
+| KIR (with the *KIR summary* of `wes_kir`), in section 8 | The KIR genes present and absent, alleles at three digits, the A/B genotype, centromeric/telomeric motifs and the B-content group (Cooley et al. 2010: Best / Better / Neutral, for unrelated-donor selection in acute myeloid leukaemia), and the KIR-HLA ligand pairs (KIR2DL1-C2, KIR2DL2/3-C1, KIR3DL1-Bw4, KIR2DS1-C2, KIR3DS1-Bw4-80I) with the ligand groups that `wes_hla` 0.2 reads from each HLA-A/B/C allele's exon 2 |
 | Changes since the previous report | With the findings TSV of an earlier report of the same sample (*Previous report: findings (TSV)*): the results that are **new**, **changed** or **no longer reported**, matched by variant, by gene for gene-level results (pharmacogenomics, APOE) and by ≥ 50 % reciprocal overlap for CNVs and UPD. Each change shows what both reports said and the evidence that differs: category, ClinVar classification and review status, automated ACMG class, genotype, gnomAD frequency, QC flags, or a variant no longer called. Results and findings to review (diagnostic, secondary findings, de novo, UPD, pathogenic CNVs; candidates, carrier status, pharmacogenomics) come first, other listed variants after. The TSV records the report version and the HPO, GenCC, ClinGen and SnpEff releases (`report_meta` rows), shown beside the previous report's. A **same-person check**: if < 65 % of the previous report's listed variants have the same genotype in the current calls, the section warns that the previous report is probably of another sample |
 | Coverage | Per-gene coding coverage at 10/20×; clinically relevant genes below 95 % at 20× are listed, because a negative result there is not reliable |
 | Limits | Lists what an exome pipeline cannot detect (small CNVs, SVs, repeat expansions, mtDNA deletions, CYP2D6, HLA, pseudogene regions, mosaicism…) |
@@ -474,6 +478,31 @@ and one paternal line only, not a person's ancestry; the report uses them for sa
 | *Mitochondrial summary* (`haplogroup`) | Haplogroup, quality, confidence, covered positions, next best haplogroups, expected variants not found, private variants |
 | *Y haplogroup summary* (JSON) | Y/X read ratio, YFull haplogroup and markers, ISOGG name, informative markers, Yleaf QC scores, confidence, lineage |
 | *Y haplogroup lineage* | The derived nodes from the root to the call, with one marker each |
+
+## 4e. KIR genes
+
+The **KIR** tool (`tools/wes_kir`, in the FASTQ workflow) types the 17 killer-cell immunoglobulin-like receptor genes
+from the exome reads with T1K 1.0.10 (its `kir-wes` preset) against the IPD-KIR database. In each job it builds T1K's
+allele reference from `kir.dat` (about 2 s), takes the reads of the KIR region (chromosome 19, 54.6-55.0 Mb) and the
+unmapped reads, and assigns them to the alleles of all KIR genes. A KIR haplotype carries 4 to 14 genes and the
+reference genome only one haplotype, so the reads of the other genes map to their paralogues or stay unmapped.
+
+* **Gene content**: a gene is present when its best allele reaches the minimum T1K quality and an abundance of a
+  minimum fraction of the framework genes' mean (KIR3DL3, KIR3DP1, KIR2DL4, KIR3DL2, present on nearly every
+  haplotype); both cut-offs were set on half of a 1000 Genomes panel and checked on the other half (section 7).
+  Copy number is not determined; alleles are given at three digits (protein).
+* **Genotype**: AA (only the genes of the A haplotype) or Bx; centromeric (KIR2DL3 = A; KIR2DL2, KIR2DS2 = B) and
+  telomeric (KIR3DL1, KIR2DS4 = A; KIR3DS1, KIR2DS1 = B) motifs from the gene content; the **B-content group** of
+  Cooley et al. (Blood 2010): Best = Cen-B/B, Better = two or more B motifs, Neutral otherwise.
+* **KIR-HLA ligands**: with the HLA summary, the pairs of an inhibitory or activating KIR with its HLA ligand.
+  `wes_hla` 0.2.0 reads the ligand group of each HLA-A, -B and -C allele from its exon 2: HLA-C residue 80 (Asn = C1,
+  Lys = C2); HLA-A/B residues 82-83 (Leu-Arg = Bw4, with residue 80 Ile or Thr; Arg-Gly = Bw6); HLA-B\*46/B\*73
+  (Val76, Asn80) = C1. On 28 well-known alleles the rule gave the published group for all 28.
+
+| Output | Content |
+|---|---|
+| *KIR genes* | The 17 genes: present, alleles, T1K quality, abundance relative to the framework genes, note |
+| *KIR summary* (JSON) | The same, the genotype, motifs, B-content group and the KIR-HLA ligand pairs, for the report |
 
 ## 5. Filters and how to change them
 
@@ -1373,6 +1402,46 @@ D-MF618315), I1\* (NA12891); paternal consistency 2/2; the four women were not t
 and "Y haplogroup: not typed" with the genetic sex, the haplogroup details in the mitochondrial section, and a
 `haplogroup` row in the findings TSV.
 
+### KIR genes (wes_kir 0.1.0, wes_hla 0.2.0, report 0.16.0)
+
+`tests/kir_eval.py`; gene content (present/absent) of the 17 KIR genes.
+
+* **1000 Genomes exomes against their genomes**: the 104 males of the haplogroup panel; 100 also have a 30× genome
+  (NYGC). The reads of chr19:54.6-55.0 Mb and the chr19 alternative haplotypes (GRCh38DH carries KIR haplotypes as
+  alts) were fetched from both CRAMs. Truth: T1K (`kir-wgs` preset) on the genome, a gene present when its abundance
+  is ≥ 25 % of the framework genes' mean. The exome cut-offs were chosen on the even half (49 samples) by accuracy
+  over all gene calls: T1K quality added nothing (0 = any called allele) and the abundance cut-off is 10 % of the
+  framework genes. The same cut-offs were chosen with a truth threshold of 15 % or 35 %.
+* **GIAB IDT exomes** (the workflow's BWA-MEM alignments, the KIR region plus the unmapped reads): HG002 and HG005
+  against their HPRC assemblies annotated by SKIRT (Zenodo 8094803, CC BY 4.0), and trio consistency (each gene of
+  a child in a parent).
+
+| Panel | Gene calls correct | Sensitivity / specificity | Gene content identical | AA/Bx genotype | B-content group | Time per sample | Peak memory |
+|---|---|---|---|---|---|---|---|
+| 1000 Genomes, held-out half (51) | 864/867 (99.7 %) | 100 % / 98.9 % | 48/51 | 51/51 | 51/51 | 95 s¹ | 2.7 GB¹ |
+| 1000 Genomes, tuning half (49) | 830/833 (99.6 %) | 100 % / 98.9 % | 46/49 | 49/49 | 49/49 | | |
+| GIAB HG002, HG005 vs assemblies | 34/34 | 100 % / 100 % | 2/2 | 2/2 | 2/2 | 13 s | 1.0 GB |
+
+¹ The 1000 Genomes extracts include the full-length alternative haplotypes of the leukocyte receptor complex (about
+2.9 million reads); on a workflow BAM (Ensembl primary assembly) the tool took 13 s (median of 9) and 1.0 GB.
+
+The three wrong calls of the held-out half were KIR2DL5B (1) and KIR2DL5A (2) called present (paralogues that exome
+reads tell apart poorly); no present gene was missed. GIAB: HG002 Bx (Cen A/B, Tel B/B; KIR2DS2 without KIR2DL2, as
+in its assembly), HG005 AA, both 17/17 genes; trios consistent (HG002 12/12 genes in a parent, HG005 9/9, HG001
+16/16); HG005-HG007 all AA. With the earlier quality cut-off of 20, HG005's KIR2DS4 (quality 16) was missed.
+
+**HLA ligands**: the exon-2 rule of `wes_hla` 0.2.0 gave the published KIR ligand group for 28 of 28 well-known
+alleles (B\*57:01, B\*27:05, B\*44:02, B\*51:01, B\*13:02, B\*58:01, B\*38:01 Bw4; B\*08:01, B\*07:02, B\*35:01,
+B\*15:01 Bw6; B\*46:01 C1; ten HLA-C alleles C1/C2; A\*23/24/25/32 Bw4). `wes_hla` 0.2.0 also reads T1K's exon
+coordinates as 1-based (0.1.0 shifted the exons by one base, which split 202 G groups on intron differences); the
+GIAB HLA results did not change (51/54 two-field, 53/54 G group, 50/50 high-confidence calls, same Mendelian checks).
+
+**Galaxy**: on HG003 (16 slots) `wes_hla` 0.2.0 took 169 s and `wes_kir` 16 s: Bx, Cen A/B, Tel A/B (Better),
+with the pairs KIR2DL1-C2 (C\*06:02), KIR2DL2/3-C1 (C\*12:03), KIR3DL1-Bw4 (B\*13:02, B\*38:01). HG001 (C1/C1,
+Bw6/Bw6): KIR2DL1 and KIR3DL1 without their ligands. The VCF workflow 0.16 on HG001's calls with all knowledge
+inputs and the Galaxy outputs of `wes_hla` 0.2.0 and `wes_kir` ran 16/16 jobs ok (13 min); the report's section 8
+lists the KIR genes, genotype, motifs, B-content group and ligand pairs, and the findings TSV a `kir_genotype` row.
+
 ## 8. Scope and limitations
 
 Germline SNVs and short indels in the exome targets, and CNVs of several exons from read depth (section 7).
@@ -1392,8 +1461,9 @@ alt read among ≥ 15) is read as reference. UPD detection needs both parents; h
 ~30 Mb are usually missed, and a deletion of one parent's copy looks like isodisomy unless CNV calls are given. The comparison with a previous report sees only what that report listed: a variant called but not listed before shows as new without its earlier state, and the ClinVar release itself is not recorded in the annotated VCF. HLA typing from an exome resolves G groups
 (two-field alleles that differ in the antigen-recognition exons), not three- or four-field alleles, null alleles
 caused outside these exons, or new alleles; HLA-DQA1 was the least reliable gene in the GIAB exomes (section 7), and
-an HLA-B\*57:01 or HLA-B\*15:02 result should be confirmed by a clinical HLA test before a drug decision. KIR genes
-are not typed. Haplogroups from an exome are often less resolved than from a genome (the Y call in 63 of 104
+an HLA-B\*57:01 or HLA-B\*15:02 result should be confirmed by a clinical HLA test before a drug decision.
+KIR typing gives gene content, not copy number; KIR2DL5A and KIR2DL5B are the genes most often called present
+wrongly (paralogues), and three-digit KIR alleles were not validated. Haplogroups from an exome are often less resolved than from a genome (the Y call in 63 of 104
 1000 Genomes exomes, the mtDNA call in 13 of 99); with less than 40 % of the mtDNA covered the mtDNA haplogroup is low
 confidence and can be wrong (3 of 15 such samples). Haplogroups describe one maternal and one paternal line, not
 ancestry. The reports support expert review; they are not a diagnosis. This is a research workflow,

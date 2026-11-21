@@ -11,7 +11,9 @@
 3. Writes per classical gene the two alleles at two-field resolution (protein level, e.g. A*01:01), T1K's quality
    (0-60) and every equally good candidate; a call is "low" confidence below --min-quality or when the candidates
    differ at two fields.
-4. Lists the pharmacogenomic alleles of CPIC guidelines and the best-known disease associations (risk alleles, not
+4. Gives the KIR ligand group of each HLA-A, -B and -C allele from its exon 2 (C1/C2, Bw4-80I/80T, Bw6), for
+   the KIR tool (wes_kir).
+5. Lists the pharmacogenomic alleles of CPIC guidelines and the best-known disease associations (risk alleles, not
    diagnoses), and writes PharmCAT's outside-call file for HLA-A and HLA-B (only confident calls: PharmCAT then
    gives the CPIC/DPWG/FDA recommendations for abacavir, allopurinol, carbamazepine, oxcarbazepine, phenytoin).
 Standard library plus t1k-build.pl, run-t1k and samtools on the PATH.
@@ -26,7 +28,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 # GRCh38 gene positions (Ensembl 115 GTF, 1-based) used by T1K to extract the reads of each gene from a BAM.
 # Genes absent from the primary assembly (DRB3/DRB4 haplotypes, pseudogenes R/Y) get no position: T1K then uses
 # the unmapped reads only, as t1k-build.pl does.
@@ -138,7 +140,7 @@ def ars_sequences(seq_fa, names):
     """Antigen-recognition-site exons (class I exons 2+3, class II exon 2) of T1K's candidate alleles.
 
     T1K names candidates by three fields (HLA-DQB1*02:01:01); the first reference allele with that prefix stands for
-    it. The reference headers give the exon positions ('>allele n s1 e1 s2 e2 ...', t1k-build.pl)."""
+    it. The reference headers give the exon positions ('>allele n s1 e1 s2 e2 ...', 1-based, t1k-build.pl)."""
     want = set(names)
     out, cur, keep = {}, None, False
     for line in open(seq_fa):
@@ -157,7 +159,9 @@ def ars_sequences(seq_fa, names):
     ars = {}
     for name, (c, seq) in out.items():
         exons = (2, 3) if name.split("*")[0] in CLASS_I else (2,)
-        ars[name] = "|".join(seq[c[2 * (e - 1)]:c[2 * (e - 1) + 1] + 1] for e in exons if 2 * e <= len(c))
+        # header positions are 1-based and inclusive (0.1.0 read them as 0-based: one intron base instead of the
+        # exon's first, which split G groups on intron differences)
+        ars[name] = "|".join(seq[c[2 * (e - 1)] - 1:c[2 * (e - 1) + 1]] for e in exons if 2 * e <= len(c))
     return ars
 
 
@@ -190,6 +194,43 @@ def resolve(field, ars):
     return call, cands, len(groups), sorted(set(first) - {call}, key=allele_key)
 
 
+CODON = {a + b + c: aa for (a, b, c), aa in zip(
+    ((x, y, z) for x in "TCAG" for y in "TCAG" for z in "TCAG"),
+    "FFLLSSSSYY**CC*WLLLLPPPPHHQQRRRRIIIMTTTTNNKKSSRRVVVVAAAADDEEGGGG")}
+
+
+def residues(exon2, first, last):
+    """Mature-protein residues first..last (1-based) of a class I allele: exon 2 codes residues 1-90."""
+    nt = exon2[(first - 1) * 3:last * 3].upper()
+    return "".join(CODON.get(nt[i:i + 3], "X") for i in range(0, len(nt) - 2, 3)) if len(nt) == (last - first + 1) * 3         else ""
+
+
+def kir_ligand(gene, ars_seq):
+    """KIR ligand group of an HLA class I allele from its exon 2 (residues 76-83):
+    HLA-C residue 80 Asn = C1 (KIR2DL2/3), Lys = C2 (KIR2DL1, KIR2DS1); HLA-A/B Bw4 (residues 82-83 Leu-Arg) =
+    KIR3DL1 ligand, with residue 80 Ile (strong) or Thr; Bw6 (Arg-Gly) is no KIR3DL1 ligand."""
+    if not ars_seq or gene not in ("HLA-A", "HLA-B", "HLA-C"):
+        return ""
+    r = residues(ars_seq.split("|")[0], 76, 83)  # r[0] = residue 76, r[4] = residue 80
+    if len(r) != 8:
+        return ""
+    if gene == "HLA-C":
+        return {"N": "C1", "K": "C2"}.get(r[4], "")
+    if r[6:8] == "LR":
+        return "Bw4-80" + r[4] if r[4] in "IT" else "Bw4"
+    if gene == "HLA-B" and r[0] == "V" and r[4] == "N":
+        return "C1"  # HLA-B*46 and B*73 carry the C1 epitope (Val76, Asn80; other HLA-B have Glu76)
+    return "Bw6" if gene == "HLA-B" else ""
+
+
+def allele_ars(field, call, ars):
+    """ARS sequence of the called two-field allele among T1K's candidates."""
+    for n in (field or "").split(","):
+        if two_field(n) == call and n in ars:
+            return ars[n]
+    return ""
+
+
 def genotypes(calls, min_q, ars=None):
     ars = ars or {}
     out = []
@@ -210,6 +251,10 @@ def genotypes(calls, min_q, ars=None):
             a1, a2, c1, c2, q1, q2, g1, g2, e1, e2 = a2, a1, c2, c1, q2, q1, g2, g1, e2, e1
         row.update(allele1=a1, allele2=a2, quality1=q1, quality2=q2, candidates1=",".join(c1),
                    candidates2=",".join(c2))
+        if g in ("HLA-A", "HLA-B", "HLA-C"):
+            fields = c["a1"] + "," + c["a2"]
+            row["kir_ligand1"] = kir_ligand(g, allele_ars(fields, a1, ars))
+            row["kir_ligand2"] = kir_ligand(g, allele_ars(fields, a2, ars))
         notes = []
         if c["n"] == 1 and g in ("HLA-DRB3", "HLA-DRB4", "HLA-DRB5"):
             notes.append("one allele found: one copy, or two of the same (each DR haplotype carries at most one of "

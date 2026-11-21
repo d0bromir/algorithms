@@ -919,3 +919,14 @@ def test_gnomad_coverage_and_pext():
         assert "PVS1" not in next(r for r in rows if r["gene"] == "GENER")["acmg_codes"]
     finally:
         rep.PEXT_LOW = old
+
+
+def test_kir_section():
+    rows, html = run_report(["--kir", os.path.join(DATA, "kir_summary.json")])
+    sec = html.split("<h3>KIR genes</h3>")[1].split("<h2>")[0]
+    assert "IPD-KIR 2.15.0" in sec and "Genotype: <b>Bx</b>" in sec
+    assert "A/B / A/A" in sec and "<b>Neutral</b>" in sec, "KIR2DL2/2DS2 with KIR2DL3: Cen A/B; Tel A/A: score 1"
+    assert "pair present" in sec and "C*06:02" in sec and "B*57:01" in sec
+    assert ("kir_genotype", "KIR") in {(r["category"], r["gene"]) for r in rows}
+    _, html0 = run_report()
+    assert "Not typed: no KIR summary given" in html0

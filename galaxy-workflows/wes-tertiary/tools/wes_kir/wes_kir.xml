@@ -1,0 +1,96 @@
+<tool id="wes_kir" name="KIR genes" version="0.1.0+galaxy0" profile="23.0">
+    <description>gene content, alleles, A/B genotype and B content from exome reads with T1K</description>
+    <requirements>
+        <requirement type="package" version="1.0.10">t1k</requirement>
+        <requirement type="package" version="1.22">samtools</requirement>
+        <requirement type="package" version="3.12">python</requirement>
+    </requirements>
+    <version_command>python3 '$__tool_directory__/wes_kir.py' --help | head -1</version_command>
+    <command detect_errors="exit_code"><![CDATA[
+ln -s '$bam' input.bam &&
+ln -s '${bam.metadata.bam_index}' input.bam.bai &&
+python3 '$__tool_directory__/wes_kir.py'
+    --bam input.bam
+    #if $kir_dat:
+        --kir-dat '$kir_dat'
+    #end if
+    #if $hla:
+        --hla '$hla'
+    #end if
+    --sample '$bam.element_identifier'
+    --threads \${GALAXY_SLOTS:-4}
+    --min-quality $min_quality
+    --min-abundance $min_abundance
+    --tsv '$genes'
+    --json '$summary'
+    ]]></command>
+    <inputs>
+        <param name="bam" type="data" format="bam" label="Aligned reads (BAM)" help="Duplicate-marked reads of the sample, aligned to GRCh38 (19 or chr19), with the unmapped reads."/>
+        <param name="kir_dat" type="data" format="txt" optional="true" label="KIR alleles (IPD-KIR kir.dat)"
+               help="kir.dat of an IPD-KIR release (https://ftp.ebi.ac.uk/pub/databases/ipd/kir/, CC BY-ND 4.0). Without it nothing is typed."/>
+        <param name="hla" type="data" format="json" optional="true" label="HLA types (wes_hla summary)"
+               help="The summary of the HLA typing tool (wes_hla 0.2 or later): the KIR ligand groups of the HLA-A, -B and -C alleles (C1/C2, Bw4)."/>
+        <param name="min_quality" type="integer" value="0" min="0" max="60" label="Lowest T1K quality of a present gene" help="0: any allele T1K calls (the tuning showed no gain from a quality cut-off)."/>
+        <param name="min_abundance" type="float" value="0.10" min="0" max="1" label="Lowest abundance of a present gene, as a fraction of the framework genes' mean"/>
+    </inputs>
+    <outputs>
+        <data name="genes" format="tabular" label="${tool.name} on ${on_string}: genes"/>
+        <data name="summary" format="json" label="${tool.name} on ${on_string}: summary"/>
+    </outputs>
+    <tests>
+        <test expect_num_outputs="2">
+            <!-- HG003 (GIAB IDT exome) reads of 19:54.6-55.0 Mb; kir.dat reduced to the alleles HG003 carries plus
+                 others of each gene -->
+            <param name="bam" value="hg003_kir.bam" ftype="bam"/>
+            <param name="kir_dat" value="kir_small.dat" ftype="txt"/>
+            <output name="genes" ftype="tabular">
+                <assert_contents>
+                    <has_text_matching expression="KIR2DL1\tTrue\tKIR2DL1\*003"/>
+                    <has_text_matching expression="KIR2DS3\tFalse"/>
+                </assert_contents>
+            </output>
+            <output name="summary" ftype="json">
+                <assert_contents>
+                    <has_text text="&quot;genotype&quot;: &quot;Bx&quot;"/>
+                    <has_text text="&quot;database&quot;: &quot;2.15.0&quot;"/>
+                </assert_contents>
+            </output>
+        </test>
+        <test expect_num_outputs="2">
+            <param name="bam" value="hg003_kir.bam" ftype="bam"/>
+            <output name="summary" ftype="json">
+                <assert_contents>
+                    <has_text text="&quot;database&quot;: &quot;not given&quot;"/>
+                </assert_contents>
+            </output>
+        </test>
+    </tests>
+    <help><![CDATA[
+**What it does**
+
+Types the killer-cell immunoglobulin-like receptor (KIR) genes from the exome reads with
+T1K 1.0.10 (Song et al., Genome Research 2023; MIT) against the IPD-KIR database. In each job it builds T1K's allele
+reference from ``kir.dat`` (about 2 s), takes the reads of the KIR region (chromosome 19, 54.6-55.0 Mb) and the
+unmapped reads, and runs T1K with its exome preset. A KIR haplotype has 4 to 14 genes and the reference genome only
+one haplotype, so reads of the other genes map to their paralogues or not at all; T1K assigns them to the alleles of
+all 17 KIR genes.
+
+**Gene content.** A gene is present when T1K calls an allele of it with an abundance of at least 10 % of the
+framework genes' mean (KIR3DL3, KIR3DP1, KIR2DL4, KIR3DL2, present on nearly every haplotype); both cut-offs were
+set on half of a 1000 Genomes panel and checked on the other half against the same people's genomes (README section
+7). Alleles are given at three digits (protein level); copy number is not determined.
+
+**From the gene content**: the A/B genotype (AA: only genes of the A haplotype), the centromeric and telomeric
+motifs, and the B-content group used to choose unrelated donors for patients with acute myeloid leukaemia (Cooley et
+al., Blood 2010: Best = Cen-B/B; Better = two or more B motifs; Neutral otherwise). With the HLA summary of wes_hla:
+the KIR-HLA ligand pairs (KIR2DL1-C2, KIR2DL2/3-C1, KIR3DL1-Bw4, KIR2DS1-C2, KIR3DS1-Bw4-80I).
+
+**Outputs**: a table of the 17 genes (present, alleles, quality, abundance relative to the framework genes) and a
+JSON summary for the clinical report.
+    ]]></help>
+    <citations>
+        <citation type="doi">10.1101/gr.277585.122</citation>
+        <citation type="doi">10.1093/nar/gks1140</citation>
+        <citation type="doi">10.1182/blood-2010-05-283051</citation>
+    </citations>
+</tool>
