@@ -81,3 +81,15 @@ third machine relays the records as CRAM.
      CRAM (a third of the BAM, for the 3 MB/s relay);
      [dv_relay_cram.sh](dv_relay_cram.sh) `TAG...` (the relay machine)
      copies them to a2, checks their md5 and starts call.sh there.
+   - Error sites, read by read (a2; the sites as TSV from hap.py's VCFs):
+     - [site_reads.py](site_reads.py): the reads over indel sites per run,
+       with the indel or clipped near it
+       ([hg005_indel_sites.md](../results/truth_2026-11_refit/hg005_indel_sites.md)).
+     - [snv_tiers.py](snv_tiers.py), [snv_missing.py](snv_missing.py) and
+       [snv_ties.py](snv_ties.py): at false SNV calls only CERTA makes, the
+       reads with the false allele by tier and what minibwa does with them,
+       the reads minibwa has there that CERTA lacks, and their equally best
+       loci.
+     - [lowend.sh](lowend.sh): the model's Phred 3–4 rewritten below
+       DeepVariant's MAPQ floor and called
+       ([snv_fp_diagnosis.md](../results/truth_2026-11_fp/snv_fp_diagnosis.md)).
