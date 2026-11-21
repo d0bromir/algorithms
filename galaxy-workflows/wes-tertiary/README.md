@@ -1402,6 +1402,46 @@ D-MF618315), I1\* (NA12891); paternal consistency 2/2; the four women were not t
 and "Y haplogroup: not typed" with the genetic sex, the haplogroup details in the mitochondrial section, and a
 `haplogroup` row in the findings TSV.
 
+### KIR genes (wes_kir 0.1.0, wes_hla 0.2.0, report 0.16.0)
+
+`tests/kir_eval.py`; gene content (present/absent) of the 17 KIR genes.
+
+* **1000 Genomes exomes against their genomes**: the 104 males of the haplogroup panel; 100 also have a 30× genome
+  (NYGC). The reads of chr19:54.6-55.0 Mb and the chr19 alternative haplotypes (GRCh38DH carries KIR haplotypes as
+  alts) were fetched from both CRAMs. Truth: T1K (`kir-wgs` preset) on the genome, a gene present when its abundance
+  is ≥ 25 % of the framework genes' mean. The exome cut-offs were chosen on the even half (49 samples) by accuracy
+  over all gene calls: T1K quality added nothing (0 = any called allele) and the abundance cut-off is 10 % of the
+  framework genes. The same cut-offs were chosen with a truth threshold of 15 % or 35 %.
+* **GIAB IDT exomes** (the workflow's BWA-MEM alignments, the KIR region plus the unmapped reads): HG002 and HG005
+  against their HPRC assemblies annotated by SKIRT (Zenodo 8094803, CC BY 4.0), and trio consistency (each gene of
+  a child in a parent).
+
+| Panel | Gene calls correct | Sensitivity / specificity | Gene content identical | AA/Bx genotype | B-content group | Time per sample | Peak memory |
+|---|---|---|---|---|---|---|---|
+| 1000 Genomes, held-out half (51) | 864/867 (99.7 %) | 100 % / 98.9 % | 48/51 | 51/51 | 51/51 | 95 s¹ | 2.7 GB¹ |
+| 1000 Genomes, tuning half (49) | 830/833 (99.6 %) | 100 % / 98.9 % | 46/49 | 49/49 | 49/49 | | |
+| GIAB HG002, HG005 vs assemblies | 34/34 | 100 % / 100 % | 2/2 | 2/2 | 2/2 | 13 s | 1.0 GB |
+
+¹ The 1000 Genomes extracts include the full-length alternative haplotypes of the leukocyte receptor complex (about
+2.9 million reads); on a workflow BAM (Ensembl primary assembly) the tool took 13 s (median of 9) and 1.0 GB.
+
+The three wrong calls of the held-out half were KIR2DL5B (1) and KIR2DL5A (2) called present (paralogues that exome
+reads tell apart poorly); no present gene was missed. GIAB: HG002 Bx (Cen A/B, Tel B/B; KIR2DS2 without KIR2DL2, as
+in its assembly), HG005 AA, both 17/17 genes; trios consistent (HG002 12/12 genes in a parent, HG005 9/9, HG001
+16/16); HG005-HG007 all AA. With the earlier quality cut-off of 20, HG005's KIR2DS4 (quality 16) was missed.
+
+**HLA ligands**: the exon-2 rule of `wes_hla` 0.2.0 gave the published KIR ligand group for 28 of 28 well-known
+alleles (B\*57:01, B\*27:05, B\*44:02, B\*51:01, B\*13:02, B\*58:01, B\*38:01 Bw4; B\*08:01, B\*07:02, B\*35:01,
+B\*15:01 Bw6; B\*46:01 C1; ten HLA-C alleles C1/C2; A\*23/24/25/32 Bw4). `wes_hla` 0.2.0 also reads T1K's exon
+coordinates as 1-based (0.1.0 shifted the exons by one base, which split 202 G groups on intron differences); the
+GIAB HLA results did not change (51/54 two-field, 53/54 G group, 50/50 high-confidence calls, same Mendelian checks).
+
+**Galaxy**: on HG003 (16 slots) `wes_hla` 0.2.0 took 169 s and `wes_kir` 16 s: Bx, Cen A/B, Tel A/B (Better),
+with the pairs KIR2DL1-C2 (C\*06:02), KIR2DL2/3-C1 (C\*12:03), KIR3DL1-Bw4 (B\*13:02, B\*38:01). HG001 (C1/C1,
+Bw6/Bw6): KIR2DL1 and KIR3DL1 without their ligands. The VCF workflow 0.16 on HG001's calls with all knowledge
+inputs and the Galaxy outputs of `wes_hla` 0.2.0 and `wes_kir` ran 16/16 jobs ok (13 min); the report's section 8
+lists the KIR genes, genotype, motifs, B-content group and ligand pairs, and the findings TSV a `kir_genotype` row.
+
 ## 8. Scope and limitations
 
 Germline SNVs and short indels in the exome targets, and CNVs of several exons from read depth (section 7).
@@ -1421,8 +1461,9 @@ alt read among ≥ 15) is read as reference. UPD detection needs both parents; h
 ~30 Mb are usually missed, and a deletion of one parent's copy looks like isodisomy unless CNV calls are given. The comparison with a previous report sees only what that report listed: a variant called but not listed before shows as new without its earlier state, and the ClinVar release itself is not recorded in the annotated VCF. HLA typing from an exome resolves G groups
 (two-field alleles that differ in the antigen-recognition exons), not three- or four-field alleles, null alleles
 caused outside these exons, or new alleles; HLA-DQA1 was the least reliable gene in the GIAB exomes (section 7), and
-an HLA-B\*57:01 or HLA-B\*15:02 result should be confirmed by a clinical HLA test before a drug decision. KIR genes
-are not typed. Haplogroups from an exome are often less resolved than from a genome (the Y call in 63 of 104
+an HLA-B\*57:01 or HLA-B\*15:02 result should be confirmed by a clinical HLA test before a drug decision.
+KIR typing gives gene content, not copy number; KIR2DL5A and KIR2DL5B are the genes most often called present
+wrongly (paralogues), and three-digit KIR alleles were not validated. Haplogroups from an exome are often less resolved than from a genome (the Y call in 63 of 104
 1000 Genomes exomes, the mtDNA call in 13 of 99); with less than 40 % of the mtDNA covered the mtDNA haplogroup is low
 confidence and can be wrong (3 of 15 such samples). Haplogroups describe one maternal and one paternal line, not
 ancestry. The reports support expert review; they are not a diagnosis. This is a research workflow,
