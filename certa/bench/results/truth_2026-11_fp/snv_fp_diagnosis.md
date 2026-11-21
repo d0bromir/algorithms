@@ -21,9 +21,8 @@ alignment objective the two share.
 
 ## The reads behind the false alleles
 
-The reads with the false allele (the alt base at a call with no variant or a het call, the ref base where the
-truth is homalt) and MAPQ >= 5 in CERTA (DeepVariant's floor), by CERTA's tier and what minibwa does with the
-same read:
+The reads with the false allele (the called alt base; the ref base where the truth is homalt) and MAPQ >= 5 in
+CERTA (DeepVariant's floor), by CERTA's tier and what minibwa does with the same read:
 
 | genome | tier | reads | CERTA MAPQ 5-19, minibwa below 5 or not in the targets | minibwa has it at the site with MAPQ >= 5 | other |
 |---|---|---|---|---|---|
@@ -44,7 +43,8 @@ same read:
 
 "Other": CERTA MAPQ >= 20 where minibwa gives below 5, places the read elsewhere in the targets, or not in them.
 Of the PR mates, 212 of 320 (HG005) and 314 of 438 (HG002) have two equally best single-end loci (XB 2): mates
-in two-copy duplications that the pair placed. The other tiers' reads have one best locus (XB 1).
+in two-copy duplications that the pair placed. So do 29 of HG005's 45 tier R reads (HG002: 1 of 50). Of the
+other tiers' reads, all but 3 (HG005) and 5 (HG002) have one best locus (XB 1).
 
 At HG005's 73 sites CERTA has more reads with MAPQ >= 5 than minibwa (1,605 against 1,236). Of minibwa's, 174
 are missing from CERTA's pileup: 133 of them CERTA places within 1 kb with MAPQ below 5 (MR 67, PR 51, IV 6, S1
@@ -54,8 +54,8 @@ are missing from CERTA's pileup: 133 of them CERTA places within 1 kb with MAPQ 
 
 The model's Phred 3 and 4 are written as MAPQ 10 and 16 (`kBwaScale`), above DeepVariant's floor, while minibwa
 gives MAPQ 0 to more of its least confident mates (test B: 0.081 % of mates, against CERTA's 0.056 % below
-MAPQ 5). Calibration cannot place these levels: on real reads minibwa misplaces 30-60 % of the mates it gives any
-MAPQ from 0 to 22. The test, by the MAPQ rewritten from the same records (`vc/bwscale.sh`), with a rule fixed
+MAPQ 5). Calibration cannot place these levels: on real reads minibwa misplaces 19-62 % of the mates it gives
+each MAPQ from 0 to 22 (test B, below). The test, by the MAPQ rewritten from the same records (`vc/bwscale.sh`), with a rule fixed
 beforehand (adopt it if HG002's errors fall by >= 1 % with no rise on CMRG, then HG005 must not rise):
 
 | run | HG002 SNV FN | HG002 SNV FP | HG002 indel FN | HG002 indel FP | HG005 SNV FN | HG005 SNV FP | HG005 indel FN | HG005 indel FP | CPU (HG002 subset) | memory |
@@ -86,8 +86,8 @@ H (HG005) minibwa  0:27%/49341 1:61%/2492 2:51%/275 3:39%/371 4:54%/201 5:55%/26
 
 - CERTA's extra false SNV calls are not its least confident reads: excluding them loses true variants and keeps
   the false calls.
-- Most of the false-allele reads at those sites are reads minibwa also counts (662 of 1,123 on HG002). The calls
-  differ in the pileups around paralogous sites: CERTA keeps more reads at MAPQ >= 5 there and drops others that
-  minibwa keeps. That is a property of the pair model's ranking in duplications, where the truth sets'
-  labels (certified unique on one haplotype) are thin.
+- On HG002, most of the false-allele reads at those sites are reads minibwa also counts (662 of 1,123; on HG005,
+  298 of 678). The calls differ in the pileups around paralogous sites: CERTA keeps more reads at MAPQ >= 5 there
+  and drops others that minibwa keeps. That is a property of the pair model's ranking in duplications, where the
+  truth sets' labels (certified unique on one haplotype) are thin.
 - With `--t2t` the T2T placement separates such reads, and CERTA's errors equal or beat minibwa's on both genomes.

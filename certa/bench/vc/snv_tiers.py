@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """snv_tiers.py SAMTOOLS REF SITES.tsv CERTA.cram MINIBWA.cram: at CERTA-only false SNV calls, the reads that carry
-the false allele (alt at a pure or het call, ref where the truth is homalt) with MAPQ >= 5 in CERTA (DeepVariant's
-default floor), by CERTA's tier and MAPQ band, against what minibwa does with the same read: at the site with
-MAPQ >= 5, at the site below 5, elsewhere in the targets, or absent (outside the targets or unmapped)."""
+the false allele (the called alt base; the ref base where the truth is homalt) with MAPQ >= 5 in CERTA
+(DeepVariant's default floor), by CERTA's tier and MAPQ band, against what minibwa does with the same read: at the
+site with MAPQ >= 5, at the site below 5, elsewhere in the targets, or absent (outside the targets or unmapped)."""
 import re
 import subprocess
 import sys

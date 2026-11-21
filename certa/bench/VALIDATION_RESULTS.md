@@ -2468,10 +2468,11 @@ killed on seeds 1 and 2 ([tests/mutants.tsv](../tests/mutants.tsv)).
      With `--mapq pair` CERTA makes 364 against minibwa's 309 on HG002, and
      113 against 71 on HG005.
      - Of the calls only CERTA makes (127 and 73), BWA-MEM2 makes 36 and 10,
-       so they do not come from the shared objective.
-     - At those sites, most reads with the false allele are reads minibwa
-       also counts with MAPQ ≥ 5 (662 of 1,123 on HG002). Many of the rest
-       are PR mates in two-copy duplications.
+       so most of them do not come from the shared objective.
+     - On HG002, most reads with the false allele at those sites are reads
+       minibwa also counts with MAPQ ≥ 5 (662 of 1,123; HG005 298 of 678).
+       The largest group by tier is mates placed by their pair (PR), most
+       with two equally best single-end loci (314 of 438 and 212 of 320).
      - *Tried, not adopted:* writing the model's Phred 3–4 below
        DeepVariant's MAPQ floor of 5, where minibwa leaves more of its least
        confident mates. Missed SNVs rose by 18–69, and false calls barely
