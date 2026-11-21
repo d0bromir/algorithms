@@ -21,7 +21,7 @@ earlier report of the sample, a section lists what is new, changed or no longer 
 Optional knowledge (0.11): MANE transcripts (RefSeq and genomic HGVS names), ClinGen/G2P/Orphanet disease context with
 genotype fit, ClinGen expert-panel rules and classifications, REVEL, MaveDB functional assays, Collins dosage and
 gnomAD exome CNV frequencies for CNVs, UniProt features, mitochondrial calls and mtDNA haplogroup (wes_mito),
-Y haplogroup (wes_yhaplo), HLA types (wes_hla), and input provenance.
+Y haplogroup (wes_yhaplo), HLA types (wes_hla), KIR genes (wes_kir), and input provenance.
 
 Standard library only (Python >= 3.8).
 """
@@ -40,7 +40,7 @@ import statistics
 import subprocess
 import sys
 
-VERSION = "0.15.0"
+VERSION = "0.16.0"
 
 # --------------------------------------------------------------------------------------------- rules
 # ACMG secondary findings v3.3 (ACMG policy statement, Genet Med 2025;27:101454): the 81 genes of v3.2 (Miller et al.,
@@ -2732,6 +2732,54 @@ def lineage_items(mito_sum, yh, sex):
     return items, warn, rows
 
 
+def kir_section(R, kir):
+    """KIR gene content, A/B genotype, B-content group and KIR-HLA ligand pairs (wes_kir), in section 8."""
+    R.h("<h3>KIR genes</h3>")
+    if not kir:
+        R.h("<p class='none'>Not typed: no KIR summary given (wes_kir on the aligned reads).</p>")
+        return
+    hap = kir.get("haplotypes", {})
+    R.h(f"<p class='small'>{esc(kir.get('tool', 'wes_kir'))}, IPD-KIR {esc(kir.get('database', ''))}. Gene content "
+        "(present/absent) of the killer-cell immunoglobulin-like receptor genes from the exome reads; alleles at three "
+        "digits (protein) are less reliable than the gene content, and copy number is not determined. KIR genotypes "
+        "inform haematopoietic cell transplant donor selection and research on infection, pregnancy and autoimmunity; "
+        "they are not a diagnosis.</p>")
+    if hap.get("genotype") == "not typed":
+        R.h("<p class='none'>Not typed: no reads in the KIR region, or no KIR allele database given.</p>")
+        return
+    present = [g for g in kir.get("genes", []) if g["present"]]
+    absent = [g["gene"] for g in kir.get("genes", []) if not g["present"]]
+    R.h("<ul class='kv'>"
+        f"<li>Genes present ({len(present)}): <b>{esc(', '.join(g['gene'] for g in present))}</b></li>"
+        f"<li>Absent: {esc(', '.join(absent) or 'none')}</li>"
+        f"<li>Genotype: <b>{esc(hap.get('genotype', ''))}</b> <span class='small'>(AA: only A-haplotype genes; Bx: at "
+        "least one B-haplotype gene)</span></li>"
+        f"<li>Centromeric / telomeric motifs: {esc(hap.get('centromeric', ''))} / {esc(hap.get('telomeric', ''))}; "
+        f"B-content group: <b>{esc(hap.get('b_content_group', ''))}</b>"
+        + (f" (score {hap['b_content_score']})" if hap.get("b_content_score") is not None else "")
+        + " <span class='small'>(Cooley et al., Blood 2010: Best = Cen-B/B, Better = two or more B motifs, Neutral "
+        "otherwise; for unrelated donors of patients with acute myeloid leukaemia)</span></li></ul>")
+    if hap.get("note"):
+        R.h(f"<div class='box warn'>KIR: {esc(hap['note'])}.</div>")
+    R.table(["Gene", "Alleles (three digits)", "T1K quality"],
+            [[f"<b>{esc(g['gene'])}</b>", esc(g["alleles"] or "-"), esc(g["quality"])] for g in present])
+    lig = kir.get("ligands", [])
+    if lig:
+        rows = []
+        for x in lig:
+            st = x["status"]
+            rows.append([esc(x["kir"]) + f" <span class='small'>({esc(x['kind'])})</span>", esc(x["ligand"]),
+                         tag(st, "t-grn" if st == "pair present" else "") + (
+                             f"<br><span class='small'>{esc(', '.join(x['ligand_alleles']))}</span>"
+                             if x["ligand_alleles"] else "")])
+        R.h("<p class='small'>KIR-HLA ligand pairs (HLA ligand groups from the HLA typing: C1/C2 for HLA-C, Bw4 for "
+            "HLA-A/B; only high-confidence HLA alleles). An inhibitory KIR with its ligand licenses NK cells.</p>")
+        R.table(["KIR", "HLA ligand", "Status"], rows)
+    R.rows.append(("kir_genotype", None, ("KIR", f"{hap.get('genotype', '')}; Cen {hap.get('centromeric', '')}, Tel "
+                                                 f"{hap.get('telomeric', '')}; B content {hap.get('b_content_group', '')}",
+                                          ", ".join(g["gene"] for g in present))))
+
+
 def load_hla(path):
     """wes_hla summary (JSON) -> dict with genotypes and associations, or {}."""
     if not path:
@@ -3343,6 +3391,7 @@ def build(args):
     mito_rows, mito_sum = load_mito(args.mito_tsv, args.mito_json)
     hla = load_hla(args.hla)
     yhaplo = load_hla(args.yhaplo)  # any JSON summary
+    kir = load_hla(args.kir)
     load_runs(args.gnomad_coverage, variants, "coverage")
     PEXT_MAX.clear()
     load_runs(args.pext, variants, "pext")
@@ -4377,6 +4426,7 @@ def build(args):
                 [[var_cell(v), call_cell(v, sex), clinvar_cell(v), freq_cell(v)] for v in shown[:100]])
         for v in other_assoc:
             R.rows.append(("clinvar_association", v, ""))
+    kir_section(R, kir)
 
     # ROH
     R.h("<h2>9. Runs of homozygosity and uniparental disomy</h2>")
@@ -4940,6 +4990,7 @@ def main(argv=None):
     ap.add_argument("--mito-tsv", help="mitochondrial calls of wes_mito (TSV)")
     ap.add_argument("--hla", help="wes_hla summary (JSON): HLA types, pharmacogenomic HLA alleles, disease associations")
     ap.add_argument("--yhaplo", help="wes_yhaplo summary (JSON): Y-chromosome haplogroup")
+    ap.add_argument("--kir", help="wes_kir summary (JSON): KIR gene content, genotype, B content, HLA ligands")
     ap.add_argument("--mito-json", help="wes_mito summary (JSON): chrM coverage, detection limit, mixture check")
     ap.add_argument("--previous-tsv", help="TSV output of an earlier report of the same sample: lists what changed")
     ap.add_argument("--previous-name", help="name of the earlier report shown in the comparison")

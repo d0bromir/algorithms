@@ -1,0 +1,219 @@
+{
+ "sample": "TEST",
+ "tool": "wes_kir 0.1.0, T1K (--preset kir-wes)",
+ "database": "2.15.0",
+ "min_quality": 20,
+ "min_abundance": 0.15,
+ "read_pairs": 30000,
+ "framework_mean_abundance": 100.0,
+ "genes": [
+  {
+   "gene": "KIR3DL3",
+   "present": true,
+   "alleles": "KIR3DL3*001",
+   "quality": 50,
+   "relative_abundance": 1.0,
+   "note": ""
+  },
+  {
+   "gene": "KIR2DS2",
+   "present": true,
+   "alleles": "KIR2DS2*001",
+   "quality": 50,
+   "relative_abundance": 1.0,
+   "note": ""
+  },
+  {
+   "gene": "KIR2DL2",
+   "present": true,
+   "alleles": "KIR2DL2*001",
+   "quality": 50,
+   "relative_abundance": 1.0,
+   "note": ""
+  },
+  {
+   "gene": "KIR2DL3",
+   "present": true,
+   "alleles": "KIR2DL3*001",
+   "quality": 50,
+   "relative_abundance": 1.0,
+   "note": ""
+  },
+  {
+   "gene": "KIR2DL5B",
+   "present": false,
+   "alleles": "",
+   "quality": -1,
+   "relative_abundance": 0.0,
+   "note": "no reads assigned"
+  },
+  {
+   "gene": "KIR2DS3",
+   "present": false,
+   "alleles": "",
+   "quality": -1,
+   "relative_abundance": 0.0,
+   "note": "no reads assigned"
+  },
+  {
+   "gene": "KIR2DP1",
+   "present": true,
+   "alleles": "KIR2DP1*001",
+   "quality": 50,
+   "relative_abundance": 1.0,
+   "note": ""
+  },
+  {
+   "gene": "KIR2DL1",
+   "present": true,
+   "alleles": "KIR2DL1*001",
+   "quality": 50,
+   "relative_abundance": 1.0,
+   "note": ""
+  },
+  {
+   "gene": "KIR3DP1",
+   "present": true,
+   "alleles": "KIR3DP1*001",
+   "quality": 50,
+   "relative_abundance": 1.0,
+   "note": ""
+  },
+  {
+   "gene": "KIR2DL4",
+   "present": true,
+   "alleles": "KIR2DL4*001",
+   "quality": 50,
+   "relative_abundance": 1.0,
+   "note": ""
+  },
+  {
+   "gene": "KIR3DL1",
+   "present": true,
+   "alleles": "KIR3DL1*001",
+   "quality": 50,
+   "relative_abundance": 1.0,
+   "note": ""
+  },
+  {
+   "gene": "KIR3DS1",
+   "present": false,
+   "alleles": "",
+   "quality": -1,
+   "relative_abundance": 0.0,
+   "note": "no reads assigned"
+  },
+  {
+   "gene": "KIR2DL5A",
+   "present": false,
+   "alleles": "",
+   "quality": -1,
+   "relative_abundance": 0.0,
+   "note": "no reads assigned"
+  },
+  {
+   "gene": "KIR2DS5",
+   "present": false,
+   "alleles": "",
+   "quality": -1,
+   "relative_abundance": 0.0,
+   "note": "no reads assigned"
+  },
+  {
+   "gene": "KIR2DS1",
+   "present": false,
+   "alleles": "",
+   "quality": -1,
+   "relative_abundance": 0.0,
+   "note": "no reads assigned"
+  },
+  {
+   "gene": "KIR2DS4",
+   "present": true,
+   "alleles": "KIR2DS4*001",
+   "quality": 50,
+   "relative_abundance": 1.0,
+   "note": ""
+  },
+  {
+   "gene": "KIR3DL2",
+   "present": true,
+   "alleles": "KIR3DL2*001",
+   "quality": 50,
+   "relative_abundance": 1.0,
+   "note": ""
+  }
+ ],
+ "haplotypes": {
+  "genes_present": 11,
+  "framework_complete": true,
+  "genotype": "Bx",
+  "centromeric": "A/B",
+  "telomeric": "A/A",
+  "b_content_score": 1,
+  "b_content_group": "Neutral"
+ },
+ "ligands": [
+  {
+   "kir": "KIR2DL1",
+   "kir_present": true,
+   "ligand": "C2",
+   "kind": "inhibitory",
+   "ligand_alleles": [
+    "C*06:02"
+   ],
+   "status": "pair present"
+  },
+  {
+   "kir": "KIR2DL2",
+   "kir_present": true,
+   "ligand": "C1",
+   "kind": "inhibitory",
+   "ligand_alleles": [
+    "C*07:01"
+   ],
+   "status": "pair present"
+  },
+  {
+   "kir": "KIR2DL3",
+   "kir_present": true,
+   "ligand": "C1",
+   "kind": "inhibitory",
+   "ligand_alleles": [
+    "C*07:01"
+   ],
+   "status": "pair present"
+  },
+  {
+   "kir": "KIR3DL1",
+   "kir_present": true,
+   "ligand": "Bw4",
+   "kind": "inhibitory",
+   "ligand_alleles": [
+    "B*57:01"
+   ],
+   "status": "pair present"
+  },
+  {
+   "kir": "KIR2DS1",
+   "kir_present": false,
+   "ligand": "C2",
+   "kind": "activating",
+   "ligand_alleles": [
+    "C*06:02"
+   ],
+   "status": "KIR absent"
+  },
+  {
+   "kir": "KIR3DS1",
+   "kir_present": false,
+   "ligand": "Bw4-80I",
+   "kind": "activating (putative)",
+   "ligand_alleles": [
+    "B*57:01"
+   ],
+   "status": "KIR absent"
+  }
+ ],
+ "seconds": 11.0
+}

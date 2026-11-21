@@ -54,7 +54,7 @@ CONFIGURE=0
 DRY=0
 VENV="${VENV:-$HOME/wes-venv}"
 PREFIX="${PREFIX:-$HOME/wes-env}"
-LOCAL_TOOL_IDS=(wes_clinical_report spliceai_score pharmcat_pgx wes_cnv wes_mito wes_couple wes_hla wes_yhaplo)
+LOCAL_TOOL_IDS=(wes_clinical_report spliceai_score pharmcat_pgx wes_cnv wes_mito wes_couple wes_hla wes_yhaplo wes_kir)
 
 die() { echo "install.sh: $*" >&2; exit 1; }
 say() { printf '\n== %s\n' "$*"; }
@@ -342,6 +342,9 @@ stage_data() {
     fetch https://ftp.ebi.ac.uk/pub/databases/ipd/imgt/hla/hla.dat hla.dat
     local hla_v; hla_v="$(grep -m1 -o 'Release Version [0-9.]*' hla.dat | cut -d' ' -f3 || true)"
     manifest hla.dat txt "https://ftp.ebi.ac.uk/pub/databases/ipd/imgt/hla/ (IPD-IMGT/HLA ${hla_v:-release unknown}, CC BY-ND 4.0; HLA typing with wes_hla)"
+    fetch https://ftp.ebi.ac.uk/pub/databases/ipd/kir/kir.dat kir.dat
+    local kir_v; kir_v="$(grep -m1 -o 'IPD-KIR Release Version [0-9.]*' kir.dat | cut -d' ' -f4 || true)"
+    manifest kir.dat txt "https://ftp.ebi.ac.uk/pub/databases/ipd/kir/ (IPD-KIR ${kir_v:-release unknown}, CC BY-ND 4.0; KIR typing with wes_kir)"
     manifest gene_disease.tsv tabular "ClinGen gene-disease validity (CC0), G2P (CC0), Orphanet (CC BY 4.0) via data/build_gene_disease.py"
     local GS=https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/genome-stratifications/v3.6/GRCh38@all
     if [[ ! -s GRCh38_segdups.bed ]]; then  # Ensembl names, like the reference

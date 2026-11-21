@@ -1,4 +1,4 @@
-<tool id="wes_hla" name="HLA typing" version="0.1.0+galaxy0" profile="23.0">
+<tool id="wes_hla" name="HLA typing" version="0.2.0+galaxy0" profile="23.0">
     <description>HLA class I and II alleles from exome reads (T1K), pharmacogenomic HLA alleles and disease associations</description>
     <requirements>
         <requirement type="package" version="1.0.10">t1k</requirement>
@@ -70,7 +70,9 @@ explain the reads best.
   none). A second table lists the pharmacogenomic alleles of CPIC guidelines (HLA-B*57:01 abacavir; HLA-B*15:02
   carbamazepine, oxcarbazepine, phenytoin; HLA-A*31:01 carbamazepine; HLA-B*58:01 allopurinol) and the best-known
   disease associations (HLA-B*27, HLA-B*51, HLA-DQB1*06:02, the celiac-disease DQ2/DQ8 heterodimers).
-* *summary* (JSON) for the clinical report.
+* *summary* (JSON) for the clinical report, with the KIR ligand group of each HLA-A, -B and -C allele, read from its
+  exon 2 (HLA-C residue 80: Asn = C1, Lys = C2; HLA-A/B residues 82-83 Leu-Arg = Bw4, with residue 80 Ile or Thr;
+  HLA-B Arg-Gly = Bw6; HLA-B*46/B*73 Val76 Asn80 = C1), for the KIR tool (wes_kir).
 * *PharmCAT outside calls*: the HLA-A and HLA-B diplotypes (confident calls only) for the PharmCAT tool, which then
   gives the CPIC, DPWG and FDA recommendations for these drugs.
 
