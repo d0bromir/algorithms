@@ -54,7 +54,7 @@ CONFIGURE=0
 DRY=0
 VENV="${VENV:-$HOME/wes-venv}"
 PREFIX="${PREFIX:-$HOME/wes-env}"
-LOCAL_TOOL_IDS=(wes_clinical_report spliceai_score pharmcat_pgx wes_cnv wes_mito wes_couple)
+LOCAL_TOOL_IDS=(wes_clinical_report spliceai_score pharmcat_pgx wes_cnv wes_mito wes_couple wes_hla)
 
 die() { echo "install.sh: $*" >&2; exit 1; }
 say() { printf '\n== %s\n' "$*"; }
@@ -339,6 +339,9 @@ stage_data() {
         rm -f uniprot_human.tsv
     fi
     manifest uniprot_features.tsv.gz tabular "UniProtKB/Swiss-Prot human (CC BY 4.0) via data/build_uniprot_features.py"
+    fetch https://ftp.ebi.ac.uk/pub/databases/ipd/imgt/hla/hla.dat hla.dat
+    local hla_v; hla_v="$(grep -m1 -o 'Release Version [0-9.]*' hla.dat | cut -d' ' -f3 || true)"
+    manifest hla.dat txt "https://ftp.ebi.ac.uk/pub/databases/ipd/imgt/hla/ (IPD-IMGT/HLA ${hla_v:-release unknown}, CC BY-ND 4.0; HLA typing with wes_hla)"
     manifest gene_disease.tsv tabular "ClinGen gene-disease validity (CC0), G2P (CC0), Orphanet (CC BY 4.0) via data/build_gene_disease.py"
     local GS=https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/genome-stratifications/v3.6/GRCh38@all
     if [[ ! -s GRCh38_segdups.bed ]]; then  # Ensembl names, like the reference

@@ -851,6 +851,20 @@ def test_mitochondrial_section():
     assert "Not analysed: no mitochondrial calls given" in html0
 
 
+def test_hla_section():
+    rows, html = run_report(["--hla", os.path.join(DATA, "hla_summary.json")])
+    sec = html.split("<h3>HLA alleles</h3>")[1].split("<h3>")[0]
+    assert "B*38:01 / B*57:01" in sec and "IPD-IMGT/HLA 3.66.0" in sec
+    assert "abacavir" in sec and "celiac disease" in sec
+    cats = {(r["category"], r["gene"]) for r in rows}
+    assert ("pgx", "HLA-B") in cats and ("hla_type", "HLA-DQA1") in cats
+    assert ("hla_association", "HLA-DQ") not in cats and "not determined" in sec, \
+        "DQA1 below the quality cut-off: DQ8 (celiac) is not determined, not reported as present"
+    assert "HLA-A/HLA-B alleles" not in html, "HLA no longer listed as not assessed"
+    _, html0 = run_report()
+    assert "Not typed: no HLA types given" in html0 and "HLA-A/HLA-B alleles" in html0
+
+
 def test_cnv_gnomad_frequency():
     d = tempfile.mkdtemp()
     rows, _ = run_report(_cnv_inputs(d) + ["--gnomad-cnv", os.path.join(DATA, "gnomad_cnv.vcf")])

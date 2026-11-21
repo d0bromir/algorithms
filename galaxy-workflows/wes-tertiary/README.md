@@ -42,7 +42,9 @@ flowchart LR
 
 **Quick install.** [`install.sh`](install.sh) runs every step of this section and section 2 on the Galaxy server.
 It installs the command-line programs, the Tool Shed and local tools with their dependencies, and the workflows.
-It also downloads and builds the reference and knowledge files and uploads them into a history:
+It also downloads and builds the reference and knowledge files and uploads them into a history.
+[`COMPONENTS.md`](COMPONENTS.md) lists everything it installs (programs, Galaxy tools, data files) with versions,
+licences and the release that added it:
 ```bash
 ./install.sh check
 ```
@@ -55,7 +57,7 @@ It also downloads and builds the reference and knowledge files and uploads them 
 | `system` | Installs bcftools, bedtools, samtools, tabix, curl, gawk and python3-venv with apt (`--conda`: into a conda environment instead) |
 | `venv` | Creates a Python environment with Ephemeris and BioBlend (`$VENV`, default `~/wes-venv`) |
 | `tools` | Installs the [`tools.yml`](tools.yml) repositories with Ephemeris; already-installed repositories are skipped |
-| `local-tools` | Copies the four local tools to the local tool directory and checks `local_tool_conf.xml`, `galaxy.yml` and the HTML allowlist. Then Galaxy installs the tools' Conda dependencies |
+| `local-tools` | Copies the seven local tools to the local tool directory and checks `local_tool_conf.xml`, `galaxy.yml` and the HTML allowlist. Then Galaxy installs the tools' Conda dependencies |
 | `workflows` | Imports both `.ga` files; with `--update`, adds a new version to workflows already present |
 | `data` | Downloads and builds the section 2 files into `--data-dir`, with a `MANIFEST.tsv` (source, date, size) |
 | `upload` | Uploads the `MANIFEST.tsv` files into a new history and runs *SnpEff download* there |
@@ -173,6 +175,8 @@ and VCFs. A naming mismatch does not raise an error. ClinVar/gnomAD annotations 
 | **gnomAD exome coverage (runs)** (optional) | Built with [`data/build_gnomad_sites.py`](data/build_gnomad_sites.py) `coverage` from the gnomAD v4.0 exome coverage summary (4 GB streamed, 75 MB out, CC0; `install.sh data` with `--regions`) | An allele absent from gnomAD gets PM2 only where ≥ 50 % of gnomAD exomes reached 20× (`COVERAGE_MIN_OVER20`); the depth is shown next to absent alleles. |
 | **Exon expression, pext (runs)** (optional) | Built with `data/build_gnomad_sites.py pext` from gnomAD's GTEx v10 base-level pext (198 MB streamed, 33 MB out, CC0) | The share of the gene's expression that includes the base (mean over tissues and the highest tissue) next to loss-of-function variants. Not scored (`PEXT_LOW = None`; see section 7). |
 | **Mitochondrial frequencies (gnomAD chrM VCF)** (FASTQ workflow, optional) | `gnomad.genomes.v3.1.sites.chrM.vcf.bgz` (5 MB, CC0) with `chrM` renamed to the reference's name (`install.sh data` does it) | mtDNA frequencies, haplogroup-defining flags and tRNA predictions for `wes_mito`. |
+| **HLA alleles (IPD-IMGT/HLA hla.dat)** (FASTQ workflow, optional) | [`hla.dat`](https://ftp.ebi.ac.uk/pub/databases/ipd/imgt/hla/) of the current IPD-IMGT/HLA release (350 MB, CC BY-ND 4.0; `install.sh data` downloads it and records the release) | HLA typing of the reads with T1K (`wes_hla`, section 4c). Without it the HLA genes are not typed. |
+| **HLA types (wes_hla summary)**, **HLA outside calls (PharmCAT TSV)** (VCF workflow, optional) | The *HLA summary* and *HLA outside calls (PharmCAT)* of `wes_hla` on the sample's reads (the FASTQ workflow connects them) | HLA alleles and associations in the report; HLA-A/B drug recommendations in PharmCAT. |
 
 The gnomAD file is built once with [`data/build_gnomad_extract.sh`](data/build_gnomad_extract.sh) on any Linux
 machine with `bcftools` (≥ 1.17) and `bedtools`. It reads only the indexed blocks of the public gnomAD v4.1 joint
@@ -310,6 +314,7 @@ The tables show the genotype columns of the first sample (`GEN[0]`); change them
 | `runs_of_homozygosity` | ✔ | ✔ | bcftools roh regions |
 | `coding_coverage_thresholds` | ✔ | | Bases covered at 1/10/20/30/50× per coding exon |
 | `target_mean_depth` | ✔ | | Mean depth per target (mosdepth regions): the input of the CNV calls; collect these as the laboratory's CNV reference panel |
+| `hla_types`, `hla_summary` | ✔ | | HLA class I and II alleles (two fields, quality, G-group equivalents), CPIC pharmacogenomic HLA alleles, HLA disease associations (section 4c) |
 | `cnv_calls`, `cnv_targets`, `cnv_summary` | ✔ | | Copy-number calls (deletions, duplications with genes, confidence), per-target ratios (for plots and as a parent's input) and a JSON summary (noise, chromosome dosage, sex chromosomes) |
 
 ## 4a. The clinical report
@@ -340,6 +345,7 @@ laboratory.
 | Risk alleles | Factor V Leiden, prothrombin G20210A, HFE p.Cys282Tyr/p.His63Asp, APOE (flagged: disclose only with counselling and consent), ClinVar risk/association variants (≥ 1 star) |
 | Runs of homozygosity and uniparental disomy | Total length of runs ≥ 1 Mb (consanguinity), runs concentrated on one chromosome, homozygous findings inside runs. With both parents: **uniparental disomy** (whole chromosome or segment, maternal or paternal, isodisomy or heterodisomy) from common SNVs where the proband lacks one parent's alleles, with the imprinting disorder (chromosomes 6, 7, 11, 14, 15, 16, 20), a CNV deletion that would explain it, and homozygous findings that only one parent carries. The **parent of origin** of a chromosome gain and of the X chromosomes in a sex-chromosome aneuploidy appears beside the chromosome dosage (section 4) |
 | Mitochondrial DNA (with the *Mitochondrial calls/summary* of `wes_mito`) | Homoplasmic (≥ 90 % of ≥ 5 reads) and heteroplasmic (≥ 10 % of ≥ 20 reads, ≥ 3 reads) mtDNA variants from the exome's off-target chrM reads: chrM coverage and the heteroplasmy detectable at the median depth; ClinVar pathogenic/likely pathogenic variants with their level; rare tRNA variants predicted pathogenic by MitoTIP or PON-mt-tRNA; gnomAD v3.1 homoplasmic/heteroplasmic frequencies; MT-RNR1 m.1555A>G, m.1494C>T, m.1095T>C for aminoglycosides (CPIC), with the read depth so that *not carried* is told apart from *not covered*; a mixture check (heteroplasmy at ≥ 3 common variants of other haplogroups: contamination or nuclear mitochondrial segments) |
+| HLA (with the *HLA summary* of `wes_hla`), in the pharmacogenomics section | The two alleles of HLA-A, -B, -C, -DRB1, -DRB3/4/5, -DQA1, -DQB1, -DPA1, -DPB1 with confidence; the CPIC pharmacogenomic alleles HLA-B\*57:01 (abacavir), HLA-B\*15:02 (carbamazepine, oxcarbazepine, phenytoin), HLA-A\*31:01 (carbamazepine), HLA-B\*58:01 (allopurinol); disease associations HLA-B\*27, HLA-B\*51, HLA-DQB1\*06:02 and the celiac-disease heterodimers DQ2.5/DQ2.2/DQ8 (their absence makes celiac disease very unlikely). With the *HLA outside calls*, PharmCAT adds the CPIC/DPWG/FDA recommendations for these drugs |
 | Changes since the previous report | With the findings TSV of an earlier report of the same sample (*Previous report: findings (TSV)*): the results that are **new**, **changed** or **no longer reported**, matched by variant, by gene for gene-level results (pharmacogenomics, APOE) and by ≥ 50 % reciprocal overlap for CNVs and UPD. Each change shows what both reports said and the evidence that differs: category, ClinVar classification and review status, automated ACMG class, genotype, gnomAD frequency, QC flags, or a variant no longer called. Results and findings to review (diagnostic, secondary findings, de novo, UPD, pathogenic CNVs; candidates, carrier status, pharmacogenomics) come first, other listed variants after. The TSV records the report version and the HPO, GenCC, ClinGen and SnpEff releases (`report_meta` rows), shown beside the previous report's. A **same-person check**: if < 65 % of the previous report's listed variants have the same genotype in the current calls, the section warns that the previous report is probably of another sample |
 | Coverage | Per-gene coding coverage at 10/20×; clinically relevant genes below 95 % at 20× are listed, because a negative result there is not reliable |
 | Limits | Lists what an exome pipeline cannot detect (small CNVs, SVs, repeat expansions, mtDNA deletions, CYP2D6, HLA, pseudogene regions, mosaicism…) |
@@ -414,6 +420,32 @@ group, 44 are newborn-screened and 56 have a pediatric actionability curation.
 
 Not detected by an exome, and listed in the report: SMN1 copy number (spinal muscular atrophy), HBA1/HBA2 deletions
 (alpha thalassemia), FMR1 repeats (fragile X), CYP21A2 and other pseudogene-rich genes, deep-intronic variants.
+
+## 4c. HLA typing
+
+The **HLA typing** tool (`tools/wes_hla`, in the FASTQ workflow) types the HLA genes from the exome reads with
+[T1K](https://github.com/mourisl/T1K) 1.0.10 (Song et al., Genome Research 2023; MIT) against the IPD-IMGT/HLA
+database. In each job it builds T1K's allele reference from `hla.dat` (about 15 s) and the positions of the HLA genes
+on GRCh38 (Ensembl 115, named like the BAM's chromosomes); T1K takes the reads aligned to the HLA genes and the
+unmapped reads and picks the two alleles per gene that explain them best.
+
+| Output | Content |
+|---|---|
+| *HLA types* | Per classical gene the two alleles at two-field (protein) resolution, T1K's quality (0-60), the equally good candidates, and a confidence: **high**, **low** (quality < 20, or candidates that differ in the antigen-recognition exons) or **none** (not typed) |
+| *HLA summary* (JSON) | The same for the report's pharmacogenomics section, with the associations |
+| *HLA outside calls (PharmCAT)* | HLA-A and HLA-B diplotypes of high confidence, for PharmCAT's outside-call input |
+
+**G groups.** An exome sequences the exons that define two-field alleles: exons 2-3 of class I and exon 2 of class II
+(the antigen-recognition site). Alleles with identical sequence there form a *G group* and cannot be told apart by
+exome reads (nor by the clinical typing of most laboratories). When T1K's candidates all share these exons, the call
+is the lowest-numbered expressed allele of the group and the others are listed; null and other expression-variant
+alleles (suffix N, L, S, Q) are called only when no expressed allele fits. Candidates that differ in these exons make
+the call low confidence.
+
+**PharmCAT.** PharmCAT's pipeline command has no outside-call option, so with outside calls the `pharmcat_pgx` tool
+re-runs PharmCAT's phenotyper and reporter on the preprocessed VCF with the HLA-A/B diplotypes. PharmCAT then lists
+the CPIC, DPWG and FDA recommendations for abacavir, allopurinol, carbamazepine, oxcarbazepine, phenytoin and
+fosphenytoin in its own report.
 
 ## 5. Filters and how to change them
 

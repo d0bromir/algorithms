@@ -1,6 +1,6 @@
 class: GalaxyWorkflow
 label: WES tertiary analysis from FASTQ (v1)
-release: "0.13"
+release: "0.14"
 license: MIT
 tags:
   - WES
@@ -325,6 +325,15 @@ inputs:
       gnomAD GTEx v10 base-level pext reduced to the exome regions by data/build_gnomad_sites.py pext (CC0): shown next
       to loss-of-function variants.
     position: {left: 0, top: 5380}
+  "HLA alleles (IPD-IMGT/HLA hla.dat)":
+    type: data
+    format: [txt]
+    optional: true
+    doc: >-
+      hla.dat of an IPD-IMGT/HLA release (https://ftp.ebi.ac.uk/pub/databases/ipd/imgt/hla/, CC BY-ND 4.0; the
+      install script's data stage downloads it): HLA typing of the sample's reads with T1K. Without it the HLA genes
+      are not typed.
+    position: {left: 0, top: 5500}
 
 outputs:
   multiqc_report:
@@ -345,6 +354,10 @@ outputs:
     outputSource: mito_calling/calls
   mito_summary:
     outputSource: mito_calling/summary
+  hla_types:
+    outputSource: hla_typing/types
+  hla_summary:
+    outputSource: hla_typing/summary
   cnv_calls:
     outputSource: cnv_calling/calls
   cnv_targets:
@@ -674,6 +687,23 @@ steps:
       calls: {rename: "Mitochondrial calls"}
       summary: {rename: "Mitochondrial summary"}
 
+  hla_typing:
+    doc: >-
+      HLA class I and II alleles from the reads of the HLA genes and the unmapped reads with T1K (local tool
+      tools/wes_hla): CPIC pharmacogenomic HLA alleles, HLA disease associations, and PharmCAT outside calls.
+    tool_id: wes_hla
+    tool_version: 0.1.0+galaxy0
+    position: {left: 1340, top: 1060}
+    in:
+      bam: mark_duplicates/outFile
+      hla_dat: "HLA alleles (IPD-IMGT/HLA hla.dat)"
+    state:
+      min_quality: 20
+    out:
+      types: {rename: "HLA types"}
+      summary: {rename: "HLA summary"}
+      outside_calls: {rename: "HLA outside calls (PharmCAT)"}
+
   tertiary:
     doc: Tertiary analysis of each sample's VCF (embedded workflow "WES tertiary analysis from VCF (v2)").
     position: {left: 1600, top: 220}
@@ -725,6 +755,8 @@ steps:
       "Protein features (UniProt TSV)": "Protein features (UniProt TSV)"
       "gnomAD exome coverage (runs)": "gnomAD exome coverage (runs)"
       "Exon expression, pext (runs)": "Exon expression, pext (runs)"
+      "HLA types (wes_hla summary)": hla_typing/summary
+      "HLA outside calls (PharmCAT TSV)": hla_typing/outside_calls
 
   multiqc:
     doc: One QC report for all samples.

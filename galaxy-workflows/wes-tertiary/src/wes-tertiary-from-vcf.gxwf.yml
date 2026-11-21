@@ -1,6 +1,6 @@
 class: GalaxyWorkflow
 label: WES tertiary analysis from VCF (v2)
-release: "0.13"
+release: "0.14"
 license: MIT
 tags:
   - WES
@@ -350,6 +350,22 @@ inputs:
       gnomAD GTEx v10 base-level pext reduced to the exome regions by data/build_gnomad_sites.py pext (CC0): shown next
       to loss-of-function variants.
     position: {left: 0, top: 5280}
+  "HLA types (wes_hla summary)":
+    type: data
+    format: [json]
+    optional: true
+    doc: >-
+      The summary (JSON) of the HLA typing tool (wes_hla) on the sample's reads: HLA alleles, CPIC pharmacogenomic HLA
+      alleles and HLA disease associations for the report.
+    position: {left: 0, top: 5400}
+  "HLA outside calls (PharmCAT TSV)":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: >-
+      The PharmCAT outside-call file of wes_hla (HLA-A and HLA-B diplotypes): PharmCAT then gives the HLA drug
+      recommendations (abacavir, allopurinol, carbamazepine, oxcarbazepine, phenytoin).
+    position: {left: 0, top: 5520}
 
 outputs:
   annotated_vcf:
@@ -588,12 +604,14 @@ steps:
   pharmacogenomics:
     doc: >-
       PharmCAT 3.4.0 star-allele diplotypes, phenotypes and CPIC/DPWG/FDA recommendations from the caller's VCF
-      (local tool tools/pharmcat_pgx). Absent positions are not assumed to be reference.
+      (local tool tools/pharmcat_pgx), with the HLA-A/B outside calls of wes_hla when given. Absent positions are not
+      assumed to be reference.
     tool_id: pharmcat_pgx
-    tool_version: 3.4.0+galaxy0
+    tool_version: 3.4.0+galaxy1
     position: {left: 2120, top: 480}
     in:
       input: "Variant calls (VCF)"
+      outside_calls: "HLA outside calls (PharmCAT TSV)"
     state:
       absent_to_ref: false
       sources: null
@@ -747,7 +765,7 @@ steps:
       Human-readable clinical interpretation report and findings table (local tool tools/wes_clinical_report;
       install it on the Galaxy server, see README).
     tool_id: wes_clinical_report
-    tool_version: 0.13.0+galaxy0
+    tool_version: 0.14.0+galaxy0
     position: {left: 2380, top: 300}
     in:
       vcf: functional_annotation/snpeff_output
@@ -789,6 +807,7 @@ steps:
       uniprot_features: "Protein features (UniProt TSV)"
       gnomad_coverage: "gnomAD exome coverage (runs)"
       pext: "Exon expression, pext (runs)"
+      hla: "HLA types (wes_hla summary)"
     state:
       max_af: 0.01
       min_ref_depth: 15
