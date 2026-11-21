@@ -82,6 +82,14 @@ struct BioParams {
   int improper = 40;        // a pair that is not proper, in Phred
   int rescue_loci = 8;      // a certified mate's loci whose proper windows a pair rescue aligns
   int lanes = 16;           // bands aligned at once, one SIMD lane each (bio_bands; 1: one at a time)
+  // --bio-phantom: a phantom-copy term in the MAPQ posterior (MAPQ only; the
+  // ML certificate is unchanged). An unseen paralogous copy at divergence
+  // phantom_delta from the best hit competes for the read, so a read whose
+  // divergence looks like a missing copy abstains instead of saturating at 60
+  // (the reference-conditioned posterior's limit). 0 disables it.
+  double phantom_delta = 0.0;  // divergence of the unseen copy (0 = off)
+  double phantom_pi = 1e-6;    // prior probability of an unseen copy at the locus
+  double phantom_err = 1e-3;   // representative sequencing error for the match term
 };
 
 // The model's integer costs, from BioParams.
@@ -998,7 +1006,37 @@ inline int posterior_mapq(double others) {
   return std::min(60, static_cast<int>(q + 0.5));
 }
 
+// The phantom-copy weight relative to the best hit: the likelihood of the read
+// arising from an unseen paralogous copy at divergence `phantom_delta`, times
+// its prior `phantom_pi`. Each of the k mismatches is explained as paralog
+// divergence (probability ~delta) rather than sample variation + sequencing
+// error (~snv+err), and each matching base as (1-delta) rather than
+// (1-snv)(1-err). Added to the posterior denominator, it demotes reads whose
+// divergence looks like a missing copy. 0 when disabled.
+inline double phantom_weight(const BioParams& bp, int k, int matches) {
+  if (bp.phantom_delta <= 0) return 0.0;
+  const double d = bp.phantom_delta, th = bp.snv, e = bp.phantom_err;
+  const double lm = std::log10(d / (th + e));
+  const double la = std::log10((1 - d) / ((1 - th) * (1 - e)));
+  return bp.phantom_pi * std::pow(10.0, k * lm + matches * la);
+}
+
 }  // namespace bio_detail
+
+// Mismatch count k and matching-base count of a traced alignment (CIGAR
+// M/I/D, r.nm = mismatches + indel bases). Used by the phantom-copy term.
+inline void bio_mm_counts(const Result& r, int& k, int& matches) {
+  int indel = 0, mbases = 0;
+  for (int c = 0; c < r.n_cigar; ++c) {
+    const uint32_t len = r.cigar[c] >> 4, op = r.cigar[c] & 0xF;
+    if (op == kOpI || op == kOpD) indel += static_cast<int>(len);
+    else if (op == kOpM) mbases += static_cast<int>(len);
+  }
+  k = r.nm - indel;
+  if (k < 0) k = 0;
+  matches = mbases - k;
+  if (matches < 0) matches = 0;
+}
 
 // Re-aligns strand `l.strand` of the read in sc.br at locus l (its band and
 // end diagonal, l.pen the exact penalty there) with traceback into r. An
@@ -1195,6 +1233,11 @@ inline bool bio_place(const IndexView& ix, const BioModel& m, const Params& p, c
   o.p1 = best;
   o.n_best = n_best;
   o.p2 = n_best > 1 ? best : (sc.loci.size() > 1 ? sc.loci[1].pen : -1);
+  if (bp.phantom_delta > 0) {  // MAPQ only: an unseen copy competes for the read
+    int k, matches;
+    bio_mm_counts(a, k, matches);
+    others += bio_detail::phantom_weight(bp, k, matches);
+  }
   o.mapq = bio_detail::posterior_mapq(others);
   const size_t keep = std::max<size_t>(static_cast<size_t>(bp.max_loci), static_cast<size_t>(pick) + 1);
   o.loci.assign(sc.loci.begin(), sc.loci.begin() + std::min(keep, sc.loci.size()));
