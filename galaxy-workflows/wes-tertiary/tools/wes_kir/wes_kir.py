@@ -39,8 +39,10 @@ FRAMEWORK = ["KIR3DL3", "KIR3DP1", "KIR2DL4", "KIR3DL2"]
 PSEUDO = {"KIR2DP1", "KIR3DP1"}
 A_GENES = {"KIR3DL3", "KIR2DL3", "KIR2DP1", "KIR2DL1", "KIR3DP1", "KIR2DL4", "KIR3DL1", "KIR2DS4", "KIR3DL2"}
 B_GENES = {"KIR2DS2", "KIR2DL2", "KIR2DL5A", "KIR2DL5B", "KIR2DS3", "KIR2DS5", "KIR3DS1", "KIR2DS1"}
-MIN_QUALITY = 20       # set on the tuning half of the 1000 Genomes panel (tests/kir_eval.py)
-MIN_ABUNDANCE = 0.15   # fraction of the framework genes' mean abundance (same)
+# Set on the tuning half of the 1000 Genomes panel against the same people's genomes (tests/kir_eval.py): T1K's
+# quality added nothing (0 = any called allele); the abundance separates present from absent genes.
+MIN_QUALITY = 0
+MIN_ABUNDANCE = 0.10   # fraction of the framework genes' mean abundance
 
 
 def bam_chrom(bam):

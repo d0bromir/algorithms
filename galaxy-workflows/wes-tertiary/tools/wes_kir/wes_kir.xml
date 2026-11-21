@@ -30,8 +30,8 @@ python3 '$__tool_directory__/wes_kir.py'
                help="kir.dat of an IPD-KIR release (https://ftp.ebi.ac.uk/pub/databases/ipd/kir/, CC BY-ND 4.0). Without it nothing is typed."/>
         <param name="hla" type="data" format="json" optional="true" label="HLA types (wes_hla summary)"
                help="The summary of the HLA typing tool (wes_hla 0.2 or later): the KIR ligand groups of the HLA-A, -B and -C alleles (C1/C2, Bw4)."/>
-        <param name="min_quality" type="integer" value="20" min="0" max="60" label="Lowest T1K quality of a present gene"/>
-        <param name="min_abundance" type="float" value="0.15" min="0" max="1" label="Lowest abundance of a present gene, as a fraction of the framework genes' mean"/>
+        <param name="min_quality" type="integer" value="0" min="0" max="60" label="Lowest T1K quality of a present gene" help="0: any allele T1K calls (the tuning showed no gain from a quality cut-off)."/>
+        <param name="min_abundance" type="float" value="0.10" min="0" max="1" label="Lowest abundance of a present gene, as a fraction of the framework genes' mean"/>
     </inputs>
     <outputs>
         <data name="genes" format="tabular" label="${tool.name} on ${on_string}: genes"/>
@@ -75,8 +75,8 @@ unmapped reads, and runs T1K with its exome preset. A KIR haplotype has 4 to 14 
 one haplotype, so reads of the other genes map to their paralogues or not at all; T1K assigns them to the alleles of
 all 17 KIR genes.
 
-**Gene content.** A gene is present when its best allele has T1K quality >= 20 and an abundance of at least 15 % of
-the framework genes' mean (KIR3DL3, KIR3DP1, KIR2DL4, KIR3DL2, present on nearly every haplotype); both cut-offs were
+**Gene content.** A gene is present when T1K calls an allele of it with an abundance of at least 10 % of the
+framework genes' mean (KIR3DL3, KIR3DP1, KIR2DL4, KIR3DL2, present on nearly every haplotype); both cut-offs were
 set on half of a 1000 Genomes panel and checked on the other half against the same people's genomes (README section
 7). Alleles are given at three digits (protein level); copy number is not determined.
 

@@ -735,8 +735,8 @@ steps:
       kir_dat: "KIR alleles (IPD-KIR kir.dat)"
       hla: hla_typing/summary
     state:
-      min_quality: 20
-      min_abundance: 0.15
+      min_quality: 0
+      min_abundance: 0.1
     out:
       genes: {rename: "KIR genes"}
       summary: {rename: "KIR summary"}
