@@ -43,6 +43,7 @@ struct MapConfig {
   RepeatParams rp;            // tier R (interval mode)
   Params pb;                  // --bio: the one pass
   BioParams bp;               // --bio: the model
+  std::string phantom_bed;    // --bio-phantom-bed: copy-deficit regions for the locus prior (A4)
   OutputOptions out;
 
   bool paired() const { return !mates_path.empty(); }

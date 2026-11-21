@@ -3719,13 +3719,13 @@ int main(int argc, char** argv) {
     // (the term is added to the posterior denominator after the optimum is fixed).
     BioParams bp;
     bp.snv = 1e-3;
-    CHECK(bio_detail::phantom_weight(bp, 4, 146) == 0.0, "phantom term is off by default");
+    CHECK(bio_detail::phantom_weight(bp, 4, 146, bp.phantom_pi) == 0.0, "phantom term is off by default");
     bp.phantom_delta = 1e-2;
     bp.phantom_pi = 1e-6;
     bp.phantom_err = 1e-3;
-    const double w0 = bio_detail::phantom_weight(bp, 0, 150);
-    const double w4 = bio_detail::phantom_weight(bp, 4, 146);
-    const double w8 = bio_detail::phantom_weight(bp, 8, 142);
+    const double w0 = bio_detail::phantom_weight(bp, 0, 150, bp.phantom_pi);
+    const double w4 = bio_detail::phantom_weight(bp, 4, 146, bp.phantom_pi);
+    const double w8 = bio_detail::phantom_weight(bp, 8, 142, bp.phantom_pi);
     CHECK(w0 > 0 && w4 > w0 && w8 > w4, "phantom weight grows with divergence (%g %g %g)", w0, w4, w8);
     CHECK(bio_detail::posterior_mapq(w0) >= 55, "a perfect read stays confident (MAPQ %d)", bio_detail::posterior_mapq(w0));
     CHECK(bio_detail::posterior_mapq(w8) < 30, "a divergent read abstains (MAPQ %d)", bio_detail::posterior_mapq(w8));
@@ -3742,6 +3742,34 @@ int main(int argc, char** argv) {
     CHECK(k == 5 && matches == 143, "bio_mm_counts: k=%d matches=%d (want 5, 143)", k, matches);
     std::fprintf(stderr, "bio-phantom: weight %.3g (0 mm) -> %.3g (8 mm); MAPQ %d -> %d; mm counts ok\n",
                  w0, w8, bio_detail::posterior_mapq(w0), bio_detail::posterior_mapq(w8));
+  }
+  {
+    // A4 (--bio-phantom-bed): RegionTrack interval lookup + the locus-specific
+    // prior (copy-deficit regions abstain, unique loci stay confident).
+    RegionTrack tr;
+    tr.add(100, 200);
+    tr.add(150, 300);  // overlaps -> merged [100, 300)
+    tr.add(500, 600);
+    tr.finalize();
+    CHECK(tr.size() == 2, "RegionTrack merged overlaps (size %zu)", tr.size());
+    CHECK(!tr.contains(99) && tr.contains(100) && tr.contains(299) && !tr.contains(300),
+          "RegionTrack half-open boundaries");
+    CHECK(!tr.contains(400) && tr.contains(550) && !tr.contains(600), "RegionTrack second interval");
+    BioParams bp;
+    bp.snv = 1e-3;
+    bp.phantom_delta = 1e-2;
+    bp.phantom_err = 1e-3;
+    bp.phantom_pi = 1e-2;        // copy-deficit locus prior
+    bp.phantom_pi_unique = 0.0;  // unique locus: no phantom
+    const double pi_in = tr.contains(150) ? bp.phantom_pi : bp.phantom_pi_unique;
+    const double pi_out = tr.contains(400) ? bp.phantom_pi : bp.phantom_pi_unique;
+    const double win = bio_detail::phantom_weight(bp, 4, 146, pi_in);
+    const double wout = bio_detail::phantom_weight(bp, 4, 146, pi_out);
+    CHECK(win > 0 && wout == 0.0, "locus prior: inside demotes, outside does not (%g vs %g)", win, wout);
+    CHECK(bio_detail::posterior_mapq(win) < 30, "a divergent read in a copy-deficit locus abstains");
+    CHECK(bio_detail::posterior_mapq(wout) == 60, "the same read in a unique locus stays confident");
+    std::fprintf(stderr, "bio-phantom-bed: RegionTrack ok; locus prior MAPQ %d (in) vs %d (out)\n",
+                 bio_detail::posterior_mapq(win), bio_detail::posterior_mapq(wout));
   }
   if (failures) {
     std::fprintf(stderr, "%d check(s) FAILED\n", failures);
