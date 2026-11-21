@@ -154,6 +154,11 @@ struct Params {
   // For MAPQ only: when the second-best locus lies beyond the certified
   // radius, estimate it among the other candidates up to this many edits.
   int mapq_limit = 0;
+  // For MAPQ only (--mapq-local): report the best *local* affine score among
+  // the other candidates (BWA-MEM's XS, which counts clipped partial
+  // paralogs), not the affine score of the closest end-to-end one. The
+  // certificate and d2x are unchanged; only sub_score (MAPQ) differs.
+  int mapq_local = 0;
   // q-gram-lemma filter: only clusters hit by at least this many distinct
   // enumerated parts are verified; the radius becomes |S| - min_support.
   int min_support = 1;
@@ -1330,25 +1335,41 @@ CERTA_HD inline int16_t cluster_score(const IndexView& ix, int L, const Cluster&
 }
 
 // MAPQ only (not part of the certificate): the best distance, up to `limit`
-// edits, among candidate clusters other than the reported locus, or -1; its
+// edits, among candidate clusters other than the reported locus, or -1; an
 // affine score goes to *sub. Evaluates the S2_TOP best-supported clusters;
-// overwrites ws.clusters.
+// overwrites ws.clusters. With `local`, *sub is the best *local* (clipped)
+// affine score among those clusters (BWA-MEM's XS, counting partial paralogs)
+// rather than the score of the closest end-to-end one; the returned distance
+// (d2x) is the same either way.
 CERTA_HD inline int other_candidates(const IndexView& ix, int L, int limit, const Result& r,
-                                     Workspace& ws, int16_t* sub) {
+                                     Workspace& ws, int16_t* sub, bool local = false) {
   const int M = limit < S2_MAX ? limit : S2_MAX;
   const int nc = build_clusters(ws, 2 * M, true);
   order_by_support(ws, nc);
   int best = M + 1, evaluated = 0, best_c = -1;
+  int eval_c[S2_TOP];  // the evaluated clusters, for the best local affine score
   for (int x = 0; x < nc && evaluated < S2_TOP && best > 0; ++x) {
     const Cluster& cl = ws.clusters[ws.corder[x]];
     if (cl.strand == r.strand && r.ref_pos >= cl.lo - L && r.ref_pos <= cl.lo + cl.width + L)
       continue;  // the reported locus itself
+    eval_c[evaluated] = ws.corder[x];
     ++evaluated;
     const int d = band_distance(ix, ws.seq[cl.strand], L, cl.lo, cl.width, best - 1, ws.row_a, ws.row_b);
     if (d < best) { best = d; best_c = ws.corder[x]; }
   }
   if (best > M) return -1;
-  *sub = cluster_score(ix, L, ws.clusters[best_c], ws);
+  if (local) {
+    // cluster_score reads ws.clusters and uses scratch rows only, so the
+    // evaluated indices stay valid across calls.
+    int16_t bs = kNoSub;
+    for (int e = 0; e < evaluated; ++e) {
+      const int16_t cs = cluster_score(ix, L, ws.clusters[eval_c[e]], ws);
+      if (cs > bs) bs = cs;
+    }
+    *sub = bs;
+  } else {
+    *sub = cluster_score(ix, L, ws.clusters[best_c], ws);
+  }
   return best;
 }
 
@@ -1909,7 +1930,7 @@ CERTA_HD inline void finish_certified(const IndexView& ix, const Params& p, int 
     for (int x = 0; x < nclust; ++x)
       if (ws.clusters[x].dist == r.d2) { r.sub_score = cluster_score(ix, L, ws.clusters[x], ws); break; }
   } else if (n_best == 1 && p.mapq_limit > R) {
-    r.d2x = (int8_t)other_candidates(ix, L, p.mapq_limit, r, ws, &r.sub_score);
+    r.d2x = (int8_t)other_candidates(ix, L, p.mapq_limit, r, ws, &r.sub_score, p.mapq_local != 0);
   }
 }
 
