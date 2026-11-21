@@ -2479,11 +2479,28 @@ killed on seeds 1 and 2 ([tests/mutants.tsv](../tests/mutants.tsv)).
        moved (HG002 364 → 369 and 358; HG005 113 → 110 and 114).
      - The calls differ in which reads each aligner trusts around paralogs.
        With `--t2t`, CERTA's errors equal or beat minibwa's.
+   - **A cheaper `--t2t`: sinks and skips, neither adopted** (2026-11-21;
+     [lean_t2t.md](results/truth_2026-11_lean/lean_t2t.md)).
+     - Sinks: at the false SNV calls only CERTA makes, CHM13 puts 12–13 % of
+       the false-allele reads in sequence GRCh38 lacks, where a sink contig
+       could take them (4–5 % with T2T MAPQ ≥ 20). It puts 29–51 % elsewhere
+       in GRCh38, which only the CHM13 placement shows.
+     - Skipping the CHM13 lookup for pairs of certified S0/S1 mates with no
+       second locus (81 % of the mates) keeps 99 % of T2T's flags on
+       misplaced mates. The 1 % it loses look unique on GRCh38 and are most
+       of the confident errors at loose N: cross-validated on HG002, test
+       B's misplaced mates rose by 6, 21 and 99 % at 99.75, 99.44 and
+       95.58 % (the rule, fixed beforehand, allowed 5 %). It would have
+       saved 6.5 % of the CPU (test B 6,349 → 5,934 s, 42.8–42.9 GiB either
+       way).
+     - The cost of `--t2t` is the CHM13 mapping of the reads that are hard
+       on GRCh38, and the second index's memory.
    - On GRCh38 the placement limit is reached
      ([above](#how-far-from-the-limit)); what remains is the reference.
      The sample's own genome shows two orders of magnitude of room in
-     confidence: CHM13's copies of GRCh38's collapsed duplications as sink
-     contigs, then pangenome haplotypes, are the way there.
+     confidence. CHM13 is the way there, then pangenome haplotypes: in one
+     pass with `--t2t`; as sink contigs it carries only the reads from copies
+     GRCh38 lacks (above).
    - With `--iv-rescue local` and the seed votes, the default MAPQ is 118
      SNV and 115 indel errors behind minibwa on HG002
      ([above](#reads-certa-lost)). Before the votes, nearly all of the gap
