@@ -10,7 +10,7 @@ MapConfig MapConfig::from_args(const Args& a) {
   if (a.pos.size() != 2 && a.pos.size() != 3)
     throw std::runtime_error(
         "usage: certa map ref.cidx reads.fq[.gz] [mates.fq[.gz]] [-k 5] [--k1 2] [--budget 16] [--budget2 256] "
-        "[--budget3 0] [--support3 2] [--local 0] [--full-cert] [--adaptive-parts 0|1|2] [--vbudget 4096] [--index2 second.cidx] [--mapq-limit 8] [-t N] [--gpu] [--device 0] [-o out.sam] "
+        "[--budget3 0] [--support3 2] [--local 0] [--full-cert] [--adaptive-parts 0|1|2] [--vbudget 4096] [--index2 second.cidx] [--mapq-limit 8] [--mapq-local] [-t N] [--gpu] [--device 0] [-o out.sam] "
         "[-u uncertified.fq] [-U uncertified_mates.fq] [--fallback-mates pair|single -S single_mates.fq] [--max-dist 850] [--stats s.json] [--batch N] [--io-threads N] [--serial-stages] "
         "[--bio [--bio-snv 0.001] [--bio-titv 2.1] [--bio-indel 0.0001] [--bio-seq-indel 0.00001] [--bio-gap-ext 0.5] "
         "[--bio-str-min 4] [--bio-str-slope 3] [--bio-str-cap 24] [--bio-gap-cap 50] [--bio-delta 60] [--bio-max-band 1024] "
@@ -52,6 +52,11 @@ MapConfig MapConfig::from_args(const Args& a) {
   // MAPQ only: the second-best estimate beyond the certified radius, up to
   // this many edits (0 = off).
   p.mapq_limit = a.geti("--mapq-limit", c.out.mapq_cal || c.out.mapq_pair ? 10 : 8);
+  // --mapq-local: the second-best estimate beyond the radius is the best
+  // *local* (clipped) affine score among the other candidates (BWA-MEM's XS,
+  // counting partial paralogs), not the closest end-to-end one's score. MAPQ
+  // only; the certificate and d2x are unchanged. No effect with --mapq-limit 0.
+  p.mapq_local = a.has("--mapq-local") ? 1 : 0;
   // S2 is off by default: on synthetic truth most S2 placements with MAPQ >= 20
   // were wrong, and on HG002 S2 reads were enriched at false-positive calls.
   p.s2_limit = a.geti("--s2", 0);
@@ -313,6 +318,7 @@ std::string MapConfig::command_line() const {
   // The certification passes beyond the defaults, when on (the default
   // command line is unchanged).
   std::string extra;
+  if (p2.mapq_local) extra += " --mapq-local";
   if (pass3()) extra += " --budget3 " + std::to_string(p3.budget) + " --support3 " + std::to_string(p3.min_support);
   if (pass_l()) extra += " --local " + std::to_string(pl.local);
   if (pass_v()) extra += " --adaptive-parts " + std::to_string(pv.vparts) + " --vbudget " + std::to_string(pv.budget);

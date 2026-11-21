@@ -3684,6 +3684,34 @@ int main(int argc, char** argv) {
     CHECK(beyond_kmax > 0, "pass V certified no read beyond %d edits: the test does not exercise it", KMAX);
     std::fprintf(stderr, "pass V: [XL, XU] checked %d times, SUB bounds %d times\n", bounds, subs);
   }
+  {
+    // A2 (--mapq-local): the best local affine competitor score (BWA-MEM's XS,
+    // counting clipped partial paralogs) changes only sub_score (MAPQ), never
+    // the certificate, the alignment or d2x, and is thread-order independent.
+    Params p{5, 256};
+    p.mapq_limit = 8;
+    Params pl = p;
+    pl.mapq_local = 1;
+    std::vector<Result> r0, r1, r1t1;
+    map_cpu(view, p, batch, r0, 4);
+    map_cpu(view, pl, batch, r1, 4);
+    map_cpu(view, pl, batch, r1t1, 1);
+    int raised = 0;
+    for (size_t i = 0; i < reads.size(); ++i) {
+      const Result& a = r0[i];
+      const Result& b = r1[i];
+      CHECK(std::memcmp(&b, &r1t1[i], sizeof b) == 0, "mapq-local read %zu differs between 1 and 4 threads", i);
+      CHECK(a.certified == b.certified && a.tier == b.tier && a.d1 == b.d1 && a.d2 == b.d2 && a.d2x == b.d2x &&
+            a.n_best == b.n_best && a.ref_pos == b.ref_pos && a.radius == b.radius && a.sub_hi == b.sub_hi &&
+            a.score == b.score && a.nm == b.nm && a.n_cigar == b.n_cigar &&
+            std::memcmp(a.cigar, b.cigar, sizeof a.cigar) == 0,
+            "mapq-local read %zu changed the certificate or alignment", i);
+      CHECK(b.sub_score >= a.sub_score, "mapq-local read %zu: sub %d below default %d", i, b.sub_score, a.sub_score);
+      raised += b.sub_score > a.sub_score;
+    }
+    CHECK(raised > 0, "mapq-local raised no sub_score: no clipped competitor exercised");
+    std::fprintf(stderr, "mapq-local: sub_score raised on %d/%zu reads, certificate unchanged\n", raised, reads.size());
+  }
   if (failures) {
     std::fprintf(stderr, "%d check(s) FAILED\n", failures);
     return 1;
