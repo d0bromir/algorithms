@@ -2710,8 +2710,8 @@ def hla_section(R, hla):
         return
     R.h(f"<p class='small'>{esc(hla.get('tool', 'wes_hla'))}, IPD-IMGT/HLA {esc(hla.get('database', ''))}. "
         "Two-field (protein-level) alleles from the exome reads; <b>low</b> confidence: T1K quality below "
-        f"{esc(hla.get('min_quality', 20))} or candidates that differ at two fields. Exome typing resolves the "
-        "antigen-recognition exons only; drug decisions on an HLA allele are usually confirmed by a clinical HLA test."
+        f"{esc(hla.get('min_quality', 20))} or candidates that differ in the antigen-recognition exons. Exome typing "
+        "resolves these exons only (G groups); drug decisions on an HLA allele are usually confirmed by a clinical HLA test."
         "</p>")
     rows = []
     for g in hla.get("genotypes", []):
