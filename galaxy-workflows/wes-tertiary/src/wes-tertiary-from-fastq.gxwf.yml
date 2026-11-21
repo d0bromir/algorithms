@@ -1,6 +1,6 @@
 class: GalaxyWorkflow
 label: WES tertiary analysis from FASTQ (v1)
-release: "0.11"
+release: "0.12"
 license: MIT
 tags:
   - WES
@@ -309,6 +309,22 @@ inputs:
       UniProtKB/Swiss-Prot domains, regions, motifs and sites by Ensembl transcript, built by
       data/build_uniprot_features.py (CC BY 4.0): shown at each variant's residue.
     position: {left: 0, top: 5140}
+  "gnomAD exome coverage (runs)":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: >-
+      gnomAD v4.0 exome coverage reduced to the exome regions by data/build_gnomad_sites.py coverage (CC0): an allele
+      absent from gnomAD gets PM2 only where at least half of gnomAD exomes reached 20x.
+    position: {left: 0, top: 5260}
+  "Exon expression, pext (runs)":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: >-
+      gnomAD GTEx v10 base-level pext reduced to the exome regions by data/build_gnomad_sites.py pext (CC0): shown next
+      to loss-of-function variants.
+    position: {left: 0, top: 5380}
 
 outputs:
   multiqc_report:
@@ -707,6 +723,8 @@ steps:
       "Mitochondrial summary (wes_mito JSON)": mito_calling/summary
       "Population CNVs (gnomAD exome CNV VCF)": "Population CNVs (gnomAD exome CNV VCF)"
       "Protein features (UniProt TSV)": "Protein features (UniProt TSV)"
+      "gnomAD exome coverage (runs)": "gnomAD exome coverage (runs)"
+      "Exon expression, pext (runs)": "Exon expression, pext (runs)"
 
   multiqc:
     doc: One QC report for all samples.

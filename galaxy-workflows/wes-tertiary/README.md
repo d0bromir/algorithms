@@ -170,6 +170,8 @@ and VCFs. A naming mismatch does not raise an error. ClinVar/gnomAD annotations 
 | **Functional assays (MaveDB TSV)** (optional) | Built with [`data/build_mavedb.py`](data/build_mavedb.py) from the [MaveDB bulk download](https://zenodo.org/records/20840937) (CC0; 1.9 GB in, 3.5 MB out) | PS3/BS3 at the calibrated strength for variants a calibrated multiplexed assay measured (73 score sets; clinical calibrations in 10 genes, research-only ones shown but not scored). |
 | **Population CNVs (gnomAD exome CNV VCF)** (optional) | [`gnomad.v4.1.cnv.all.vcf.gz`](https://gnomad.broadinstitute.org/downloads) (9 MB, CC0; rare CNVs of 464,297 exomes) | The frequency of a gnomAD CNV of the same type with ≥ 50 % reciprocal overlap next to each CNV call; 4O (−1) when an ancestry group (≥ 1,000 exomes) has it at ≥ 1 %. |
 | **Protein features (UniProt TSV)** (optional) | Built with [`data/build_uniprot_features.py`](data/build_uniprot_features.py) from the reviewed human UniProt entries (REST API; 15 MB in, 2.2 MB out, CC BY 4.0) | The domain, region, motif or site at each variant's residue, on the MANE transcripts that encode UniProt's canonical isoform (12,926 of 19,438). Shown for review (PM1 needs a gene-specific definition), not scored. |
+| **gnomAD exome coverage (runs)** (optional) | Built with [`data/build_gnomad_sites.py`](data/build_gnomad_sites.py) `coverage` from the gnomAD v4.0 exome coverage summary (4 GB streamed, 75 MB out, CC0; `install.sh data` with `--regions`) | An allele absent from gnomAD gets PM2 only where ≥ 50 % of gnomAD exomes reached 20× (`COVERAGE_MIN_OVER20`); the depth is shown next to absent alleles. |
+| **Exon expression, pext (runs)** (optional) | Built with `data/build_gnomad_sites.py pext` from gnomAD's GTEx v10 base-level pext (198 MB streamed, 33 MB out, CC0) | The share of the gene's expression that includes the base (mean over tissues and the highest tissue) next to loss-of-function variants. Not scored (`PEXT_LOW = None`; see section 7). |
 | **Mitochondrial frequencies (gnomAD chrM VCF)** (FASTQ workflow, optional) | `gnomad.genomes.v3.1.sites.chrM.vcf.bgz` (5 MB, CC0) with `chrM` renamed to the reference's name (`install.sh data` does it) | mtDNA frequencies, haplogroup-defining flags and tRNA predictions for `wes_mito`. |
 
 The gnomAD file is built once with [`data/build_gnomad_extract.sh`](data/build_gnomad_extract.sh) on any Linux
@@ -1102,6 +1104,25 @@ On the three GIAB exomes (0.10 against 0.11 with all inputs):
 | HG002 | 16.2 s, 1.70 GiB | 24.1 s, 1.88 GiB |
 | HG005 | 15.7 s, 1.52 GiB | 24.7 s, 1.70 GiB |
 | HG001 | 13.0 s, 1.50 GiB | 21.1 s, 1.68 GiB |
+
+### gnomAD coverage and exon expression (report 0.12.0)
+
+Two ClinGen considerations were added and tested on the ClinVar benchmark above (tuning half first):
+- **PM2 needs coverage.** An allele absent from gnomAD gets PM2 only where at least half of the gnomAD v4.0 exomes
+  had ≥ 20 reads (`COVERAGE_MIN_OVER20` 0.2, 0.5 and 0.8 tried). On the tuning half the rule barely changes
+  anything: P/LP 74.9 → 74.8 %, B/LB 43.6 → 43.7 % at 0.5, because ClinVar variants lie in well-covered coding exons.
+  It matters in samples: in the three GIAB exomes it fired once, on TBP p.Gln94del (HG002, possibly de novo) in the
+  CAG repeat that gnomAD exomes barely cover, which moved from VUS to likely benign (BP3 without PM2).
+- **pext is shown, not scored.** Removing PVS1 from loss-of-function variants in bases with low pext (GTEx v10; mean
+  over tissues < 0.1, or highest tissue < 0.05 or < 0.1, in genes whose best bases reach 0.5) only lost pathogenic
+  LoF calls on the tuning half (89.4 → 88.1 % with the mean, → 89.2 % with the highest tissue) and fixed none of the
+  four benign LoF variants called LP. pext is printed next to LoF variants for the reviewer.
+
+| Report 0.12.0 | ClinVar P/LP | ClinVar B/LB | Expert P/LP | Expert B/LB | Time | Memory |
+|---|---|---|---|---|---|---|
+| Tuning half | 74.8 % / 0.2 % | 43.7 % / 0.1 % | 79.1 % / 0.3 % | 44.2 % / 0.2 % | 9 s | 0.84 GiB |
+| Held-out half | 73.4 % / 0.2 % | 46.3 % / 0.0 % | 67.4 % / 0.6 % | 70.3 % / 0.1 % | 8 s | 0.84 GiB |
+| HG002 report, all inputs (one run) | | | | | 27.7 s | 1.90 GiB |
 
 ### Mitochondrial DNA from exome reads (wes_mito 0.1.0, report 0.11.0, GIAB IDT exomes)
 

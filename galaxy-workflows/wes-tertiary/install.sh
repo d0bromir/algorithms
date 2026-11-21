@@ -366,6 +366,20 @@ stage_data() {
             bash "$HERE/data/build_gnomad_extract.sh" regions.bed "$FA" gnomad.v4.1.joint.targets.GRCh38.bcf "$JOBS"
         fi
         manifest gnomad.v4.1.joint.targets.GRCh38.bcf bcf "$GN/ joint sites VCFs via data/build_gnomad_extract.sh (CC0)"
+        local GB=https://storage.googleapis.com/gcp-public-data--gnomad
+        [[ -s regions.bed ]] || cat "$REGIONS" "$CDS" | cut -f1-3 > regions.bed
+        if [[ ! -s gnomad_exome_coverage.tsv ]]; then
+            echo "  gnomad_exome_coverage.tsv <- gnomAD v4.0 exome coverage summary (4 GB streamed; about 6 min)"
+            curl -sfL "$GB/release/4.0/coverage/exomes/gnomad.exomes.v4.0.coverage.summary.tsv.bgz" | gzip -dc |
+              python3 "$HERE/data/build_gnomad_sites.py" coverage regions.bed gnomad_exome_coverage.tsv
+        fi
+        manifest gnomad_exome_coverage.tsv tabular "gnomAD v4.0 exome coverage (CC0) via data/build_gnomad_sites.py"
+        if [[ ! -s gnomad_pext.tsv ]]; then
+            echo "  gnomad_pext.tsv <- gnomAD GTEx v10 base-level pext (198 MB streamed; about 7 min)"
+            curl -sfL "$GB/release/4.1/pext/gnomad.pext.gtex_v10.base_level.tsv.gz" | gzip -dc |
+              python3 "$HERE/data/build_gnomad_sites.py" pext regions.bed gnomad_pext.tsv
+        fi
+        manifest gnomad_pext.tsv tabular "gnomAD GTEx v10 pext (CC0) via data/build_gnomad_sites.py"
     else
         echo "  gnomAD extract skipped (give --regions kit.bed; see README section 2)"
     fi
