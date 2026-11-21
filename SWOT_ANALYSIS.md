@@ -98,7 +98,7 @@ source material but are now standard reference points in the field:
 | 14 | Minimizers + chaining (minimap2-style) | 2004/2018 | Sketching + chaining | O(L) sketch; O(N·h) bounded-lookback chain (minimap2 default), O(N log N) exact RMQ chaining | ✅ |
 | 15 | MashMap / MinHash | 2018 | Sketch-based identity estimation | O(sketch) compare | ✅ |
 | 16 | Strobemers / strobealign | 2021/2022 | Indel-robust sketching | O(L) | ✅ |
-| 17 | Burrows-Wheeler Transform | 1994 | Full-text indexing | O(n log n) build | ✅ |
+| 17 | Burrows-Wheeler Transform | 1994 | Full-text indexing | O(n) build via SA-IS (naive rotation sort O(n² log n)) | ✅ |
 | 18 | FM-index | 2000 | Full-text indexing | O(m) search | ✅ |
 | 19 | SA-IS suffix array construction | 2009 | Full-text indexing (build) | O(n) | citation only |
 | 20 | r-index / RLBWT | 2020 | Compressed indexing (repetitive text) | O(r) space, near-optimal locate | citation only |
@@ -143,9 +143,16 @@ source material but are now standard reference points in the field:
 | 59 | NVIDIA Parabricks | 2019– | GPU clinical pipeline | GPU BWA-MEM + GPU callers | citation only |
 | 60 | Minigraph / Minigraph-Cactus | 2020/2024 | Pangenome graph construction/mapping | Minimizer chaining on graphs | citation only |
 | 61 | vg Giraffe long-read | 2025 | Pangenome graph aligner | Haplotype-sampled graphs; short + long reads | citation only |
-| 62 | Move structure / MONI / SPUMONI / Movi | 2021–2025 | r-index-based pangenome query | O(r)-space MEM/matching statistics | citation only |
+| 62 | Move structure / MONI / SPUMONI / Movi | 2021–2024 | r-index-based pangenome query | O(r)-space MEM/matching statistics | citation only |
 | 63 | UNCALLED / RawHash2 | 2021/2024 | Raw-signal nanopore mapping | Maps before basecalling (adaptive sampling) | citation only |
 | 64 | Conditional lower bounds for graph alignment | 2019/2020 | Theory | OV/SETH-hardness; NP-hardness only with graph edits | citation only (theory) |
+| 65 | T2T-CHM13 / v2.0 (+ T2T-Y) | 2022/2023 | Complete reference | Gapless genome + chrY; resolves SDs/centromeres/rDNA | citation only |
+| 66 | HPRC pangenome / HPRC2 | 2023/2026 | Pangenome reference | 94 → 460 haplotypes; near-complete common-variation coverage | citation only |
+| 67 | FixItFelix | 2023 | Reference-error correction | Mask false duplications + targeted remap | citation only |
+| 68 | levioSAM2 | 2024 | Coordinate lift-over | Map to CHM13, lift to GRCh38 (commit/defer/suppress) | citation only |
+| 69 | Pangenome-aware DeepVariant | 2025 | Pangenome-aware calling | Fewer errors in SDs (induces ~half as many new) | citation only |
+| 70 | SDrecall | 2026 | SD-specific calling | Homologous-network realignment + phasing/ILP | citation only |
+| 71 | Qtip | 2017 | MAPQ calibration | Tandem-simulation mapping-quality prediction | citation only |
 
 ---
 
@@ -286,8 +293,10 @@ predecessors of WFA, which generalizes them to gap-affine costs.
 - **Strengths:** First algorithm to compute edit distance in O(n·d) time
   and space, where d is the edit distance itself (not the sequence
   lengths) — exploiting the fact that the DP matrix's optimal path never
-  strays more than d cells from the main diagonal; provably optimal in the
-  regime d << n.
+  strays more than d cells from the main diagonal; an output-sensitive,
+  parameterized bound (no matching Ω(nd) lower bound is known, so it is not
+  "provably optimal"). Ukkonen's Theorem 2 gives O(s·min(m,n)) time/space
+  with the edit sequence, reducible to O(min(s,m,n)) score-only.
 - **Weaknesses:** Degrades to O(n²) when d is large (dissimilar
   sequences); needs d as an input or an outer doubling loop to discover
   it, adding a constant-factor overhead.
@@ -640,8 +649,9 @@ Equipment Corporation.
   similar contexts together, making the text far more compressible (runs
   of identical characters) while remaining exactly invertible; requires
   no extra side information beyond the sentinel position.
-- **Weaknesses:** Naive construction (sort all rotations) is O(n² log n)
-  or O(n log n) with suffix-array-based methods; by itself provides no
+- **Weaknesses:** Naive construction (sort all rotations) is O(n² log n);
+  with a linear-time suffix array (SA-IS) the BWT is buildable in O(n)
+  (older suffix-array methods gave O(n log n)); by itself provides no
   search capability — needs the FM-index machinery on top.
 - **Opportunities:** The compressibility property it provides is exactly
   what enables the FM-index's memory efficiency, and by extension every
@@ -692,11 +702,13 @@ array construction by almost pure induced-sorting. In *2009 Data
 Compression Conference*, 193-202.
 DOI: [10.1109/DCC.2009.42](https://doi.org/10.1109/DCC.2009.42)
 
-- **Strengths:** First induced-sorting algorithm to construct a suffix
-  array (the structure BWT/FM-index construction is normally built from)
-  in provably O(n) time *and* O(n) space with a compact (<100 line)
-  implementation — a major practical improvement over earlier O(n log n)
-  or higher-constant linear algorithms.
+- **Strengths:** The first simple, compact (<100 line) "almost pure"
+  induced-sorting construction of a suffix array (the structure BWT/FM-index
+  construction is normally built from) in provably O(n) time *and* O(n)
+  space. Linear-time SA construction predates it (Kärkkäinen–Sanders 2003;
+  Ko–Aluru 2003/2005); SA-IS's contribution is the simple induced-sorting
+  formulation — a major practical improvement over earlier higher-constant
+  linear algorithms.
 - **Weaknesses:** The induced-sorting recursion, while linear, has a
   larger constant factor than simpler (but asymptotically worse)
   approaches for small inputs; parallelizing it well is nontrivial.
@@ -1313,10 +1325,12 @@ the authors' own unless stated, measured on their hardware and baselines.)*
   DOI: [10.4230/LIPIcs.WABI.2024.17](https://doi.org/10.4230/LIPIcs.WABI.2024.17).
   Exact edit-distance alignment that combines A* search, a
   seed-based admissible heuristic, and Myers bit-parallel blocks in SIMD.
-  It is reported competitive with or faster than *approximate* methods on
-  all tested datasets, and it is the main exact competitor to (Bi)WFA for
-  long, divergent pairs. *Caveat:* unit-cost edit distance only; no
-  affine gaps yet.
+  It is reported often faster and never much slower than *approximate*
+  methods (WFA-adaptive, Block Aligner), and it is the main exact competitor
+  to (Bi)WFA for long, divergent pairs. The one loss (~10 kbp ONT reads,
+  where Block Aligner is ~1.6–2× faster) comes with a large accuracy cost
+  for the heuristic (~53% of alignments optimal). *Caveat:* unit-cost edit
+  distance only; no affine gaps yet.
 - **Block Aligner** — Liu, D., & Steinegger, M. (2023). Block Aligner:
   an adaptive SIMD-accelerated aligner for sequences and
   position-specific scoring matrices. *Bioinformatics*, 39(8), btad487.
@@ -1407,14 +1421,16 @@ the authors' own unless stated, measured on their hardware and baselines.)*
   BWA-MEM's variable-length (SMEM) seeding with minimap2's chaining and
   base-level alignment, plus prefetching and heuristics that skip
   unnecessary mate rescue and reduce effort in highly repetitive regions.
-  Reported ~4x faster than BWA-MEM and >2x faster than BWA-MEM2 at
-  comparable accuracy. It also maps accurate long reads and bisulfite data. **This is
+  Reported ~4x faster than BWA-MEM and >2x faster than BWA-MEM2 (the repo
+  README quotes >3×/2×) at near-comparable accuracy — marginally lower on
+  simulated WGS short reads, driven by centromeric/acrocentric regions, with
+  no variant-calling impact. It also maps accurate long reads and bisulfite data. **This is
   the most important short-read omission from the original review.**
   It is the strongest CPU baseline any new short-read aligner must beat.
   *Caveat:* preprint (June 2026); independent benchmarks pending.
 - **Strobealign with multi-context seeds (MCS)** — Tolstoganov, I.,
-  Martin, M., Buchin, K., & Sahlin, K. (2026). Multi-context seeds
-  enable fast and high-accuracy read mapping. *Genome Biology*.
+  Martin, M., Buchin, N., & Sahlin, K. (2026). Multi-context seeds
+  enable fast and high-accuracy read mapping. *Genome Biology*, 27, 118.
   DOI: [10.1186/s13059-026-04017-x](https://doi.org/10.1186/s13059-026-04017-x).
   Stores seeds of several lengths in one index so that both full and
   partial strobe matches are found. It improves accuracy at ≤150 nt
@@ -1425,8 +1441,9 @@ the authors' own unless stated, measured on their hardware and baselines.)*
   minimizer space with mapquik. *Genome Research*, 33(7), 1188-1197.
   DOI: [10.1101/gr.277679.123](https://doi.org/10.1101/gr.277679.123).
   Seeds are k *consecutive minimizers* (k-min-mers), and only
-  reference-unique k-min-mers are indexed. Reported ~30x faster than
-  minimap2 on human HiFi reads. *Caveat:* designed for low-divergence
+  reference-unique k-min-mers are indexed. Reported ~37x faster than
+  minimap2 on human HiFi reads in the published version (30x in the
+  preprint; 410x on maize). *Caveat:* designed for low-divergence
   (HiFi / Q20+) reads; unique-only indexing gives up sensitivity in
   repeats, so it is a fast path rather than a complete mapper.
 - **mm2-fast** — Kalikar, S., Jain, C., Vasimuddin, M., & Misra, S.
@@ -1442,8 +1459,9 @@ the authors' own unless stated, measured on their hardware and baselines.)*
   Jain, C., et al. (2022). Long-read mapping to repetitive reference
   sequences using Winnowmap2. *Nature Methods*, 19, 705-710.
   DOI: [10.1038/s41592-022-01457-8](https://doi.org/10.1038/s41592-022-01457-8).
-  Down-weights frequent k-mers, which improves mapping in repeats and
-  centromeres (T2T era).
+  Winnowmap down-weights frequent k-mers, improving mapping in repeats and
+  centromeres (T2T era); Winnowmap2 adds minimal confidently alignable
+  substrings (MCAS) and paralog-specific-variant sensitivity.
 - **Chaining with provable guarantees** — Jain, C., Gibney, D., &
   Thankachan, S. V. (2022). Algorithms for colinear chaining with
   overlaps and gap costs. *Journal of Computational Biology*, 29(11),
@@ -1477,7 +1495,7 @@ the authors' own unless stated, measured on their hardware and baselines.)*
   DOI: [10.1038/s41587-024-02382-1](https://doi.org/10.1038/s41587-024-02382-1).
   FPGA-accelerated mapping to a *multigenome (pangenome) reference*,
   plus ML-based variant calling and specialized callers for medically
-  relevant genes. About 30 min from raw reads to variants per 30x
+  relevant genes. About 30 min from raw reads to variants per ~35x
   genome, evaluated on 3,202 1000 Genomes samples. **Omitting DRAGEN
   was the largest gap in the original review:** it is the de facto
   clinical standard for Illumina data, and any claim of "faster in
@@ -1494,8 +1512,8 @@ the authors' own unless stated, measured on their hardware and baselines.)*
   re-implementation of BWA-MEM and GATK-equivalent algorithms; widely
   used in clinical labs.
 - **ONT production stack** — Dorado basecaller (R10.4.1, v5 models)
-  with integrated minimap2 alignment (`lr:hq` preset recommended for
-  Q20+ data since 2025), and the `wf-human-variation` workflow (Clair3,
+  with integrated minimap2 alignment (`lr:hq` preset for Q20+ data, added
+  in minimap2 v2.27, 2024), and the `wf-human-variation` workflow (Clair3,
   Sniffles2, Straglr, modkit). This is the long-read clinical baseline.
 
 ### K.5 Raw-signal and real-time mapping (ONT)
@@ -1527,6 +1545,90 @@ the authors' own unless stated, measured on their hardware and baselines.)*
   complexity of string matching for graphs. *ICALP 2019*.
   DOI: [10.4230/LIPIcs.ICALP.2019.55](https://doi.org/10.4230/LIPIcs.ICALP.2019.55)
   — OV/SETH-conditional quadratic lower bound, even for exact matching.
+
+### K.7 Reference content, coordinates and calling
+
+*(Added by the Nov. 2026 correctness review, see [SWOT_REVIEW.md](SWOT_REVIEW.md).
+The original review covered algorithmics but not the reference itself; yet
+reference-content errors — missing/collapsed copies, false duplications,
+coordinate lift-over — bound achievable placement accuracy independently of
+the aligner. This is the class that dominates the residual confident errors
+of certified aligners; see
+[certa/reports/Theoretical limits of certified read placement.md](certa/reports/Theoretical%20limits%20of%20certified%20read%20placement.md),
+Limits 3–6.)*
+
+- **T2T-CHM13 / v2.0** — Nurk, S., et al. (2022). The complete sequence of a
+  human genome. *Science*, 376(6588), 44-53.
+  DOI: [10.1126/science.abj6987](https://doi.org/10.1126/science.abj6987).
+  v2.0 = **GCA_009914755.4 / GCF_009914755.1**, adding a complete chromosome Y
+  from HG002 (T2T-Y): Rhie, A., et al. (2023). The complete sequence of a
+  human Y chromosome. *Nature*, **621**, 344-354.
+  DOI: [10.1038/s41586-023-06457-y](https://doi.org/10.1038/s41586-023-06457-y)
+  (62,460,029 bp; >30 Mbp added vs GRCh38-Y; TSPY/DAZ/RBMY arrays). Resolves
+  centromeres, acrocentric short arms, rDNA and segmental duplications absent
+  from GRCh38. *Caveat:* a single (mostly haploid) genome — a second opinion /
+  sink source, not a population reference.
+- **HPRC pangenome (draft → HPRC2)** — Liao, W.-W., et al. (2023). A draft
+  human pangenome reference. *Nature*, 617, 312-324.
+  DOI: [10.1038/s41586-023-05896-x](https://doi.org/10.1038/s41586-023-05896-x)
+  (47 individuals / 94 haplotypes; pangenome mapping cuts small-variant errors
+  and improves SV genotyping). **HPRC2:** Lucas, J. K., Hebbar, P.,
+  Liao, W.-W., et al. (2026). HPRC2: a human pangenome reference with
+  near-complete coverage of common genetic variation.
+  [bioRxiv 10.64898/2026.07.21.739710](https://doi.org/10.64898/2026.07.21.739710)
+  (**460 haplotypes / 232 individuals**; >99% of common variation in All of Us
+  v8; thousands of T2T chromosomes; **halves** structurally unreliable regions
+  and per-haplotype base errors vs HPRC1; formal pangenome coordinates for
+  off-reference variation). *Caveat:* preprint; graph coordinate systems and
+  tooling maturity remain the adoption barrier.
+- **Reference errors / missing copies (FixItFelix)** — Behera, S., LeFaive,
+  J., Orchard, P., et al. (2023). FixItFelix: improving genomic analysis by
+  fixing reference errors. *Genome Biology*, 24, 31.
+  DOI: [10.1186/s13059-023-02863-7](https://doi.org/10.1186/s13059-023-02863-7).
+  GRCh38 has ~1.2 Mbp falsely duplicated + ~8.04 Mbp falsely collapsed SDs
+  affecting 33 protein-coding genes (12 medically relevant); a masked/decoy
+  modified GRCh38 + targeted remap (~4-5 min per 30× BAM) raises CMRG SNV
+  F-measure 0.012→0.980 in false-dup genes. *Caveat:* a decoy can steal real
+  reads (FANCD2 recall collapsed 0.941→0.318) — validate per locus.
+- **Coordinate lift-over (levioSAM2)** — Chen, N. C., Paulin, L. F.,
+  Sedlazeck, F. J., Koren, S., Phillippy, A. M., & Langmead, B. (2024).
+  Improved sequence mapping using a complete reference genome and lift-over.
+  *Nature Methods*, **21**, 41-49.
+  DOI: [10.1038/s41592-023-02069-6](https://doi.org/10.1038/s41592-023-02069-6).
+  Map to T2T-CHM13 first, then lift to GRCh38 (commit / defer-reconcile /
+  suppress); improves variant accuracy especially in CMRG (11-52% fewer
+  errors). Predecessor levioSAM: Mun, Chen, Langmead (2021), *Bioinformatics*,
+  btab396. *Caveat:* lift-over chains are unreliable inside SDs.
+- **Pangenome-aware calling** — Asri, M., et al. (2025). Pangenome-aware
+  DeepVariant. [bioRxiv 10.1101/2025.06.05.657102](https://doi.org/10.1101/2025.06.05.657102).
+  Up to ~25.5% fewer variant errors vs linear DeepVariant, greatest in
+  SDs/low-mappability (~20.3% fewer in >99%-identity SDs); a personalized
+  32-haplotype pangenome ≈ the full 88-haplotype graph. DeepVariant itself:
+  Poplin, R., et al. (2018). *Nature Biotechnology*, 36, 983-987.
+  DOI: [10.1038/nbt.4235](https://doi.org/10.1038/nbt.4235). *Caveat:* induces
+  ~half as many new errors as it fixes (5,497 induced vs 9,272 fixed SNPs),
+  concentrated in high-identity SDs.
+- **SD-specific calling (SDrecall)** — Yang, X. T., She, C. H., et al.
+  (2026). SDrecall. *Genome Biology*, **27**, 23.
+  DOI: [10.1186/s13059-025-03928-5](https://doi.org/10.1186/s13059-025-03928-5).
+  Homologous-sequence network + realignment + phasing/ILP; ~95% sensitivity
+  for short variants in SDs from short reads alone. *Caveat:* short reads
+  cannot fully resolve copy ambiguity per-read (the identifiability limit).
+- **MAPQ calibration (Qtip)** — Langmead, B. (2017). A tandem simulation
+  framework for predicting mapping quality. *Genome Biology*, 18, 152.
+  DOI: [10.1186/s13059-017-1290-3](https://doi.org/10.1186/s13059-017-1290-3).
+  Predicts aligner MAPQ from tandem simulations; uses MAQ's error taxonomy and
+  *assumes absent-source (category-1) errors rare enough to ignore*, while
+  proposing global category-1 scaling as a fix. *Note:* there is **no 2024
+  Qtip paper** — the 2024 "QTIP" (arXiv:2406.11235) is LLM weight quantization.
+- **Reference-content impact / truth sets** — Aganezov, S., et al. (2022).
+  A complete reference genome improves analysis of human genetic variation.
+  *Science*, 376, eabl3533.
+  DOI: [10.1126/science.abl3533](https://doi.org/10.1126/science.abl3533)
+  (203 collapsed loci / 8.04 Mbp; 12 false-duplication loci). GIAB truth:
+  Zook, J. M., et al. (2020). A robust benchmark for detection of germline
+  large deletions and insertions. *Nature Biotechnology*, 38, 1347-1355.
+  DOI: [10.1038/s41587-020-0538-8](https://doi.org/10.1038/s41587-020-0538-8).
 
 ---
 
@@ -1565,6 +1667,13 @@ for DNA read alignment as of September 2026 is:
   alignment. The reason is conditional quadratic lower bounds and
   tooling and coordinate-system complexity, not NP-hardness (graph
   alignment with edits only in the query is polynomial; see K.6).
+- *Reference content*, not just algorithmics, bounds achievable accuracy:
+  reads whose true copy is missing from or collapsed in GRCh38 cannot be
+  correctly placed by any reference-only score-maximiser and are confidently
+  mismapped (K.7; Limits 3–6 in
+  [certa/reports/Theoretical limits of certified read placement.md](certa/reports/Theoretical%20limits%20of%20certified%20read%20placement.md)).
+  T2T/HPRC references, lift-over and pangenome-aware calling address this, but
+  no aligner yet certifies abstention against a missing-copy posterior.
 
 **Opportunities**
 - *Adaptive* alignment effort: Block Aligner, minibwa's repeat-aware
