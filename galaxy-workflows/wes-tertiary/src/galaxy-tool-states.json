@@ -142,6 +142,21 @@
     },
     "tool_version": "1.0.0"
   },
+  "WES tertiary analysis from FASTQ (v1)/hla_typing": {
+    "tool_id": "wes_hla",
+    "tool_state": {
+      "__page__": 0,
+      "__rerun_remap_job_id__": null,
+      "bam": {
+        "__class__": "ConnectedValue"
+      },
+      "hla_dat": {
+        "__class__": "ConnectedValue"
+      },
+      "min_quality": "20"
+    },
+    "tool_version": "0.1.0+galaxy0"
+  },
   "WES tertiary analysis from FASTQ (v1)/hs_metrics": {
     "tool_id": "toolshed.g2.bx.psu.edu/repos/devteam/picard/picard_CollectHsMetrics/3.1.1",
     "tool_state": {
@@ -526,6 +541,9 @@
       "gnomad_coverage": {
         "__class__": "ConnectedValue"
       },
+      "hla": {
+        "__class__": "ConnectedValue"
+      },
       "hpo_annotations": {
         "__class__": "ConnectedValue"
       },
@@ -588,7 +606,7 @@
         "__class__": "ConnectedValue"
       }
     },
-    "tool_version": "0.13.0+galaxy0"
+    "tool_version": "0.14.0+galaxy0"
   },
   "WES tertiary analysis from FASTQ (v1)/tertiary/clinvar_annotation": {
     "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
@@ -818,9 +836,12 @@
       "input": {
         "__class__": "ConnectedValue"
       },
+      "outside_calls": {
+        "__class__": "ConnectedValue"
+      },
       "sources": null
     },
-    "tool_version": "3.4.0+galaxy0"
+    "tool_version": "3.4.0+galaxy1"
   },
   "WES tertiary analysis from FASTQ (v1)/tertiary/population_annotation": {
     "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
@@ -1306,6 +1327,9 @@
       "gnomad_coverage": {
         "__class__": "ConnectedValue"
       },
+      "hla": {
+        "__class__": "ConnectedValue"
+      },
       "hpo_annotations": {
         "__class__": "ConnectedValue"
       },
@@ -1368,7 +1392,7 @@
         "__class__": "ConnectedValue"
       }
     },
-    "tool_version": "0.13.0+galaxy0"
+    "tool_version": "0.14.0+galaxy0"
   },
   "WES tertiary analysis from VCF (v2)/clinvar_annotation": {
     "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
@@ -1598,9 +1622,12 @@
       "input": {
         "__class__": "ConnectedValue"
       },
+      "outside_calls": {
+        "__class__": "ConnectedValue"
+      },
       "sources": null
     },
-    "tool_version": "3.4.0+galaxy0"
+    "tool_version": "3.4.0+galaxy1"
   },
   "WES tertiary analysis from VCF (v2)/population_annotation": {
     "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",

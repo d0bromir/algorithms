@@ -20,7 +20,8 @@ earlier report of the sample, a section lists what is new, changed or no longer 
 
 Optional knowledge (0.11): MANE transcripts (RefSeq and genomic HGVS names), ClinGen/G2P/Orphanet disease context with
 genotype fit, ClinGen expert-panel rules and classifications, REVEL, MaveDB functional assays, Collins dosage and
-gnomAD exome CNV frequencies for CNVs, UniProt features, mitochondrial calls (wes_mito), and input provenance.
+gnomAD exome CNV frequencies for CNVs, UniProt features, mitochondrial calls (wes_mito), HLA types (wes_hla), and
+input provenance.
 
 Standard library only (Python >= 3.8).
 """
@@ -39,7 +40,7 @@ import statistics
 import subprocess
 import sys
 
-VERSION = "0.13.0"
+VERSION = "0.14.0"
 
 # --------------------------------------------------------------------------------------------- rules
 # ACMG secondary findings v3.3 (ACMG policy statement, Genet Med 2025;27:101454): the 81 genes of v3.2 (Miller et al.,
@@ -2693,6 +2694,54 @@ def load_mito(tsv, js):
     return rows, summ
 
 
+def load_hla(path):
+    """wes_hla summary (JSON) -> dict with genotypes and associations, or {}."""
+    if not path:
+        return {}
+    with opener(path) as f:
+        return json.load(f)
+
+
+def hla_section(R, hla):
+    """HLA types and HLA pharmacogenomic / disease-association alleles (wes_hla), inside the pharmacogenomics section."""
+    R.h("<h3>HLA alleles</h3>")
+    if not hla:
+        R.h("<p class='none'>Not typed: no HLA types given (wes_hla on the aligned reads).</p>")
+        return
+    R.h(f"<p class='small'>{esc(hla.get('tool', 'wes_hla'))}, IPD-IMGT/HLA {esc(hla.get('database', ''))}. "
+        "Two-field (protein-level) alleles from the exome reads; <b>low</b> confidence: T1K quality below "
+        f"{esc(hla.get('min_quality', 20))} or candidates that differ in the antigen-recognition exons. Exome typing "
+        "resolves these exons only (G groups); drug decisions on an HLA allele are usually confirmed by a clinical HLA test."
+        "</p>")
+    rows = []
+    for g in hla.get("genotypes", []):
+        if g["confidence"] == "none":
+            gt, kind = esc(g["note"]), "t-amb"
+        else:
+            gt, kind = f"{esc(g['allele1'])} / {esc(g['allele2'])}", ("t-grn" if g["confidence"] == "high" else "t-amb")
+        rows.append([f"<b>{esc(g['gene'])}</b>", gt, tag(g["confidence"], kind),
+                     f"{esc(g['quality1'])} / {esc(g['quality2'])}" if g["confidence"] != "none" else "",
+                     esc(g["note"]) if g["confidence"] != "none" else ""])
+        if g["confidence"] != "none":
+            R.rows.append(("hla_type", None, (g["gene"], f"{g['allele1']}/{g['allele2']}", g["confidence"])))
+    R.table(["Gene", "Alleles", "Confidence", "Quality (0-60)", "Notes"], rows)
+    rows = []
+    for a in hla.get("associations", []):
+        st = a["status"]
+        kind = "t-red" if st == "present" and a["kind"] == "pharmacogenomic" else (
+            "t-amb" if st.startswith("present") or "determined" in st else "t-grn")
+        rows.append([esc(a["kind"]), f"<b>{esc(a['allele'])}</b>", esc(a["condition"]), tag(st, kind),
+                     f"<span class='small'>{esc(a['source'])}</span>"])
+        if st.startswith("present"):
+            R.rows.append(("pgx" if a["kind"] == "pharmacogenomic" else "hla_association", None,
+                           ("HLA-" + a["allele"].split("*")[0] if "*" in a["allele"] else "HLA-DQ",
+                            a["allele"], f"{a['condition']} ({st})")))
+    R.h("<p class='small'>Pharmacogenomic alleles of CPIC guidelines (the recommendations are in the PharmCAT report "
+        "when its outside calls are given) and HLA disease associations. An associated allele raises the risk; it "
+        "does not diagnose the disease.</p>")
+    R.table(["Kind", "Allele", "Drug or condition", "Status", "Note"], rows)
+
+
 def load_cnv_summary(path):
     if not path:
         return {}
@@ -3254,6 +3303,7 @@ def build(args):
     MANE.clear()
     MANE.update(load_mane(args.mane))
     mito_rows, mito_sum = load_mito(args.mito_tsv, args.mito_json)
+    hla = load_hla(args.hla)
     load_runs(args.gnomad_coverage, variants, "coverage")
     PEXT_MAX.clear()
     load_runs(args.pext, variants, "pext")
@@ -4219,8 +4269,11 @@ def build(args):
         R.rows.append(("pgx", None, (gene, dip, ph)))
     R.table(["Gene", "Alleles tested", "Genotype", "Predicted phenotype", "Affected drugs"], rows)
     na_pgx = NOT_ASSESSED_PGX.replace("MT-RNR1 (aminoglycosides; mitochondrial genome), ", "") if mito_sum         else NOT_ASSESSED_PGX
+    if hla:
+        na_pgx = na_pgx.replace("HLA-A/HLA-B alleles (abacavir, carbamazepine, allopurinol...), ", "")
     R.h(f"<p class='small'><b>Not assessed by this exome pipeline:</b> {esc(na_pgx)}"
         + (" (MT-RNR1: section 10)" if mito_sum else "") + ".</p>")
+    hla_section(R, hla)
     pharmcat = load_pharmcat(args.pharmcat)
     if args.pharmcat:
         R.h(f"<h3>PharmCAT {esc(pharmcat['version'])}</h3><p class='small'>Diplotypes from PharmCAT's named-allele "
@@ -4827,6 +4880,7 @@ def main(argv=None):
     ap.add_argument("--mave", help="calibrated functional-assay evidence (data/build_mavedb.py from the MaveDB dump): "
                     "PS3/BS3 at the calibrated strength")
     ap.add_argument("--mito-tsv", help="mitochondrial calls of wes_mito (TSV)")
+    ap.add_argument("--hla", help="wes_hla summary (JSON): HLA types, pharmacogenomic HLA alleles, disease associations")
     ap.add_argument("--mito-json", help="wes_mito summary (JSON): chrM coverage, detection limit, mixture check")
     ap.add_argument("--previous-tsv", help="TSV output of an earlier report of the same sample: lists what changed")
     ap.add_argument("--previous-name", help="name of the earlier report shown in the comparison")

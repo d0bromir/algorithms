@@ -1,0 +1,179 @@
+{
+ "sample": "TEST",
+ "tool": "wes_hla 0.1.0, T1K (--preset hla)",
+ "database": "3.66.0",
+ "min_quality": 20,
+ "genotypes": [
+  {
+   "gene": "HLA-A",
+   "allele1": "A*01:01",
+   "allele2": "A*26:01",
+   "quality1": 60,
+   "quality2": 60,
+   "confidence": "high",
+   "candidates1": "A*01:01",
+   "candidates2": "A*26:01",
+   "note": ""
+  },
+  {
+   "gene": "HLA-B",
+   "allele1": "B*38:01",
+   "allele2": "B*57:01",
+   "quality1": 60,
+   "quality2": 60,
+   "confidence": "high",
+   "candidates1": "B*38:01",
+   "candidates2": "B*57:01",
+   "note": ""
+  },
+  {
+   "gene": "HLA-C",
+   "allele1": "C*04:01",
+   "allele2": "C*12:03",
+   "quality1": 60,
+   "quality2": 58,
+   "confidence": "high",
+   "candidates1": "C*04:01",
+   "candidates2": "C*12:03",
+   "note": ""
+  },
+  {
+   "gene": "HLA-DRB1",
+   "allele1": "DRB1*04:02",
+   "allele2": "DRB1*10:01",
+   "quality1": 40,
+   "quality2": 45,
+   "confidence": "high",
+   "candidates1": "DRB1*04:02",
+   "candidates2": "DRB1*10:01",
+   "note": ""
+  },
+  {
+   "gene": "HLA-DRB3",
+   "allele1": "",
+   "allele2": "",
+   "quality1": "",
+   "quality2": "",
+   "confidence": "none",
+   "candidates1": "",
+   "candidates2": "",
+   "note": "not typed (no reads, or the gene is absent from this haplotype)"
+  },
+  {
+   "gene": "HLA-DRB4",
+   "allele1": "",
+   "allele2": "",
+   "quality1": "",
+   "quality2": "",
+   "confidence": "none",
+   "candidates1": "",
+   "candidates2": "",
+   "note": "not typed (no reads, or the gene is absent from this haplotype)"
+  },
+  {
+   "gene": "HLA-DRB5",
+   "allele1": "",
+   "allele2": "",
+   "quality1": "",
+   "quality2": "",
+   "confidence": "none",
+   "candidates1": "",
+   "candidates2": "",
+   "note": "not typed (no reads, or the gene is absent from this haplotype)"
+  },
+  {
+   "gene": "HLA-DQA1",
+   "allele1": "DQA1*01:05",
+   "allele2": "DQA1*03:01",
+   "quality1": 15,
+   "quality2": 30,
+   "confidence": "low",
+   "candidates1": "DQA1*01:05",
+   "candidates2": "DQA1*03:01",
+   "note": "quality below 20"
+  },
+  {
+   "gene": "HLA-DQB1",
+   "allele1": "DQB1*03:02",
+   "allele2": "DQB1*05:01",
+   "quality1": 45,
+   "quality2": 50,
+   "confidence": "high",
+   "candidates1": "DQB1*03:02",
+   "candidates2": "DQB1*05:01",
+   "note": ""
+  },
+  {
+   "gene": "HLA-DPA1",
+   "allele1": "",
+   "allele2": "",
+   "quality1": "",
+   "quality2": "",
+   "confidence": "none",
+   "candidates1": "",
+   "candidates2": "",
+   "note": "not typed (too few reads)"
+  },
+  {
+   "gene": "HLA-DPB1",
+   "allele1": "",
+   "allele2": "",
+   "quality1": "",
+   "quality2": "",
+   "confidence": "none",
+   "candidates1": "",
+   "candidates2": "",
+   "note": "not typed (too few reads)"
+  }
+ ],
+ "associations": [
+  {
+   "kind": "pharmacogenomic",
+   "allele": "B*57:01",
+   "copies": 1,
+   "condition": "abacavir: hypersensitivity reaction",
+   "status": "present",
+   "source": "CPIC 2014 (Martin et al.)"
+  },
+  {
+   "kind": "pharmacogenomic",
+   "allele": "B*15:02",
+   "copies": 0,
+   "condition": "carbamazepine, oxcarbazepine, phenytoin, fosphenytoin: Stevens-Johnson syndrome / TEN",
+   "status": "absent",
+   "source": "CPIC 2017 (Phillips et al.)"
+  },
+  {
+   "kind": "pharmacogenomic",
+   "allele": "A*31:01",
+   "copies": 0,
+   "condition": "carbamazepine: SJS/TEN, DRESS and maculopapular exanthema",
+   "status": "absent",
+   "source": "CPIC 2017 (Phillips et al.)"
+  },
+  {
+   "kind": "pharmacogenomic",
+   "allele": "B*58:01",
+   "copies": 0,
+   "condition": "allopurinol: severe cutaneous adverse reactions (SCAR)",
+   "status": "absent",
+   "source": "CPIC 2015 (Saito et al.)"
+  },
+  {
+   "kind": "disease association",
+   "allele": "DQ8",
+   "copies": 1,
+   "condition": "celiac disease",
+   "status": "not determined",
+   "source": "present in about 30-40 % of the population; most carriers never develop celiac disease"
+  }
+ ],
+ "pharmcat_outside_calls": [
+  "HLA-A\t*01:01/*26:01",
+  "HLA-B\t*38:01/*57:01"
+ ],
+ "seconds": {
+  "reference": 15,
+  "total": 170
+ }
+}

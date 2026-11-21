@@ -1,0 +1,89 @@
+<tool id="wes_hla" name="HLA typing" version="0.1.0+galaxy0" profile="23.0">
+    <description>HLA class I and II alleles from exome reads (T1K), pharmacogenomic HLA alleles and disease associations</description>
+    <requirements>
+        <requirement type="package" version="1.0.10">t1k</requirement>
+        <requirement type="package" version="1.22">samtools</requirement>
+        <requirement type="package" version="3.12">python</requirement>
+    </requirements>
+    <version_command>run-t1k 2>&amp;1 | head -1</version_command>
+    <command detect_errors="exit_code"><![CDATA[
+ln -s '$bam' input.bam &&
+ln -s '${bam.metadata.bam_index}' input.bam.bai &&
+python3 '$__tool_directory__/wes_hla.py'
+    --bam input.bam
+    #if $hla_dat:
+        --hla-dat '$hla_dat'
+    #end if
+    --sample '$bam.element_identifier'
+    --threads \${GALAXY_SLOTS:-4}
+    --min-quality $min_quality
+    --tsv '$types'
+    --json '$summary'
+    --pharmcat '$outside_calls'
+    ]]></command>
+    <inputs>
+        <param name="bam" type="data" format="bam" label="Aligned reads (BAM)"
+               help="Duplicate-marked reads of the sample on GRCh38 (chromosome 6 named 6 or chr6), with the unmapped reads kept, as the FASTQ workflow writes them."/>
+        <param name="hla_dat" type="data" format="txt" optional="true" label="HLA allele database (IPD-IMGT/HLA hla.dat)"
+               help="hla.dat of an IPD-IMGT/HLA release (https://ftp.ebi.ac.uk/pub/databases/ipd/imgt/hla/hla.dat; the install script's data stage downloads it). T1K's allele reference is built from it in each job (about 15 s). Without it nothing is typed and the outputs say so."/>
+        <param name="min_quality" type="integer" value="20" min="0" max="60" label="Lowest T1K quality of a confident call"
+               help="T1K's allele quality ranges from 0 to 60. Below it, or when the candidate alleles differ at two fields, the call is marked low confidence and is not passed to PharmCAT."/>
+    </inputs>
+    <outputs>
+        <data name="types" format="tabular" label="${tool.name} on ${on_string}: HLA types"/>
+        <data name="summary" format="json" label="${tool.name} on ${on_string}: summary"/>
+        <data name="outside_calls" format="tabular" label="${tool.name} on ${on_string}: PharmCAT outside calls"/>
+    </outputs>
+    <tests>
+        <test expect_num_outputs="3">
+            <param name="bam" value="hla_a.bam" ftype="bam"/>
+            <param name="hla_dat" value="hla_a.dat" ftype="txt"/>
+            <output name="types" ftype="tabular">
+                <assert_contents>
+                    <has_text_matching expression="HLA-A\tA\*01:01\tA\*11:01\t\d+\t\d+\thigh"/>
+                </assert_contents>
+            </output>
+            <output name="outside_calls" ftype="tabular">
+                <assert_contents>
+                    <has_text text="HLA-A&#9;*01:01/*11:01"/>
+                </assert_contents>
+            </output>
+            <output name="summary" ftype="json">
+                <assert_contents>
+                    <has_text text="&quot;allele&quot;: &quot;A*31:01&quot;"/>
+                </assert_contents>
+            </output>
+        </test>
+    </tests>
+    <help><![CDATA[
+**What it does**
+
+Types the HLA genes of one exome with T1K 1.0.10 (Song, Bai, Li et al., Genome Research 2023; MIT licence) against
+the IPD-IMGT/HLA database (Barker et al., Nucleic Acids Res 2023; CC BY-ND 4.0). T1K takes the reads aligned to the
+HLA genes and the unmapped reads from the BAM, aligns them to every allele, and picks the two alleles per gene that
+explain the reads best.
+
+**Outputs**
+
+* *HLA types*: for HLA-A, -B, -C, -DRB1, -DRB3/4/5, -DQA1, -DQB1, -DPA1 and -DPB1 the two alleles at two-field
+  (protein) resolution, T1K's quality (0-60), the other equally good candidates and a confidence (high / low /
+  none). A second table lists the pharmacogenomic alleles of CPIC guidelines (HLA-B*57:01 abacavir; HLA-B*15:02
+  carbamazepine, oxcarbazepine, phenytoin; HLA-A*31:01 carbamazepine; HLA-B*58:01 allopurinol) and the best-known
+  disease associations (HLA-B*27, HLA-B*51, HLA-DQB1*06:02, the celiac-disease DQ2/DQ8 heterodimers).
+* *summary* (JSON) for the clinical report.
+* *PharmCAT outside calls*: the HLA-A and HLA-B diplotypes (confident calls only) for the PharmCAT tool, which then
+  gives the CPIC, DPWG and FDA recommendations for these drugs.
+
+**Accuracy** (README section 7): two-field alleles against published types of six GIAB exomes, and Mendelian
+consistency in three trios.
+
+**Limits**: exome capture covers the exons that define two-field alleles (exons 2-3 of class I, exon 2 of class
+II); three- and four-field alleles, null alleles from intronic or promoter changes and new alleles are not
+resolved. A gene with one allele found is homozygous or a missed allele. HLA associations are risk factors, not
+diagnoses; drug decisions on HLA-B*57:01 or HLA-B*15:02 are usually confirmed with a clinical HLA test.
+    ]]></help>
+    <citations>
+        <citation type="doi">10.1101/gr.277585.122</citation>
+        <citation type="doi">10.1093/nar/gkac1011</citation>
+    </citations>
+</tool>

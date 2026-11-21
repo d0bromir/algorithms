@@ -72,6 +72,11 @@ def tools(tools_yml):
 
 def local_deps(*tool_ids):
     for tid in tool_ids:
+        try:
+            gi.tools.show_tool(tid)
+        except Exception:  # noqa: BLE001 - not loaded
+            print(f"  {tid}: not loaded by Galaxy yet: restart Galaxy, then re-run the 'local-tools' stage")
+            sys.exit(1)
         reqs = gi.tools.requirements(tid)
         if reqs and all(r.get("dependency_type") not in (None, "null") for r in reqs):
             print(f"  {tid}: resolved ({reqs[0].get('environment_path', '')})")

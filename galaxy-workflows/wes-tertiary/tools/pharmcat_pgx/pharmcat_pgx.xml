@@ -1,4 +1,4 @@
-<tool id="pharmcat_pgx" name="PharmCAT pharmacogenomics" version="3.4.0+galaxy0" profile="23.0">
+<tool id="pharmcat_pgx" name="PharmCAT pharmacogenomics" version="3.4.0+galaxy1" profile="23.0">
     <description>star-allele diplotypes, phenotypes and CPIC/DPWG/FDA recommendations from a germline VCF</description>
     <requirements>
         <requirement type="package" version="3.4.0">pharmcat3</requirement>
@@ -23,6 +23,17 @@ pharmcat_pipeline '$vcf' -o out
     #end if
     -reporterHtml -reporterJson -reporterCallsOnlyTsv
     -cp \${GALAXY_SLOTS:-1} &&
+## outside calls (HLA-A/B from wes_hla): pharmcat_pipeline has no option for them, so the phenotyper and reporter
+## are re-run by PharmCAT itself on the preprocessed VCF with the outside-call file
+#if $outside_calls:
+    if [ -s '$outside_calls' ]; then
+        pharmcat -vcf out/sample.preprocessed.vcf.bgz -po '$outside_calls'
+        #if $sources:
+            -rs '$sources'
+        #end if
+        -reporterHtml -reporterJson -reporterCallsOnlyTsv -o out ;
+    fi &&
+#end if
 mv out/sample.report.html '$report' &&
 mv out/sample.report.json '$report_json' &&
 mv out/sample.report.tsv '$calls'
@@ -33,6 +44,8 @@ mv out/sample.report.tsv '$calls'
         <param name="absent_to_ref" type="boolean" truevalue="--absent-to-ref" falsevalue="" checked="false"
                label="Assume pharmacogenomic positions absent from the VCF are reference (0/0)"
                help="Only for a whole-genome or gVCF-like call set. In an exome VCF an absent position is often simply not covered (off-target), and this would turn missing data into a reference call."/>
+        <param name="outside_calls" type="data" format="tabular" optional="true" label="Outside calls (PharmCAT TSV)"
+               help="Diplotypes called by another tool, one gene per line (gene, tab, diplotype), e.g. the HLA-A and HLA-B calls of the HLA typing tool (wes_hla). PharmCAT then reports the HLA drug recommendations (abacavir, allopurinol, carbamazepine, oxcarbazepine, phenytoin). An empty file is ignored."/>
         <param name="sources" type="select" multiple="true" optional="true" display="checkboxes" label="Guideline sources"
                help="Default: all (CPIC, DPWG, FDA).">
             <option value="CPIC">CPIC</option>
@@ -54,6 +67,15 @@ mv out/sample.report.tsv '$calls'
                 </assert_contents>
             </output>
         </test>
+        <test expect_num_outputs="3">
+            <param name="input" value="pgx_in.vcf" ftype="vcf"/>
+            <param name="outside_calls" value="hla_outside.tsv" ftype="tabular"/>
+            <output name="report_json" ftype="json">
+                <assert_contents>
+                    <has_text text="*57:01 positive"/>
+                </assert_contents>
+            </output>
+        </test>
     </tests>
     <help><![CDATA[
 **What it does**
@@ -69,7 +91,7 @@ missing positions), which the exome clinical report shows in its pharmacogenomic
 
 **Exomes**: positions outside the capture are absent from the VCF and are reported by PharmCAT as missing; a call
 made with missing positions can hide an allele defined there (e.g. CYP2C19 \*17, UGT1A1 \*28/\*80 promoter). CYP2D6,
-HLA-A/B and MT-RNR1 need outside calls and are not made here. On the first run PharmCAT downloads its GRCh38
+HLA-A/B need outside calls: give the HLA typing tool's (wes_hla) outside-call file; MT-RNR1 is not called here. On the first run PharmCAT downloads its GRCh38
 reference (about 0.9 GB) into its conda environment.
 
 PharmCAT is MPL-2.0; its guideline data come from CPIC, DPWG and the FDA via ClinPGx.
