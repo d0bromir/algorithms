@@ -3,6 +3,7 @@
     python3 tests/acmg_clinvar_eval.py ANNOTATED.vcf clinvar_truth.tsv REF_DIR [--split tune|holdout|all] [--tsv OUT]
         [--mane MANE.summary.txt.gz] [--gene-disease gene_disease.tsv] [--vcep-rules vcep_rules.tsv]
         [--mave mave_evidence.tsv.gz] [--missense-policy alphamissense|revel|concordant]
+        [--gnomad-coverage cov.tsv --cov-min X] [--pext pext.tsv --pext-low X --pext-action drop|moderate]
 
 ANNOTATED.vcf is the VCF workflow's annotated_vcf for tests/acmg_clinvar_set.py's pseudo-sample; REF_DIR holds the
 reference files install.sh downloads (GenCC, gnomAD constraint, ClinGen dosage, ClinVar residue table, FASTA).
@@ -22,6 +23,12 @@ ap.add_argument("--missense-policy", choices=("alphamissense", "revel", "concord
 ap.add_argument("--mave", help="data/build_mavedb.py evidence: calibrated PS3/BS3 (needs --mane for protein matches)")
 ap.add_argument("--vcep-keep", default=None, help="comma-separated codes whose strength VCEP caps do not reduce "
                 "(default: the report's VCEP_KEEP_STRENGTH; '' = apply all caps)")
+ap.add_argument("--gnomad-coverage", help="data/build_gnomad_sites.py coverage runs: PM2 only where gnomAD is covered")
+ap.add_argument("--pext", help="data/build_gnomad_sites.py pext runs: no PVS1 in little-expressed exons")
+ap.add_argument("--cov-min", type=float, help="COVERAGE_MIN_OVER20 (default: the report's)")
+ap.add_argument("--pext-low", type=float, help="PEXT_LOW (default: the report's)")
+ap.add_argument("--pext-measure", choices=("mean", "max"), help="PEXT_MEASURE (default: the report's)")
+ap.add_argument("--pext-action", choices=("drop", "moderate"), help="PEXT_ACTION (default: the report's)")
 ap.add_argument("--vcep-rules", help="data/build_vcep.py rules: ClinGen expert-panel cut-offs, codes and strengths")
 a = ap.parse_args()
 t0 = time.time()
@@ -53,6 +60,11 @@ variants = [v for v in variants if (v.chrom, v.pos, v.ref, v.alt) in truth and (
 for v in variants:
     R.apply_main_annotation(v)
 R.load_mave(a.mave, variants)
+R.load_runs(a.gnomad_coverage, variants, "coverage")
+R.load_runs(a.pext, variants, "pext")
+for k, attr in (("cov_min", "COVERAGE_MIN_OVER20"), ("pext_low", "PEXT_LOW"), ("pext_action", "PEXT_ACTION"), ("pext_measure", "PEXT_MEASURE")):
+    if getattr(a, k) is not None:
+        setattr(R, attr, getattr(a, k))
 inframe = [v for v in variants if any(e in (v.anns[0][1] if v.anns else "") for e in R.INFRAME_EFFECTS)]
 ctx = R.reference_contexts(f"{a.ref}/GRCh38.ensembl115.primary_assembly.fa", prefix, inframe)
 for v in inframe:

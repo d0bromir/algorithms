@@ -864,3 +864,21 @@ def test_uniprot_features():
     _, html = run_report(["--uniprot-features", os.path.join(DATA, "uniprot_features.tsv")])
     assert "UniProt P51587: domain BRC repeat test (410-420); region Interaction with NPM1 (300-500)" in html, \
         "BRCA2 p.Gln412*: the narrower domain first"
+
+
+def test_gnomad_coverage_and_pext():
+    extra = ["--gnomad-coverage", os.path.join(DATA, "gnomad_coverage.tsv"), "--pext", os.path.join(DATA, "gnomad_pext.tsv")]
+    rows, html = run_report(extra)
+    brca2 = next(r for r in rows if r["gene"] == "BRCA2" and r["category"] == "diagnostic")
+    assert "PM2" not in brca2["acmg_codes"], "absent from gnomAD where only 10 % of gnomAD exomes reach 20x"
+    assert "absence uninformative, no PM2" in html
+    gener = next(r for r in rows if r["gene"] == "GENER")
+    assert "PVS1" in gener["acmg_codes"], "pext is shown, not scored (PEXT_LOW = None)"
+    assert "pext 0.05 (highest tissue 0.05; gene max 0.90): little-expressed exon in GTEx" in html
+    old = rep.PEXT_LOW
+    rep.PEXT_LOW = 0.1
+    try:
+        rows, _ = run_report(extra)
+        assert "PVS1" not in next(r for r in rows if r["gene"] == "GENER")["acmg_codes"]
+    finally:
+        rep.PEXT_LOW = old

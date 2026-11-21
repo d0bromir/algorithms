@@ -1,4 +1,4 @@
-<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.11.0+galaxy0" profile="23.0">
+<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.12.0+galaxy0" profile="23.0">
     <description>diagnostic, secondary, carrier, pharmacogenomic and risk findings in one human-readable report</description>
     <requirements>
         <requirement type="package" version="3.12">python</requirement>
@@ -114,6 +114,12 @@ python3 '$__tool_directory__/wes_clinical_report.py'
     #if $erepo:
         --erepo '$erepo'
     #end if
+    #if $gnomad_coverage:
+        --gnomad-coverage '$gnomad_coverage'
+    #end if
+    #if $pext:
+        --pext '$pext'
+    #end if
     #if $uniprot_features:
         --uniprot-features '$uniprot_features'
     #end if
@@ -213,6 +219,10 @@ python3 '$__tool_directory__/wes_clinical_report.py'
                help="Built with data/build_vcep.py: gene-specific allele-frequency cut-offs, criteria and strengths of the ClinGen variant curation expert panels."/>
         <param name="erepo" type="data" format="tabular,tsv,txt" optional="true" label="ClinGen expert-panel classifications (ERepo)"
                help="Built with data/build_vcep.py from the ClinGen Evidence Repository: the panel's own classification of a variant, shown next to ClinVar."/>
+        <param name="gnomad_coverage" type="data" format="tabular,tsv,txt" optional="true" label="gnomAD exome coverage (runs)"
+               help="Built with data/build_gnomad_sites.py coverage from the gnomAD v4.0 exome coverage summary: no PM2 for an allele absent from gnomAD where fewer than half of gnomAD exomes reached 20x."/>
+        <param name="pext" type="data" format="tabular,tsv,txt" optional="true" label="Exon expression, pext (runs)"
+               help="Built with data/build_gnomad_sites.py pext from gnomAD's GTEx v10 base-level pext: shown next to loss-of-function variants."/>
         <param name="uniprot_features" type="data" format="tabular,tsv,txt" optional="true" label="Protein features (UniProt)"
                help="Built with data/build_uniprot_features.py from UniProtKB/Swiss-Prot (CC BY 4.0): the domain, region or site at each variant's residue."/>
         <param name="gnomad_cnv" type="data" format="vcf,vcf_bgzip" optional="true" label="gnomAD v4.1 exome CNVs (VCF)"

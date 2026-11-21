@@ -39,7 +39,7 @@ import statistics
 import subprocess
 import sys
 
-VERSION = "0.11.0"
+VERSION = "0.12.0"
 
 # --------------------------------------------------------------------------------------------- rules
 # ACMG secondary findings v3.3 (ACMG policy statement, Genet Med 2025;27:101454): the 81 genes of v3.2 (Miller et al.,
@@ -207,6 +207,9 @@ def freq_cell(v):
     """HTML: overall AF, then grpmax AF, FAF95 and homozygote count where the v4.1 fields are present."""
     overall = v.af
     s = esc(fmt_af(overall))
+    if v.cov is not None and freq(v) is None:
+        s += (f"<br><span class='small'>gnomAD exomes here: mean {v.cov[0]}x, {v.cov[1]:.0%} at &ge; 20x"
+              + ("; absence uninformative, no PM2" if pm2_uninformative(v) else "") + "</span>")
     det = []
     if v.grpmax_af is not None and v.grpmax:
         det.append(f"max {esc(v.grpmax)} {fmt_af(v.grpmax_af)}")
@@ -226,12 +229,13 @@ class Variant:
                  "zyg", "gene", "effect", "impact", "hgvs_c", "hgvs_p", "feature", "af", "clnsig", "revstat",
                  "clndn", "stars", "rs", "ab", "flags",
                  "an", "nhomalt", "grpmax", "grpmax_af", "faf", "faf_grp", "gfilter", "gdisc", "artefact",
-                 "am", "sai", "sai_gene", "repeat", "mane", "refseq", "hgvs_g", "revel")
+                 "am", "sai", "sai_gene", "repeat", "mane", "refseq", "hgvs_g", "revel", "cov", "pext")
 
     def __init__(self):
         self.repeat = None  # repeat context of an in-frame change (repeat_flag), set when the reference is given
         self.mane, self.refseq, self.hgvs_g = "", "", ""
         self.revel = None
+        self.cov, self.pext = None, {}
 
     def key(self):
         return f"{self.chrom}:{self.pos}:{self.ref}>{self.alt}"
@@ -792,6 +796,65 @@ def curated_rows_sorted(gene):
     src = {"ClinGen": 0, "G2P": 1, "Orphanet": 2}
     return sorted(CURATED.get(gene, ()), key=lambda r: (not curated_valid(r), -VALIDITY_RANK.get(r["validity"], 0),
                                                          src.get(r["source"], 3), r["disease"]))
+
+
+# ------------------------------------------------------------------ gnomAD coverage and pext at the variant
+# Tuned on the tuning half of the ClinVar benchmark (README section 7); None disables a rule.
+COVERAGE_MIN_OVER20 = 0.5  # PM2 for an allele absent from gnomAD only where >= this share of gnomAD exomes had 20x
+PEXT_LOW = None            # shown, not scored: removing PVS1 below 0.05-0.1 lost pathogenic LoF calls on the tuning
+                           # half and fixed no benign one; set e.g. 0.1 to drop PVS1 in little-expressed bases ...
+PEXT_GENE_MIN = 0.5        # ... in a gene whose best-expressed bases reach this level
+PEXT_ACTION = "drop"       # "drop": no PVS1 (ClinGen: not in a biologically relevant transcript); "moderate"
+PEXT_MEASURE = "max"       # "mean" over GTEx tissues, or "max": the highest share in any one tissue
+PEXT_MAX = {}  # gene -> highest pext of the gene; set by build() from --pext
+
+
+def load_runs(path, variants, kind):
+    """Runs of data/build_gnomad_sites.py that contain a variant position: sets v.cov = (mean, over_20) for coverage,
+    v.pext = {gene: value} for pext."""
+    if not path:
+        return
+    by_chrom = collections.defaultdict(list)
+    for v in variants:
+        by_chrom[v.chrom].append((v.pos, v))
+    for c in by_chrom:
+        by_chrom[c].sort(key=lambda x: x[0])
+    keys = {c: [p for p, _ in xs] for c, xs in by_chrom.items()}
+    with opener(path) as f:
+        for line in f:
+            if line.startswith("#"):
+                if kind == "pext" and line.startswith("# gene_max"):
+                    t = line.rstrip("\n").split("\t")
+                    PEXT_MAX[t[1]] = float(t[2])
+                continue
+            t = line.rstrip("\n").split("\t")
+            c = t[0]
+            if c not in keys:
+                continue
+            a, b = int(t[1]), int(t[2])
+            ks = keys[c]
+            i = bisect.bisect_left(ks, a)
+            while i < len(ks) and ks[i] <= b:
+                v = by_chrom[c][i][1]
+                if kind == "coverage":
+                    v.cov = (int(t[3]), float(t[4]))
+                else:
+                    v.pext[t[3]] = (float(t[4]), float(t[5]) if len(t) > 5 else float(t[4]))
+                i += 1
+
+
+def pm2_uninformative(v):
+    """Absent from gnomAD where gnomAD exomes were poorly covered: absence says little (no PM2)."""
+    return (COVERAGE_MIN_OVER20 is not None and freq(v) is None and v.cov is not None
+            and v.cov[1] < COVERAGE_MIN_OVER20)
+
+
+def pext_low(v, gene):
+    """The loss-of-function base is in a little-expressed part of a well-expressed gene (GTEx v10 pext)."""
+    pe = v.pext.get(gene) if v.pext else None
+    x = None if pe is None else (pe[1] if PEXT_MEASURE == "max" else pe[0])
+    return (PEXT_LOW is not None and x is not None and x < PEXT_LOW
+            and PEXT_MAX.get(gene, 0) >= PEXT_GENE_MIN)
 
 
 # ------------------------------------------------------------------ functional assays (MaveDB, PS3/BS3)
@@ -1695,10 +1758,13 @@ def acmg_evidence(v, gene, moi, constraint, hpo_hit, max_af, dosage=None, protei
     a = main_ann(v, gene) or (v.anns[0] if v.anns else [""] * 16)
     utr_splice = "splice_" in a[1] and a[9].startswith(("c.-", "c.*"))  # splice site of an intron in a UTR
     if any(e in a[1] for e in LOF_EFFECTS) and not utr_splice and lof_mechanism(gene, moi, constraint, dosage or {}):
-        codes.append(pvs1_code(v, gene))
+        if not pext_low(v, gene):
+            codes.append(pvs1_code(v, gene))
+        elif PEXT_ACTION == "moderate":
+            codes.append("PVS1_Moderate")
     p = freq(v)
     dominant_only = bool(moi) and not ({"AR", "XL"} & moi)
-    if p is None or p < (1e-4 if dominant_only else 1e-3):
+    if (p is None or p < (1e-4 if dominant_only else 1e-3)) and not pm2_uninformative(v):
         codes.append("PM2_supporting")
     if p is not None and p > 0.05 and (gene, a[9]) not in BA1_EXCEPTIONS:
         codes.append("BA1")
@@ -1830,6 +1896,11 @@ def var_cell(v):
         s += f"<br>{esc(v.refseq)}"
     if v.hgvs_g:
         s += f"<br>{esc(v.hgvs_g)}"
+    pe = v.pext.get(v.gene) if v.pext else None
+    if pe is not None and any(e in (v.effect or "") for e in LOF_EFFECTS):
+        s += (f"<br>pext {pe[0]:.2f} (highest tissue {pe[1]:.2f}; gene max {PEXT_MAX.get(v.gene, 0):.2f})"
+              + (": little-expressed exon, PVS1 not applied" if pext_low(v, v.gene) else
+                 (": little-expressed exon in GTEx" if pe[1] < 0.1 and PEXT_MAX.get(v.gene, 0) >= PEXT_GENE_MIN else "")))
     pf = protein_features(v) if UNIPROT else []
     if pf:
         s += "<br>UniProt " + esc(pf[0][4]) + ": " + "; ".join(
@@ -3177,6 +3248,9 @@ def build(args):
     MANE.clear()
     MANE.update(load_mane(args.mane))
     mito_rows, mito_sum = load_mito(args.mito_tsv, args.mito_json)
+    load_runs(args.gnomad_coverage, variants, "coverage")
+    PEXT_MAX.clear()
+    load_runs(args.pext, variants, "pext")
     load_uniprot(args.uniprot_features, {a[6].split(".")[0] for v in variants for a in v.anns if len(a) > 6})
     gd, gd_sources = load_gene_disease(args.gene_disease)
     CURATED.clear()
@@ -4733,6 +4807,10 @@ def main(argv=None):
                     "registry): gene-specific frequency cut-offs, codes and strengths")
     ap.add_argument("--erepo", help="ClinGen expert-panel classifications (data/build_vcep.py from the Evidence "
                     "Repository), shown next to ClinVar")
+    ap.add_argument("--gnomad-coverage", help="gnomAD exome coverage runs (data/build_gnomad_sites.py coverage): no "
+                    "PM2 for an allele absent from gnomAD where gnomAD exomes were poorly covered")
+    ap.add_argument("--pext", help="gnomAD pext runs (data/build_gnomad_sites.py pext, GTEx v10): no PVS1 for a "
+                    "loss of function in a little-expressed part of a gene")
     ap.add_argument("--uniprot-features", help="protein features by Ensembl transcript (data/build_uniprot_features.py): "
                     "the UniProt domain, region or site at each variant's residue")
     ap.add_argument("--gnomad-cnv", help="gnomAD v4.1 exome CNVs (gnomad.v4.1.cnv.all.vcf.gz): population frequency "
