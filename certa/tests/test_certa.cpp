@@ -46,6 +46,7 @@
 #include "check.h"
 #include "certa/pair.h"
 #include "certa/repeat.h"
+#include "certa/bio.h"
 #include "mapper.h"
 #include "sam_output.h"
 
@@ -3711,6 +3712,36 @@ int main(int argc, char** argv) {
     }
     CHECK(raised > 0, "mapq-local raised no sub_score: no clipped competitor exercised");
     std::fprintf(stderr, "mapq-local: sub_score raised on %d/%zu reads, certificate unchanged\n", raised, reads.size());
+  }
+  {
+    // A3 (--bio-phantom): the phantom-copy posterior weight and the mismatch
+    // counts it uses. MAPQ only; the ML certificate is untouched by construction
+    // (the term is added to the posterior denominator after the optimum is fixed).
+    BioParams bp;
+    bp.snv = 1e-3;
+    CHECK(bio_detail::phantom_weight(bp, 4, 146) == 0.0, "phantom term is off by default");
+    bp.phantom_delta = 1e-2;
+    bp.phantom_pi = 1e-6;
+    bp.phantom_err = 1e-3;
+    const double w0 = bio_detail::phantom_weight(bp, 0, 150);
+    const double w4 = bio_detail::phantom_weight(bp, 4, 146);
+    const double w8 = bio_detail::phantom_weight(bp, 8, 142);
+    CHECK(w0 > 0 && w4 > w0 && w8 > w4, "phantom weight grows with divergence (%g %g %g)", w0, w4, w8);
+    CHECK(bio_detail::posterior_mapq(w0) >= 55, "a perfect read stays confident (MAPQ %d)", bio_detail::posterior_mapq(w0));
+    CHECK(bio_detail::posterior_mapq(w8) < 30, "a divergent read abstains (MAPQ %d)", bio_detail::posterior_mapq(w8));
+    // mismatch/match counts from a traced CIGAR: 100M(5 mm) 2I 48M 3D, nm=10
+    Result r;
+    r.cigar[0] = (100u << 4) | kOpM;
+    r.cigar[1] = (2u << 4) | kOpI;
+    r.cigar[2] = (48u << 4) | kOpM;
+    r.cigar[3] = (3u << 4) | kOpD;
+    r.n_cigar = 4;
+    r.nm = 10;
+    int k = -1, matches = -1;
+    bio_mm_counts(r, k, matches);
+    CHECK(k == 5 && matches == 143, "bio_mm_counts: k=%d matches=%d (want 5, 143)", k, matches);
+    std::fprintf(stderr, "bio-phantom: weight %.3g (0 mm) -> %.3g (8 mm); MAPQ %d -> %d; mm counts ok\n",
+                 w0, w8, bio_detail::posterior_mapq(w0), bio_detail::posterior_mapq(w8));
   }
   if (failures) {
     std::fprintf(stderr, "%d check(s) FAILED\n", failures);

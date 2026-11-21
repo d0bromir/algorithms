@@ -14,7 +14,8 @@ MapConfig MapConfig::from_args(const Args& a) {
         "[-u uncertified.fq] [-U uncertified_mates.fq] [--fallback-mates pair|single -S single_mates.fq] [--max-dist 850] [--stats s.json] [--batch N] [--io-threads N] [--serial-stages] "
         "[--bio [--bio-snv 0.001] [--bio-titv 2.1] [--bio-indel 0.0001] [--bio-seq-indel 0.00001] [--bio-gap-ext 0.5] "
         "[--bio-str-min 4] [--bio-str-slope 3] [--bio-str-cap 24] [--bio-gap-cap 50] [--bio-delta 60] [--bio-max-band 1024] "
-        "[--bio-budget 4096] [--bio-insert 400,100] [--bio-improper 40] [--bio-rescue-loci 8] [--bio-run-table 1]]");
+        "[--bio-budget 4096] [--bio-insert 400,100] [--bio-improper 40] [--bio-rescue-loci 8] [--bio-run-table 1] "
+        "[--bio-phantom 0] [--bio-phantom-pi 1e-6] [--bio-phantom-err 1e-3]]");
   MapConfig c;
   c.index_path = a.pos[0];
   c.reads_path = a.pos[1];
@@ -268,6 +269,9 @@ MapConfig MapConfig::from_args(const Args& a) {
   bp.max_band = a.geti("--bio-max-band", bp.max_band);
   bp.improper = a.geti("--bio-improper", bp.improper);
   bp.rescue_loci = a.geti("--bio-rescue-loci", bp.rescue_loci);
+  bp.phantom_delta = a.getd("--bio-phantom", bp.phantom_delta);
+  bp.phantom_pi = a.getd("--bio-phantom-pi", bp.phantom_pi);
+  bp.phantom_err = a.getd("--bio-phantom-err", bp.phantom_err);
   const std::string ins = a.get("--bio-insert", "");
   if (!ins.empty()) {
     const size_t comma = ins.find(',');
@@ -282,6 +286,9 @@ MapConfig MapConfig::from_args(const Args& a) {
   if (bp.str_min < 1 || bp.str_slope < 0 || bp.str_cap < 0 || bp.gap_cap < 0 || bp.gap_cap > 200 || bp.delta < 0 ||
       bp.max_band < 1 || bp.improper < 0 || bp.rescue_loci < 0 || !(bp.insert_sd > 0) || !(bp.insert_mean > 0))
     throw std::runtime_error("bad --bio-* parameters");
+  if (!(bp.phantom_delta >= 0 && bp.phantom_delta < 1) || !(bp.phantom_pi >= 0) ||
+      !(bp.phantom_err >= 0 && bp.phantom_err < 0.5))
+    throw std::runtime_error("--bio-phantom in [0,1), --bio-phantom-pi >= 0, --bio-phantom-err in [0,0.5)");
   Params& pb = c.pb;
   pb = c.p2;
   pb.k = KMAX;
@@ -313,7 +320,14 @@ std::string MapConfig::command_line() const {
                   pb.budget, bp.snv, bp.titv, bp.indel, bp.seq_indel, bp.gap_ext, bp.str_min, bp.str_slope,
                   bp.str_cap, bp.gap_cap, bp.delta, bp.max_band, bp.insert_mean, bp.insert_sd, bp.improper,
                   bp.rescue_loci, pp.max_dist);
-    return b;
+    std::string s = b;
+    if (bp.phantom_delta > 0) {
+      char ph[128];
+      std::snprintf(ph, sizeof ph, " --bio-phantom %g --bio-phantom-pi %g --bio-phantom-err %g",
+                    bp.phantom_delta, bp.phantom_pi, bp.phantom_err);
+      s += ph;
+    }
+    return s;
   }
   // The certification passes beyond the defaults, when on (the default
   // command line is unchanged).
