@@ -16,6 +16,15 @@ paternal (Y) consistency in the trios.
 
     haplogroup_eval.py --mt-tree tree.xml --y-tree tree.json --y-positions new_positions.txt
         [--panel panel.tsv --mt-truth kg_mt_truth.txt --panel-res DIR] [--giab DIR --giab-truth DIR]
+
+The panel (tests/haplogroup_panel_1kg.tsv: sample, population, Poznik hg-SNP, major lineage, CRAM URL) was made from
+release/20130502/supporting/chrY/1000Y.sample_level_haplogroup_calls.ver5.txt: up to 4 males per population with a
+GRCh38 exome CRAM, distinct major lineages first. Reads: `samtools view -b URL chrM chrY` with
+REF_PATH=https://www.ebi.ac.uk/ena/cram/md5/%s. mtDNA truth: release/20130502/supporting/MT/
+chrMT_sequences_2534.20160505.fasta.gz turned into HSD (SNVs and deletions against rCRS; N left out of the range;
+HaploGrep3 FASTA input needs an x86-64 library) and classified with `haplogrep3 classify --tree phylotree-fu-rcrs@1.2
+--extend-report`. The tools then run with a FASTA of chrM (= Ensembl MT) and chrY, and `wes_yhaplo --min-y-ratio 0`
+(the extracts have no X reads).
 """
 import argparse
 import collections
@@ -27,7 +36,7 @@ import statistics
 import xml.etree.ElementTree as ET
 
 MATERNAL = [("HG001", "NA12892"), ("HG002", "HG004"), ("HG005", "HG007")]
-PATERNAL = [("HG002", "HG003"), ("HG005", "HG006"), ("HG001", "NA12891")]  # HG001 is female: no Y
+PATERNAL = [("HG002", "HG003"), ("HG005", "HG006")]  # sons; HG001 is a daughter (no Y)
 
 
 def mt_tree(path):

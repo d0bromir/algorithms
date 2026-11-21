@@ -9,10 +9,12 @@
     <command detect_errors="exit_code"><![CDATA[
 ln -s '$bam' input.bam &&
 ln -s '${bam.metadata.bam_index}' input.bam.bai &&
+## Yleaf accepts only .fa/.fasta/.fna names
+ln -s '$reference' reference.fa &&
 export YLEAF_NO_UPDATE_CHECK=1 &&
 python3 '$__tool_directory__/wes_yhaplo.py'
     --bam input.bam
-    --reference '$reference'
+    --reference reference.fa
     --sample '$bam.element_identifier'
     --threads \${GALAXY_SLOTS:-4}
     --min-y-ratio $min_y_ratio
@@ -26,7 +28,7 @@ python3 '$__tool_directory__/wes_yhaplo.py'
         <param name="reference" type="data" format="fasta" label="Reference genome (FASTA)"
                help="The genome the reads were aligned to. Yleaf only checks it for BAM input; without it Yleaf would download a genome."/>
         <param name="min_y_ratio" type="float" value="0.05" min="0" label="Lowest Y/X ratio of mapped reads for a Y chromosome"
-               help="About 0.01 in female exomes (reads mismapped to Y), 0.2-0.3 in male exomes. 0 turns the check off."/>
+               help="About 0.01 in female exomes (reads mismapped to Y), 0.18-0.29 in male exomes (GIAB). 0 turns the check off."/>
         <param name="min_reads" type="integer" value="10" min="1" label="Reads needed at a marker (Yleaf -r)"/>
         <param name="prediction_quality" type="float" value="0.95" min="0" max="1" label="QC score for a high-confidence call (Yleaf -pq)"/>
     </inputs>
@@ -72,12 +74,12 @@ reads at the SNPs of the YFull tree (v14) and walks the tree to the most derived
 reads and 90 % of them for the derived base at a marker); it also gives the legacy ISOGG name.
 
 The tool first checks for a Y chromosome: the ratio of reads mapped to Y and to X is about 0.01 in female exomes
-(reads mismapped to Y) and 0.2-0.3 in male exomes. Below 0.05 the sample is not typed.
+(reads mismapped to Y) and 0.18-0.29 in male exomes. Below 0.05 the sample is not typed.
 
 **Exomes are less resolved than genomes**: the capture covers the Y genes and some off-target sequence, so the call
 is often an ancestor of the haplogroup a genome would give (a "paragroup" such as ``I1*``: none of the known
 subclades has enough reads). In 104 males of 1000 Genomes (tests/haplogroup_eval.py, truth from Poznik et al. 2016)
-no call was on a wrong branch; 96 reached the correct major haplogroup (A-T) or below.
+no call was on a wrong branch; 98 reached the correct major haplogroup (A-T) or below.
 
 **Outputs**: a JSON summary (YFull haplogroup and markers, ISOGG name, Y/X read ratio, informative markers, Yleaf QC
 scores, confidence, lineage) and a table of the derived nodes from the root to the call. The clinical report shows

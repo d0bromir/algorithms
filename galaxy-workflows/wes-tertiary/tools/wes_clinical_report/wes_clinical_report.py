@@ -4542,9 +4542,9 @@ def build(args):
             R.h("<p class='small'>Expected variants of the haplogroup not found: "
                 + (esc(", ".join(nf)) if nf else "none")
                 + ". Variants beyond the haplogroup (private variants; hotspots are common sequencing or alignment "
-                "artefacts): " + (esc(", ".join(extra)) if extra else "none") + ". A rare variant that is private here "
-                "but expected in the haplogroup is not a candidate; a private variant can be (see the tables above)."
-                "</p>")
+                "artefacts): " + (esc(", ".join(extra)) if extra else "none") + ". The variants that define the "
+                "haplogroup are lineage markers shared by everyone of the haplogroup, not disease candidates; a "
+                "pathogenic mtDNA variant is usually private (the tables above).</p>")
         elif mh:
             R.h(f"<p class='small'>Haplogroup: {esc(mh.get('status', ''))}.</p>")
         nhap = sum(1 for r in mito_rows if r.get("haplogroup_defining"))

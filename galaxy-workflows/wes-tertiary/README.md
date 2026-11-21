@@ -466,7 +466,7 @@ and one paternal line only, not a person's ancestry; the report uses them for sa
 * **Y** (`wes_yhaplo` 0.1.0): [Yleaf](https://github.com/genid/Yleaf) 4.1.7 (GPL-3.0) piles up the reads at the
   SNPs of the YFull tree (v14) and walks the tree to the most derived haplogroup with support (≥ 10 reads, ≥ 90 % of
   them derived), and gives the legacy ISOGG name. A sample is typed only when the Y/X ratio of mapped reads is ≥ 0.05
-  (about 0.01 in female exomes, from reads mismapped to Y; 0.2-0.3 in male exomes). Exome calls are often **less
+  (about 0.01 in female exomes, from reads mismapped to Y; 0.18-0.29 in the GIAB male exomes). Exome calls are often **less
   resolved** than a genome's: a paragroup such as `I1*` means that none of the subclades had enough reads.
 
 | Output | Content |
@@ -1330,6 +1330,49 @@ NA12891 DQ2.5 (the DR3-DQ2.5 haplotype of the CEPH family), NA12891 DQB1\*06:02,
 from DQB1 alone (no DQB1\*02 or \*03:02), and *not determined* where DQB1\*03:02 meets an uncertain DQA1 (HG002,
 HG003).
 
+### mtDNA and Y haplogroups (wes_mito 0.2.0, wes_yhaplo 0.1.0, report 0.15.0)
+
+Two truth sets, scored on the trees themselves (`tests/haplogroup_eval.py`): a call is the **same** node as the
+truth, **more derived** (a descendant: a newer tree, or more markers), **less resolved** (an ancestor: correct, fewer
+markers) or on **another branch** (an error); *consistent* = the first three.
+
+* **1000 Genomes phase 3 exomes**: 104 males, 4 per population from all 26 populations, chosen to cover different
+  major Y lineages (31 major lineages, A0 to T). The chrM and chrY reads of their GRCh38 exome CRAMs (2010-2013
+  captures, HiSeq 2000) were fetched by region. Truth for mtDNA: the curated phase 3 mtDNA sequences from the
+  low-coverage genomes, classified with the same HaploGrep3 tree; truth for Y: Poznik et al. (Nat Genet 2016), most
+  derived SNP placed on the YFull tree (from low-coverage genomes *and* these exomes, so not fully independent).
+  The panel's mtDNA coverage ranged from 4 % to 100 % (median 100 %; 15 samples below 40 %, 5 without chrM reads).
+  The 40 % coverage gate of the mtDNA confidence was set on the odd-numbered half of the panel (the first 0.1 step
+  above every tuning sample whose call was less resolved or wrong) and is reported on the other half.
+* **GIAB IDT exomes** (NovaSeq 6000, the workflow's BWA-MEM alignments): truth = the same tools on the deep GIAB
+  genomes (Illumina 100-300×; about 110,000× on chrM; chrY 2.8-26.6 Mb for HG002 and HG006), plus maternal and paternal
+  consistency in the trios.
+
+| Panel | mtDNA: consistent | same / more derived / less resolved / other branch | Y: consistent | same / more derived / less resolved / other branch | Time per sample (mtDNA; Y) | Peak memory |
+|---|---|---|---|---|---|---|
+| 1000 Genomes, 104 males (5 without chrM reads: no call) | 96/99 (97.0 %) | 81 / 2 / 13 / 3 | 101/101 (100 %)¹ | 13 / 25 / 63 / 0 | 1.6 s (max 5.8); 3.2 s (max 5.2) | 214 MB; 126 MB |
+| GIAB exomes vs deep genomes | 7/7 | 7 / 0 / 0 / 0 | 2/2 | 0 / 0 / 2 / 0 | 1.3-2.2 s; 2.0-2.4 s | 201-221 MB; ≤ 196 MB |
+
+¹ 3 more truth SNPs (I2-S434, D2-JST022456, FH-M2713) are not in the YFull marker list and could not be placed; their
+calls (F\*, D-Z1527, H-Z5866\*) are in the expected lineages. 98 of 104 Y calls reached the truth's major
+haplogroup (A-T) or below; six stopped at the paragroup F\* (older captures with few Y markers).
+
+**mtDNA confidence, held-out half** (52 samples): high 30 (27 same, 1 more derived, 2 less resolved, 0 other
+branch), medium 11 (all same), low 9 (2 other branch, 6 less resolved, 1 same), no call 2. All three wrong mtDNA
+calls of the panel had less than 26 % of the mtDNA covered, where HaploGrep3 still reported quality 0.5-1.0.
+
+**GIAB exomes** (9 samples): mtDNA H13a1a1a (HG001, NA12892), H5a7 (HG002, HG004), K1a1b1a (HG003), F2b1 (HG005,
+HG007), D4a3a (HG006), H1e1a8 (NA12891), each identical to the deep genome where one was available (7/7); maternal
+consistency 3/3 trios. Y: J-L816 (HG002, HG003; genome J-ZS2721, more derived), D-N1\* (HG005, HG006; genome
+D-MF618315), I1\* (NA12891); paternal consistency 2/2; the four women were not typed (Y/X read ratio 0.012 against
+0.18-0.29 in the men: sex check 9/9). Each tool took a few seconds and about 200 MB; as Galaxy jobs on HG003
+(16 slots) `wes_mito` with the haplogroup took 24 s and `wes_yhaplo` 15 s.
+
+**Workflow run**: the VCF workflow 0.15 on HG001's calls with all knowledge inputs and the Galaxy outputs of
+`wes_mito` 0.2.0 and `wes_yhaplo` ran 16/16 jobs ok (804 s); the report lists the mtDNA haplogroup (H13a1a1a, high)
+and "Y haplogroup: not typed" with the genetic sex, the haplogroup details in the mitochondrial section, and a
+`haplogroup` row in the findings TSV.
+
 ## 8. Scope and limitations
 
 Germline SNVs and short indels in the exome targets, and CNVs of several exons from read depth (section 7).
@@ -1350,5 +1393,8 @@ alt read among ≥ 15) is read as reference. UPD detection needs both parents; h
 (two-field alleles that differ in the antigen-recognition exons), not three- or four-field alleles, null alleles
 caused outside these exons, or new alleles; HLA-DQA1 was the least reliable gene in the GIAB exomes (section 7), and
 an HLA-B\*57:01 or HLA-B\*15:02 result should be confirmed by a clinical HLA test before a drug decision. KIR genes
-are not typed. The reports support expert review; they are not a diagnosis. This is a research workflow,
+are not typed. Haplogroups from an exome are often less resolved than from a genome (the Y call in 63 of 104
+1000 Genomes exomes, the mtDNA call in 13 of 99); with less than 40 % of the mtDNA covered the mtDNA haplogroup is low
+confidence and can be wrong (3 of 15 such samples). Haplogroups describe one maternal and one paternal line, not
+ancestry. The reports support expert review; they are not a diagnosis. This is a research workflow,
 not a validated clinical pipeline.

@@ -6,7 +6,7 @@ to the most derived haplogroup with support; it also gives the legacy ISOGG name
 some off-target sequence, enough for a few hundred to a few thousand informative markers in a male.
 
 The tool first checks that there is a Y chromosome: the Y/X ratio of mapped reads (samtools idxstats) is about 0.01 in
-female exomes (reads mismapped to Y) and 0.2-0.3 in male exomes; below --min-y-ratio the sample is not typed.
+female exomes (reads mismapped to Y) and 0.18-0.29 in male exomes; below --min-y-ratio the sample is not typed.
 
 Outputs: a JSON summary (haplogroup, YFull and ISOGG names, defining markers, path of derived nodes, Yleaf QC scores,
 confidence) and a TSV of the derived nodes on the path.

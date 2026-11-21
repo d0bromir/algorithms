@@ -11,7 +11,7 @@
         "tertiary-analysis"
     ],
     "license": "MIT",
-    "release": "0.14",
+    "release": "0.15",
     "uuid": "325a3624-2876-419f-9805-0558388e1825",
     "comments": [],
     "steps": {
@@ -1051,6 +1051,28 @@
         },
         "47": {
             "id": 47,
+            "name": "Y haplogroup (wes_yhaplo summary)",
+            "type": "data_input",
+            "label": "Y haplogroup (wes_yhaplo summary)",
+            "annotation": "The summary (JSON) of the Y-chromosome haplogroup tool (wes_yhaplo) on the sample's reads: shown with the genetic sex (paternal lineage), with a warning when the Y result and the sex disagree.",
+            "tool_state": "{\"name\": \"Y haplogroup (wes_yhaplo summary)\", \"optional\": true, \"format\": [\"json\"]}",
+            "position": {
+                "top": 5640,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "Y haplogroup (wes_yhaplo summary)",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "48": {
+            "id": 48,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/samtools_faidx/samtools_faidx/1.22+galaxy1",
             "type": "tool",
             "label": "chrom_sizes",
@@ -1081,8 +1103,8 @@
                 }
             }
         },
-        "48": {
-            "id": 48,
+        "49": {
+            "id": 49,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bedtools/bedtools_slopbed/2.31.1+galaxy1",
             "type": "tool",
             "label": "pad_targets",
@@ -1103,7 +1125,7 @@
                 ],
                 "genome_file_opts|genome": [
                     {
-                        "id": 47,
+                        "id": 48,
                         "output_name": "output"
                     }
                 ],
@@ -1132,8 +1154,8 @@
                 }
             }
         },
-        "49": {
-            "id": 49,
+        "50": {
+            "id": 50,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_norm/bcftools_norm/1.24+galaxy0",
             "type": "tool",
             "label": "normalize",
@@ -1177,8 +1199,8 @@
                 }
             }
         },
-        "50": {
-            "id": 50,
+        "51": {
+            "id": 51,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_filter/bcftools_filter/1.24+galaxy0",
             "type": "tool",
             "label": "target_filter",
@@ -1193,13 +1215,13 @@
             "input_connections": {
                 "input_file": [
                     {
-                        "id": 49,
+                        "id": 50,
                         "output_name": "output_file"
                     }
                 ],
                 "sec_restrict|regions|regions_file": [
                     {
-                        "id": 48,
+                        "id": 49,
                         "output_name": "output"
                     }
                 ],
@@ -1228,8 +1250,8 @@
                 }
             }
         },
-        "51": {
-            "id": 51,
+        "52": {
+            "id": 52,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
             "type": "tool",
             "label": "clinvar_annotation",
@@ -1244,7 +1266,7 @@
             "input_connections": {
                 "input_file": [
                     {
-                        "id": 50,
+                        "id": 51,
                         "output_name": "output_file"
                     }
                 ],
@@ -1273,8 +1295,8 @@
                 }
             }
         },
-        "52": {
-            "id": 52,
+        "53": {
+            "id": 53,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
             "type": "tool",
             "label": "population_annotation",
@@ -1289,7 +1311,7 @@
             "input_connections": {
                 "input_file": [
                     {
-                        "id": 51,
+                        "id": 52,
                         "output_name": "output_file"
                     }
                 ],
@@ -1318,8 +1340,8 @@
                 }
             }
         },
-        "53": {
-            "id": 53,
+        "54": {
+            "id": 54,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
             "type": "tool",
             "label": "missense_annotation",
@@ -1334,7 +1356,7 @@
             "input_connections": {
                 "input_file": [
                     {
-                        "id": 52,
+                        "id": 53,
                         "output_name": "output_file"
                     }
                 ],
@@ -1363,8 +1385,8 @@
                 }
             }
         },
-        "54": {
-            "id": 54,
+        "55": {
+            "id": 55,
             "name": "spliceai_score",
             "type": "tool",
             "label": "splice_prediction",
@@ -1379,7 +1401,7 @@
             "input_connections": {
                 "input": [
                     {
-                        "id": 53,
+                        "id": 54,
                         "output_name": "output_file"
                     }
                 ],
@@ -1408,8 +1430,8 @@
                 }
             }
         },
-        "55": {
-            "id": 55,
+        "56": {
+            "id": 56,
             "name": "pharmcat_pgx",
             "type": "tool",
             "label": "pharmacogenomics",
@@ -1469,8 +1491,8 @@
                 }
             }
         },
-        "56": {
-            "id": 56,
+        "57": {
+            "id": 57,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpeff/snpEff/5.4+galaxy0",
             "type": "tool",
             "label": "functional_annotation",
@@ -1485,7 +1507,7 @@
             "input_connections": {
                 "input": [
                     {
-                        "id": 54,
+                        "id": 55,
                         "output_name": "output"
                     }
                 ],
@@ -1543,8 +1565,8 @@
                 }
             }
         },
-        "57": {
-            "id": 57,
+        "58": {
+            "id": 58,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_filter/5.4.0c+galaxy1",
             "type": "tool",
             "label": "prioritize",
@@ -1559,7 +1581,7 @@
             "input_connections": {
                 "input": [
                     {
-                        "id": 56,
+                        "id": 57,
                         "output_name": "snpeff_output"
                     }
                 ],
@@ -1588,8 +1610,8 @@
                 }
             }
         },
-        "58": {
-            "id": 58,
+        "59": {
+            "id": 59,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1",
             "type": "tool",
             "label": "candidate_table",
@@ -1604,7 +1626,7 @@
             "input_connections": {
                 "input": [
                     {
-                        "id": 57,
+                        "id": 58,
                         "output_name": "output"
                     }
                 ]
@@ -1627,8 +1649,8 @@
                 }
             }
         },
-        "59": {
-            "id": 59,
+        "60": {
+            "id": 60,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1",
             "type": "tool",
             "label": "annotated_table",
@@ -1643,7 +1665,7 @@
             "input_connections": {
                 "input": [
                     {
-                        "id": 56,
+                        "id": 57,
                         "output_name": "snpeff_output"
                     }
                 ]
@@ -1666,8 +1688,8 @@
                 }
             }
         },
-        "60": {
-            "id": 60,
+        "61": {
+            "id": 61,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_stats/bcftools_stats/1.24+galaxy0",
             "type": "tool",
             "label": "variant_stats",
@@ -1682,7 +1704,7 @@
             "input_connections": {
                 "input_file": [
                     {
-                        "id": 56,
+                        "id": 57,
                         "output_name": "snpeff_output"
                     }
                 ]
@@ -1705,8 +1727,8 @@
                 }
             }
         },
-        "61": {
-            "id": 61,
+        "62": {
+            "id": 62,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_roh/bcftools_roh/1.24+galaxy1",
             "type": "tool",
             "label": "runs_of_homozygosity",
@@ -1721,7 +1743,7 @@
             "input_connections": {
                 "input_file": [
                     {
-                        "id": 56,
+                        "id": 57,
                         "output_name": "snpeff_output"
                     }
                 ]
@@ -1744,15 +1766,15 @@
                 }
             }
         },
-        "62": {
-            "id": 62,
+        "63": {
+            "id": 63,
             "name": "wes_clinical_report",
             "type": "tool",
             "label": "clinical_report",
             "annotation": "Human-readable clinical interpretation report and findings table (local tool tools/wes_clinical_report; install it on the Galaxy server, see README).",
-            "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"affected_parents\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"artefacts\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clingen_dosage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clingen_regions\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clinvar_protein\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"cnv_calls\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"cnv_summary\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"collins_dosage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"constraint\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"coverage_summary\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"erepo\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"father_bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"father_cnv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"father_vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gencc\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gene_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gene_disease\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gnomad_cnv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gnomad_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hla\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_annotations\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_genes\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_terms\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mane\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mave\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"max_af\": \"\\\"0.01\\\"\", \"max_candidates\": \"\\\"60\\\"\", \"min_ref_depth\": \"\\\"15\\\"\", \"mito_json\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mito_tsv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mother_bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mother_cnv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mother_vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"pext\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"pharmcat\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"previous_tsv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"reference\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"roh\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"sample_name\": \"\\\"\\\"\", \"target_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"uniprot_features\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"vcep_rules\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\"}",
+            "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"affected_parents\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"artefacts\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clingen_dosage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clingen_regions\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clinvar_protein\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"cnv_calls\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"cnv_summary\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"collins_dosage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"constraint\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"coverage_summary\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"erepo\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"father_bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"father_cnv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"father_vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gencc\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gene_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gene_disease\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gnomad_cnv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gnomad_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hla\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_annotations\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_genes\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_terms\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mane\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mave\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"max_af\": \"\\\"0.01\\\"\", \"max_candidates\": \"\\\"60\\\"\", \"min_ref_depth\": \"\\\"15\\\"\", \"mito_json\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mito_tsv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mother_bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mother_cnv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mother_vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"pext\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"pharmcat\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"previous_tsv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"reference\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"roh\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"sample_name\": \"\\\"\\\"\", \"target_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"uniprot_features\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"vcep_rules\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"yhaplo\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\"}",
             "tool_id": "wes_clinical_report",
-            "tool_version": "0.14.0+galaxy0",
+            "tool_version": "0.15.0+galaxy0",
             "position": {
                 "top": 300,
                 "left": 2380
@@ -1760,7 +1782,7 @@
             "input_connections": {
                 "vcf": [
                     {
-                        "id": 56,
+                        "id": 57,
                         "output_name": "snpeff_output"
                     }
                 ],
@@ -1772,13 +1794,13 @@
                 ],
                 "roh": [
                     {
-                        "id": 61,
+                        "id": 62,
                         "output_name": "output_file"
                     }
                 ],
                 "pharmcat": [
                     {
-                        "id": 55,
+                        "id": 56,
                         "output_name": "calls"
                     }
                 ],
@@ -1995,6 +2017,12 @@
                 "hla": [
                     {
                         "id": 45,
+                        "output_name": "output"
+                    }
+                ],
+                "yhaplo": [
+                    {
+                        "id": 47,
                         "output_name": "output"
                     }
                 ]
