@@ -2463,6 +2463,21 @@ killed on seeds 1 and 2 ([tests/mutants.tsv](../tests/mutants.tsv)).
      - Next for indels: minimap2-style two-piece gap costs, as an option with
        their own certificates, where clipping a long insertion now scores
        more than aligning through it.
+   - **False SNV calls without `--t2t`** (2026-11-21;
+     [snv_fp_diagnosis.md](results/truth_2026-11_fp/snv_fp_diagnosis.md)).
+     With `--mapq pair` CERTA makes 364 against minibwa's 309 on HG002, and
+     113 against 71 on HG005.
+     - Of the calls only CERTA makes (127 and 73), BWA-MEM2 makes 36 and 10,
+       so they do not come from the shared objective.
+     - At those sites, most reads with the false allele are reads minibwa
+       also counts with MAPQ ≥ 5 (662 of 1,123 on HG002). Many of the rest
+       are PR mates in two-copy duplications.
+     - *Tried, not adopted:* writing the model's Phred 3–4 below
+       DeepVariant's MAPQ floor of 5, where minibwa leaves more of its least
+       confident mates. Missed SNVs rose by 18–69, and false calls barely
+       moved (HG002 364 → 369 and 358; HG005 113 → 110 and 114).
+     - The calls differ in which reads each aligner trusts around paralogs.
+       With `--t2t`, CERTA's errors equal or beat minibwa's.
    - On GRCh38 the placement limit is reached
      ([above](#how-far-from-the-limit)); what remains is the reference.
      The sample's own genome shows two orders of magnitude of room in
