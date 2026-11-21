@@ -93,3 +93,8 @@ third machine relays the records as CRAM.
      - [lowend.sh](lowend.sh): the model's Phred 3–4 rewritten below
        DeepVariant's MAPQ floor and called
        ([snv_fp_diagnosis.md](../results/truth_2026-11_fp/snv_fp_diagnosis.md)).
+     - [snv_t2t.py](snv_t2t.py): where T2T-CHM13 puts the reads CERTA counts
+       at those sites (from a `--t2t --feature-tags` run of the same reads,
+       [t2t_feat.sh](t2t_feat.sh)); [t2t_tiers.py](t2t_tiers.py): T2T's
+       disagreements over all records, by tier and region
+       ([lean_t2t.md](../results/truth_2026-11_lean/lean_t2t.md)).
