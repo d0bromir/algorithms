@@ -1,0 +1,30 @@
+{
+ "sample": "HG003",
+ "tool": "wes_yhaplo 0.1.0",
+ "program": "Yleaf 4.1.7",
+ "y_reads": 185027,
+ "x_reads": 694263,
+ "y_x_ratio": 0.2665,
+ "min_y_ratio": 0.05,
+ "status": "ok",
+ "haplogroup": "J-L816",
+ "haplogroup_base": "J-L816",
+ "markers": [
+  "L816"
+ ],
+ "excluded_subclades": 0,
+ "isogg": "J1a2a1a2c1a1",
+ "isogg_markers": [
+  "L816"
+ ],
+ "valid_markers": 1137,
+ "qc_score": 1.0,
+ "qc": [
+  1.0,
+  1.0,
+  1.0
+ ],
+ "confidence": "high",
+ "lineage": "A0-T > A1 > F > J1 > J-P58 > J-L817 > J-L816",
+ "note": ""
+}

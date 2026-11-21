@@ -1,0 +1,90 @@
+<tool id="wes_yhaplo" name="Y-chromosome haplogroup" version="0.1.0+galaxy0" profile="23.0">
+    <description>from the reads of an exome, with Yleaf (YFull and ISOGG trees)</description>
+    <requirements>
+        <requirement type="package" version="4.1.7">yleaf</requirement>
+        <requirement type="package" version="1.22">samtools</requirement>
+        <requirement type="package" version="3.12">python</requirement>
+    </requirements>
+    <version_command>python3 '$__tool_directory__/wes_yhaplo.py' --help | head -1</version_command>
+    <command detect_errors="exit_code"><![CDATA[
+ln -s '$bam' input.bam &&
+ln -s '${bam.metadata.bam_index}' input.bam.bai &&
+export YLEAF_NO_UPDATE_CHECK=1 &&
+python3 '$__tool_directory__/wes_yhaplo.py'
+    --bam input.bam
+    --reference '$reference'
+    --sample '$bam.element_identifier'
+    --threads \${GALAXY_SLOTS:-4}
+    --min-y-ratio $min_y_ratio
+    --min-reads $min_reads
+    --prediction-quality $prediction_quality
+    --json '$summary'
+    --tsv '$lineage'
+    ]]></command>
+    <inputs>
+        <param name="bam" type="data" format="bam" label="Aligned reads (BAM)" help="Duplicate-marked reads of the sample, aligned to GRCh38 (Y or chrY)."/>
+        <param name="reference" type="data" format="fasta" label="Reference genome (FASTA)"
+               help="The genome the reads were aligned to. Yleaf only checks it for BAM input; without it Yleaf would download a genome."/>
+        <param name="min_y_ratio" type="float" value="0.05" min="0" label="Lowest Y/X ratio of mapped reads for a Y chromosome"
+               help="About 0.01 in female exomes (reads mismapped to Y), 0.2-0.3 in male exomes. 0 turns the check off."/>
+        <param name="min_reads" type="integer" value="10" min="1" label="Reads needed at a marker (Yleaf -r)"/>
+        <param name="prediction_quality" type="float" value="0.95" min="0" max="1" label="QC score for a high-confidence call (Yleaf -pq)"/>
+    </inputs>
+    <outputs>
+        <data name="summary" format="json" label="${tool.name} on ${on_string}: summary"/>
+        <data name="lineage" format="tabular" label="${tool.name} on ${on_string}: lineage"/>
+    </outputs>
+    <tests>
+        <test expect_num_outputs="2">
+            <!-- HG003 (GIAB) exome reads on Y:2.78-8 Mb plus some X reads; the reference is a 1.2 kb stub because
+                 Yleaf does not read it for BAM input -->
+            <param name="bam" value="hg003_y.bam" ftype="bam"/>
+            <param name="reference" value="y_part.fa" ftype="fasta"/>
+            <output name="summary" ftype="json">
+                <assert_contents>
+                    <has_text text="&quot;haplogroup&quot;: &quot;J-L816&quot;"/>
+                    <has_text text="&quot;isogg&quot;: &quot;J1a2a1a2c1a1&quot;"/>
+                    <has_text text="&quot;confidence&quot;: &quot;high&quot;"/>
+                </assert_contents>
+            </output>
+            <output name="lineage" ftype="tabular">
+                <assert_contents>
+                    <has_text_matching expression="J-L816\tL816"/>
+                </assert_contents>
+            </output>
+        </test>
+        <test expect_num_outputs="2">
+            <param name="bam" value="hg003_y.bam" ftype="bam"/>
+            <param name="reference" value="y_part.fa" ftype="fasta"/>
+            <param name="min_y_ratio" value="5.0"/>
+            <output name="summary" ftype="json">
+                <assert_contents>
+                    <has_text text="&quot;status&quot;: &quot;not typed&quot;"/>
+                </assert_contents>
+            </output>
+        </test>
+    </tests>
+    <help><![CDATA[
+**What it does**
+
+Assigns the Y-chromosome haplogroup (paternal lineage) of a male sample from its exome reads. Yleaf 4 piles up the
+reads at the SNPs of the YFull tree (v14) and walks the tree to the most derived haplogroup with support (at least 10
+reads and 90 % of them for the derived base at a marker); it also gives the legacy ISOGG name.
+
+The tool first checks for a Y chromosome: the ratio of reads mapped to Y and to X is about 0.01 in female exomes
+(reads mismapped to Y) and 0.2-0.3 in male exomes. Below 0.05 the sample is not typed.
+
+**Exomes are less resolved than genomes**: the capture covers the Y genes and some off-target sequence, so the call
+is often an ancestor of the haplogroup a genome would give (a "paragroup" such as ``I1*``: none of the known
+subclades has enough reads). In 104 males of 1000 Genomes (tests/haplogroup_eval.py, truth from Poznik et al. 2016)
+no call was on a wrong branch; 96 reached the correct major haplogroup (A-T) or below.
+
+**Outputs**: a JSON summary (YFull haplogroup and markers, ISOGG name, Y/X read ratio, informative markers, Yleaf QC
+scores, confidence, lineage) and a table of the derived nodes from the root to the call. The clinical report shows
+them in its ancestry/lineage subsection.
+    ]]></help>
+    <citations>
+        <citation type="doi">10.1093/molbev/msy032</citation>
+        <citation type="doi">10.1038/ng.3559</citation>
+    </citations>
+</tool>

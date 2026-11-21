@@ -4,7 +4,7 @@ Everything the two workflows use: programs, Galaxy tools, reference and knowledg
 them. Update this file with every release. `install.sh` installs all of it (column *Stage*: the `install.sh` stage
 that provides it); README section 1 explains the stages, section 2 the workflow inputs, section 7 the validation.
 
-Release 0.14 (2026-11-21). GRCh38 throughout, Ensembl chromosome names (`1`, `MT`) unless a file says otherwise.
+Release 0.15 (2026-11-21). GRCh38 throughout, Ensembl chromosome names (`1`, `MT`) unless a file says otherwise.
 
 ## 1. Analyses, by release
 
@@ -25,6 +25,7 @@ Release 0.14 (2026-11-21). GRCh38 throughout, Ensembl chromosome names (`1`, `MT
 | release 0.12 | 2026-11-21 | gnomAD exome coverage gates PM2; pext next to loss-of-function variants | Coverage and pext |
 | release 0.13 | 2026-11-21 | Couple carrier screening (local tool `wes_couple`), carrier gene table; sex check in the report | Couple screening |
 | release 0.14 | 2026-11-21 | HLA typing (local tool `wes_hla`, T1K): class I/II alleles, CPIC HLA pharmacogenomics through PharmCAT outside calls, HLA disease associations | HLA typing |
+| release 0.15 | 2026-11-21 | mtDNA haplogroup (`wes_mito` 0.2.0, HaploGrep3) and Y-chromosome haplogroup (local tool `wes_yhaplo`, Yleaf) as maternal/paternal lineages in the report, with a Y-versus-sex check | Haplogroups |
 
 ## 2. Programs on the host
 
@@ -55,16 +56,22 @@ Local tools (`tools/`, stage `local-tools`; Galaxy installs their Conda requirem
 
 | Tool | Version | Conda requirements | Licence of the main dependency | Added |
 |---|---|---|---|---|
-| `wes_clinical_report` | 0.14.0 | python 3.12, samtools 1.22 | this repository | 0.1 |
+| `wes_clinical_report` | 0.15.0 | python 3.12, samtools 1.22 | this repository | 0.1 |
 | `spliceai_score` | 1.3.1 | spliceai 1.3.1, numpy 1.26.4, setuptools 80.9, bcftools 1.24 | SpliceAI: GPL-3.0 | 0.4 |
 | `pharmcat_pgx` | 3.4.0+galaxy1 | pharmcat3 3.4.0 | MPL-2.0 (guidelines: CPIC CC0, DPWG, FDA via ClinPGx) | 0.4 |
 | `wes_cnv` | 0.1.0 | python 3.12, numpy 2.2.6, samtools 1.22 | this repository | 0.7 |
-| `wes_mito` | 0.1.0 | python 3.12, samtools 1.22 | this repository | 0.11 |
+| `wes_mito` | 0.2.0 | python 3.12, samtools 1.22, haplogrep3 3.2.2 | HaploGrep3: MIT | 0.11 (haplogroup 0.15) |
 | `wes_couple` | 0.1.0 | python 3.12 | this repository | 0.13 |
 | `wes_hla` | 0.1.0 | t1k 1.0.10, samtools 1.22, python 3.12 | T1K: MIT | 0.14 |
+| `wes_yhaplo` | 0.1.0 | yleaf 4.1.7, samtools 1.22, python 3.12 | Yleaf: GPL-3.0 | 0.15 |
 
 Tested on aarch64 (Ubuntu, Galaxy 26.2); every requirement also has a bioconda/conda-forge build for x86-64.
 SpliceAI's TensorFlow 2.19 is the only aarch64 build and needs numpy 1.26.
+
+Data inside the Conda packages (no separate download): HaploGrep3's mtDNA tree PhyloTree 17 Forensic Update 1.2
+(6,380 haplogroups; installed by the package's post-link step from GitHub, so the Galaxy dependency install needs
+internet) and Yleaf's YFull v14 and ISOGG trees with their GRCh38 marker positions. HaploGrep3's FASTA input needs an
+x86-64 native library; the tools pass HSD text, which works on aarch64.
 
 ## 4. Reference and knowledge data
 

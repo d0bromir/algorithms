@@ -9,21 +9,35 @@ with enough supporting reads on both strands, and annotates it with:
   genomes, maximum heteroplasmy seen, haplogroup-defining flag, common low-heteroplasmy flag, MitoTIP and PON-mt-tRNA
   predictions for tRNA variants) and the rCRS gene.
 
-Outputs: a TSV of calls (one row per allele) and a JSON summary (coverage, detection limit, counts).
-Standard library plus samtools.
+Haplogroup: with HaploGrep3 on the PATH (--haplogroup), the majority allele of every position covered by at least
+--min-depth-hom reads is classified against PhyloTree 17 Forensic Update 1.2. Exomes cover the mtDNA unevenly, so
+HaploGrep3 gets the covered ranges (HSD format): an uncovered position counts as unknown, not as the rCRS base.
+
+Outputs: a TSV of calls (one row per allele) and a JSON summary (coverage, detection limit, counts, haplogroup).
+Standard library plus samtools (and HaploGrep3 for the haplogroup).
 
     wes_mito.py --bam reads.bam --reference ref.fa [--gnomad-mt gnomad.chrM.vcf.bgz] [--clinvar clinvar.vcf.gz]
-                --tsv calls.tsv --json summary.json [--min-hl 0.10] [--min-alt 3] [--min-depth 20]
+                --tsv calls.tsv --json summary.json [--min-hl 0.10] [--min-alt 3] [--min-depth 20] [--haplogroup]
 """
 import argparse
+import csv
 import gzip
+import os
 import json
 import re
 import statistics
+import shutil
 import subprocess
 import sys
+import tempfile
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
+TAB = "\t"
+TREE = "phylotree-fu-rcrs@1.2"  # PhyloTree 17 Forensic Update 1.2 (HaploGrep3 default)
+# Below this fraction of the mtDNA covered the haplogroup is low confidence. Set on the tuning half of the 1000 Genomes
+# exome panel (tests/haplogroup_eval.py): the first 0.1 step above every tuning sample whose call was less resolved
+# than, or different from, the truth.
+MIN_COVERED = 0.4
 # rCRS (NC_012920.1) genes: start, end (1-based, inclusive), symbol
 MT_GENES = [(577, 647, "MT-TF"), (648, 1601, "MT-RNR1"), (1602, 1670, "MT-TV"), (1671, 3229, "MT-RNR2"),
             (3230, 3304, "MT-TL1"), (3307, 4262, "MT-ND1"), (4263, 4331, "MT-TI"), (4329, 4400, "MT-TQ"),
@@ -107,6 +121,80 @@ def pileup(bam, ref, contig, min_mapq, min_bq):
         raise SystemExit("samtools mpileup failed: " + p.stderr.read()[:500])
 
 
+def ranges(covered):
+    """Sorted 1-based positions -> HaploGrep range string ("1-300;320-16569")."""
+    out, start, prev = [], None, None
+    for p in covered:
+        if start is None:
+            start = prev = p
+        elif p == prev + 1:
+            prev = p
+        else:
+            out.append(f"{start}-{prev}")
+            start = prev = p
+    if start is not None:
+        out.append(f"{start}-{prev}")
+    return ";".join(out)
+
+
+def hsd_variants(pos, ref, alt):
+    """VCF-style allele -> HaploGrep/PhyloTree notation (73G, 523d, 315.1C)."""
+    if len(ref) == len(alt) == 1:
+        return [f"{pos}{alt}"]
+    if len(ref) > len(alt):  # deletion of ref[1:] after the anchor base
+        return [f"{pos + k}d" for k in range(1, len(ref))]
+    return [f"{pos}.{k}{b}" for k, b in enumerate(alt[1:], 1)]
+
+
+def haplogroup(sample, covered, majority, tree, hits=3):
+    """Classify the consensus profile with HaploGrep3 -> dict (best hit, alternatives, coverage of the tree)."""
+    exe = shutil.which("haplogrep3")
+    if not exe:
+        return {"status": "not run: haplogrep3 not found"}
+    if not covered:
+        return {"status": "not determined: no mtDNA position covered"}
+    d = tempfile.mkdtemp()
+    hsd, out = os.path.join(d, "in.hsd"), os.path.join(d, "out.txt")
+    # 3107 is the rCRS placeholder base (N): reads always "delete" it
+    profile = [v for pos, ref, alt in majority for v in hsd_variants(pos, ref, alt) if v != "3107d"]
+    with open(hsd, "w") as f:
+        f.write(TAB.join([sample, ranges(covered), "?"] + profile) + "\n")
+    p = subprocess.run([exe, "classify", "--tree", tree, "--in", hsd, "--out", out, "--extend-report",
+                        "--hits", str(hits)], capture_output=True, text=True)
+    if p.returncode or not os.path.exists(out):
+        return {"status": "failed: " + (p.stderr or p.stdout)[-300:]}
+    with open(out) as f:
+        rows = list(csv.DictReader(f, delimiter=TAB))
+    shutil.rmtree(d, ignore_errors=True)
+    if not rows:
+        return {"status": "failed: no HaploGrep3 result"}
+
+    def split(x):
+        """'152C (localPrivateMutation) 3107d (hotspot)' -> ['152C local private mutation', '3107d hotspot']"""
+        out = []
+        for v in (x or "").split():
+            if v.startswith("(") and out:
+                label = v.strip("()")
+                out[-1] += " " + "".join(" " + c.lower() if c.isupper() else c for c in label).strip()
+            else:
+                out.append(v)
+        return out
+    best = rows[0]
+    q = float(best["Quality"])
+    alts = [{"haplogroup": r["Haplogroup"], "quality": round(float(r["Quality"]), 4)} for r in rows[1:]]
+    return {"status": "ok", "tree": tree, "haplogroup": best["Haplogroup"], "quality": round(q, 4),
+            "confidence": "low" if len(covered) / 16569 < MIN_COVERED else
+                          "high" if q >= 0.9 else "medium" if q >= 0.8 else "low",
+            "note": f"only {len(covered) / 16569:.0%} of the mtDNA covered: the haplogroup may be less resolved or "
+                    "wrong (HaploGrep3's quality counts the covered positions only)"
+                    if len(covered) / 16569 < MIN_COVERED else "",
+            "covered_positions": len(covered), "covered_fraction": round(len(covered) / 16569, 4),
+            "profile_variants": len(profile),
+            "expected_not_found": split(best.get("Not_Found_Polys")),
+            "extra_variants": split(best.get("Remaining_Polys")),
+            "alternatives": alts}
+
+
 def load_vcf_mt(path, fields):
     """(pos, ref, alt) -> {field: value} for the mitochondrial records of a VCF."""
     out = {}
@@ -144,14 +232,22 @@ def main(argv=None):
     ap.add_argument("--min-bq", type=int, default=20)
     ap.add_argument("--tsv", required=True)
     ap.add_argument("--json", required=True)
+    ap.add_argument("--haplogroup", action="store_true", help="classify the mtDNA haplogroup with HaploGrep3")
+    ap.add_argument("--tree", default=TREE, help=f"HaploGrep3 tree (default {TREE})")
+    ap.add_argument("--sample", default="sample")
     a = ap.parse_args(argv)
     contig = mt_contig(a.bam)
     gn = load_vcf_mt(a.gnomad_mt, {"AF_hom", "AF_het", "max_hl", "hap_defining_variant", "common_low_heteroplasmy",
                                   "mitotip_trna_prediction", "pon_mt_trna_prediction", "filters"})
     cv = load_vcf_mt(a.clinvar, {"CLNSIG", "CLNREVSTAT", "CLNDN"})
-    depths, rows, pgx_depth = [], [], {}
+    depths, rows, pgx_depth, covered, majority = [], [], {}, [], []
     for pos, rb, depth, counts, indels in pileup(a.bam, a.reference, contig, a.min_mapq, a.min_bq):
         depths.append(depth)
+        if depth >= a.min_depth_hom and "N" not in rb:  # consensus for the haplogroup: majority allele (> 50 %)
+            covered.append(pos)
+            for (ref, alt), (f, r) in [((rb, b), v) for b, v in counts.items() if b not in (rb, "N")] + list(indels.items()):
+                if (f + r) * 2 > depth and "N" not in alt:
+                    majority.append((pos, ref, alt))
         if pos in PGX_SITES:
             pgx_depth[str(pos)] = depth
         alleles = [((rb, b), v) for b, v in counts.items() if b != rb and b != "N"] + list(indels.items())
@@ -203,7 +299,9 @@ def main(argv=None):
                "mixture_sites": len(mix),
                "mixture": "possible second mtDNA lineage (contamination or NUMT reads): heteroplasmy at "
                           f"{len(mix)} common haplogroup variant sites" if len(mix) >= MIXTURE_SITES else "",
-               "pgx_depth": pgx_depth, "gnomad_mt": bool(gn), "clinvar": bool(cv)}
+               "pgx_depth": pgx_depth, "gnomad_mt": bool(gn), "clinvar": bool(cv),
+               "haplogroup": haplogroup(a.sample, covered, majority, a.tree) if a.haplogroup
+               else {"status": "not run"}}
     with open(a.json, "w") as f:
         json.dump(summary, f, indent=1)
     print(json.dumps(summary), file=sys.stderr)

@@ -54,7 +54,7 @@ CONFIGURE=0
 DRY=0
 VENV="${VENV:-$HOME/wes-venv}"
 PREFIX="${PREFIX:-$HOME/wes-env}"
-LOCAL_TOOL_IDS=(wes_clinical_report spliceai_score pharmcat_pgx wes_cnv wes_mito wes_couple wes_hla)
+LOCAL_TOOL_IDS=(wes_clinical_report spliceai_score pharmcat_pgx wes_cnv wes_mito wes_couple wes_hla wes_yhaplo)
 
 die() { echo "install.sh: $*" >&2; exit 1; }
 say() { printf '\n== %s\n' "$*"; }

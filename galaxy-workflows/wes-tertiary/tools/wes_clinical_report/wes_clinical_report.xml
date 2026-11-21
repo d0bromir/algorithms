@@ -1,4 +1,4 @@
-<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.14.0+galaxy0" profile="23.0">
+<tool id="wes_clinical_report" name="Exome clinical interpretation report" version="0.15.0+galaxy0" profile="23.0">
     <description>diagnostic, secondary, carrier, pharmacogenomic and risk findings in one human-readable report</description>
     <requirements>
         <requirement type="package" version="3.12">python</requirement>
@@ -141,6 +141,9 @@ python3 '$__tool_directory__/wes_clinical_report.py'
     #if $hla:
         --hla '$hla'
     #end if
+    #if $yhaplo:
+        --yhaplo '$yhaplo'
+    #end if
     #if $previous_tsv:
         #import re
         #set $previous_name = re.sub(r"[^\w .,:()+-]", "_", str($previous_tsv.element_identifier))
@@ -238,6 +241,8 @@ python3 '$__tool_directory__/wes_clinical_report.py'
         <param name="mito_json" type="data" format="json" optional="true" label="Mitochondrial summary (wes_mito)"/>
         <param name="hla" type="data" format="json" optional="true" label="HLA types (wes_hla summary)"
                help="The summary (JSON) of the HLA typing tool (wes_hla): HLA alleles, the CPIC pharmacogenomic HLA alleles and HLA disease associations, shown in the pharmacogenomics section."/>
+        <param name="yhaplo" type="data" format="json" optional="true" label="Y haplogroup (wes_yhaplo summary)"
+               help="The summary (JSON) of the Y-chromosome haplogroup tool (wes_yhaplo), shown with the genetic sex in section 1; a Y haplogroup in a genetically female sample (or none in a male) is flagged."/>
         <param name="previous_tsv" type="data" format="tabular" optional="true" label="Previous report of this sample: findings (TSV)"
                help="The findings TSV of an earlier run of this tool on the same sample. The report then lists what is new, what changed (ClinVar, ACMG class, category, genotype) and what is no longer reported, with the evidence that differs."/>
         <param name="max_af" type="float" value="0.01" min="0" max="1" label="Rare variant cut-off (population allele frequency)"
@@ -462,7 +467,10 @@ of a variant is shown next to ClinVar. REVEL (when in the missense file) is the 
 calibrated assays give PS3/BS3. Collins dosage scores and gnomAD exome CNV frequencies are added to CNV calls,
 UniProt features to the variant names, and the wes_mito outputs give a mitochondrial section (including MT-RNR1 for
 aminoglycosides). The wes_hla summary adds the HLA alleles, the CPIC pharmacogenomic HLA alleles (abacavir,
-carbamazepine, allopurinol) and HLA disease associations to the pharmacogenomics section. Every input file is
+carbamazepine, allopurinol) and HLA disease associations to the pharmacogenomics section. The mtDNA haplogroup
+(wes_mito 0.2) and the Y haplogroup (wes_yhaplo) are shown with the genetic sex as maternal and paternal lineages,
+with a warning when the Y result and the sex disagree; the mitochondrial section lists the haplogroup's quality,
+alternatives, missing expected variants and private variants. Every input file is
 listed with its SHA-256, and a fingerprint identifies the data and rules.
 
 **Reanalysis.** Given the findings TSV of an earlier report of the same sample, a section after the summary
