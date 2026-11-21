@@ -57,7 +57,7 @@ licences and the release that added it:
 | `system` | Installs bcftools, bedtools, samtools, tabix, curl, gawk and python3-venv with apt (`--conda`: into a conda environment instead) |
 | `venv` | Creates a Python environment with Ephemeris and BioBlend (`$VENV`, default `~/wes-venv`) |
 | `tools` | Installs the [`tools.yml`](tools.yml) repositories with Ephemeris; already-installed repositories are skipped |
-| `local-tools` | Copies the seven local tools to the local tool directory and checks `local_tool_conf.xml`, `galaxy.yml` and the HTML allowlist. Then Galaxy installs the tools' Conda dependencies |
+| `local-tools` | Copies the eight local tools to the local tool directory and checks `local_tool_conf.xml`, `galaxy.yml` and the HTML allowlist. Then Galaxy installs the tools' Conda dependencies |
 | `workflows` | Imports both `.ga` files; with `--update`, adds a new version to workflows already present |
 | `data` | Downloads and builds the section 2 files into `--data-dir`, with a `MANIFEST.tsv` (source, date, size) |
 | `upload` | Uploads the `MANIFEST.tsv` files into a new history and runs *SnpEff download* there |
@@ -315,6 +315,8 @@ The tables show the genotype columns of the first sample (`GEN[0]`); change them
 | `coding_coverage_thresholds` | ✔ | | Bases covered at 1/10/20/30/50× per coding exon |
 | `target_mean_depth` | ✔ | | Mean depth per target (mosdepth regions): the input of the CNV calls; collect these as the laboratory's CNV reference panel |
 | `hla_types`, `hla_summary` | ✔ | | HLA class I and II alleles (two fields, quality, G-group equivalents), CPIC pharmacogenomic HLA alleles, HLA disease associations (section 4c) |
+| `mito_calls`, `mito_summary` | ✔ | | mtDNA variants and heteroplasmy; the summary also holds the **mtDNA haplogroup** (HaploGrep3, section 4d) |
+| `yhaplo_summary`, `yhaplo_lineage` | ✔ | | **Y-chromosome haplogroup** (Yleaf: YFull and ISOGG names, markers, QC) and the derived nodes from the root (section 4d) |
 | `cnv_calls`, `cnv_targets`, `cnv_summary` | ✔ | | Copy-number calls (deletions, duplications with genes, confidence), per-target ratios (for plots and as a parent's input) and a JSON summary (noise, chromosome dosage, sex chromosomes) |
 
 ## 4a. The clinical report
@@ -327,7 +329,7 @@ laboratory.
 
 | Section | Rule |
 |---|---|
-| Sample and data quality | Ts/Tv, het/hom, het allele-fraction distribution (contamination hint), genetic sex from chrX heterozygosity and chrY coverage, target coverage at 10/20/30× |
+| Sample and data quality | Ts/Tv, het/hom, het allele-fraction distribution (contamination hint), genetic sex from chrX heterozygosity and chrY coverage, target coverage at 10/20/30×; with `wes_mito` 0.2 and `wes_yhaplo`, the mtDNA (maternal) and Y (paternal) haplogroups, and a warning when a Y haplogroup is called in a genetically female sample or none in a male |
 | Diagnostic findings | ClinVar pathogenic/likely pathogenic (not conflicting) **and** a genotype that fits the gene's mode of inheritance in GenCC: one allele for dominant genes, hemizygous for X-linked genes in males, two alleles for recessive genes. Genes with both dominant and recessive disorders, X-linked heterozygous females and genes without a GenCC entry go to a *review* table |
 | Candidate variants | Not classified in ClinVar (or VUS/conflicting), gnomAD frequency below the cut-off (default 1 %), in a GenCC gene: predicted loss-of-function; missense with AlphaMissense (and REVEL, when the predictions file has it) ≥ 0.906 (PP3_Moderate or stronger); missense at a residue with a pathogenic ClinVar missense variant (PS1/PM5); predicted splice-altering outside the canonical sites (SpliceAI ≥ 0.5, or ≥ 0.2 in genes matching the HPO terms); missense/in-frame variants in genes matching the HPO terms. An automated ACMG/AMP class (next row), inheritance fit (incl. compound heterozygotes, phased from the reads where possible) and ranking by phenotype match, disease-level phenotype match and evidence |
 | Phenotype match by disease | With HPO terms: for every gene with a finding, the HPO-annotated disease that explains the largest share of the patient's terms, each term weighted by its information content; which terms it explains and which it does not, with the disease's onset, course and inheritance |
@@ -344,7 +346,7 @@ laboratory.
 | Pharmacogenomics | CYP2C19, CYP2C9, VKORC1, CYP4F2, SLCO1B1, DPYD, TPMT, NUDT15, CYP3A5, CYP2B6, UGT1A1 at fixed GRCh38 positions (checked against ClinVar and the reference). A missing variant counts as the reference allele only with ≥ 15 reads at the position (BAM in v1); otherwise the gene is *indeterminate*. CPIC phenotypes, ClinVar drug-response variants (≥ 1 star). Next to it, the PharmCAT 3.4.0 diplotypes and phenotypes (all defining positions of each star allele, with the positions missing from the VCF listed); PharmCAT's own HTML report carries the CPIC, DPWG and FDA recommendations |
 | Risk alleles | Factor V Leiden, prothrombin G20210A, HFE p.Cys282Tyr/p.His63Asp, APOE (flagged: disclose only with counselling and consent), ClinVar risk/association variants (≥ 1 star) |
 | Runs of homozygosity and uniparental disomy | Total length of runs ≥ 1 Mb (consanguinity), runs concentrated on one chromosome, homozygous findings inside runs. With both parents: **uniparental disomy** (whole chromosome or segment, maternal or paternal, isodisomy or heterodisomy) from common SNVs where the proband lacks one parent's alleles, with the imprinting disorder (chromosomes 6, 7, 11, 14, 15, 16, 20), a CNV deletion that would explain it, and homozygous findings that only one parent carries. The **parent of origin** of a chromosome gain and of the X chromosomes in a sex-chromosome aneuploidy appears beside the chromosome dosage (section 4) |
-| Mitochondrial DNA (with the *Mitochondrial calls/summary* of `wes_mito`) | Homoplasmic (≥ 90 % of ≥ 5 reads) and heteroplasmic (≥ 10 % of ≥ 20 reads, ≥ 3 reads) mtDNA variants from the exome's off-target chrM reads: chrM coverage and the heteroplasmy detectable at the median depth; ClinVar pathogenic/likely pathogenic variants with their level; rare tRNA variants predicted pathogenic by MitoTIP or PON-mt-tRNA; gnomAD v3.1 homoplasmic/heteroplasmic frequencies; MT-RNR1 m.1555A>G, m.1494C>T, m.1095T>C for aminoglycosides (CPIC), with the read depth so that *not carried* is told apart from *not covered*; a mixture check (heteroplasmy at ≥ 3 common variants of other haplogroups: contamination or nuclear mitochondrial segments) |
+| Mitochondrial DNA (with the *Mitochondrial calls/summary* of `wes_mito`) | Homoplasmic (≥ 90 % of ≥ 5 reads) and heteroplasmic (≥ 10 % of ≥ 20 reads, ≥ 3 reads) mtDNA variants from the exome's off-target chrM reads: chrM coverage and the heteroplasmy detectable at the median depth; ClinVar pathogenic/likely pathogenic variants with their level; rare tRNA variants predicted pathogenic by MitoTIP or PON-mt-tRNA; gnomAD v3.1 homoplasmic/heteroplasmic frequencies; MT-RNR1 m.1555A>G, m.1494C>T, m.1095T>C for aminoglycosides (CPIC), with the read depth so that *not carried* is told apart from *not covered*; a mixture check (heteroplasmy at ≥ 3 common variants of other haplogroups: contamination or nuclear mitochondrial segments); with `wes_mito` 0.2 the haplogroup with its quality, coverage, the next best haplogroups, the expected variants not found and the private variants |
 | HLA (with the *HLA summary* of `wes_hla`), in the pharmacogenomics section | The two alleles of HLA-A, -B, -C, -DRB1, -DRB3/4/5, -DQA1, -DQB1, -DPA1, -DPB1 with confidence; the CPIC pharmacogenomic alleles HLA-B\*57:01 (abacavir), HLA-B\*15:02 (carbamazepine, oxcarbazepine, phenytoin), HLA-A\*31:01 (carbamazepine), HLA-B\*58:01 (allopurinol); disease associations HLA-B\*27, HLA-B\*51, HLA-DQB1\*06:02 and the celiac-disease heterodimers DQ2.5/DQ2.2/DQ8 (their absence makes celiac disease very unlikely). With the *HLA outside calls*, PharmCAT adds the CPIC/DPWG/FDA recommendations for these drugs |
 | Changes since the previous report | With the findings TSV of an earlier report of the same sample (*Previous report: findings (TSV)*): the results that are **new**, **changed** or **no longer reported**, matched by variant, by gene for gene-level results (pharmacogenomics, APOE) and by ≥ 50 % reciprocal overlap for CNVs and UPD. Each change shows what both reports said and the evidence that differs: category, ClinVar classification and review status, automated ACMG class, genotype, gnomAD frequency, QC flags, or a variant no longer called. Results and findings to review (diagnostic, secondary findings, de novo, UPD, pathogenic CNVs; candidates, carrier status, pharmacogenomics) come first, other listed variants after. The TSV records the report version and the HPO, GenCC, ClinGen and SnpEff releases (`report_meta` rows), shown beside the previous report's. A **same-person check**: if < 65 % of the previous report's listed variants have the same genotype in the current calls, the section warns that the previous report is probably of another sample |
 | Coverage | Per-gene coding coverage at 10/20×; clinically relevant genes below 95 % at 20× are listed, because a negative result there is not reliable |
@@ -446,6 +448,32 @@ the call low confidence.
 re-runs PharmCAT's phenotyper and reporter on the preprocessed VCF with the HLA-A/B diplotypes. PharmCAT then lists
 the CPIC, DPWG and FDA recommendations for abacavir, allopurinol, carbamazepine, oxcarbazepine, phenytoin and
 fosphenytoin in its own report.
+
+## 4d. mtDNA and Y haplogroups
+
+Two tools of the FASTQ workflow assign the maternal and paternal lineages from the exome reads. The report shows them
+with the genetic sex (section 1) and the mtDNA details in its mitochondrial section. Haplogroups describe one maternal
+and one paternal line only, not a person's ancestry; the report uses them for sample checks, not for interpretation.
+
+* **mtDNA** (`wes_mito` 0.2.0): the majority allele of every chrM position with ≥ 5 reads is classified by
+  [HaploGrep3](https://github.com/genepi/haplogrep3) 3.2.2 (MIT) against PhyloTree 17 Forensic Update 1.2.
+  Exomes cover the mtDNA unevenly (from under 5 % to 100 % in the panels of section 7), so HaploGrep3 receives the
+  covered ranges in its HSD format: an uncovered position is unknown, not the reference base (a VCF would make it the
+  rCRS base and pull the call towards H2a2a1). HaploGrep3's quality counts the covered positions only, so the
+  confidence also needs coverage: **high** = ≥ 40 % of the mtDNA covered and quality ≥ 0.9, **medium** = quality
+  0.8-0.9, **low** otherwise (the 40 % was set on one half of the 1000 Genomes panel, section 7). The summary lists the
+  best three haplogroups, the expected variants not found and the private variants (hotspots marked).
+* **Y** (`wes_yhaplo` 0.1.0): [Yleaf](https://github.com/genid/Yleaf) 4.1.7 (GPL-3.0) piles up the reads at the
+  SNPs of the YFull tree (v14) and walks the tree to the most derived haplogroup with support (≥ 10 reads, ≥ 90 % of
+  them derived), and gives the legacy ISOGG name. A sample is typed only when the Y/X ratio of mapped reads is ≥ 0.05
+  (about 0.01 in female exomes, from reads mismapped to Y; 0.18-0.29 in the GIAB male exomes). Exome calls are often **less
+  resolved** than a genome's: a paragroup such as `I1*` means that none of the subclades had enough reads.
+
+| Output | Content |
+|---|---|
+| *Mitochondrial summary* (`haplogroup`) | Haplogroup, quality, confidence, covered positions, next best haplogroups, expected variants not found, private variants |
+| *Y haplogroup summary* (JSON) | Y/X read ratio, YFull haplogroup and markers, ISOGG name, informative markers, Yleaf QC scores, confidence, lineage |
+| *Y haplogroup lineage* | The derived nodes from the root to the call, with one marker each |
 
 ## 5. Filters and how to change them
 
@@ -1302,6 +1330,49 @@ NA12891 DQ2.5 (the DR3-DQ2.5 haplotype of the CEPH family), NA12891 DQB1\*06:02,
 from DQB1 alone (no DQB1\*02 or \*03:02), and *not determined* where DQB1\*03:02 meets an uncertain DQA1 (HG002,
 HG003).
 
+### mtDNA and Y haplogroups (wes_mito 0.2.0, wes_yhaplo 0.1.0, report 0.15.0)
+
+Two truth sets, scored on the trees themselves (`tests/haplogroup_eval.py`): a call is the **same** node as the
+truth, **more derived** (a descendant: a newer tree, or more markers), **less resolved** (an ancestor: correct, fewer
+markers) or on **another branch** (an error); *consistent* = the first three.
+
+* **1000 Genomes phase 3 exomes**: 104 males, 4 per population from all 26 populations, chosen to cover different
+  major Y lineages (31 major lineages, A0 to T). The chrM and chrY reads of their GRCh38 exome CRAMs (2010-2013
+  captures, HiSeq 2000) were fetched by region. Truth for mtDNA: the curated phase 3 mtDNA sequences from the
+  low-coverage genomes, classified with the same HaploGrep3 tree; truth for Y: Poznik et al. (Nat Genet 2016), most
+  derived SNP placed on the YFull tree (from low-coverage genomes *and* these exomes, so not fully independent).
+  The panel's mtDNA coverage ranged from 4 % to 100 % (median 100 %; 15 samples below 40 %, 5 without chrM reads).
+  The 40 % coverage gate of the mtDNA confidence was set on the odd-numbered half of the panel (the first 0.1 step
+  above every tuning sample whose call was less resolved or wrong) and is reported on the other half.
+* **GIAB IDT exomes** (NovaSeq 6000, the workflow's BWA-MEM alignments): truth = the same tools on the deep GIAB
+  genomes (Illumina 100-300×; about 110,000× on chrM; chrY 2.8-26.6 Mb for HG002 and HG006), plus maternal and paternal
+  consistency in the trios.
+
+| Panel | mtDNA: consistent | same / more derived / less resolved / other branch | Y: consistent | same / more derived / less resolved / other branch | Time per sample (mtDNA; Y) | Peak memory |
+|---|---|---|---|---|---|---|
+| 1000 Genomes, 104 males (5 without chrM reads: no call) | 96/99 (97.0 %) | 81 / 2 / 13 / 3 | 101/101 (100 %)¹ | 13 / 25 / 63 / 0 | 1.6 s (max 5.8); 3.2 s (max 5.2) | 214 MB; 126 MB |
+| GIAB exomes vs deep genomes | 7/7 | 7 / 0 / 0 / 0 | 2/2 | 0 / 0 / 2 / 0 | 1.3-2.2 s; 2.0-2.4 s | 201-221 MB; ≤ 196 MB |
+
+¹ 3 more truth SNPs (I2-S434, D2-JST022456, FH-M2713) are not in the YFull marker list and could not be placed; their
+calls (F\*, D-Z1527, H-Z5866\*) are in the expected lineages. 98 of 104 Y calls reached the truth's major
+haplogroup (A-T) or below; six stopped at the paragroup F\* (older captures with few Y markers).
+
+**mtDNA confidence, held-out half** (52 samples): high 30 (27 same, 1 more derived, 2 less resolved, 0 other
+branch), medium 11 (all same), low 9 (2 other branch, 6 less resolved, 1 same), no call 2. All three wrong mtDNA
+calls of the panel had less than 26 % of the mtDNA covered, where HaploGrep3 still reported quality 0.5-1.0.
+
+**GIAB exomes** (9 samples): mtDNA H13a1a1a (HG001, NA12892), H5a7 (HG002, HG004), K1a1b1a (HG003), F2b1 (HG005,
+HG007), D4a3a (HG006), H1e1a8 (NA12891), each identical to the deep genome where one was available (7/7); maternal
+consistency 3/3 trios. Y: J-L816 (HG002, HG003; genome J-ZS2721, more derived), D-N1\* (HG005, HG006; genome
+D-MF618315), I1\* (NA12891); paternal consistency 2/2; the four women were not typed (Y/X read ratio 0.012 against
+0.18-0.29 in the men: sex check 9/9). Each tool took a few seconds and about 200 MB; as Galaxy jobs on HG003
+(16 slots) `wes_mito` with the haplogroup took 24 s and `wes_yhaplo` 15 s.
+
+**Workflow run**: the VCF workflow 0.15 on HG001's calls with all knowledge inputs and the Galaxy outputs of
+`wes_mito` 0.2.0 and `wes_yhaplo` ran 16/16 jobs ok (804 s); the report lists the mtDNA haplogroup (H13a1a1a, high)
+and "Y haplogroup: not typed" with the genetic sex, the haplogroup details in the mitochondrial section, and a
+`haplogroup` row in the findings TSV.
+
 ## 8. Scope and limitations
 
 Germline SNVs and short indels in the exome targets, and CNVs of several exons from read depth (section 7).
@@ -1322,5 +1393,8 @@ alt read among ≥ 15) is read as reference. UPD detection needs both parents; h
 (two-field alleles that differ in the antigen-recognition exons), not three- or four-field alleles, null alleles
 caused outside these exons, or new alleles; HLA-DQA1 was the least reliable gene in the GIAB exomes (section 7), and
 an HLA-B\*57:01 or HLA-B\*15:02 result should be confirmed by a clinical HLA test before a drug decision. KIR genes
-are not typed. The reports support expert review; they are not a diagnosis. This is a research workflow,
+are not typed. Haplogroups from an exome are often less resolved than from a genome (the Y call in 63 of 104
+1000 Genomes exomes, the mtDNA call in 13 of 99); with less than 40 % of the mtDNA covered the mtDNA haplogroup is low
+confidence and can be wrong (3 of 15 such samples). Haplogroups describe one maternal and one paternal line, not
+ancestry. The reports support expert review; they are not a diagnosis. This is a research workflow,
 not a validated clinical pipeline.

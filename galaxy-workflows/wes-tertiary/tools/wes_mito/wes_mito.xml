@@ -1,8 +1,9 @@
-<tool id="wes_mito" name="Mitochondrial DNA variants" version="0.1.0+galaxy0" profile="23.0">
-    <description>homoplasmic and heteroplasmic mtDNA variants from the off-target reads of an exome</description>
+<tool id="wes_mito" name="Mitochondrial DNA variants" version="0.2.0+galaxy0" profile="23.0">
+    <description>homoplasmic and heteroplasmic mtDNA variants and the mtDNA haplogroup from the off-target reads of an exome</description>
     <requirements>
         <requirement type="package" version="3.12">python</requirement>
         <requirement type="package" version="1.22">samtools</requirement>
+        <requirement type="package" version="3.2.2">haplogrep3</requirement>
     </requirements>
     <version_command>python3 '$__tool_directory__/wes_mito.py' --help | head -1</version_command>
     <command detect_errors="exit_code"><![CDATA[
@@ -23,6 +24,10 @@ python3 '$__tool_directory__/wes_mito.py'
     --min-alt $min_alt
     --min-depth $min_depth
     --min-depth-hom $min_depth_hom
+    #if $haplogroup:
+        --haplogroup
+        --sample '$bam.element_identifier'
+    #end if
     --tsv '$calls'
     --json '$summary'
     ]]></command>
@@ -35,7 +40,8 @@ python3 '$__tool_directory__/wes_mito.py'
         <param name="min_hl" type="float" value="0.10" min="0.01" max="0.9" label="Lowest heteroplasmy reported"/>
         <param name="min_alt" type="integer" value="3" min="1" label="Reads needed for a heteroplasmic call"/>
         <param name="min_depth" type="integer" value="20" min="1" label="Depth needed for a heteroplasmic call"/>
-        <param name="min_depth_hom" type="integer" value="5" min="1" label="Depth needed for a homoplasmic call (at least 90 % of reads)"/>
+        <param name="min_depth_hom" type="integer" value="5" min="1" label="Depth needed for a homoplasmic call (at least 90 % of reads)" help="Also the depth at which a position counts as covered for the haplogroup."/>
+        <param name="haplogroup" type="boolean" checked="true" label="Classify the mtDNA haplogroup (HaploGrep3, PhyloTree 17 Forensic Update 1.2)"/>
     </inputs>
     <outputs>
         <data name="calls" format="tabular" label="${tool.name} on ${on_string}: calls"/>
@@ -58,6 +64,8 @@ python3 '$__tool_directory__/wes_mito.py'
                 <assert_contents>
                     <has_text text="&quot;homoplasmic&quot;: 36"/>
                     <has_text text="&quot;median_depth&quot;: 12"/>
+                    <has_text text="&quot;haplogroup&quot;: &quot;K1a1b1a&quot;"/>
+                    <has_text text="&quot;confidence&quot;: &quot;high&quot;"/>
                 </assert_contents>
             </output>
         </test>
@@ -80,11 +88,20 @@ variants, and the rCRS gene. Flags: one strand only, the artefact-prone homopoly
 exome, shows as heteroplasmy at positions that are common homoplasmic variants of other haplogroups (gnomAD >= 1 %).
 Three or more such sites are reported in the summary; low heteroplasmy is then unreliable in that sample.
 
+**Haplogroup.** The majority allele of every position covered by at least 5 reads is classified with HaploGrep3
+against PhyloTree 17 Forensic Update 1.2. Exomes cover the mtDNA unevenly, so HaploGrep3 is given the covered ranges
+(HSD format): an uncovered position is unknown, not the rCRS base. HaploGrep3's quality counts the covered positions
+only, so the confidence also needs coverage: **high** = at least 40 % of the mtDNA covered and quality >= 0.9,
+**medium** = quality 0.8-0.9, **low** otherwise. In 104 1000 Genomes exomes (tests/haplogroup_eval.py) no high- or
+medium-confidence call was on a wrong branch; the wrong calls were all below 26 % coverage. The summary lists the
+best three haplogroups, the expected variants not found and the extra (private) variants.
+
 **Outputs**: a table of calls and a JSON summary (coverage, the heteroplasmy detectable at the median depth, counts,
-the mixture check, and the depth at the CPIC MT-RNR1 positions 1095, 1494 and 1555). The clinical report shows them
+the mixture check, the depth at the CPIC MT-RNR1 positions 1095, 1494 and 1555, and the haplogroup). The clinical report shows them
 in its mitochondrial section.
     ]]></help>
     <citations>
         <citation type="doi">10.1101/gr.276013.121</citation>
+        <citation type="doi">10.1093/nar/gkad284</citation>
     </citations>
 </tool>

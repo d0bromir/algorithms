@@ -20,8 +20,8 @@ earlier report of the sample, a section lists what is new, changed or no longer 
 
 Optional knowledge (0.11): MANE transcripts (RefSeq and genomic HGVS names), ClinGen/G2P/Orphanet disease context with
 genotype fit, ClinGen expert-panel rules and classifications, REVEL, MaveDB functional assays, Collins dosage and
-gnomAD exome CNV frequencies for CNVs, UniProt features, mitochondrial calls (wes_mito), HLA types (wes_hla), and
-input provenance.
+gnomAD exome CNV frequencies for CNVs, UniProt features, mitochondrial calls and mtDNA haplogroup (wes_mito),
+Y haplogroup (wes_yhaplo), HLA types (wes_hla), and input provenance.
 
 Standard library only (Python >= 3.8).
 """
@@ -40,7 +40,7 @@ import statistics
 import subprocess
 import sys
 
-VERSION = "0.14.0"
+VERSION = "0.15.0"
 
 # --------------------------------------------------------------------------------------------- rules
 # ACMG secondary findings v3.3 (ACMG policy statement, Genet Med 2025;27:101454): the 81 genes of v3.2 (Miller et al.,
@@ -2694,6 +2694,44 @@ def load_mito(tsv, js):
     return rows, summ
 
 
+def lineage_items(mito_sum, yh, sex):
+    """Section 1 lines for the mtDNA and Y haplogroups (wes_mito --haplogroup, wes_yhaplo) and sex-consistency warnings
+    -> (list of HTML <li>, list of warnings, findings rows)."""
+    items, warn, rows = [], [], []
+    mh = (mito_sum or {}).get("haplogroup") or {}
+    if mh.get("status") == "ok":
+        items.append(f"<li>mtDNA haplogroup (maternal lineage): <b>{esc(mh['haplogroup'])}</b> "
+                     f"<span class='small'>(HaploGrep3, PhyloTree 17 FU 1.2; quality {mh.get('quality', 0):.2f}, "
+                     f"{esc(mh.get('confidence', ''))} confidence, {100 * mh.get('covered_fraction', 0):.0f}% of the "
+                     "mtDNA covered)</span></li>")
+        rows.append(("haplogroup", None, ("mtDNA", mh["haplogroup"], mh.get("confidence", ""))))
+    elif mh:
+        items.append(f"<li>mtDNA haplogroup: {esc(mh.get('status', ''))}</li>")
+    if yh:
+        if yh.get("status") == "ok":
+            isogg = f"ISOGG {esc(yh['isogg'])}; " if yh.get("isogg") else ""
+            items.append(f"<li>Y haplogroup (paternal lineage): <b>{esc(yh['haplogroup'])}</b> "
+                         f"<span class='small'>(Yleaf, YFull tree; {isogg}{yh.get('valid_markers', 0):,} informative "
+                         f"markers, QC {yh.get('qc_score', 0):.2f}, {esc(yh.get('confidence', ''))} confidence"
+                         + (f"; {esc(yh['note'])}" if yh.get("note") else "") + ")</span></li>")
+            rows.append(("haplogroup", None, ("Y", yh["haplogroup"], yh.get("confidence", ""))))
+            if sex == "female":
+                warn.append(f"A Y haplogroup was called ({yh['haplogroup']}, Y/X read ratio {yh.get('y_x_ratio')}) but "
+                            "the genetic sex is female: check for a sample mix-up, contamination with male DNA or a "
+                            "disorder of sex development.")
+        else:
+            items.append(f"<li>Y haplogroup: {esc(yh.get('status', ''))}"
+                         + (f" <span class='small'>({esc(yh['note'])})</span>" if yh.get("note") else "") + "</li>")
+            if sex == "male" and yh.get("status") == "not typed":
+                warn.append(f"Genetic sex is male but few reads map to Y (Y/X read ratio {yh.get('y_x_ratio')}): check "
+                            "for loss of Y, a 46,XX male (SRY translocation) or a sample problem.")
+    if items:
+        items.append("<li class='small'>Haplogroups trace one maternal (mtDNA) and one paternal (Y) line only; they do "
+                     "not describe a person's ancestry or ethnicity, and are not used in the variant interpretation. In "
+                     "a trio the child carries the mother's mtDNA and (a son) the father's Y haplogroup.</li>")
+    return items, warn, rows
+
+
 def load_hla(path):
     """wes_hla summary (JSON) -> dict with genotypes and associations, or {}."""
     if not path:
@@ -3304,6 +3342,7 @@ def build(args):
     MANE.update(load_mane(args.mane))
     mito_rows, mito_sum = load_mito(args.mito_tsv, args.mito_json)
     hla = load_hla(args.hla)
+    yhaplo = load_hla(args.yhaplo)  # any JSON summary
     load_runs(args.gnomad_coverage, variants, "coverage")
     PEXT_MAX.clear()
     load_runs(args.pext, variants, "pext")
@@ -3968,7 +4007,9 @@ def build(args):
                         ("pct_30X", "Target bases >= 30x", "{:.1f}%")):
         if qc.get(k) is not None:
             R.h(f"<li>{esc(label)}: <b>{f.format(qc[k])}</b></li>")
-    R.h(f"<li>Genetic sex: <b>{esc(sex)}</b></li></ul>")
+    lin_items, lin_warn, lin_rows = lineage_items(mito_sum, yhaplo, sex)
+    R.h(f"<li>Genetic sex: <b>{esc(sex)}</b></li>" + "".join(lin_items) + "</ul>")
+    R.rows.extend(lin_rows)
     if trio and trio.qc:
         parts = []
         for w in ("mother", "father"):
@@ -3984,7 +4025,7 @@ def build(args):
             R.h("<div class='box alert'>The parents' genotypes do not fit the proband's (expected &ge; 90%, usually "
                 "&ge; 97%): sample mix-up, non-paternity/non-maternity or a parental sample of poor quality. De novo "
                 "status is not used as evidence (no PS2).</div>")
-    warn = []
+    warn = list(lin_warn)
     if qc.get("tstv") is not None and not (2.3 <= qc["tstv"] <= 3.5):
         warn.append("Ts/Tv outside the usual exome range: check for false positives or off-target calls.")
     if qc.get("het_ab_low") is not None and qc["het_ab_low"] > 0.15:
@@ -4489,6 +4530,23 @@ def build(args):
                 R.rows.append(("pgx", None, ("MT-RNR1", f"m.{pos}{ref}>{alt} {hit['call']}",
                                              "aminoglycoside-induced hearing loss risk (CPIC)")))
         R.table(["Variant", "Status"], mt_pgx)
+        mh = ms.get("haplogroup") or {}
+        if mh.get("status") == "ok":
+            R.h("<h3>Haplogroup</h3>")
+            alts = ", ".join(f"{esc(x['haplogroup'])} ({x['quality']:.2f})" for x in mh.get("alternatives", []))
+            R.h(f"<p><b>{esc(mh['haplogroup'])}</b>: HaploGrep3 quality {mh.get('quality', 0):.2f}, "
+                f"{esc(mh.get('confidence', ''))} confidence; {mh.get('covered_positions', 0):,} of 16,569 positions "
+                "covered (&ge; 5 reads)." + (f" Next best: {alts}." if alts else "")
+                + (f" <b>{esc(mh['note'])}.</b>" if mh.get("note") else "") + "</p>")
+            nf, extra = mh.get("expected_not_found", []), mh.get("extra_variants", [])
+            R.h("<p class='small'>Expected variants of the haplogroup not found: "
+                + (esc(", ".join(nf)) if nf else "none")
+                + ". Variants beyond the haplogroup (private variants; hotspots are common sequencing or alignment "
+                "artefacts): " + (esc(", ".join(extra)) if extra else "none") + ". The variants that define the "
+                "haplogroup are lineage markers shared by everyone of the haplogroup, not disease candidates; a "
+                "pathogenic mtDNA variant is usually private (the tables above).</p>")
+        elif mh:
+            R.h(f"<p class='small'>Haplogroup: {esc(mh.get('status', ''))}.</p>")
         nhap = sum(1 for r in mito_rows if r.get("haplogroup_defining"))
         R.h(f"<p class='small'>{nhap} of the variants define haplogroups (PhyloTree 17), as expected for any person. "
             "Not assessed: large mtDNA deletions, nuclear genes of mitochondrial disease are in the sections above.</p>")
@@ -4881,6 +4939,7 @@ def main(argv=None):
                     "PS3/BS3 at the calibrated strength")
     ap.add_argument("--mito-tsv", help="mitochondrial calls of wes_mito (TSV)")
     ap.add_argument("--hla", help="wes_hla summary (JSON): HLA types, pharmacogenomic HLA alleles, disease associations")
+    ap.add_argument("--yhaplo", help="wes_yhaplo summary (JSON): Y-chromosome haplogroup")
     ap.add_argument("--mito-json", help="wes_mito summary (JSON): chrM coverage, detection limit, mixture check")
     ap.add_argument("--previous-tsv", help="TSV output of an earlier report of the same sample: lists what changed")
     ap.add_argument("--previous-name", help="name of the earlier report shown in the comparison")

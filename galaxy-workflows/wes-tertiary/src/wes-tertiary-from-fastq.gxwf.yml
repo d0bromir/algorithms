@@ -1,6 +1,6 @@
 class: GalaxyWorkflow
 label: WES tertiary analysis from FASTQ (v1)
-release: "0.14"
+release: "0.15"
 license: MIT
 tags:
   - WES
@@ -358,6 +358,10 @@ outputs:
     outputSource: hla_typing/types
   hla_summary:
     outputSource: hla_typing/summary
+  yhaplo_summary:
+    outputSource: y_haplogroup/summary
+  yhaplo_lineage:
+    outputSource: y_haplogroup/lineage
   cnv_calls:
     outputSource: cnv_calling/calls
   cnv_targets:
@@ -669,9 +673,10 @@ steps:
 
   mito_calling:
     doc: >-
-      Mitochondrial DNA variants and heteroplasmy from the off-target chrM reads (local tool tools/wes_mito).
+      Mitochondrial DNA variants and heteroplasmy from the off-target chrM reads, and the mtDNA haplogroup with
+      HaploGrep3 (local tool tools/wes_mito).
     tool_id: wes_mito
-    tool_version: 0.1.0+galaxy0
+    tool_version: 0.2.0+galaxy0
     position: {left: 1340, top: 820}
     in:
       bam: mark_duplicates/outFile
@@ -683,6 +688,7 @@ steps:
       min_alt: 3
       min_depth: 20
       min_depth_hom: 5
+      haplogroup: true
     out:
       calls: {rename: "Mitochondrial calls"}
       summary: {rename: "Mitochondrial summary"}
@@ -703,6 +709,24 @@ steps:
       types: {rename: "HLA types"}
       summary: {rename: "HLA summary"}
       outside_calls: {rename: "HLA outside calls (PharmCAT)"}
+
+  y_haplogroup:
+    doc: >-
+      Y-chromosome haplogroup with Yleaf (YFull and ISOGG trees) from the Y reads, after a Y/X read-ratio check
+      (local tool tools/wes_yhaplo).
+    tool_id: wes_yhaplo
+    tool_version: 0.1.0+galaxy0
+    position: {left: 1340, top: 1300}
+    in:
+      bam: mark_duplicates/outFile
+      reference: "Reference genome (FASTA)"
+    state:
+      min_y_ratio: 0.05
+      min_reads: 10
+      prediction_quality: 0.95
+    out:
+      summary: {rename: "Y haplogroup summary"}
+      lineage: {rename: "Y haplogroup lineage"}
 
   tertiary:
     doc: Tertiary analysis of each sample's VCF (embedded workflow "WES tertiary analysis from VCF (v2)").
@@ -757,6 +781,7 @@ steps:
       "Exon expression, pext (runs)": "Exon expression, pext (runs)"
       "HLA types (wes_hla summary)": hla_typing/summary
       "HLA outside calls (PharmCAT TSV)": hla_typing/outside_calls
+      "Y haplogroup (wes_yhaplo summary)": y_haplogroup/summary
 
   multiqc:
     doc: One QC report for all samples.

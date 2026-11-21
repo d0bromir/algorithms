@@ -7,6 +7,7 @@ Only the standard library is needed; the BAM/reference features (samtools) are n
 """
 import csv
 import importlib.util
+import json
 import os
 import sys
 import tempfile
@@ -863,6 +864,28 @@ def test_hla_section():
     assert "HLA-A/HLA-B alleles" not in html, "HLA no longer listed as not assessed"
     _, html0 = run_report()
     assert "Not typed: no HLA types given" in html0 and "HLA-A/HLA-B alleles" in html0
+
+
+def test_haplogroups():
+    rows, html = run_report(["--mito-tsv", os.path.join(DATA, "mito_calls.tsv"),
+                             "--mito-json", os.path.join(DATA, "mito_summary_haplogroup.json"),
+                             "--yhaplo", os.path.join(DATA, "yhaplo_summary.json")])
+    sec1 = html.split("<h2>1. Sample and data quality</h2>")[1].split("<h2>")[0]
+    assert "mtDNA haplogroup (maternal lineage): <b>K1a1b1a</b>" in sec1
+    assert "Y haplogroup (paternal lineage): <b>J-L816</b>" in sec1 and "ISOGG J1a2a1a2c1a1" in sec1
+    assert "do not describe a person's ancestry" in sec1
+    mt = html.split("<h2>10. Mitochondrial DNA</h2>")[1].split("<h2>")[0]
+    assert "K1a1b1a*" in mt and "16093C" in mt and "310.1C global private mutation" in mt
+    assert {("haplogroup", "mtDNA"), ("haplogroup", "Y")} <= {(r["category"], r["gene"]) for r in rows}
+    y = json.load(open(os.path.join(DATA, "yhaplo_summary.json")))
+    _, warn, _ = rep.lineage_items({}, y, "female")
+    assert warn and "genetic sex is female" in warn[0]
+    _, warn, _ = rep.lineage_items({}, {"status": "not typed", "y_x_ratio": 0.012, "note": "no Y"}, "male")
+    assert warn and "few reads map to Y" in warn[0]
+    items, warn, rows = rep.lineage_items({}, {}, "male")
+    assert items == warn == rows == [], "nothing given: nothing shown"
+    _, html0 = run_report()
+    assert "haplogroup" not in html0.split("<h2>2.")[0]
 
 
 def test_cnv_gnomad_frequency():
