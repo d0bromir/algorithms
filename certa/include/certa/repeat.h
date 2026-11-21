@@ -86,7 +86,21 @@ struct RepeatParams {
   int vote_occ = 0;
   int vote_top = 0;
   int vote_pad = 16;
+  // Lower bound only, for a read not proven exact whose best alignment so
+  // far loses at least kWideLoss to a perfect match: one band of BMAX - 1
+  // diagonals centred on A*'s is aligned too (0 = off). Every band above
+  // holds one run of diagonals (a sampled copy +- spad, a chain, a vote
+  // group), so the parts on the two sides of an indel longer than those
+  // bands fall into different bands, and each band's best alignment clips
+  // the other side.
+  int wide = 0;
 };
+
+// RepeatParams::wide: how far below a perfect match A* must score for the
+// wide band to be aligned. A read clipped at an indel loses its clipped
+// bases and kClip more; one with a few mismatches loses less and gains
+// nothing from a wider band.
+constexpr int kWideLoss = 20;
 
 // Tier R's other alignments for the pair stage (RepeatOut::alt): at most
 // kRepAlt, at loci away from A*, scoring at least kRepAltMin (BWA-MEM -T)
@@ -517,6 +531,19 @@ inline RepeatOut repeat_tier(const IndexView& ix, const RepeatParams& rp, const 
         if (v > lo) { lo = v; lo_st = st; lo_lo = blo; lo_B = B; }
       }
     }
+  }
+  // The wide band (RepeatParams::wide), for a read not proven exact whose
+  // best alignment so far may clip an indel: the BMAX - 1 diagonals centred
+  // on A*'s band, so an indel of up to (BMAX - 2) / 2 bases fits either way
+  // (a 24-bp insertion: 63M24I64M scores 97 where the bands above give
+  // 68M83S, 63). As with the votes, only lo rises, by an alignment computed;
+  // hi and the parts are unchanged.
+  if (rp.wide && lo != kNoSub && lo < Ueff && lo <= L * kMatch - kWideLoss) {
+    const int B = BMAX - 1;
+    const int64_t blo = lo_lo + lo_B / 2 - B / 2;
+    const int v = band_score(ix, ws.seq[lo_st], L, blo, B);
+    if (v != kNoSub) sc.evals.push_back({v, lo_st, blo, B});
+    if (v > lo) { lo = v; lo_lo = blo; lo_B = B; }
   }
   out.hi = std::max(lo, Ueff);
   out.lo = lo;

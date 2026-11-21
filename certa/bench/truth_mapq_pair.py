@@ -5,8 +5,8 @@ trees over both mates' records, fitted at the locus on HG002, written as
 include/certa/mapq_model.h.
 
   samtools view RUN.bam | truth_mapq_pair.py feat truth.npz REF.fai OUT.npz
-  truth_mapq_pair.py fit [--cv] OUT.npz ... > include/certa/mapq_model.h
-  truth_mapq_pair.py fit --t2t OUT.npz ... > include/certa/mapq_model_t2t.h
+  truth_mapq_pair.py fit [--cv] [--xm] OUT.npz ... > include/certa/mapq_model.h
+  truth_mapq_pair.py fit --t2t [--xm] OUT.npz ... > include/certa/mapq_model_t2t.h
   truth_mapq_pair.py eval [--half] --model MODEL.h ... truth.npz OUT.npz NAME=RUN.npz ...
   samtools view PAIR.bam | truth_mapq_pair.py replay [--bwa PAIR_MODEL_H] MODEL.h FEAT.npz
 
@@ -22,13 +22,18 @@ certa/interval.h) are, per mate, its own record's
   tier, MAPQ, gap to the second-best locus (XD, else XO, minus XE; 11: none),
   XE, log2 of the clusters verified, XB, XQ, NM, soft clips / 5, the pair
   margin of a PR mate (AS + the other mate's AS - XS), proper / mate-unmapped
-  flags, and |TLEN| in classes (XM, the margin of a pair placed from the
-  alignments found, is kept for a refit but is not an input);
+  flags, and |TLEN| in classes;
 and the other mate's tier, MAPQ, gap, XE, XQ, NM, soft clips and margin.
 With --t2t (t2t_model_features) also the mate's T2T placement: whether it
 lifts to the record's locus, elsewhere, or not at all; its gap to the
 second-best locus there, XE minus its XE there, its MAPQ there / 5 and its
-tier; and the other mate's class and gap.
+tier; and the other mate's class and gap. With --xm the last input is XM,
+the margin of a pair placed from the alignments found (place_pair's score
+minus the best other pair found or the unpaired alternative; one value for
+both mates): min(XM, 40) + 1, 0 when absent. A header says by its number of
+inputs whether the trees read XM; CERTA reads only models fitted without it
+(certa/pair_model.h): on HG002's held-out half XM changed the misplaced mates
+by under 2 % at every N (truth_pair.sh fit, 2026-11-20).
 
 `fit` trains trees of depth --depth (4) by Newton boosting on the log loss of
 "placed more than 150 bp from the truth" (--rounds 300, rate 0.1, L2 1, every
@@ -61,6 +66,11 @@ PART = ("tier", "mq", "gap", "xe", "xq", "nm", "clip", "margin")
 NAMES = OWN + tuple("p_" + k for k in PART)
 T2T = ("t_cls", "t_gap", "t_dx", "t_mq", "t_tier", "p_t_cls", "p_t_gap")
 DEPTH, ROUNDS, RATE, LAM, MIN_H, KEEP, SEED = 4, 300, 0.1, 1.0, 20.0, 8, 7  # --depth, --rounds
+
+
+def names(t2t, xm):
+    """The model's inputs in order: NAMES, then T2T (--t2t), then xm last (--xm)."""
+    return NAMES + (T2T if t2t else ()) + (("xm",) if xm else ())
 
 
 def cmd_feat(a):
@@ -109,9 +119,9 @@ def log2i(v):
     return np.frexp(v.astype(np.float64))[1].astype(np.int32) - 1
 
 
-def features(z, t2t=False):
+def features(z, t2t=False, xm=False):
     """(n, 2, F) int32: each mate's own inputs, then the other mate's (pair_model_features); with t2t
-    also the T2T-CHM13 inputs (t2t_model_features)."""
+    also the T2T-CHM13 inputs (t2t_model_features); with xm the pair's XM last."""
     mapped = (z["flag"] & 4) == 0
     g = lambda k: np.where(mapped, z[k], -1)  # noqa: E731
     tier = np.where(mapped, z["tier"].astype(np.int32), -1)
@@ -142,6 +152,9 @@ def features(z, t2t=False):
         tdx = np.where(on & (z["t_xe"] >= 0) & (xe >= 0), np.clip(xe - z["t_xe"], -3, 5) + 3, 9)
         cols += [cls, tgap, tdx, np.where(on, np.minimum(z["t_mq"], 60) // 5, 0), np.where(on, z["t_tier"] + 1, 0),
                  cls[:, ::-1], tgap[:, ::-1]]
+    if xm:
+        x = g("XM")
+        cols.append(np.where(x >= 0, np.minimum(x, 40) + 1, 0))
     return np.stack(cols, axis=-1).astype(np.int32)
 
 
@@ -167,52 +180,89 @@ class Trees:
         return f
 
 
-def fit(X, y, w, base, depth=DEPTH, rounds=ROUNDS, log=sys.stderr):
+# fit --workers N: N forked processes compute a level's histograms, each for
+# its share of the inputs, from arrays they share with this process. The
+# splits are chosen here from the same sums in the same order, so the trees
+# are those of the serial fit, bit for bit.
+_SHARED = {}
+
+
+def _histograms(job):
+    j, nn, b = job
+    s = _SHARED
+    key = s["node"] * b + s["X"][j]
+    return np.bincount(key, s["gr"], nn * b), np.bincount(key, s["h"], nn * b)
+
+
+def fit(X, y, w, base, depth=DEPTH, rounds=ROUNDS, log=sys.stderr, workers=1):
     n, F = X.shape
     nb = X.max(axis=0) + 1
+    Xc = np.ascontiguousarray(X.T)  # one input per row, read contiguously
     f = np.full(n, base)
     nodes = (1 << depth) - 1
     feat = np.full((rounds, nodes), -1, np.int64)
     thr = np.zeros((rounds, nodes), np.int64)
     leaf = np.zeros((rounds, 1 << depth))
     rows = np.arange(n)
-    for r in range(rounds):
-        p = 1 / (1 + np.exp(-f))
-        gr = (p - y) * w
-        h = np.maximum(p * (1 - p), 1e-6) * w
-        node = np.zeros(n, np.int64)
-        for d in range(depth):
-            nn = 1 << d
-            best_gain = np.zeros(nn)
-            for j in range(F):
-                b = int(nb[j])
-                key = node * b + X[:, j]
-                G = np.bincount(key, gr, nn * b).reshape(nn, b)
-                H = np.bincount(key, h, nn * b).reshape(nn, b)
-                GL, HL = np.cumsum(G, 1), np.cumsum(H, 1)
-                GT, HT = GL[:, -1:], HL[:, -1:]
-                GR, HR = GT - GL, HT - HL
-                gain = GL ** 2 / (HL + LAM) + GR ** 2 / (HR + LAM) - GT ** 2 / (HT + LAM)
-                gain[(HL < MIN_H) | (HR < MIN_H)] = 0
-                gain[:, -1] = 0
-                bi = np.argmax(gain, axis=1)
-                bg = gain[np.arange(nn), bi]
-                better = bg > best_gain
-                k = (1 << d) - 1 + np.arange(nn)
-                feat[r, k[better]] = j
-                thr[r, k[better]] = bi[better]
-                best_gain = np.where(better, bg, best_gain)
-            k = (1 << d) - 1 + node
-            fj = feat[r, k]
-            go = (fj >= 0) & (X[rows, np.maximum(fj, 0)] > thr[r, k])
-            node = node * 2 + go
-        G = np.bincount(node, gr, 1 << depth)
-        H = np.bincount(node, h, 1 << depth)
-        leaf[r] = -G / (H + LAM) * RATE
-        f += leaf[r][node]
-        if r % 50 == 0 or r == rounds - 1:
-            ll = -np.sum(w * (y * np.log(p + 1e-12) + (1 - y) * np.log(1 - p + 1e-12))) / w.sum()
-            print(f"[fit] round {r}: log loss {ll:.6f}", file=log, flush=True)
+    pool = None
+    if workers > 1:
+        import multiprocessing as mp
+        ctx = mp.get_context("fork")
+        _SHARED.update(X=Xc, gr=np.frombuffer(ctx.RawArray("d", n)), h=np.frombuffer(ctx.RawArray("d", n)),
+                       node=np.frombuffer(ctx.RawArray("q", n), np.int64))
+        pool = ctx.Pool(workers)
+    try:
+        for r in range(rounds):
+            p = 1 / (1 + np.exp(-f))
+            gr = (p - y) * w
+            h = np.maximum(p * (1 - p), 1e-6) * w
+            node = np.zeros(n, np.int64)
+            if pool:
+                _SHARED["gr"][:] = gr
+                _SHARED["h"][:] = h
+            for d in range(depth):
+                nn = 1 << d
+                best_gain = np.zeros(nn)
+                if pool:
+                    _SHARED["node"][:] = node
+                    hist = pool.map(_histograms, [(j, nn, int(nb[j])) for j in range(F)])
+                for j in range(F):
+                    b = int(nb[j])
+                    if pool:
+                        G, H = hist[j]
+                    else:
+                        key = node * b + Xc[j]
+                        G, H = np.bincount(key, gr, nn * b), np.bincount(key, h, nn * b)
+                    G, H = G.reshape(nn, b), H.reshape(nn, b)
+                    GL, HL = np.cumsum(G, 1), np.cumsum(H, 1)
+                    GT, HT = GL[:, -1:], HL[:, -1:]
+                    GR, HR = GT - GL, HT - HL
+                    gain = GL ** 2 / (HL + LAM) + GR ** 2 / (HR + LAM) - GT ** 2 / (HT + LAM)
+                    gain[(HL < MIN_H) | (HR < MIN_H)] = 0
+                    gain[:, -1] = 0
+                    bi = np.argmax(gain, axis=1)
+                    bg = gain[np.arange(nn), bi]
+                    better = bg > best_gain
+                    k = (1 << d) - 1 + np.arange(nn)
+                    feat[r, k[better]] = j
+                    thr[r, k[better]] = bi[better]
+                    best_gain = np.where(better, bg, best_gain)
+                k = (1 << d) - 1 + node
+                fj = feat[r, k]
+                go = (fj >= 0) & (Xc[np.maximum(fj, 0), rows] > thr[r, k])
+                node = node * 2 + go
+            G = np.bincount(node, gr, 1 << depth)
+            H = np.bincount(node, h, 1 << depth)
+            leaf[r] = -G / (H + LAM) * RATE
+            f += leaf[r][node]
+            if r % 50 == 0 or r == rounds - 1:
+                ll = -np.sum(w * (y * np.log(p + 1e-12) + (1 - y) * np.log(1 - p + 1e-12))) / w.sum()
+                print(f"[fit] round {r}: log loss {ll:.6f}", file=log, flush=True)
+    finally:
+        if pool:
+            pool.close()
+            pool.join()
+            _SHARED.clear()
     return Trees(base, feat, thr, leaf, depth)
 
 
@@ -226,13 +276,13 @@ def to_mapq(score, T):
     return (score[:, None] <= T[None, :]).sum(axis=1)
 
 
-def training_set(paths, half, t2t, drop=()):
+def training_set(paths, half, t2t, drop=(), xm=False):
     Xs, ys = [], []
     for p in paths:
         z = np.load(p)
-        F = features(z, t2t)
+        F = features(z, t2t, xm)
         for k in drop:  # held at 0: one bin, so no split on it
-            F[..., (NAMES + T2T).index(k)] = 0
+            F[..., names(t2t, xm).index(k)] = 0
         n = F.shape[0]
         sel = z["placed"] & z["truth"]
         if half is not None:
@@ -247,12 +297,14 @@ def training_set(paths, half, t2t, drop=()):
     return X, y, w, float(np.log(np.sum(w * y) / np.sum(w * (1 - y))))
 
 
-def write_header(m, paths, t2t, out=sys.stdout):
+def write_header(m, paths, t2t, xm=False, out=sys.stdout):
     T = q_thresholds()
     nodes = (1 << m.depth) - 1
     k = "kT2tModel" if t2t else "kModel"
-    nf = len(NAMES) + (len(T2T) if t2t else 0)
+    nf = len(names(t2t, xm))
     what = ("both mates' records and their placements on T2T-CHM13 (--t2t)" if t2t else "both mates' records")
+    if xm:
+        what += ",\n// the last input the pair's XM"
     out.write("// Generated by bench/truth_mapq_pair.py from " + ", ".join(p.rsplit("/", 1)[-1] for p in paths) +
               f".\n// The MAPQ of `certa map --intervals --mapq pair`: boosted trees over {what}\n"
               "// (bench/VALIDATION_RESULTS.md, \"A MAPQ from both mates\"). Inputs: certa/pair_model.h.\n"
@@ -273,10 +325,14 @@ def write_header(m, paths, t2t, out=sys.stdout):
 
 
 def read_header(path):
-    """(trees, MAPQ thresholds, whether the model reads the T2T inputs)."""
+    """(trees, MAPQ thresholds, whether the model reads the T2T inputs, whether it reads XM)."""
     s = open(path).read()
     t2t = "kT2tModelBase" in s
     k = "kT2tModel" if t2t else "kModel"
+    nf = int(re.search(k + r"Features = (\d+)", s).group(1))
+    if nf not in (len(names(t2t, False)), len(names(t2t, True))):
+        raise SystemExit(f"{path}: {nf} inputs, not a layout of this script")
+    xm = nf == len(names(t2t, True))
 
     def arr(name):
         body = s[s.index(name):]
@@ -290,7 +346,7 @@ def read_header(path):
     thr = np.array(arr(k + "Thr["), np.int64).reshape(nt, nodes)
     leaf = np.array(arr(k + "Leaf["), np.float64).reshape(nt, 1 << depth)
     T = np.array(arr(k + "Q["), np.float64)
-    return Trees(base, feat, thr, leaf, depth), T, t2t
+    return Trees(base, feat, thr, leaf, depth), T, t2t, xm
 
 
 def at_n(mq, bad, n):
@@ -307,16 +363,16 @@ def at_n(mq, bad, n):
 
 def cmd_fit(a):
     drop = [k for k in a.drop.split(",") if k]
-    X, y, w, base = training_set(a.npz, 0 if a.cv else None, a.t2t, drop)
-    print(f"[fit] {len(y):,} rows, {int(y.sum()):,} misplaced; not split on: {', '.join(drop) or 'none'}",
-          file=sys.stderr)
-    m = fit(X, y, w, base, a.depth, a.rounds)
-    write_header(m, a.npz, a.t2t)
+    X, y, w, base = training_set(a.npz, 0 if a.cv else None, a.t2t, drop, a.xm)
+    print(f"[fit] {len(y):,} rows, {int(y.sum()):,} misplaced; inputs: {len(names(a.t2t, a.xm))} "
+          f"(XM: {'yes' if a.xm else 'no'}); not split on: {', '.join(drop) or 'none'}", file=sys.stderr)
+    m = fit(X, y, w, base, a.depth, a.rounds, workers=a.workers)
+    write_header(m, a.npz, a.t2t, a.xm)
 
 
-def mapq_of(z, m, T, t2t, mask=None):
+def mapq_of(z, m, T, t2t, xm, mask=None):
     """The model's MAPQ of every mapped mate (of the mates in mask, if given; 0 elsewhere)."""
-    F = features(z, t2t)
+    F = features(z, t2t, xm)
     sel = (z["flag"] & 4) == 0
     if mask is not None:
         sel = sel & mask
@@ -336,9 +392,9 @@ def cmd_eval(a):
     nt = int(truth.sum())
     runs = {"the run's MAPQ": (z["mapq"].astype(np.int64), z["placed"], z["ok"])}
     for path in a.model:
-        m, T, t2t = read_header(path)
-        runs[f"--mapq pair ({path.rsplit('/', 1)[-1]})"] = (mapq_of(z, m, T, t2t, z["placed"] & truth), z["placed"],
-                                                           z["ok"])
+        m, T, t2t, xm = read_header(path)
+        runs[f"--mapq pair ({path.rsplit('/', 1)[-1]})"] = (mapq_of(z, m, T, t2t, xm, z["placed"] & truth),
+                                                           z["placed"], z["ok"])
     for spec in a.runs:
         name, p = spec.split("=", 1)
         r = np.load(p)
@@ -351,7 +407,7 @@ def cmd_eval(a):
     for name, (mq, pl, ok) in runs.items():
         sel = pl & truth
         row = [at_n(mq[sel], ~ok[sel], int(round(s * nt))) / int(round(s * nt)) * 1e6 for s in shares]
-        print(f"| {name} | " + " | ".join(f"{v:,.0f}" for v in row) + f" | {100 * np.mean(mq[sel] >= 40):.2f} % |")
+        print(f"| {name} | " + " | ".join(f"{v:,.1f}" for v in row) + f" | {100 * np.mean(mq[sel] >= 40):.2f} % |")
     print(f"\n{nt:,} mates with a truth; misplaced per million among each run's N most confident.")
 
 
@@ -365,9 +421,9 @@ def bwa_scale(path):
 def cmd_replay(a):
     """CERTA's --mapq pair MAPQ (stdin) against this script's on the same records (FEAT.npz: the same run's
     features, from --feature-tags). --bwa: CERTA wrote it on BWA-MEM's scale (--mapq-scale bwa, the default)."""
-    m, T, t2t = read_header(a.model)
+    m, T, t2t, xm = read_header(a.model)
     z = np.load(a.npz)
-    want = mapq_of(z, m, T, t2t)
+    want = mapq_of(z, m, T, t2t, xm)
     if a.bwa:
         sc = bwa_scale(a.bwa)
         want = sc[np.minimum(want, len(sc) - 1)]
@@ -397,6 +453,10 @@ def main():
     p.add_argument("--t2t", action="store_true")
     p.add_argument("--depth", type=int, default=DEPTH)
     p.add_argument("--rounds", type=int, default=ROUNDS)
+    p.add_argument("--xm", action="store_true", help="XM, the margin of a pair placed from the alignments found, "
+                   "as the last input")
+    p.add_argument("--workers", type=int, default=1, help="processes for a level's histograms (Linux: fork); "
+                   "the trees are the same for every value")
     p.add_argument("--drop", default="", help="inputs the trees may not split on (comma-separated names, e.g. "
                    "xe,nm,clip,xq,p_xe,p_nm,p_clip,p_xq: the counts of the read's own edits)")
     p.add_argument("npz", nargs="+")

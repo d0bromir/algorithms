@@ -158,6 +158,30 @@ minibwa on HG005 (555 against 543); indels are level on HG002 and behind
 on HG005 (77 against 63). That configuration costs twice minibwa's CPU
 time and 4.6× its memory.
 
+**The pair model refit** ([below](#the-pair-model-refit-on-the-default-builds-placements), 2026-11-20):
+both trees fitted again on the default build's records.
+- **Held out on HG005:** `--mapq pair` misplaces fewer of its confident
+  mates than minibwa at every operating point (185 against 208 per million
+  at 99.75 %), at about minibwa's CPU time. With `--t2t` it misplaces
+  2.2–14× fewer.
+- **DeepVariant with `--t2t`:** fewer SNV errors than with minibwa or
+  BWA-MEM2 on both genomes (HG002 1,671 against 1,745 and 1,761; HG005 534
+  against 543 and 553). Indels stay behind minibwa (HG005 74 against 63).
+  Most of that indel gap comes from BWA-MEM's gap costs, which CERTA
+  shares, and a few cases are alignments its search misses.
+- **XM** (the margin of a pair placed from the alignments found) did not
+  help the trees.
+
+**Tier R's wide band** ([below](#tier-rs-wide-band), 2026-11-20, `--iv-wide 1`):
+in a repeat, tier R aligned the two sides of an indel longer than 16 bases
+in separate bands and clipped one side. One band of 95 diagonals around a
+clipped alignment aligns such reads through the indel, for 0.3 % more CPU.
+- **Variant calls:** DeepVariant's indel errors fall by 13–25 on HG002 and
+  by 1–3 on HG005, and its SNV errors by 8–15 on HG002.
+- **With `--t2t`:** CERTA's total errors are below minibwa's on HG002 (3,446
+  against 3,520) and equal on HG005 (606).
+- **Truth sets:** they barely change.
+
 ## Pilot (2 M HG002 NovaSeq X pairs, trimmed)
 
 | | default | `--bio` |
@@ -2170,20 +2194,275 @@ were measured on with the same reads):
   seeds cost more than on the truth sets: HG002 3,291 s against 1,964 s
   without them (+68 %; HG005 +64 %).
 
+## The pair model refit on the default build's placements
+
+`--mapq pair` with both models fitted again, on the records of the default
+build (2026-11-20; [truth_pair.sh](truth_pair.sh) `features`, `fit`, `check`
+and `holdout`; reports in [results/truth_2026-11_refit/](results/truth_2026-11_refit/)).
+
+**Why.** The trees of [A MAPQ from both mates](#a-mapq-from-both-mates) were
+fitted on the records of PR #19's build. Since then the local mate rescue,
+tier R's seed votes and alternatives and the joint seeds have moved mates
+and changed what their records hold (more MR mates, new margins). On HG005,
+`--mapq pair` misplaced 186 per million of its 99.75 % most confident mates
+on PR #19's placements and 207.3 on the default build's.
+
+**What.**
+- **The records:** tests A, B and H mapped by the default build (the source
+  of commit 320a506) with `--intervals --iv-mapq cert --iv-pair all
+  --iv-rescue local --t2t --feature-tags`.
+- **The trees:** fitted as on 2026-11-05, 300 of depth 4 for the pair model
+  and 400 of depth 6 for the T2T model, on every misplaced mate of tests A
+  and B and one in eight of the others.
+- **One new input tried:** XM, the margin of a pair placed from the
+  alignments found (`truth_mapq_pair.py fit --xm`). The joint seeds' pairs
+  carry it, and the trees did not read it.
+- **Two rules, fixed before the runs they decide:**
+  - XM becomes an input of a model if, fitted on HG002's even pairs, it
+    lowers test B's misplaced mates per million on the odd pairs by at least
+    5 % at two of the three N and raises none by more than 5 % (the rule of
+    the depth choice).
+  - The refit replaces a model of 2026-11-05 unless, on HG005 (held out, run
+    once), it misplaces more than 5 % more mates at two or more of the four N.
+- **The fits:** `fit --workers 7` computes each level's histograms in seven
+  forked processes. The trees are those of a serial fit, bit for bit
+  (checked on synthetic data), and the eight fits took 26 minutes on 64
+  cores; serially, the T2T fits on every pair had not reached round 50 of
+  400 after 16 minutes.
+
+**Cross-validated on HG002** (fitted on the even pairs, scored on the odd
+pairs at matched N; [cv_A.md](results/truth_2026-11_refit/cv_A.md),
+[cv_B.md](results/truth_2026-11_refit/cv_B.md)). The cost is that of mapping
+test B with each configuration (galaxy, 64 cores; CPU seconds as user + sys,
+peak memory); XM costs nothing to compute:
+
+| model | B, 99.75 % | B, 99.44 % | B, 95.58 % | A, 94.13 % | A, 83.10 % | CPU (B) | memory (B) |
+|---|---|---|---|---|---|---|---|
+| `--mapq pair` | 117.1 | 71.2 | 17.9 | 403.5 | **67.8** | 3,473 s | 24.3 GiB |
+| the same, with XM | **116.5** | **71.0** | **17.8** | **383.0** | 70.9 | 3,473 s | 24.3 GiB |
+| `--mapq pair --t2t` | **60.8** | 31.3 | **8.7** | 110.2 | 23.4 | 6,350 s | 45.4 GiB |
+| the same, with XM | 61.8 | **31.0** | 8.8 | **103.9** | **22.8** | 6,350 s | 45.4 GiB |
+
+- **XM is not an input.** On test B it changes the misplaced mates by 0.3–0.6 %
+  for the pair model and 1.0–1.6 % for the T2T model, against the 5 % the
+  rule asks. On test A it lowers them by 5–6 % at 94.13 % and raises the pair
+  model's by 4.6 % at 83.10 %. With XM the pair model gives MAPQ ≥ 40 to
+  fewer mates (test A 56 % against 67 %).
+- **The refit holds the level of the 2026-11-05 fit** on its own placements
+  (test B 118 / 71 / 18 for the pair model, 63 / 32 / 9 for the T2T model).
+
+**Held out: HG005** (run once with the refit;
+[holdout_H.md](results/truth_2026-11_refit/holdout_H.md); misplaced per
+million among each run's N most confident of the 30.13 M mates with a
+truth; ranked by `XP`, the model's Phred, or by the MAPQ written on
+BWA-MEM's scale; the other rows as in [The default build](#the-default-build-all-together);
+cost of the 20 M pairs on galaxy's 64 cores):
+
+| run | 99.75 % | 99.29 % | 98 % | 95 % | CPU | memory |
+|---|---|---|---|---|---|---|
+| CERTA, default MAPQ | 317.6 | 124.5 | 71.2 | 71.2 | 3,915 s | 24.8 GiB |
+| CERTA, `--mapq pair`, the trees of 2026-11-05, by `XP` | 207.3 | 61.7 | 20.7 | 9.4 | 3,995 s | 24.8 GiB |
+| CERTA, `--mapq pair`, refit, by `XP` | 185.2 | 60.8 | 20.9 | 9.9 | 3,981 s | 24.8 GiB |
+| CERTA, `--mapq pair`, refit, by MAPQ | 185.2 | 60.8 | 21.3 | 10.0 | 3,981 s | 24.8 GiB |
+| CERTA, `--mapq pair --t2t`, the trees of 2026-11-05, by `XP` | 99.2 | 25.2 | 7.2 | **2.6** | 7,602 s | 46.1 GiB |
+| CERTA, `--mapq pair --t2t`, refit, by `XP` | **95.1** | **24.8** | **7.1** | **2.6** | 7,544 s | 46.1 GiB |
+| CERTA, `--mapq pair --t2t`, refit, by MAPQ | **95.1** | 25.9 | 7.4 | 2.7 | 7,544 s | 46.1 GiB |
+| minibwa | 208.0 | 79.9 | 37.4 | 37.4 | **3,741 s** | **10.1 GiB** |
+| BWA-MEM2 | 202.2 | 107.9 | 107.9 | 107.9 | 17,300 s | 32.9 GiB |
+| minibwa with BWA-MEM2's T2T veto | 167.4 | 47.5 | 22.3 | 22.3 | 25,560 s | 38.3 GiB |
+
+- **The refit passes its rule.** The pair model misplaces 11 % fewer of its
+  confident mates at 99.75 % (185.2 against 207.3 per million) and 1.5 %
+  fewer at 99.29 %; it is 1 % worse at 98 % and 5.3 % worse at 95 % (9.9
+  against 9.4), one N past 5 %. The T2T model is better or level at every N
+  (95.1 against 99.2 at 99.75 %).
+- **With one index, `--mapq pair` is again ahead of minibwa at every
+  point:** 185.2, 60.8, 21.3 and 10.0 per million against 208.0, 79.9, 37.4
+  and 37.4, by the MAPQ written (1.1–3.7× fewer). Before the refit it was
+  level with minibwa at 99.75 %.
+- **With `--t2t`, 2.2–14× fewer than minibwa**, and fewer than minibwa with
+  BWA-MEM2's T2T veto at every point, which needs a second aligner and index.
+- **The cost is unchanged:** the trees have the same number and depth.
+
+**DeepVariant** (1.10.0; the variant-calling subsets mapped again by the
+refit build, which places every read as the default build does, so only
+MAPQ differs; errors = FN + FP; the CPU and memory columns repeat the HG005
+runs above):
+
+| run | HG002 SNV | HG002 indel | CMRG SNV | CMRG indel | HG005 SNV | HG005 indel | CPU | memory |
+|---|---|---|---|---|---|---|---|---|
+| CERTA, default MAPQ | 1,870 | 1,894 | 843 | 299 | 637 | 79 | 3,915 s | 24.8 GiB |
+| CERTA, `--mapq pair`, the trees of 2026-11-05 | 1,841 | 1,826 | 851 | 295 | 592 | 77 | 3,995 s | 24.8 GiB |
+| CERTA, `--mapq pair`, refit | 1,830 | 1,831 | 839 | 294 | 597 | 75 | 3,981 s | 24.8 GiB |
+| CERTA, `--mapq pair --t2t`, the trees of 2026-11-05 | 1,696 | 1,807 | 789 | 280 | 555 | 77 | 7,602 s | 46.1 GiB |
+| CERTA, `--mapq pair --t2t`, refit | **1,671** | 1,806 | **783** | 285 | **534** | 74 | 7,544 s | 46.1 GiB |
+| minibwa | 1,745 | **1,775** | 800 | **278** | 543 | **63** | **3,741 s** | **10.1 GiB** |
+| BWA-MEM2 | 1,761 | 1,848 | 805 | 291 | 553 | 73 | 17,300 s | 32.9 GiB |
+
+- **With `--t2t`, the refit makes fewer SNV errors than minibwa and
+  BWA-MEM2 on both genomes:** HG002 1,671 against 1,745 and 1,761, CMRG 783
+  against 800 and 805, and HG005 (held out) 534 against 543 and 553. With
+  the trees of 2026-11-05 HG005 was 555.
+- **Indels stay behind minibwa:** HG002 1,806 against 1,775, HG005 74
+  against 63. They are level with BWA-MEM2 on HG005 (73) and ahead of it on
+  HG002 (1,848). Why: the indel bullets of [Next](#next).
+- **Without `--t2t` the refit's calls are level with the trees of
+  2026-11-05:** HG002 1,830 against 1,841 SNV errors and 1,831 against 1,826
+  indel errors, HG005 597 against 592 and 75 against 77. They stay below the
+  default MAPQ's (1,870 / 1,894 and 637 / 79).
+- The subsets were mapped in 3,271 s (HG002) and 3,082 s (HG005) at
+  21.5 GiB, and with `--t2t` in 5,663 s and 5,532 s at 42.9 GiB (galaxy, 64
+  cores).
+
+**Checks.**
+- CERTA's MAPQ equals the script's replay of the refit trees on every mapped
+  mate, with and without `--t2t`: tests A and B (19,940,557 and 39,667,148
+  mates) and HG005 (39,568,207 mates), on the build of these headers
+  (`truth_pair.sh check` and `holdout`).
+- `test_certa` passes with the refit headers on seeds 20260927, 1, 2 and
+  11–15 (WSL, g++ 13.3).
+
+## Tier R's wide band
+
+`--iv-wide 1` (on by default; `0` turns it off; 2026-11-20;
+[repeat.h](../include/certa/repeat.h) `repeat_tier`, `RepeatParams::wide`).
+
+**Why.** In [hg005_indel_sites.md](results/truth_2026-11_refit/hg005_indel_sites.md),
+at 5:1,430,797, a 24-bp insertion in HG005:
+- minibwa aligns 24 reads through the insertion (63M24I64M);
+- CERTA writes 28 of its 30 reads there clipped (68M83S, AS 63, tier IV)
+  and loses the reads with the insertion near their start from the site.
+
+Under CERTA's own scores, the alignment through the insertion scores 97.
+Tier R aligns a read in bands that each hold one run of diagonals: a
+sampled copy ±8, a chain of rare parts, or a vote group ±16. In a repeat no
+part is rare, so no chain spans the indel. The two sides of an indel longer
+than 16 bases then fall into different bands.
+
+**How.** Take a read that tier R did not prove exact and whose best
+alignment so far scores at least 20 below a perfect match. Tier R also
+aligns one band of 95 diagonals centred on that alignment's band, which
+holds an indel of up to 47 bases either way. As with the seed votes, only lo
+rises, and only by an alignment actually computed. hi, the parts and every
+certificate are unchanged.
+
+**Against the truth.** These runs compare the default build with and without
+the wide band (`--intervals --iv-pair all --iv-rescue local`, default MAPQ;
+reports moved7_A.md, moved7_B.md, moved7_H.md, oracle7_A.md and oracle7_B.md
+in [results/truth_2026-11_refit/](results/truth_2026-11_refit/)). The
+columns give misplaced mates per million among each run's N most confident.
+The cost is that of mapping test B back to back, twice each with SAM to
+/dev/null, on galaxy's 64 cores:
+
+| test | run | away from the locus | search misses | N₁ | N₂ | N₃ | N₄ | moved: wrong → right, right → wrong | CPU (B) | memory (B) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | without | 405,364 | **6,165** | **1,262.3** | **752.4** | | | | **3,443 s** | 21.6 GiB |
+| A | with | **405,361** | 6,169 | 1,264.8 | 753.5 | | | 20, 17 | 3,453 s | 21.6 GiB |
+| B | without | 27,925 | 147 | 170.8 | 134.7 | 80.9 | | | **3,443 s** | 21.6 GiB |
+| B | with | **27,922** | **145** | 170.8 | 134.7 | 80.9 | | 4, 1 | 3,453 s | 21.6 GiB |
+| H | without | 28,309 | | **317.6** | **124.5** | **71.2** | **71.2** | | **3,443 s** | 21.6 GiB |
+| H | with | 28,309 | | 317.8 | 124.7 | 71.3 | 71.3 | 0, 0 | 3,453 s | 21.6 GiB |
+
+N: 94.13 % and 83.10 % (test A); 99.75 %, 99.44 % and 95.58 % (test B);
+99.75 %, 99.29 %, 98 % and 95 % (HG005). Away from the locus counts the
+misplaced and unplaced mates with a truth.
+- **Few reads change:** 4,041 mates on test A, 5,846 on test B and 8,398 on
+  HG005, of which 879, 316 and 321 have a truth.
+- **The truth sets barely move.** Their labels are certified unique on one
+  haplotype, so they hold few reads across a long indel in a repeat. The
+  confident errors rise by at most 0.2 %: a misplaced read whose alignment
+  improves where it is gains MAPQ.
+- **The cost is 0.3 % more CPU** (3,453 s against 3,443 s), with the same
+  memory.
+
+**DeepVariant** (1.10.0; the variant-calling subsets mapped by the default
+build with the refit models, without and with the wide band; errors are FN
++ FP; [vc_errors_wide.md](results/truth_2026-11_refit/vc_errors_wide.md)):
+
+| run | HG002 SNV | HG002 indel | CMRG SNV | CMRG indel | HG005 SNV | HG005 indel | CPU (HG002) | memory |
+|---|---|---|---|---|---|---|---|---|
+| CERTA, default MAPQ | 1,870 | 1,894 | 843 | 299 | 637 | 79 | 3,291 s | 21.6 GiB |
+| the same, wide band | 1,855 | 1,869 | 836 | 291 | 637 | 78 | 3,266 s | 21.6 GiB |
+| CERTA, `--mapq pair` | 1,830 | 1,831 | 839 | 294 | 597 | 75 | 3,271 s | 21.5 GiB |
+| the same, wide band | 1,822 | 1,818 | 838 | 292 | 597 | 72 | 3,311 s | 21.6 GiB |
+| CERTA, `--mapq pair --t2t` | 1,671 | 1,806 | 783 | 285 | **534** | 74 | 5,663 s | 42.8 GiB |
+| the same, wide band | **1,656** | 1,790 | **776** | 279 | **534** | 72 | 5,836 s | 43.0 GiB |
+| minibwa | 1,745 | **1,775** | 800 | **278** | 543 | **63** | 75,512 s (30×) | **9.5 GiB** |
+| BWA-MEM2 | 1,761 | 1,848 | 805 | 291 | 553 | 73 | 333,333 s (30×) | 34.6 GiB |
+
+CERTA's CPU is that of mapping the HG002 subset on galaxy's 64 cores.
+minibwa's and BWA-MEM2's is that of their 30× runs. The wide band's runs
+shared the host with another project's jobs; back to back it costs 0.3 %
+more (above).
+- **HG002:** with every MAPQ, indel errors fall by 13–25 and SNV errors by
+  8–15. With `--t2t`, CERTA's total errors are 3,446, against minibwa's 3,520
+  and BWA-MEM2's 3,609, and its indel gap to minibwa halves (1,790 against
+  1,775; it was 1,806).
+- **HG005, held out:** indel errors fall from 75 to 72 with `--mapq pair` and
+  from 74 to 72 with `--t2t`, below BWA-MEM2's 73; SNV errors are unchanged.
+  Of the four HG005 indel errors traced to the search, three are gone
+  (5:1,430,797, 20:38,081,181 and 20:50,366,199). At 5:1,430,797 CERTA now
+  aligns 21 of its 38 reads through the 24-bp insertion (before: none of
+  30; minibwa: 24 of 39). With `--t2t`, CERTA's total errors on HG005 equal
+  minibwa's (606; BWA-MEM2 626).
+- **Indels stay behind minibwa:** HG005 72 against 63. The rest comes from
+  BWA-MEM's gap costs, which CERTA shares (the indel bullets of [Next](#next)).
+
+**Tests.** [test_certa.cpp](../tests/test_certa.cpp) `test_tier_r_wide`:
+- **Reads:** 160 reads with an insertion or a deletion of 9–40 bases at
+  least 30 bases from either end, 120 of them from a 400-bp element with 20
+  identical copies.
+- **Without the wide band**, lo reaches OPT on 32–43 of the 120 element reads,
+  about those whose indel is at most 16 bases.
+- **With it**, lo reaches OPT on all 120, and every read it raises is aligned
+  through its indel.
+- **Unique sequence:** for the reads from unique sequence, the chains already
+  span the indel.
+- **Invariants:** the bounds stay sound against the oracle on every read, hi
+  is max(lo, hi without it), and the parts are the same.
+- **Default configurations:** the wide band is also on in the interval-mode
+  configurations of the tier R, pair-alternative, joint-seed,
+  pair-placement and `certa check` tests.
+
+All checks pass on seeds 20260927, 1, 2 and 11–15 (CI's), and so do the
+lemma checks. Mutants WB1–WB4 (the band never aligned, not centred on the
+band of A*, lo raised without its band, the threshold never met) are all
+killed on seeds 1 and 2 ([tests/mutants.tsv](../tests/mutants.tsv)).
+
 ## Next
 
 1. **Accuracy.** With `--iv-pair all --mapq pair`, CERTA is the most
    accurate aligner measured at every operating point, held out on HG005;
-   with `--t2t` by 2–12× over minibwa
-   ([above](#a-mapq-from-both-mates)).
+   with `--t2t` by 2.2–14× over minibwa
+   ([above](#the-pair-model-refit-on-the-default-builds-placements)).
    - *Done (2026-11-19):* the fitted MAPQ cost DeepVariant 1.8–3.5×
      minibwa's errors because it was written as a Phred; on BWA-MEM's scale
      it gives fewer errors than the default MAPQ
      ([above](#the-fitted-mapq-on-bwas-scale)).
-     Next: make `--mapq pair` (on BWA-MEM's scale) the default MAPQ of
-     paired interval mode, and refit the models on the current placements
-     with XM (the margin of a pair placed from the alignments found) as an
-     input.
+   - *Done (2026-11-20):* both models refitted on the default build's
+     placements; XM is not an input
+     ([above](#the-pair-model-refit-on-the-default-builds-placements)).
+     Next: make `--mapq pair` the default MAPQ of paired interval mode,
+     together with `--iv-pair all --iv-rescue local`, the records it was
+     fitted on.
+   - **Indels** (HG005, the refit `--mapq pair` run;
+     [hg005_indel_sites.md](results/truth_2026-11_refit/hg005_indel_sites.md)).
+     CERTA makes 18 indel errors that minibwa does not; minibwa makes 7 that
+     CERTA does not.
+     - 11 of the 18 are BWA-MEM2's errors too. BWA-MEM's single affine gap
+       (6 + k, CERTA's objective) makes clipping a long insertion score more
+       than aligning through it, where minibwa's two-piece gap costs do not.
+       For example, a 32-bp insertion in a TG repeat scores 72 aligned
+       through and 86 clipped. Aligning those reads needs another objective,
+       and with it new certificates.
+     - About 4 are search misses under CERTA's own objective. Tier R kept
+       seed diagonals more than 16 apart in separate bands, so reads across
+       a 24-bp insertion were clipped (68M83S, AS 63) where the alignment
+       through it scores 97 (63M24I64M). *Done (2026-11-20):* tier R's wide
+       band ([above](#tier-rs-wide-band)) removes three of the four.
+     - Next for indels: minimap2-style two-piece gap costs, as an option with
+       their own certificates, where clipping a long insertion now scores
+       more than aligning through it.
    - On GRCh38 the placement limit is reached
      ([above](#how-far-from-the-limit)); what remains is the reference.
      The sample's own genome shows two orders of magnitude of room in
