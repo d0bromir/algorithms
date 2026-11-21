@@ -1260,6 +1260,48 @@ deeper off-target reads, or contamination. NA12891/NA12892 have 3 and 7 such sit
 heteroplasmy is unreliable in the sample. There is no mtDNA truth set for these cell lines, so heteroplasmy calls
 are not benchmarked.
 
+### HLA typing (wes_hla 0.1.0, report 0.14.0, GIAB IDT exomes)
+
+`wes_hla` was run on the duplicate-marked BAMs of the nine GIAB NovaSeq 6000 IDT exomes (HG002 and HG005 realigned
+with the workflow's BWA-MEM settings; IPD-IMGT/HLA 3.66.0; 16 threads, cores pinned) and scored with
+[`tests/hla_giab_eval.py`](tests/hla_giab_eval.py) against published types:
+
+* HG001 (NA12878) and its parents NA12891, NA12892: the 1000 Genomes HLA types (Abi-Rached et al., PLoS One 2018);
+  HLA-A, -B, -C, -DRB1, -DQB1.
+* HG002: clinical sequence-based typing, trio-phased (Chin et al., Nat Commun 2020, Supplementary Table 4); HLA-A,
+  -B, -C, -DRB1, -DQA1, -DQB1. For HG003 and HG004 this gives the allele each passed to HG002 (one per gene).
+* HG005 and its parents: no published types; Mendelian consistency only.
+
+Nothing was fitted: T1K runs with its `--preset hla` defaults and the quality cut-off (20 of 60) was set before the
+runs; the G-group rule is the definition of the resolution exome reads can give.
+
+| Sample | Two-field match | Same G group | High-confidence calls: match | Low-confidence genes | Time | Memory |
+|---|---|---|---|---|---|---|
+| HG001 | 10/10 | 10/10 | 10/10 | – | 2:52 | 3.6 GiB |
+| NA12891 | 10/10 | 10/10 | 10/10 | – | 3:00 | 3.6 GiB |
+| NA12892 | 10/10 | 10/10 | 10/10 | DRB5 (artefact, see below) | 2:50 | 3.6 GiB |
+| HG002 | 11/12 | 12/12 | 10/10 | DQA1 | 2:51 | 3.8 GiB |
+| HG003 (one allele per gene) | 5/6 | 5/6 | 5/5 | DQA1, DRB5 | 2:54 | 3.7 GiB |
+| HG004 (one allele per gene) | 5/6 | 6/6 | 5/5 | DQA1 | 2:49 | 3.7 GiB |
+| **All** | **51/54 (94.4 %)** | **53/54 (98.1 %)** | **50/50 (100 %)** | | | |
+
+Per gene: HLA-A, -B, -C, -DRB1 and -DQB1 10/10 each, at two fields and with high confidence. HLA-DQA1 is the weak
+gene: 1/4 at two fields, 3/4 in the same G group (DQA1\*01:05 for 01:01, identical in exon 2), and every DQA1 call
+is low confidence (T1K quality < 20 or competing candidates), in all nine samples. HG003's DQA1\*03:01 was called
+03:100N. **Mendelian consistency** over HLA-A, -B, -C, -DRB1, -DQA1, -DQB1, -DPA1 and -DPB1: HG001 trio 8/8,
+HG005 trio 8/8, HG002 trio 7/8 (DQA1, low confidence). Spurious DRB3/DRB4/DRB5 calls (reads of a related DRB gene,
+e.g. DRB5 with DRB1\*01:01/01:01 in NA12892, all three secondary genes in HG006) are marked low confidence by the
+DR-haplotype rule.
+
+The runs took 2:37-3:00 min each (T1K's read extraction from the whole BAM is most of it; the allele reference is
+built in 15 s), 3.5-3.8 GiB. As a Galaxy job on HG001 (4 slots) `wes_hla` took 175 s and PharmCAT with the HLA
+outside calls 19 s; PharmCAT then reported HLA-A and HLA-B as outside calls (\*01:01/\*11:01, \*08:01/\*56:01) and gave
+the CPIC recommendations for abacavir, allopurinol, carbamazepine and oxcarbazepine (standard use: no risk allele). Associations found: HG001 and
+NA12891 DQ2.5 (the DR3-DQ2.5 haplotype of the CEPH family), NA12891 DQB1\*06:02, HG006 B\*51; no CPIC risk allele
+(B\*57:01, B\*15:02, A\*31:01, B\*58:01) in the nine. Celiac DQ2/DQ8 is excluded for HG004 and the HG005 family
+from DQB1 alone (no DQB1\*02 or \*03:02), and *not determined* where DQB1\*03:02 meets an uncertain DQA1 (HG002,
+HG003).
+
 ## 8. Scope and limitations
 
 Germline SNVs and short indels in the exome targets, and CNVs of several exons from read depth (section 7).
@@ -1276,5 +1318,9 @@ literature evidence) and is a draft for review, and the HPO ranking depends on t
 works on the variants the proband's caller found; de novo status at repeats, segmental duplications and other
 loci where calls are written differently stays *possibly de novo*, and a parent's low-level mosaicism (a single
 alt read among ≥ 15) is read as reference. UPD detection needs both parents; heterodisomic segments shorter than
-~30 Mb are usually missed, and a deletion of one parent's copy looks like isodisomy unless CNV calls are given. The comparison with a previous report sees only what that report listed: a variant called but not listed before shows as new without its earlier state, and the ClinVar release itself is not recorded in the annotated VCF. The reports support expert review; they are not a diagnosis. This is a research workflow,
+~30 Mb are usually missed, and a deletion of one parent's copy looks like isodisomy unless CNV calls are given. The comparison with a previous report sees only what that report listed: a variant called but not listed before shows as new without its earlier state, and the ClinVar release itself is not recorded in the annotated VCF. HLA typing from an exome resolves G groups
+(two-field alleles that differ in the antigen-recognition exons), not three- or four-field alleles, null alleles
+caused outside these exons, or new alleles; HLA-DQA1 was the least reliable gene in the GIAB exomes (section 7), and
+an HLA-B\*57:01 or HLA-B\*15:02 result should be confirmed by a clinical HLA test before a drug decision. KIR genes
+are not typed. The reports support expert review; they are not a diagnosis. This is a research workflow,
 not a validated clinical pipeline.

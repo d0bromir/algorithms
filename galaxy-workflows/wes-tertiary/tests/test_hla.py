@@ -88,3 +88,20 @@ def test_without_database():
     assert j["database"] == "not given" and all(r["confidence"] == "none" for r in j["genotypes"])
     assert "no HLA allele database" in j["genotypes"][0]["note"]
     assert open(out["pc.tsv"]).read() == ""
+
+
+def test_dr_haplotypes_and_celiac_from_dqb1():
+    calls = {"HLA-DRB1": call(2, "HLA-DRB1*04:05:01", 50, "HLA-DRB1*09:01:02", 50),
+             "HLA-DRB3": call(1, "HLA-DRB3*02:02:01", 30),
+             "HLA-DRB4": call(1, "HLA-DRB4*01:03:01", 40),
+             "HLA-DQA1": call(2, "HLA-DQA1*03:02", 12, "HLA-DQA1*03:03:01", 30),
+             "HLA-DQB1": call(2, "HLA-DQB1*03:03:02", 50, "HLA-DQB1*04:01:01", 45)}
+    rows = {r["gene"]: r for r in hla.genotypes(calls, 20)}
+    assert rows["HLA-DRB4"]["confidence"] == "high", "DR4 and DR9 carry DRB4"
+    assert rows["HLA-DRB3"]["confidence"] == "low" and "not expected with DRB1*04:05/DRB1*09:01" in rows["HLA-DRB3"]["note"]
+    assert rows["HLA-DQA1"]["confidence"] == "low"
+    a = {x["condition"]: x for x in hla.associations(list(rows.values()))}
+    assert a["celiac disease"]["status"] == "absent", "no DQB1*02/03:02: DQ2/DQ8 excluded although DQA1 is uncertain"
+    calls["HLA-DQB1"]["a2"] = "HLA-DQB1*03:02:01"
+    a = {x["condition"]: x for x in hla.associations(hla.genotypes(calls, 20))}
+    assert a["celiac disease"]["status"] == "not determined", "DQB1*03:02 with an uncertain DQA1"

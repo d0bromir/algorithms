@@ -33,9 +33,10 @@ Used by the data scripts (`data/`), not by Galaxy jobs (those get their own Cond
 | Program | Version (tested) | Licence | Stage |
 |---|---|---|---|
 | bcftools, samtools, tabix/bgzip (htslib) | 1.21 (apt) | MIT/Expat | `system` (apt, or Conda with `--conda`) |
-| bedtools | 2.31 | MIT | `system` |
+| bedtools | 2.31.1 | MIT | `system` |
 | curl, gawk, python3 (+ venv) | distribution | various | `system` |
-| Ephemeris, BioBlend, gxformat2 (Python) | latest | AFL-3.0 / MIT | `venv` (`~/wes-venv`) |
+| Ephemeris, BioBlend (Python) | 0.10.11, 1.9.0 | AFL-3.0, MIT | `venv` (`~/wes-venv`) |
+| gxformat2 (Python, only to rebuild the `.ga` files with `build.py`) | 0.29.2 | AFL-3.0 | a throwaway venv |
 
 ## 3. Galaxy tools
 
@@ -62,8 +63,8 @@ Local tools (`tools/`, stage `local-tools`; Galaxy installs their Conda requirem
 | `wes_couple` | 0.1.0 | python 3.12 | this repository | 0.13 |
 | `wes_hla` | 0.1.0 | t1k 1.0.10, samtools 1.22, python 3.12 | T1K: MIT | 0.14 |
 
-All local tools run on aarch64 and x86-64 (bioconda builds for both; SpliceAI's TensorFlow 2.19 is the only aarch64
-build and needs numpy 1.26).
+Tested on aarch64 (Ubuntu, Galaxy 26.2); every requirement also has a bioconda/conda-forge build for x86-64.
+SpliceAI's TensorFlow 2.19 is the only aarch64 build and needs numpy 1.26.
 
 ## 4. Reference and knowledge data
 

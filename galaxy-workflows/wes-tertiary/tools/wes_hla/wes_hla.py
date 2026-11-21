@@ -211,7 +211,10 @@ def genotypes(calls, min_q, ars=None):
         row.update(allele1=a1, allele2=a2, quality1=q1, quality2=q2, candidates1=",".join(c1),
                    candidates2=",".join(c2))
         notes = []
-        if c["n"] == 1:
+        if c["n"] == 1 and g in ("HLA-DRB3", "HLA-DRB4", "HLA-DRB5"):
+            notes.append("one allele found: one copy, or two of the same (each DR haplotype carries at most one of "
+                         "DRB3, DRB4, DRB5)")
+        elif c["n"] == 1:
             notes.append("one allele found: homozygous, or the second allele was missed")
         amb = g1 > 1 or g2 > 1
         if amb:
@@ -225,7 +228,33 @@ def genotypes(calls, min_q, ars=None):
         row["confidence"] = "low" if low else "high"
         row["note"] = "; ".join(notes)
         out.append(row)
+    dr_haplotypes(out)
     return out
+
+
+# Each DR haplotype carries at most one of the secondary DRB genes, fixed by its DRB1 allele group (Marsh et al.,
+# The HLA FactsBook): DRB3 with DR3/11/12/13/14 (DR52), DRB4 with DR4/7/9 (DR53), DRB5 with DR15/16 (DR51), none
+# with DR1/8/10.
+DRB_PARTNER = {"03": "HLA-DRB3", "11": "HLA-DRB3", "12": "HLA-DRB3", "13": "HLA-DRB3", "14": "HLA-DRB3",
+               "04": "HLA-DRB4", "07": "HLA-DRB4", "09": "HLA-DRB4", "15": "HLA-DRB5", "16": "HLA-DRB5"}
+
+
+def dr_haplotypes(rows):
+    """Mark DRB3/4/5 calls that the DRB1 alleles do not allow (reads of a related DRB gene) low confidence."""
+    by = {r["gene"]: r for r in rows}
+    d = by.get("HLA-DRB1")
+    if not d or d["confidence"] != "high":
+        return
+    groups = [a.split("*")[1].split(":")[0] for a in (d["allele1"], d["allele2"])]
+    expected = {DRB_PARTNER[x] for x in groups if x in DRB_PARTNER}
+    for g in ("HLA-DRB3", "HLA-DRB4", "HLA-DRB5"):
+        r = by[g]
+        if r["confidence"] != "none" and g not in expected:
+            r["confidence"] = "low"
+            r["note"] = "; ".join(x for x in (r["note"], f"not expected with {d['allele1']}/{d['allele2']} (reads of "
+                                              "a related DRB gene)") if x)
+        elif r["confidence"] == "none" and g in expected:
+            r["note"] = f"not typed, although {d['allele1']}/{d['allele2']} carry it (too few reads)"
 
 
 def has(rows, allele):
@@ -259,6 +288,9 @@ def associations(rows):
                         "source": note})
     dq = [name for name, a, b in CELIAC if has(rows, a) and has(rows, b)]
     sure = conf.get("HLA-DQA1") == "high" and conf.get("HLA-DQB1") == "high"
+    # DQ2/DQ8 need DQB1*02:01, *02:02 or *03:02: a confident DQB1 without them excludes DQ2/DQ8 whatever DQA1 is
+    if not sure and conf.get("HLA-DQB1") == "high" and not any(has(rows, b) for _n, _a, b in CELIAC):
+        dq, sure = [], True
     out.append({"kind": "disease association", "allele": "+".join(dq) if dq else ("no DQ2/DQ8" if sure else "DQ2/DQ8"),
                 "copies": len(dq), "condition": "celiac disease",
                 "status": ("present" if dq else "absent") if sure else "not determined",
