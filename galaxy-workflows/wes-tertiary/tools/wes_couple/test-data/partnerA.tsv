@@ -1,0 +1,8 @@
+sample	category	gene	chrom	pos	ref	alt	genotype	depth	alt_fraction	hgvs_c	hgvs_p	effect	gnomad_af	gnomad_grpmax_af	gnomad_faf95	gnomad_nhomalt	alphamissense	spliceai	clinvar	clinvar_review	clinvar_condition	qc_flags	confidence	note	acmg_class	acmg_points	acmg_codes	transcript	hgvs_refseq	hgvs_g
+ANNA	report_meta	sample																					high	ANNA						
+ANNA	report_meta	sex																					high	female						
+ANNA	carrier	CFTR	7	117559590	ATCT	A	0/1				p.Phe508del								Pathogenic	practice guideline			high							
+ANNA	pathogenic_review	DMD	X	31000000	C	T	0/1				p.Arg100*												high		pathogenic		PVS1,PM2_supporting			
+ANNA	carrier	GJB2	13	20189546	AC	A	0/1				p.Gly12fs								Pathogenic				high							
+ANNA	candidate	PAH	12	102840474	T	C	0/1				p.Tyr414Cys								Uncertain_significance				high		uncertain significance					
+ANNA	carrier	BRCA2	13	32340301	C	T	0/1				p.Gln412*								Pathogenic				low: alt fraction < 0.25							

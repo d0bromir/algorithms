@@ -1,0 +1,7 @@
+gene	moi	carrier_freq	carrier_freq_max_group	max_group	plp_alleles	in_gnomad	tier3	newborn_screening	actionability	conditions
+CFTR	AR	0.03	0.04	nfe	1000	400	yes	cystic fibrosis		cystic fibrosis
+PAH	AR	0.02	0.07	mid	800	300	yes	phenylketonuria		phenylketonuria
+GJB2	AR,+dominant	0.05	0.2	eas	200	100	yes			nonsyndromic hearing loss
+DMD	XL	0.0002	0.0015	mid	2000	40				Duchenne muscular dystrophy
+OTC	XL	0.00005	0.0001	nfe	300	10			3C (8CC) Ornithine transcarbamylase deficiency	ornithine transcarbamylase deficiency
+BRCA2	AR,+dominant	0.003	0.006	nfe	3000	300	yes			Fanconi anemia D1

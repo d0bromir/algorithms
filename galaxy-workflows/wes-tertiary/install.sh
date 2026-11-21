@@ -54,7 +54,7 @@ CONFIGURE=0
 DRY=0
 VENV="${VENV:-$HOME/wes-venv}"
 PREFIX="${PREFIX:-$HOME/wes-env}"
-LOCAL_TOOL_IDS=(wes_clinical_report spliceai_score pharmcat_pgx wes_cnv wes_mito)
+LOCAL_TOOL_IDS=(wes_clinical_report spliceai_score pharmcat_pgx wes_cnv wes_mito wes_couple)
 
 die() { echo "install.sh: $*" >&2; exit 1; }
 say() { printf '\n== %s\n' "$*"; }
@@ -380,6 +380,17 @@ stage_data() {
               python3 "$HERE/data/build_gnomad_sites.py" pext regions.bed gnomad_pext.tsv
         fi
         manifest gnomad_pext.tsv tabular "gnomAD GTEx v10 pext (CC0) via data/build_gnomad_sites.py"
+        if [[ ! -s carrier_genes.tsv ]]; then
+            echo "  carrier_genes.tsv <- ClinVar P/LP x gnomAD v4.1 extract, curated genes, ClinGen pediatric actionability"
+            fetch "https://actionability.clinicalgenome.org/ac/Pediatric/api/summ?flavor=flat" actionability_pediatric.json
+            [[ -s gnomad.v4.1.joint.targets.GRCh38.bcf.csi ]] || bcftools index -f gnomad.v4.1.joint.targets.GRCh38.bcf
+            bcftools view -i 'INFO/CLNSIG~"athogenic" && INFO/CLNSIG!~"onflicting"' clinvar.GRCh38.vcf.gz -Oz -o clinvar_plp.vcf.gz
+            tabix -f -p vcf clinvar_plp.vcf.gz
+            bcftools annotate -a gnomad.v4.1.joint.targets.GRCh38.bcf                 -c INFO/gnomAD_AF,INFO/gnomAD_grpmax_AF,INFO/gnomAD_grpmax,INFO/gnomAD_filter clinvar_plp.vcf.gz |
+              python3 "$HERE/data/build_carrier_genes.py" gene_disease.tsv actionability_pediatric.json carrier_genes.tsv
+            rm -f clinvar_plp.vcf.gz clinvar_plp.vcf.gz.tbi
+        fi
+        manifest carrier_genes.tsv tabular "ClinVar, gnomAD v4.1, ClinGen/G2P/Orphanet, ClinGen actionability via data/build_carrier_genes.py"
     else
         echo "  gnomAD extract skipped (give --regions kit.bed; see README section 2)"
     fi

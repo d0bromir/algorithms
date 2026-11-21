@@ -1,0 +1,92 @@
+<tool id="wes_couple" name="Couple carrier screening" version="0.1.0+galaxy0" profile="23.0">
+    <description>reproductive risk from two partners' exome findings: recessive and X-linked conditions, treatability</description>
+    <requirements>
+        <requirement type="package" version="3.12">python</requirement>
+    </requirements>
+    <version_command>python3 '$__tool_directory__/wes_couple.py' --help | head -1</version_command>
+    <command detect_errors="exit_code"><![CDATA[
+#import re
+#set $na = re.sub(r"[^\w .,:()+-]", "_", str($partner_a.element_identifier))
+#set $nb = re.sub(r"[^\w .,:()+-]", "_", str($partner_b.element_identifier))
+python3 '$__tool_directory__/wes_couple.py'
+    --a '$partner_a' --b '$partner_b'
+    --a-name '$na' --b-name '$nb'
+    #if str($sex_a) != "report":
+        --a-sex '$sex_a'
+    #end if
+    #if str($sex_b) != "report":
+        --b-sex '$sex_b'
+    #end if
+    --carrier-genes '$carrier_genes'
+    --miss $miss
+    --html '$report'
+    --tsv '$table'
+    ]]></command>
+    <inputs>
+        <param name="partner_a" type="data" format="tabular" label="Partner A: clinical findings (table)"
+               help="The 'Clinical findings (table)' of the exome clinical report (0.13.0 or later records the genetic sex)."/>
+        <param name="sex_a" type="select" label="Partner A: sex">
+            <option value="report" selected="true">from the report</option>
+            <option value="female">female</option>
+            <option value="male">male</option>
+        </param>
+        <param name="partner_b" type="data" format="tabular" label="Partner B: clinical findings (table)"/>
+        <param name="sex_b" type="select" label="Partner B: sex">
+            <option value="report" selected="true">from the report</option>
+            <option value="female">female</option>
+            <option value="male">male</option>
+        </param>
+        <param name="carrier_genes" type="data" format="tabular" label="Carrier gene table"
+               help="Built with data/build_carrier_genes.py: recessive and X-linked genes with carrier frequencies (gnomAD v4.1, ClinVar), newborn screening and ClinGen pediatric actionability."/>
+        <param name="miss" type="float" value="0.10" min="0" max="1" label="Share of carriers an exome misses"
+               help="Used for the other partner's residual carrier chance (CNVs, deep-intronic variants, repeats)."/>
+    </inputs>
+    <outputs>
+        <data name="report" format="html" label="${tool.name}: ${partner_a.element_identifier} and ${partner_b.element_identifier}"/>
+        <data name="table" format="tabular" label="${tool.name}: ${partner_a.element_identifier} and ${partner_b.element_identifier} (table)"/>
+    </outputs>
+    <tests>
+        <test expect_num_outputs="2">
+            <param name="partner_a" value="partnerA.tsv" ftype="tabular"/>
+            <param name="partner_b" value="partnerB.tsv" ftype="tabular"/>
+            <param name="carrier_genes" value="carrier_genes.tsv" ftype="tabular"/>
+            <output name="table" ftype="tabular">
+                <assert_contents>
+                    <has_text_matching expression="both_carriers\tCFTR\tA\+B\t.*\t1 in 4\t"/>
+                    <has_text_matching expression="x_linked\tDMD\tA\t"/>
+                    <has_text_matching expression="one_carrier\tPAH\tB\t"/>
+                </assert_contents>
+            </output>
+            <output name="report" ftype="html">
+                <assert_contents>
+                    <has_text text="Autosomal recessive: both partners carriers"/>
+                    <has_text text="ANNA (female)"/>
+                </assert_contents>
+            </output>
+        </test>
+    </tests>
+    <help><![CDATA[
+**What it does**
+
+Reproductive carrier screening of a couple from the findings tables of their two exome reports:
+
+* **Both partners carriers** of a pathogenic or likely pathogenic allele in the same autosomal recessive gene: 1 in 4
+  risk per pregnancy (1 in 2 when a partner already has two alleles).
+* **X-linked**: a female carrier has a 1 in 2 chance of an affected son.
+* **One partner a carrier**: the other partner's residual chance of being an undetected carrier (the gene's carrier
+  frequency in gnomAD v4.1 times the share of carriers an exome misses), so that targeted follow-up can be offered.
+* **Treatable**: the condition is on the US newborn screening panel (RUSP) or ClinGen's pediatric actionability
+  curation scores the intervention as effective (2 or 3 of 3).
+
+Carrier alleles are ClinVar pathogenic/likely pathogenic (not conflicting, not low-penetrance or risk factor) or the
+report's automated P/LP class, and high-confidence CNV deletions of recessive genes. Low-confidence calls (paralogous
+genes such as HBA2, VWF, NEB) are kept and marked for confirmation.
+
+**Not detected by an exome**: SMN1 copy number (spinal muscular atrophy), HBA1/HBA2 deletions (alpha thalassemia),
+FMR1 repeats (fragile X), CYP21A2 and other pseudogene-rich genes, deep-intronic variants. Genetic counselling is
+needed before acting on any result.
+    ]]></help>
+    <citations>
+        <citation type="doi">10.1038/s41436-021-01203-z</citation>
+    </citations>
+</tool>

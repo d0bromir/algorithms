@@ -388,6 +388,33 @@ repeat context (from the reference), difficult/polymorphic region (HLA, KIR, muc
 
 Intermediate datasets are hidden in the history. Use *show hidden* to inspect them.
 
+## 4b. Couple carrier screening
+
+The **Couple carrier screening** tool (`tools/wes_couple`) compares the *Clinical findings (table)* of two partners'
+reports (report 0.13.0 or later, which records the genetic sex) for reproductive risk:
+
+| Result | Rule |
+|---|---|
+| Both partners carriers | A pathogenic or likely pathogenic allele in the same autosomal recessive gene in each: 1 in 4 risk per pregnancy (1 in 2 when a partner already has two alleles) |
+| X-linked | The female partner carries one: 1 in 2 sons affected, 1 in 2 daughters carriers; a hemizygous male partner passes it to all daughters |
+| One partner a carrier | The other partner's residual chance of being an undetected carrier: the gene's carrier frequency (gnomAD v4.1, most affected ancestry group) × the share of carriers an exome misses (default 10 %), and the couple's risk (× 1/4); genes with a carrier frequency ≥ 1/200 (ACMG 2021 tier 3) are marked |
+| Treatable | The condition is on the US newborn screening panel (RUSP), or ClinGen's pediatric actionability curation scores the effectiveness of intervention 2 or 3 of 3 |
+
+Carrier alleles are ClinVar pathogenic/likely pathogenic (not conflicting, not labelled low penetrance or risk factor)
+or the report's automated P/LP class, plus high-confidence CNV deletions of a recessive gene. Low-confidence calls
+are kept and marked *confirm*: dropping them would hide carriers in paralogous genes such as HBA2, VWF, CHEK2 and NEB.
+The genes come from the **carrier gene table**, built with [`data/build_carrier_genes.py`](data/build_carrier_genes.py)
+(`install.sh data` builds it): 3,025 recessive or X-linked genes (ClinGen, G2P and Orphanet, moderate or stronger),
+each with its carrier frequency computed from the ClinVar P/LP alleles (≥ 1 star) and their gnomAD v4.1 frequencies
+(overall, and an upper bound for the most affected ancestry group), RUSP and ClinGen pediatric actionability. Alleles
+at gnomAD-filtered sites, alleles labelled low penetrance or risk factor (HFE p.Cys282Tyr, SERPINA1 S and Z), and
+alleles above 2 % without an expert-panel or practice-guideline classification (CFTR poly-T 5T) are not counted; the
+CFTR estimate still includes other TG/T-tract alleles and is high (5.8 % overall). 414 genes reach 1/200 in some
+group, 44 are newborn-screened and 56 have a pediatric actionability curation.
+
+Not detected by an exome, and listed in the report: SMN1 copy number (spinal muscular atrophy), HBA1/HBA2 deletions
+(alpha thalassemia), FMR1 repeats (fragile X), CYP21A2 and other pseudogene-rich genes, deep-intronic variants.
+
 ## 5. Filters and how to change them
 
 Both filters are workflow parameters, so you can change them on the run form without editing the workflow.
@@ -1123,6 +1150,54 @@ Two ClinGen considerations were added and tested on the ClinVar benchmark above 
 | Tuning half | 74.8 % / 0.2 % | 43.7 % / 0.1 % | 79.1 % / 0.3 % | 44.2 % / 0.2 % | 9 s | 0.84 GiB |
 | Held-out half | 73.4 % / 0.2 % | 46.3 % / 0.0 % | 67.4 % / 0.6 % | 70.3 % / 0.1 % | 8 s | 0.84 GiB |
 | HG002 report, all inputs (one run) | | | | | 27.7 s | 1.90 GiB |
+
+### Couple carrier screening (wes_couple 0.1.0, report 0.13.0)
+
+**Sensitivity, by spiking.** Real pathogenic alleles were added to two real exomes: HG001 (as the female partner) and
+HG002 (male). In each of 10 trials, 20 recessive genes were chosen from the 348 with ≥ 2 held-out ClinVar
+pathogenic/likely pathogenic alleles (≥ 2 stars, even chromosomes: the held-out half of the ACMG benchmark). One allele
+went into each partner's annotated VCF, as the fully annotated record from the benchmark's VCF-workflow run, with a
+heterozygous call. Both reports and the couple tool were then run ([`tests/couple_spike_eval.py`](tests/couple_spike_eval.py)).
+
+| Spiked alleles | Couple genes found | To confirm first | Couple results from the real exomes | Time (10 trials, 10 in parallel) | Memory |
+|---|---|---|---|---|---|
+| In ClinVar | **194 / 200** | 6 (100 % in all) | 0 | 36 s | 1.3 GiB |
+| New: ClinVar annotation removed | **107 / 200** | 2 (54.5 % in all) | 0 | 35 s | 1.3 GiB |
+
+- **Known alleles.** The first run found 193 of 200 and showed two faults, both fixed:
+  - The tool dropped low-confidence calls in paralogous genes (VWF, HBA2, CHEK2, NEB). They now count, under
+    *to confirm*.
+  - SnpEff listed a new overlapping Ensembl 115 gene first for some variants. The report now uses the gene with a
+    MANE transcript.
+- **New variants.** Each allele must reach P/LP by the automated ACMG classification alone, which happens for about
+  74 % of held-out pathogenic alleles (section 7), so about 0.74² of couples are found. Of the 91 missed pairs:
+  56 had an allele listed but classified VUS, and 35 had an allele not listed at all (a missense variant with no
+  phenotype terms, no strong predictor and no ClinVar data). Such couples need the variants reviewed by hand.
+
+**Real couples.** The six GIAB parents (HG003 × HG004, HG006 × HG007, NA12891 × NA12892) were run through the VCF
+workflow release 0.12 in Galaxy and report 0.13 ([`tests/couple_real_eval.py`](tests/couple_real_eval.py)). All 15
+pairs of them were screened, the three real couples and 12 unrelated pairs. Each run took 2 s or less.
+
+| Pairs | Couple risks | To confirm | X-linked (female carrier) | One partner a carrier |
+|---|---|---|---|---|
+| 3 real couples | 0 | 1 (FANCD2, HG006 × HG007) | 0 | 6-9 genes per couple |
+| 12 unrelated pairs | 0 | 5 (FANCD2) | 0 | 4-9 genes per pair |
+
+- **Truth check.** The carrier alleles of HG003, HG004, HG006 and HG007 were looked up in their GIAB v4.2.1
+  benchmark sets: 12 of 15 inside the benchmark regions are real. The 3 false ones are the same FANCD2
+  c.1278+1G>T, near its pseudogene FANCD2P2, called in four of the six parents at allele fractions 0.21-0.35.
+- **FANCD2 handling.** FANCD2 was added to the report's paralogous genes (low confidence). The couple tool also
+  flags the identical allele in both partners when it is absent from gnomAD or below 0.01 % there: that points to a
+  recurrent artefact (or relatedness). Such results go to *to confirm*, never to the couple risks.
+- **Inheritance.** Only 6 of the 31 parental carrier alleles reached the child, against the 50 % expected. Three
+  of the 31 are the FANCD2 artefact. HG002 inherited none of the 7 real alleles of his parents, which his GIAB truth
+  set confirms (chance 1 in 128).
+- **Genetic sex.** Running the report on the parents' calls showed that its sex cut-off from chrX heterozygosity
+  (< 0.10 male) was too strict for these exomes: off-target X calls give males 0.06-0.11. It was moved to < 0.25 male,
+  > 0.40 female (QC-passed calls); all nine exomes are now right (males 0.06-0.11, females 0.56-0.62). HG005 was
+  "inconclusive" before.
+
+The ACMG benchmark is unchanged by report 0.13 (held-out P/LP 73.4 %, B/LB 46.3 % on the correct side).
 
 ### Mitochondrial DNA from exome reads (wes_mito 0.1.0, report 0.11.0, GIAB IDT exomes)
 
