@@ -4,7 +4,7 @@ Everything the two workflows use: programs, Galaxy tools, reference and knowledg
 them. Update this file with every release. `install.sh` installs all of it (column *Stage*: the `install.sh` stage
 that provides it); README section 1 explains the stages, section 2 the workflow inputs, section 7 the validation.
 
-Release 0.16 (2026-11-21). GRCh38 throughout, Ensembl chromosome names (`1`, `MT`) unless a file says otherwise.
+Release 0.17 (2026-11-22). GRCh38 throughout, Ensembl chromosome names (`1`, `MT`) unless a file says otherwise.
 
 ## 1. Analyses, by release
 
@@ -25,6 +25,7 @@ Release 0.16 (2026-11-21). GRCh38 throughout, Ensembl chromosome names (`1`, `MT
 | release 0.12 | 2026-11-21 | gnomAD exome coverage gates PM2; pext next to loss-of-function variants | Coverage and pext |
 | release 0.13 | 2026-11-21 | Couple carrier screening (local tool `wes_couple`), carrier gene table; sex check in the report | Couple screening |
 | release 0.14 | 2026-11-21 | HLA typing (local tool `wes_hla`, T1K): class I/II alleles, CPIC HLA pharmacogenomics through PharmCAT outside calls, HLA disease associations | HLA typing |
+| release 0.17 | 2026-11-22 | Gene panels from a local PanelApp snapshot (Genomics England, Australia): panels applied by test code or id, findings flagged or restricted, green-gene coverage, panels suggested from HPO terms; scheduled data update (`update.sh`) | Gene panels |
 | release 0.16 | 2026-11-21 | KIR typing (local tool `wes_kir`, T1K): KIR gene content, A/B genotype, B-content group, KIR-HLA ligand pairs; `wes_hla` 0.2.0 gives each HLA-A/B/C allele's KIR ligand group (and reads the exons 1-based: one fix to the G groups) | KIR genes |
 | release 0.15 | 2026-11-21 | mtDNA haplogroup (`wes_mito` 0.2.0, HaploGrep3) and Y-chromosome haplogroup (local tool `wes_yhaplo`, Yleaf) as maternal/paternal lineages in the report, with a Y-versus-sex check | Haplogroups |
 
@@ -57,7 +58,7 @@ Local tools (`tools/`, stage `local-tools`; Galaxy installs their Conda requirem
 
 | Tool | Version | Conda requirements | Licence of the main dependency | Added |
 |---|---|---|---|---|
-| `wes_clinical_report` | 0.16.0 | python 3.12, samtools 1.22 | this repository | 0.1 |
+| `wes_clinical_report` | 0.17.0 | python 3.12, samtools 1.22 | this repository | 0.1 |
 | `spliceai_score` | 1.3.1 | spliceai 1.3.1, numpy 1.26.4, setuptools 80.9, bcftools 1.24 | SpliceAI: GPL-3.0 | 0.4 |
 | `pharmcat_pgx` | 3.4.0+galaxy1 | pharmcat3 3.4.0 | MPL-2.0 (guidelines: CPIC CC0, DPWG, FDA via ClinPGx) | 0.4 |
 | `wes_cnv` | 0.1.0 | python 3.12, numpy 2.2.6, samtools 1.22 | this repository | 0.7 |
@@ -80,7 +81,7 @@ x86-64 native library; the tools pass HSD text, which works on aarch64.
 Stage `data` downloads and builds them into `--data-dir` and lists each file with its source and date in
 `MANIFEST.tsv`; stage `upload` puts them into one Galaxy history. `update.sh` (scheduled weekly, README section 1)
 makes a new dated release with the frequently changing sources refreshed (ClinVar, GenCC, HPO, ClinGen, G2P/Orphanet,
-UniProt, IPD-IMGT/HLA, IPD-KIR and the tables built from them); the other files are version-pinned.
+UniProt, IPD-IMGT/HLA, IPD-KIR, PanelApp and the tables built from them); the other files are version-pinned.
 
 | File | Source | Licence | Used for | Added |
 |---|---|---|---|---|
@@ -109,6 +110,7 @@ UniProt, IPD-IMGT/HLA, IPD-KIR and the tables built from them); the other files 
 | `carrier_genes.tsv` | ClinVar × gnomAD v4.1 × gene-disease table × ClinGen actionability; `data/build_carrier_genes.py` (needs `--regions`) | as its sources | couple screening | 0.13 |
 | `hla.dat` | IPD-IMGT/HLA (current release; the file states it, e.g. 3.66.0) | CC BY-ND 4.0 | HLA typing | 0.14 |
 | `kir.dat` | IPD-KIR (current release; the file states it, e.g. 2.15.0) | CC BY-ND 4.0 | KIR typing | 0.16 |
+| `panelapp_panels.tsv` | Genomics England PanelApp and PanelApp Australia, `data/build_panelapp.py` (one-time snapshot; no phenotype text) | non-commercial use, with acknowledgement | gene panels | 0.17 |
 
 Not used, and why: OMIM (licence), HGMD (commercial), dbNSFP (registration pending), MITOMAP (no bulk download),
 COSMIC/OncoKB (somatic, commercial licences).
