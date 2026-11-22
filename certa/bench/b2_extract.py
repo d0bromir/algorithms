@@ -20,13 +20,16 @@ from collections import defaultdict
 
 
 def parse_chain(path):
+    # The hs1ToHg38 chain is oriented hg38(query) -> hs1(target): header
+    # tName/tSize are CHM13 (hs1), qName/qSize are GRCh38. CHM13-only sequence
+    # is the uncovered TARGET (hs1) intervals, so track tName/tStart and dt.
     covered = defaultdict(list)
     sizes = {}
     with gzip.open(path, "rt") as f:
-        qname = None
-        qpos = 0
-        qsize = 0
-        qminus = False
+        tname = None
+        tpos = 0
+        tsize = 0
+        tminus = False
         for line in f:
             line = line.strip()
             if not line:
@@ -34,19 +37,19 @@ def parse_chain(path):
             p = line.split()
             if p[0] == "chain":
                 # chain score tName tSize tStrand tStart tEnd qName qSize qStrand qStart qEnd id
-                qname = p[7]
-                qsize = int(p[8])
-                qminus = p[9] == "-"
-                qpos = int(p[10])
-                sizes[qname] = qsize
+                tname = p[2]
+                tsize = int(p[3])
+                tminus = p[4] == "-"
+                tpos = int(p[5])
+                sizes[tname] = tsize
             else:
                 size = int(p[0])
-                dq = int(p[2]) if len(p) > 2 else 0
-                if qminus:
-                    covered[qname].append((qsize - qpos - size, qsize - qpos))
+                dt = int(p[1]) if len(p) > 1 else 0
+                if tminus:
+                    covered[tname].append((tsize - tpos - size, tsize - tpos))
                 else:
-                    covered[qname].append((qpos, qpos + size))
-                qpos += size + dq
+                    covered[tname].append((tpos, tpos + size))
+                tpos += size + dt
     return covered, sizes
 
 
