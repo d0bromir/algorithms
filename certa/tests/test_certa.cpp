@@ -3771,6 +3771,30 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "bio-phantom-bed: RegionTrack ok; locus prior MAPQ %d (in) vs %d (out)\n",
                  bio_detail::posterior_mapq(win), bio_detail::posterior_mapq(wout));
   }
+  {
+    // Paired production: bio_pair adds each mate's phantom weight to that
+    // mate's posterior, demoting only the divergent mate.
+    BioParams bp;
+    BioOut o1, o2;
+    o1.ok = o2.ok = true;
+    o1.p1 = o2.p1 = 0;
+    o1.list_bound = o2.list_bound = 200;
+    BioLocus l1; l1.pen = 0; l1.strand = 0; l1.end = 1000;
+    BioLocus l2; l2.pen = 0; l2.strand = 1; l2.end = 1400;
+    o1.loci.push_back(l1);
+    o2.loci.push_back(l2);
+    auto contig_of = [](int64_t) { return 0; };
+    o1.phantom_w = 0.5;  // mate 1 looks like a missing copy
+    o2.phantom_w = 0.0;
+    const BioPair pr = bio_pair(bp, o1, 150, o2, 150, 850, contig_of, 0);
+    CHECK(pr.ok, "bio_pair ok");
+    CHECK(pr.mapq[0] < 30 && pr.mapq[1] >= 55, "paired phantom demotes mate 1 only (%d vs %d)", pr.mapq[0], pr.mapq[1]);
+    o1.phantom_w = 0.0;
+    const BioPair pr0 = bio_pair(bp, o1, 150, o2, 150, 850, contig_of, 0);
+    CHECK(pr0.mapq[0] >= 55 && pr0.mapq[1] >= 55, "no phantom: both mates confident (%d, %d)", pr0.mapq[0], pr0.mapq[1]);
+    std::fprintf(stderr, "bio-pair phantom: MAPQ %d/%d (mate1 divergent) vs %d/%d (none)\n",
+                 pr.mapq[0], pr.mapq[1], pr0.mapq[0], pr0.mapq[1]);
+  }
   if (failures) {
     std::fprintf(stderr, "%d check(s) FAILED\n", failures);
     return 1;
