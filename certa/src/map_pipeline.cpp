@@ -119,6 +119,12 @@ MapPipeline::MapPipeline(const MapConfig& c, const Reference& ref, const IndexVi
     o.mapq_cal = o.mapq_pair = o.feature_tags = o.witness = false;
     writer_t2t_.reset(new RecordWriter(t2t_->ref, t2t_->view, o));
   }
+  // --bio-phantom-bed: the locus-specific prior's copy-deficit regions (A4).
+  if (!c.phantom_bed.empty()) {
+    phantom_track_.load_bed(c.phantom_bed, ref.names, ref.offsets);
+    bio_model_.phantom_track = &phantom_track_;
+    std::fprintf(stderr, "[map] --bio-phantom-bed: %zu copy-deficit regions\n", phantom_track_.size());
+  }
   // --bio: every band would scan its window's tandem runs; tabulate them
   // once instead (the same costs: run lengths are clamped where go no longer
   // falls). Without the table (or if go keeps falling past what four bits

@@ -58,6 +58,7 @@
 #endif
 
 #include "certa/core.h"
+#include "certa/regions.h"
 
 namespace certa {
 
@@ -90,6 +91,11 @@ struct BioParams {
   double phantom_delta = 0.0;  // divergence of the unseen copy (0 = off)
   double phantom_pi = 1e-6;    // prior probability of an unseen copy at the locus
   double phantom_err = 1e-3;   // representative sequencing error for the match term
+  // With --bio-phantom-bed (a RegionTrack on BioModel), phantom_pi applies
+  // inside the track's copy-deficit regions and phantom_pi_unique outside, so
+  // missing-copy loci abstain while unique loci stay confident (A4). Without a
+  // track, phantom_pi applies everywhere (A3).
+  double phantom_pi_unique = 0.0;
 };
 
 // The model's integer costs, from BioParams.
@@ -142,6 +148,9 @@ class BioModel {
     }
   }
   const BioParams& params() const { return p_; }
+  // --bio-phantom-bed: copy-deficit regions for the locus-specific prior (A4),
+  // or null for a global prior. Set by the pipeline after loading the BED.
+  const RegionTrack* phantom_track = nullptr;
   // Read base b (0-3) at quality q on reference base a (0-3), a != b.
   int mis(int q, int a, int b) const { return mis_[q][a][b]; }
   int mmin(int q) const { return mmin_[q]; }  // the cheapest mismatch at quality q
@@ -1013,12 +1022,12 @@ inline int posterior_mapq(double others) {
 // error (~snv+err), and each matching base as (1-delta) rather than
 // (1-snv)(1-err). Added to the posterior denominator, it demotes reads whose
 // divergence looks like a missing copy. 0 when disabled.
-inline double phantom_weight(const BioParams& bp, int k, int matches) {
-  if (bp.phantom_delta <= 0) return 0.0;
+inline double phantom_weight(const BioParams& bp, int k, int matches, double pi) {
+  if (bp.phantom_delta <= 0 || pi <= 0) return 0.0;
   const double d = bp.phantom_delta, th = bp.snv, e = bp.phantom_err;
   const double lm = std::log10(d / (th + e));
   const double la = std::log10((1 - d) / ((1 - th) * (1 - e)));
-  return bp.phantom_pi * std::pow(10.0, k * lm + matches * la);
+  return pi * std::pow(10.0, k * lm + matches * la);
 }
 
 }  // namespace bio_detail
@@ -1236,7 +1245,10 @@ inline bool bio_place(const IndexView& ix, const BioModel& m, const Params& p, c
   if (bp.phantom_delta > 0) {  // MAPQ only: an unseen copy competes for the read
     int k, matches;
     bio_mm_counts(a, k, matches);
-    others += bio_detail::phantom_weight(bp, k, matches);
+    double pi = bp.phantom_pi;
+    if (m.phantom_track)  // A4: locus-specific prior (copy-deficit regions)
+      pi = m.phantom_track->contains(a.ref_pos) ? bp.phantom_pi : bp.phantom_pi_unique;
+    others += bio_detail::phantom_weight(bp, k, matches, pi);
   }
   o.mapq = bio_detail::posterior_mapq(others);
   const size_t keep = std::max<size_t>(static_cast<size_t>(bp.max_loci), static_cast<size_t>(pick) + 1);

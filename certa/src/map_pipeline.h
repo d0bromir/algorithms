@@ -107,6 +107,7 @@ class MapPipeline {
   const T2tRef* t2t_;
   std::unique_ptr<RecordWriter> writer_t2t_;  // --t2t: places pairs on T2T-CHM13 (its records are not written)
   BioModel bio_model_;  // --bio
+  RegionTrack phantom_track_;  // --bio-phantom-bed: copy-deficit regions for the locus prior (A4)
   std::vector<uint8_t> bio_runs_;  // --bio: the reference's tandem runs (bio_pack_contexts), or empty
   GpuMapper* gm_ = nullptr;
   Slot slots_[kSlots];
