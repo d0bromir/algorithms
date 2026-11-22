@@ -76,8 +76,13 @@ n=2; while [[ -e "$NEW" ]]; do NEW="$ROOT/release-$(date +%F)-$n"; n=$((n + 1));
 echo "current release: $PREV"
 echo "new release:     $NEW"
 
+if [[ -z "$REGIONS" && -s "$PREV/regions.bed" ]]; then REGIONS="$PREV/regions.bed"; fi
 if ((DRY)); then
-    for f in "${FREQUENT[@]}"; do [[ -e "$PREV/$f" ]] && echo "  would refresh $f"; done
+    for f in "${FREQUENT[@]}"; do
+        [[ -e "$PREV/$f" ]] || continue
+        if [[ $f == carrier_genes.tsv && -z "$REGIONS" ]]; then echo "  would keep $f (no --regions)"
+        else echo "  would refresh $f"; fi
+    done
     exit 0
 fi
 
@@ -86,7 +91,6 @@ trap 'fail "interrupted or failed at line $LINENO"' ERR
 
 # install.sh writes new files (temporary name, then rename) and leaves present ones alone, so the hard-linked files
 # of the current release are never modified through the new one.
-if [[ -z "$REGIONS" && -s "$PREV/regions.bed" ]]; then REGIONS="$PREV/regions.bed"; fi
 cp -al "$PREV" "$NEW"
 rm -f "$NEW/CHANGES.tsv"
 for f in "${FREQUENT[@]}"; do
@@ -99,10 +103,11 @@ args=(--data-dir "$NEW")
 [[ -n "$REGIONS" ]] && args+=(--regions "$REGIONS")
 "$HERE/install.sh" "${args[@]}" data || fail "install.sh data failed"
 
-content() {  # content hash; gzip headers carry a timestamp, so compressed files are compared decompressed
+content() {  # hash of the data lines: comment lines (#) carry download dates and source hashes, and gzip headers a
+             # timestamp, so neither counts as a change
     case "$1" in
-        *.gz) gzip -dc "$1" | sha256sum | cut -d' ' -f1 ;;
-        *) sha256sum < "$1" | cut -d' ' -f1 ;;
+        *.gz) gzip -dc "$1" | grep -v '^#' | sha256sum | cut -d' ' -f1 ;;
+        *) grep -v '^#' "$1" | sha256sum | cut -d' ' -f1 ;;
     esac
 }
 row() { awk -F'\t' -v f="$2" '$1 == f {print $4"\t"$5"\t"$3}' "$1/MANIFEST.tsv"; }
@@ -112,6 +117,11 @@ for f in "${FREQUENT[@]}"; do
     if [[ ! -e "$PREV/$f" ]] || [[ "$(content "$PREV/$f")" != "$(content "$NEW/$f")" ]]; then changed+=("$f"); fi
 done
 trap - ERR
+# install.sh keeps a file's date when its size and source are unchanged; a changed file is dated today
+for f in "${changed[@]}"; do
+    awk -F'\t' -v OFS='\t' -v f="$f" -v d="$(date +%F)" '$1 == f {$4 = d} {print}' "$NEW/MANIFEST.tsv" > "$NEW/MANIFEST.tsv.tmp"
+    mv "$NEW/MANIFEST.tsv.tmp" "$NEW/MANIFEST.tsv"
+done
 
 if ((${#changed[@]} == 0 && ! FORCE)); then
     echo "nothing changed since $(basename "$PREV"): new release removed"

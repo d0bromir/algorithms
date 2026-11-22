@@ -66,6 +66,40 @@ licences and the release that added it:
 - **Galaxy configuration:** changed only with `--configure`, which writes a missing `local_tool_conf.xml` and adds the report tools to the allowlist. Otherwise the script prints what to add, since Galaxy servers managed by Ansible should change it in their templates.
 - **gnomAD extract:** built only with `--regions` (the capture kit BEDs), because it reads about 2 hours from the gnomAD bucket. The capture kit BED itself is the laboratory's own and is not downloaded.
 - **Re-running:** every stage can be run again; what is already in place is left alone. On the test server (November 2026 releases), the `data` stage without gnomAD took 16 min, most of it the Ensembl FASTA at 1.5 MB/s. It wrote 3.8 GB, with a peak memory of 2.1 GB (the AlphaMissense build).
+- **Everything stays on the server:** the files are downloaded once per release; the workflows and tools then run without network access and send no sample data anywhere.
+
+**Keeping the data current.** [`update.sh`](update.sh) builds a new dated release next to the current one and is
+meant to run unattended:
+```bash
+./update.sh --regions kit.bed --upload --keep 4
+```
+- It hard-links every file of the current release into `release-YYYY-MM-DD` (no extra disk space), deletes the
+  files of the sources that change (ClinVar, GenCC, HPO, ClinGen dosage/validity/expert panels, G2P/Orphanet,
+  UniProt, IPD-IMGT/HLA, IPD-KIR and the tables built from them) and lets the `data` stage download and rebuild
+  only those. Version-pinned files (genome, gnomAD, MANE, AlphaMissense, REVEL, Collins, MaveDB) stay as they are;
+  they change only with a new `install.sh data` release.
+- It compares the refreshed files with the current release by content. Nothing changed: the new release is removed.
+  Otherwise `CHANGES.tsv` lists each changed file with its old and new date, size and source, `current` points to
+  the new release, and with `--upload` a new Galaxy history *WES reference data release-YYYY-MM-DD* is made, where
+  unchanged files are copied from the previous release's history (shared storage) and only the changed ones uploaded.
+- A lock prevents two runs at once; a failed run removes its partial release and leaves the current one untouched
+  (exit status 1). The log is `logs/update-YYYY-MM-DD.log` under the data directory. `--keep N` keeps the N newest
+  releases; `--dry-run` lists what would be refreshed.
+- **Schedule** with the systemd units in [`install/systemd/`](install/systemd/) (weekly, Tuesday 02:30, after ClinVar's
+  Monday release; `Persistent=true` catches up after downtime):
+  ```bash
+  sudo cp install/systemd/wes-data-update.* /etc/systemd/system/   # set User= and the paths in the .service first
+  ```
+  ```bash
+  sudo systemctl daemon-reload && sudo systemctl enable --now wes-data-update.timer
+  ```
+  or with cron (`crontab -e` as the user who owns the data directory):
+  ```
+  30 2 * * 2  /opt/wes-tertiary/update.sh --regions /data/galaxy/wes-ref/kits.bed --upload --keep 4
+  ```
+- **After an update** new analyses should use the datasets of the new history. To see what the new knowledge changes
+  for a patient analysed before, run the report again with the earlier *findings TSV* as *Previous report* (section
+  4a, reanalysis): it lists what is new, changed or no longer reported.
 
 The manual steps follow.
 

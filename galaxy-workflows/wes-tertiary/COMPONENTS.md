@@ -78,7 +78,9 @@ x86-64 native library; the tools pass HSD text, which works on aarch64.
 ## 4. Reference and knowledge data
 
 Stage `data` downloads and builds them into `--data-dir` and lists each file with its source and date in
-`MANIFEST.tsv`; stage `upload` puts them into one Galaxy history.
+`MANIFEST.tsv`; stage `upload` puts them into one Galaxy history. `update.sh` (scheduled weekly, README section 1)
+makes a new dated release with the frequently changing sources refreshed (ClinVar, GenCC, HPO, ClinGen, G2P/Orphanet,
+UniProt, IPD-IMGT/HLA, IPD-KIR and the tables built from them); the other files are version-pinned.
 
 | File | Source | Licence | Used for | Added |
 |---|---|---|---|---|
