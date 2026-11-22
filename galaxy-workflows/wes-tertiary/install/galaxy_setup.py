@@ -5,7 +5,9 @@
     galaxy_setup.py tools TOOLS_YML                 install the Tool Shed repositories (Ephemeris shed-tools)
     galaxy_setup.py local-deps TOOL_ID...           install the Conda dependencies of local tools that lack them
     galaxy_setup.py workflows [--update] GA...      import workflows (or update those with the same name)
-    galaxy_setup.py upload DATA_DIR HISTORY SNPEFF  upload the MANIFEST.tsv files to a new history, fetch SnpEff db
+    galaxy_setup.py upload DATA_DIR HISTORY SNPEFF [PREVIOUS_HISTORY]
+                                                upload the MANIFEST.tsv files to a new history, fetch SnpEff db;
+                                                files unchanged since PREVIOUS_HISTORY are copied from it
 
 Galaxy URL: $GALAXY_URL (default http://localhost).
 """
@@ -134,18 +136,44 @@ def wait(dataset_ids, what):
     print(f"  {what}: ok ({time.time() - t0:.0f} s)")
 
 
-def upload(data_dir, history, snpeff_db):
+def previous_datasets(name):
+    """Datasets (ok, not deleted) of the most recent history with this name: {dataset name: (id, size)}."""
+    hs = [x for x in gi.histories.get_histories(name=name) if not x.get("deleted")]
+    if not hs:
+        return {}
+    hs.sort(key=lambda x: x.get("update_time", ""), reverse=True)
+    out = {}
+    for d in gi.histories.show_history(hs[0]["id"], contents=True, details="all", deleted=False):
+        if d.get("history_content_type") == "dataset" and d.get("state") == "ok" and not d.get("purged"):
+            out.setdefault(d["name"], (d["id"], d.get("file_size")))
+    return out
+
+
+def upload(data_dir, history, snpeff_db, previous=""):
+    """Upload the files of MANIFEST.tsv into a new history. With the name of the previous release's history, files
+    with the same name and size there are copied (Galaxy shares their storage) instead of uploaded again, and so is
+    the SnpEff database."""
     rows = list(csv.DictReader(open(os.path.join(data_dir, "MANIFEST.tsv")), delimiter="\t"))
+    prev = previous_datasets(previous) if previous else {}
     h = gi.histories.create_history(history)
-    print(f"  history '{history}' ({h['id']})")
+    print(f"  history '{history}' ({h['id']})" + (f", reusing '{previous}'" if prev else ""))
     ids = []
     for r in rows:
         p = os.path.join(data_dir, r["file"])
+        old = prev.get(r["file"])
+        if old and str(old[1]) == r["bytes"]:
+            gi.histories.copy_dataset(h["id"], old[0])
+            print(f"  {r['file']}: unchanged, copied from the previous release", flush=True)
+            continue
         out = gi.tools.upload_file(p, h["id"], file_type=r["galaxy_datatype"], file_name=r["file"])  # tus upload
         ids += [o["id"] for o in out["outputs"]]
         print(f"  uploading {r['file']} ({int(r['bytes']) / 1024**2:,.0f} MB) as {r['galaxy_datatype']}", flush=True)
+    snp = next((v for k, v in prev.items() if "snpeff" in k.lower()), None)
     dl = [t["id"] for t in gi.tools.get_tools() if "/snpeff/snpEff_download/" in t["id"]]
-    if dl:
+    if snp:
+        gi.histories.copy_dataset(h["id"], snp[0])
+        print("  SnpEff database: copied from the previous release")
+    elif dl:
         tid = sorted(dl, key=lambda x: [int(p) if p.isdigit() else p for p in x.split("/")[-1].replace("+", ".").split(".")])[-1]
         out = gi.tools.run_tool(h["id"], tid, {"genome_version": snpeff_db})
         ids += [o["id"] for o in out["outputs"]]

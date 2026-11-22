@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly refresh of the WES reference and knowledge files
+
+[Timer]
+# ClinVar publishes its weekly VCF on Mondays; run on Tuesday night
+OnCalendar=Tue *-*-* 02:30:00
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

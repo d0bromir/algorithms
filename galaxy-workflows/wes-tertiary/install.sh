@@ -27,6 +27,8 @@
 #   --jobs N                parallel gnomAD readers (default 32)
 #   --ensembl N             Ensembl release of the FASTA, the coding-exon BED and SnpEff (default 115)
 #   --history NAME          history name for "upload" (default "WES reference data <data-dir name>")
+#   --previous-history NAME "upload": copy the files that did not change from this history (the previous release)
+#                           instead of uploading them again (Galaxy shares their storage)
 #   --conda                 "system": install the programs with conda/mamba into $PREFIX instead of apt
 #   --update                "workflows": update workflows that already exist
 #   --configure             "local-tools": write a missing local_tool_conf.xml and add the report tools to the
@@ -48,6 +50,7 @@ REGIONS=""
 JOBS=32
 ENSEMBL=115
 HISTORY=""
+PREV_HISTORY=""
 USE_CONDA=0
 UPDATE=0
 CONFIGURE=0
@@ -74,6 +77,7 @@ while (($#)); do
         --jobs) JOBS="$2"; shift 2 ;;
         --ensembl) ENSEMBL="$2"; shift 2 ;;
         --history) HISTORY="$2"; shift 2 ;;
+        --previous-history) PREV_HISTORY="$2"; shift 2 ;;
         --conda) USE_CONDA=1; shift ;;
         --update) UPDATE=1; shift ;;
         --configure) CONFIGURE=1; shift ;;
@@ -237,10 +241,12 @@ stage_data() {
     mkdir -p "$DATA_DIR"; cd "$DATA_DIR"
     local M=MANIFEST.tsv
     [[ -f $M ]] || printf 'file\tgalaxy_datatype\tsource\tdate\tbytes\n' > $M
-    manifest() {  # file datatype source
-        local f="$1"
+    manifest() {  # file datatype source; an unchanged file (same size, same source) keeps its date
+        local f="$1" bytes d
+        bytes="$(stat -c %s "$f")"
+        d="$(awk -F'\t' -v f="$f" -v b="$bytes" -v s="$3" '$1 == f && $5 == b && $3 == s {print $4}' $M)"
         awk -F'\t' -v f="$f" '$1 != f' $M > $M.tmp && mv $M.tmp $M
-        printf '%s\t%s\t%s\t%s\t%s\n' "$f" "$2" "$3" "$(date +%F)" "$(stat -c %s "$f")" >> $M
+        printf '%s\t%s\t%s\t%s\t%s\n' "$f" "$2" "$3" "${d:-$(date +%F)}" "$bytes" >> $M
     }
     fetch() {  # url out: resumable download, kept only when complete
         [[ -s "$2" ]] && { echo "  $2: present"; return; }
@@ -408,7 +414,7 @@ stage_data() {
 stage_upload() {
     say "upload $DATA_DIR into Galaxy"
     [[ -f "$DATA_DIR/MANIFEST.tsv" ]] || die "no $DATA_DIR/MANIFEST.tsv: run the 'data' stage first"
-    helper upload "$DATA_DIR" "${HISTORY:-WES reference data $(basename "$DATA_DIR")}" "GRCh38.$ENSEMBL"
+    helper upload "$DATA_DIR" "${HISTORY:-WES reference data $(basename "$DATA_DIR")}" "GRCh38.$ENSEMBL" "$PREV_HISTORY"
 }
 
 for s in "${STAGES[@]}"; do "stage_${s//-/_}"; done
