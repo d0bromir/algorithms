@@ -190,6 +190,11 @@ MapConfig MapConfig::from_args(const Args& a) {
     throw std::runtime_error("--t2t needs --intervals and paired input");
   if (c.t2t() && !c.out.mapq_pair && !c.out.feature_tags)
     throw std::runtime_error("--t2t is read by --mapq pair (or written by --feature-tags): give one");
+  c.out.t2t_commit = a.has("--t2t-commit");
+  c.out.t2t_commit_mapq = a.geti("--t2t-commit-mapq", c.out.t2t_commit_mapq);
+  if (c.out.t2t_commit && !c.t2t()) throw std::runtime_error("--t2t-commit needs --t2t");
+  if (c.out.t2t_commit_mapq < 0 || c.out.t2t_commit_mapq > 60)
+    throw std::runtime_error("--t2t-commit-mapq in [0, 60]");
 
   // --index2: a second index of the same reference (e.g. q = 15: more, shorter
   // parts) on which the reads still uncertified after every pass get every
@@ -349,6 +354,7 @@ std::string MapConfig::command_line() const {
   if (pass_v()) extra += " --adaptive-parts " + std::to_string(pv.vparts) + " --vbudget " + std::to_string(pv.budget);
   if (index2()) extra += " --index2 " + index2_path;
   if (t2t()) extra += " --t2t " + t2t_path + " --t2t-chain " + t2t_chain_path;
+  if (out.t2t_commit) extra += " --t2t-commit --t2t-commit-mapq " + std::to_string(out.t2t_commit_mapq);
   return "certa map -k " + std::to_string(p2.k) + " --k1 " + std::to_string(p1.k) + " --budget " +
          std::to_string(p1.budget) + " --budget2 " + std::to_string(p2.budget) + " --s2 " +
          std::to_string(p2.s2_limit) + (gpu ? " --gpu" : "") + extra;
