@@ -33,6 +33,11 @@ struct OutputOptions {
   // written on BWA-MEM's scale (pair_model.h kBwaScale), and the model's own
   // value, a Phred, in XP.
   bool mapq_bwa = false;
+  // --t2t-commit (B1): a confident T2T lift that lands elsewhere is re-aligned
+  // on the reference and committed when it scores better (selective
+  // lift-and-commit); the mate becomes kTierMR. Needs --t2t.
+  bool t2t_commit = false;
+  int t2t_commit_mapq = 40;  // --t2t-commit-mapq: the lift's minimum MAPQ to commit
   PairVoteParams pair_votes;  // --iv-pair-votes: joint seeds of both mates in place_pair (occ 0: off)
 };
 

@@ -399,6 +399,40 @@ int interval_reason(const Result& r) {
   return r.certified == 1 ? int(kOk) : (r.reason == kOk ? int(kNotFound) : int(r.reason));
 }
 
+// B1 (--t2t-commit): selective lift-and-commit. A confident T2T-CHM13 lift that
+// lands elsewhere than the reference placement proposes a candidate locus (the
+// missing copy's projection). Re-align the read there on the reference and take
+// it only when it explains the read better (higher affine score); the committed
+// record is moved (kTierMR), not certified -- a lift is a proposal verified on
+// the reference, not a global certificate. levioSAM2-style commit/defer: a lift
+// that is not confident, lands "here", or does not improve is deferred to the
+// reference placement. Returns whether it committed.
+bool commit_lift(const IndexView& view, const Reference& ref, const uint8_t* codes, int L, Result& r,
+                 const T2tLift& l, int commit_mapq, Workspace& ws) {
+  if (l.state != 1 || l.mapq < commit_mapq || L > LMAX || !r.certified) return false;
+  const int ct = ref.contig_of(r.ref_pos);
+  if (ct < 0) return false;
+  const int lead = r.n_cigar && (r.cigar[0] & 0xF) == kOpS ? static_cast<int>(r.cigar[0] >> 4) : 0;
+  const int64_t left = r.ref_pos - lead;
+  if (l.contig == ct && l.strand == r.strand && std::llabs(l.left - left) <= 150) return false;  // "here"
+  uint8_t rd[LMAX];
+  for (int i = 0; i < L; ++i) {
+    const uint8_t c = codes[l.strand ? L - 1 - i : i];
+    rd[i] = l.strand ? (c < 4 ? static_cast<uint8_t>(3 - c) : static_cast<uint8_t>(4)) : c;
+  }
+  const int64_t lo = l.left - BMAX;
+  if (lo < 0 || lo + L - 1 + BMAX > static_cast<int64_t>(view.ref_len)) return false;
+  Result rc{};
+  if (!affine_align(view, rd, L, lo, BMAX, ws, rc, false, l.left - 50, l.left + 50)) return false;
+  if (rc.score <= r.score) return false;  // not a better explanation: defer
+  rc.strand = static_cast<uint8_t>(l.strand);
+  rc.certified = 0;
+  rc.tier = kTierMR;
+  rc.reason = kOk;
+  r = rc;
+  return true;
+}
+
 }  // namespace
 
 void check_contig(Result& r, const Reference& ref) {
@@ -599,7 +633,11 @@ int RecordWriter::single_interval(const Result& r0, const RepeatOut* iv, const F
 bool RecordWriter::pair_interval(const Result* r0, const Result* se_res, const RepeatOut* const* iv,
                                  const uint8_t* const* codes, const FastqRecord* rec, PairScratch& sc, Records& out,
                                  int* reason, Placement* placed, const T2tLift* t2t) const {
-  const Result r[2] = {mate_as_reported(r0[0], ref_), mate_as_reported(r0[1], ref_)};
+  Result r[2] = {mate_as_reported(r0[0], ref_), mate_as_reported(r0[1], ref_)};
+  if (opt_.t2t_commit && t2t)  // B1: a confident lift elsewhere may move a mate (kTierMR)
+    for (int x = 0; x < 2; ++x)
+      commit_lift(view_, ref_, codes[x], static_cast<int>(rec[x].seq.size()), r[x], t2t[x],
+                  opt_.t2t_commit_mapq, *sc.ws);
   auto contig_of = [&](int64_t pos) { return ref_.contig_of(pos); };
   const int rescue_q = opt_.iv_rescue_local ? kRescueLocalMapq : -1;  // --iv-rescue local
   Placement se[2];
