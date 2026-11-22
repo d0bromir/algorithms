@@ -114,7 +114,9 @@ row() { awk -F'\t' -v f="$2" '$1 == f {print $4"\t"$5"\t"$3}' "$1/MANIFEST.tsv";
 changed=()
 for f in "${FREQUENT[@]}"; do
     [[ -e "$NEW/$f" ]] || continue
-    if [[ ! -e "$PREV/$f" ]] || [[ "$(content "$PREV/$f")" != "$(content "$NEW/$f")" ]]; then changed+=("$f"); fi
+    if [[ ! -e "$PREV/$f" ]] || [[ "$(content "$PREV/$f")" != "$(content "$NEW/$f")" ]]; then changed+=("$f")
+    else ln -f "$PREV/$f" "$NEW/$f"  # unchanged: share the current release's copy again (no extra disk space)
+    fi
 done
 trap - ERR
 # install.sh keeps a file's date when its size and source are unchanged; a changed file is dated today

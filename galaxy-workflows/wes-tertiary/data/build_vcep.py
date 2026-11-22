@@ -118,7 +118,20 @@ def rules(cspec_dir):
     return out
 
 
+ACMG_ORDER = {k: i for i, k in enumerate(("PVS", "PS", "PM", "PP", "BA", "BS", "BP"))}
+
+
+def codes(field):
+    """'BP4, BP7' in the repository's (varying) order -> 'BP4,BP7' in ACMG order, so that a rebuild of unchanged
+    data gives the same file."""
+    def key(c):
+        m = re.match(r"([A-Z]+?)(\d+)(.*)", c)
+        return (ACMG_ORDER.get(m.group(1), 9), int(m.group(2)), m.group(3)) if m else (9, 0, c)
+    return ",".join(sorted((c for c in field.replace(" ", "").split(",") if c), key=key))
+
+
 def erepo(path):
+    """Expert-panel classifications, sorted (the repository returns rows and code lists in varying order)."""
     out = []
     with open(path, encoding="utf-8", newline="") as f:
         r = csv.reader(f, delimiter="\t")
@@ -128,14 +141,14 @@ def erepo(path):
             if len(t) < len(head) or t[ix["Retracted"]].strip().lower() == "true":
                 continue
             hg = [h.strip() for h in t[ix["HGVS Expressions"]].split(",")]
-            g38 = [h for h in hg if ":g." in h and h.split(":")[0] in GRCH38]
+            g38 = sorted(h for h in hg if ":g." in h and h.split(":")[0] in GRCH38)
             for g in g38[:1]:
                 out.append([g, t[ix["HGNC Gene Symbol"]], t[ix["Disease"]], t[ix["Mondo Id"]],
                             t[ix["Mode of Inheritance"]], t[ix["Assertion"]],
-                            t[ix["Applied Evidence Codes (Met)"]].replace(" ", ""),
-                            t[ix["Applied Evidence Codes (Not Met)"]].replace(" ", ""), t[ix["Expert Panel"]],
+                            codes(t[ix["Applied Evidence Codes (Met)"]]),
+                            codes(t[ix["Applied Evidence Codes (Not Met)"]]), t[ix["Expert Panel"]],
                             t[ix["Approval Date"]][:10], t[ix["Evidence Repo Link"]]])
-    return out
+    return sorted(out)
 
 
 # GRCh38 RefSeq chromosome accessions (the repository lists GRCh37 and NCBI36 names too)

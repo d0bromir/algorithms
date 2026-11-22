@@ -85,6 +85,13 @@ meant to run unattended:
 - A lock prevents two runs at once; a failed run removes its partial release and leaves the current one untouched
   (exit status 1). The log is `logs/update-YYYY-MM-DD.log` under the data directory. `--keep N` keeps the N newest
   releases; `--dry-run` lists what would be refreshed.
+- **Measured** on the test server (22 November 2026): the first update found GenCC, the ClinGen gene list, the
+  gene-disease table, the expert-panel classifications and UniProt changed; it took 20 min (most of it the ClinGen
+  specification registry and UniProt) with a peak memory of 214 MB; refreshed files that did not change are linked back to the previous release, so a
+  release takes only the space of its changed files (about 35 MB here), and the
+  Galaxy history copied 17 datasets and uploaded 9 (10 s). Builders write sorted output, and comment lines (download
+  dates, source hashes) are ignored in the comparison, so a run on unchanged sources makes no release: two downloads
+  of the expert-panel repository taken seconds apart differ in row and code order but build identical tables.
 - **Schedule** with the systemd units in [`install/systemd/`](install/systemd/) (weekly, Tuesday 02:30, after ClinVar's
   Monday release; `Persistent=true` catches up after downtime):
   ```bash
