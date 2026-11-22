@@ -1,0 +1,17 @@
+# Weekly refresh of the WES reference and knowledge files (galaxy-workflows/wes-tertiary/update.sh).
+# Install: copy both units to /etc/systemd/system/, set User and the paths below, then
+#   systemctl daemon-reload && systemctl enable --now wes-data-update.timer
+# Check: systemctl list-timers wes-data-update.timer; journalctl -u wes-data-update.service
+[Unit]
+Description=Refresh the WES reference and knowledge files (new dated data release)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=mpiuser
+# the Galaxy admin API key is read from ~/.galaxy_admin_key of this user (only needed for --upload)
+ExecStart=/opt/wes-tertiary/update.sh --root /data/galaxy/wes-ref --regions /data/galaxy/wes-ref/kits.bed --upload --keep 4
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=12h
