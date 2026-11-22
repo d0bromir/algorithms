@@ -506,7 +506,8 @@ applied: every finding shows its gene's rating in them (green, amber, red, not i
 lists the panels with the coverage of their green genes and the findings in panel genes, and the findings TSV has a
 *panel* column. *Restrict* lists diagnostic, candidate and de novo findings only in green or amber panel genes and
 names the genes left out; secondary findings, carrier status and pharmacogenomics are not restricted. With HPO
-terms, the panels of at most 500 green genes whose best green gene explains most of the phenotype are suggested.
+terms, the panels whose best green gene explains most of the phenotype (ties: the sum) are suggested; superpanels
+(PanelApp type Super Panel, or more than 1,000 green genes) and screening or research lists are not.
 Every input file is
 listed with its SHA-256, and a fingerprint identifies the data and rules.
 

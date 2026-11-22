@@ -567,8 +567,9 @@ OMIM). PanelApp's terms allow non-commercial use with acknowledgement.
   findings only in green or amber panel genes, as a panel test would, and names the genes that were left out.
 * **Suggestions**: with the patient's HPO terms the report lists the five panels whose best green gene explains the
   largest share of the phenotype (terms weighted by information content, as for the disease match; ties broken by
-  the sum over their green genes), among panels of at most 500 green genes; broad superpanels (Paediatric disorders, Mendeliome, DDG2P: thousands of genes) would
-  always rank first and are not suggested, but can be applied. Suggestions do not change the analysis.
+  the sum over their green genes). Superpanels (PanelApp type *Super Panel*, or more than 1,000 green genes, such as
+  Paediatric disorders or Mendeliome) would always rank first and are not suggested, nor are screening and research
+  lists; all can still be applied. Suggestions do not change the analysis.
 
 ## 5. Filters and how to change them
 
@@ -1514,31 +1515,33 @@ lists the KIR genes, genotype, motifs, B-content group and ligand pairs, and the
 HPO links to exactly one gene and that have ≥ 5 phenotype terms. Each patient gets 5 (or 2) of the disease's own
 terms at random and 1 term of another disease; a suggestion is right when the panel has the disease gene rated
 green. 1,500 patients per half (diseases at even/odd positions); the ranking method was chosen on the even half by
-the share of patients with a right panel among the first three, and the scoring is checked against the report's
-own function.
+the share of patients with a right panel among the first three, and the evaluation's scoring is checked against the
+report's own function.
 
-How the method came about: the first criterion counted any panel and chose *sum*, which put a superpanel first for
-most patients (median 4,449 green genes: Mendeliome, Paediatric disorders), right but useless as a suggestion.
-Superpanels (> 500 green genes, above the 95th percentile of panel size) are therefore not suggested. *max* (the
-best green gene) then won on new patient draws, but a Galaxy run with two general terms (seizure, developmental
-delay) showed its weakness: many genes explain such terms fully, the scores tie and single-gene panels came first.
-*max_sum* (ties broken by the sum over the green genes) was added and chosen on the tuning half for both patient
-types.
+How the rule came about (each step changed what is suggested, not how the methods are scored):
+1. Counting any panel, *sum* won by putting a superpanel first (median 4,449 green genes: Mendeliome, Paediatric
+   disorders): right, but useless as a suggestion.
+2. A cap of 500 green genes made *max* (the best green gene) win, but a Galaxy run with two general terms (seizure,
+   developmental delay) showed ties at full score and single-gene panels first. *max_sum* (ties broken by the sum
+   over the green genes) was added; it won on the tuning half with 5 and with 2 terms.
+3. The cap also hid the epilepsy panels (GE 402: 632 green genes). Superpanels are now recognised by PanelApp's own
+   panel type (*Super Panel*, *Superpanel*), untyped exome-wide lists by size (> 1,000 green genes), and screening
+   and research lists by name; 45 of the 685 panels are not suggested. *max_sum* won again on the tuning half.
 
-| Method (panels ≤ 500 green genes) | Held-out, 5 terms: right panel first | in first 3 | Held-out, 2 terms: first | in first 3 | Green genes of the first panel (median, 5 / 2 terms) |
+| Method (final rule) | Held-out, 5 terms: right panel first | in first 3 | Held-out, 2 terms: first | in first 3 | Green genes of the first panel (median, 5 / 2 terms) |
 |---|---|---|---|---|---|
-| **max_sum** (chosen) | 1,238/1,398 (88.6 %) | 94.3 % | 780/1,387 (56.2 %) | 71.9 % | 353 / 353 |
-| max | 75.7 % | 83.2 % | 27.0 % | 38.2 % | 18 / 9 |
-| sum_sqrt | 64.4 % | 78.2 % | 45.3 % | 62.1 % | 256 / 231 |
-| sum_log | 58.7 % | 74.0 % | 43.7 % | 61.3 % | 361 / 353 |
-| sum | 55.7 % | 71.7 % | 42.4 % | 61.9 % | 370 / 357 |
-| share | 38.5 % | 58.6 % | 22.1 % | 36.8 % | 5 / 1 |
+| **max_sum** (chosen) | 1,226/1,403 (87.4 %) | 93.8 % | 768/1,396 (55.0 %) | 71.1 % | 547 / 547 |
+| max | 75.6 % | 82.9 % | 27.2 % | 38.2 % | 18 / 9 |
+| sum_sqrt | 64.9 % | 80.4 % | 46.7 % | 65.5 % | 370 / 250 |
+| sum_log | 52.0 % | 72.7 % | 43.4 % | 64.8 % | 795 / 547 |
+| sum | 47.3 % | 66.6 % | 40.9 % | 60.8 % | 795 / 795 |
+| share | 38.4 % | 58.4 % | 22.1 % | 36.7 % | 5 / 1 |
 
-For 6.8 % (5 terms) and 7.5 % (2 terms) of the held-out diseases the gene is green on no panel of ≤ 500 genes, so
-no suggestion could be right; the rates exclude them. The benchmark took about 8 ms per patient (31 s and 287 MB
-for both halves). The patients' terms come from the same annotations the matching uses, so real patients will see
-lower rates: the figures are an upper bound and a comparison between methods. *max_sum* prefers the larger of the
-panels that contain a well-matching gene (median 353 green genes, a common size for diagnostic panels).
+For 6.5 % (5 terms) and 6.9 % (2 terms) of the held-out diseases the gene is green on no suggestible panel, so no
+suggestion could be right; the rates exclude them. About 8 ms per patient (31 s and 287 MB for both halves). The
+patients' terms come from the same annotations the matching uses, so real patients will see lower rates: the figures
+are an upper bound and a comparison between methods. *max_sum* buys its accuracy with broader panels (median 547
+green genes against 18 for *max*).
 
 ## 8. Scope and limitations
 
