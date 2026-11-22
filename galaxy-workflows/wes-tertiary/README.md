@@ -91,7 +91,8 @@ meant to run unattended:
   release takes only the space of its changed files (about 35 MB here), and the
   Galaxy history copied 17 datasets and uploaded 9 (10 s). Builders write sorted output, and comment lines (download
   dates, source hashes) are ignored in the comparison, so a run on unchanged sources makes no release: two downloads
-  of the expert-panel repository taken seconds apart differ in row and code order but build identical tables.
+  of the expert-panel repository taken seconds apart differ in row and code order but build identical tables, and a
+  second update run on the same day reported "nothing changed" and made no release.
 - **Schedule** with the systemd units in [`install/systemd/`](install/systemd/) (weekly, Tuesday 02:30, after ClinVar's
   Monday release; `Persistent=true` catches up after downtime):
   ```bash
