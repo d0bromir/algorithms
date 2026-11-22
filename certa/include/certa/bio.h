@@ -393,6 +393,7 @@ struct BioOut {
   int yh = -1;          // every end position below yh is accounted for
   int n_best = 0;       // loci tied at p1
   int mapq = 0;         // posterior, Phred
+  double phantom_w = 0.0;  // the phantom-copy weight added to the posterior (pairs reuse it)
   std::vector<BioLocus> loci;  // the cheapest loci (at most max_loci, the chosen one included)
   int list_bound = -1;  // every locus not in `loci` costs at least this
   int chosen = -1;      // index of the reported locus in `loci`
@@ -1248,7 +1249,8 @@ inline bool bio_place(const IndexView& ix, const BioModel& m, const Params& p, c
     double pi = bp.phantom_pi;
     if (m.phantom_track)  // A4: locus-specific prior (copy-deficit regions)
       pi = m.phantom_track->contains(a.ref_pos) ? bp.phantom_pi : bp.phantom_pi_unique;
-    others += bio_detail::phantom_weight(bp, k, matches, pi);
+    o.phantom_w = bio_detail::phantom_weight(bp, k, matches, pi);
+    others += o.phantom_w;
   }
   o.mapq = bio_detail::posterior_mapq(others);
   const size_t keep = std::max<size_t>(static_cast<size_t>(bp.max_loci), static_cast<size_t>(pick) + 1);
@@ -1357,8 +1359,9 @@ inline BioPair bio_pair(const BioParams& bp, const BioOut& o1, int L1, const Bio
   out.pen = best;
   out.ins = ins[static_cast<size_t>(out.x) * n2 + out.y];
   out.n_best = n_best;
-  out.mapq[0] = bio_detail::posterior_mapq((total - num1) / num1);
-  out.mapq[1] = bio_detail::posterior_mapq((total - num2) / num2);
+  // Each mate's unseen-copy hypothesis competes for that mate (MAPQ only).
+  out.mapq[0] = bio_detail::posterior_mapq((total - num1) / num1 + o1.phantom_w);
+  out.mapq[1] = bio_detail::posterior_mapq((total - num2) / num2 + o2.phantom_w);
   return out;
 }
 
@@ -1514,8 +1517,21 @@ inline BioRescue bio_rescue(const IndexView& ix, const BioModel& m, const BioOut
   out.pen = best;
   out.ins = pick.ins;
   out.n_best = n_best;
-  out.mapq[0] = bio_detail::posterior_mapq((total - num_k) / num_k);
-  out.mapq[1] = bio_detail::posterior_mapq((total - num_f) / num_f);
+  // Each mate's unseen-copy hypothesis competes for that mate (MAPQ only): k's
+  // weight is stored from bio_place; f's is computed from its traced alignment.
+  double phantom_f = 0.0;
+  if (bp.phantom_delta > 0) {
+    Result fr;
+    if (bio_align_locus(ix, m, pick.f, sc, fr)) {
+      int kf, mf;
+      bio_mm_counts(fr, kf, mf);
+      double pi = bp.phantom_pi;
+      if (m.phantom_track) pi = m.phantom_track->contains(fr.ref_pos) ? bp.phantom_pi : bp.phantom_pi_unique;
+      phantom_f = bio_detail::phantom_weight(bp, kf, mf, pi);
+    }
+  }
+  out.mapq[0] = bio_detail::posterior_mapq((total - num_k) / num_k + ok.phantom_w);
+  out.mapq[1] = bio_detail::posterior_mapq((total - num_f) / num_f + phantom_f);
   return out;
 }
 
