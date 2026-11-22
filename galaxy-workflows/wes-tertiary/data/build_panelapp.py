@@ -5,9 +5,10 @@
 
 Reads each public panel once over HTTPS (only panel numbers are requested; no sample data leaves the server) and
 writes one row per panel gene:
-    source  panel_id  panel  version  version_created  signed_off  disorders  gene  hgnc_id  rating  moi
-rating: green (confidence 3, diagnostic grade), amber (2), red (1). Kept are the panel, its version and test codes
-(relevant disorders, e.g. R59), the gene and its rating and mode of inheritance; the phenotype text is left out
+    source  panel_id  panel  version  version_created  signed_off  disorders  gene  hgnc_id  rating  moi  types
+rating: green (confidence 3, diagnostic grade), amber (2), red (1); types: PanelApp's panel types (Super Panel,
+Component Of Super Panel, GMS signed-off ...), which mark the broad superpanels. Kept are the panel, its version and
+test codes (relevant disorders, e.g. R169), the gene and its rating and mode of inheritance; the phenotype text is left out
 (part of it derives from OMIM, whose licence PanelApp's terms of use pass on). PanelApp's terms: non-commercial use,
 with acknowledgement. Short tandem repeats and regions are not kept (the report works on genes).
 
@@ -81,13 +82,15 @@ def main(argv=None):
                              ";".join(clean(x) for x in d.get("relevant_disorders") or []),
                              clean(gd.get("gene_symbol") or g.get("entity_name")), clean(gd.get("hgnc_id")),
                              RATING.get(str(g.get("confidence_level")), "red"),
-                             clean(g.get("mode_of_inheritance"))])
+                             clean(g.get("mode_of_inheritance")),
+                             ";".join(sorted(clean(t.get("name")) for t in d.get("types") or [] if t.get("name")))])
         print(f"{name}: {len(panels)} panels", file=sys.stderr)
     rows.sort()
     with open(a.out, "w", encoding="utf-8", newline="\n") as f:
         f.write("# source\t" + ", ".join(API[s][0] for s in a.source.split(",")) +
                 f"\t{time.strftime('%Y-%m-%d')}\tnon-commercial use, with acknowledgement (PanelApp terms of use)\n")
-        f.write("source\tpanel_id\tpanel\tversion\tversion_created\tsigned_off\tdisorders\tgene\thgnc_id\trating\tmoi\n")
+        f.write("source\tpanel_id\tpanel\tversion\tversion_created\tsigned_off\tdisorders\tgene\thgnc_id\trating\tmoi"
+                "\ttypes\n")
         for r in rows:
             f.write("\t".join(r) + "\n")
     print(f"{n_panels} panels, {len(rows)} panel genes -> {a.out}", file=sys.stderr)

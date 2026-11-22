@@ -4,8 +4,8 @@
 Patients: the diseases of phenotype.hpoa (OMIM, ORPHA) that phenotype_to_genes.txt links to exactly one gene; each
 patient gets --terms of the disease's own phenotype terms (aspect P, drawn at random) and --noise terms of another
 disease (imprecise or unrelated findings). A suggestion is correct when the panel has the disease gene rated green.
-Diseases whose gene is green on no panel are counted apart (no panel could be right). As in the report, panels with
-more than PANEL_SUGGEST_MAX_GENES green genes (superpanels) are not suggested.
+Diseases whose gene is green on no panel are counted apart (no panel could be right). As in the report, superpanels
+(is_superpanel: PanelApp type Super Panel, or more than PANEL_SUGGEST_MAX_GENES green genes) are not suggested.
 
 The ranking method (PANEL_SUGGEST) is chosen on the tuning half (diseases at even positions of the sorted list) by
 the share of patients with a correct panel among the first three, and every method is reported on the held-out half.
@@ -53,7 +53,7 @@ def main(argv=None):
     for k, p in panels.items():
         g = [x for x, (r, _m) in p["genes"].items() if r == "green"]
         size[k] = len(g)
-        if len(g) > rep.PANEL_SUGGEST_MAX_GENES:  # superpanels are not suggested (as in the report)
+        if rep.is_superpanel(p):  # superpanels are not suggested (as in the report)
             continue
         for x in g:
             green_of[x].add(k)

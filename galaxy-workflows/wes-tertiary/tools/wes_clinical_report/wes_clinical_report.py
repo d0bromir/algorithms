@@ -1257,10 +1257,21 @@ PANEL = {}  # gene -> [(panel label, rating, mode of inheritance)] of the applie
 # genes), "sum_log" sum / ln(number of green genes + e), "share" fraction of green genes that explain at least half
 # of the phenotype, "max_sum" best green gene, ties (common with few, general terms) broken by the sum
 PANEL_SUGGEST = "max_sum"
-# Only panels with at most this many green genes are suggested: the broad "superpanels" (Paediatric disorders,
-# Mendeliome, DDG2P: thousands of genes) contain nearly every gene and would always rank first; they can still be
-# applied by name. 500 is above the 95th percentile of panel size (352 green genes, November 2026 snapshot).
-PANEL_SUGGEST_MAX_GENES = 500
+# Superpanels are not suggested (they contain nearly every gene and would always rank first; they can still be
+# applied): panels PanelApp types as Super Panel / Superpanel, and untyped exome-wide lists, caught by size (more
+# than this many green genes: Mendeliome, DDG2P, the fetal-anomaly and intellectual-disability lists). The diagnostic
+# epilepsy panels (632 and 916 green genes) stay below it.
+PANEL_SUGGEST_MAX_GENES = 1000
+SUPERPANEL_TYPES = {"super panel", "superpanel"}
+# lists that are not diagnostic panels (population or carrier screening, research) are not suggested either
+NOT_DIAGNOSTIC = re.compile(r"screening|babyscreen|prepair|carrier|research|covid", re.I)
+
+
+def is_superpanel(p):
+    """True for panels that are not suggested: superpanels, exome-wide lists, screening and research lists."""
+    green = sum(1 for r, _m in p["genes"].values() if r == "green")
+    return (green > PANEL_SUGGEST_MAX_GENES or any(t.lower() in SUPERPANEL_TYPES for t in p.get("types", ()))
+            or bool(NOT_DIAGNOSTIC.search(p["panel"])) or any(t.lower() == "research" for t in p.get("types", ())))
 
 
 def load_panels(path):
@@ -1282,7 +1293,8 @@ def load_panels(path):
             k = (r["source"], r["panel_id"])
             p = out.setdefault(k, {"source": r["source"], "id": r["panel_id"], "panel": r["panel"],
                                    "version": r["version"], "signed_off": r["signed_off"],
-                                   "disorders": [d for d in r["disorders"].split(";") if d], "genes": {}})
+                                   "disorders": [d for d in r["disorders"].split(";") if d],
+                                   "types": [x for x in r.get("types", "").split(";") if x], "genes": {}})
             p["genes"][r["gene"]] = (r["rating"], r["moi"])
     return out, src
 
@@ -1331,7 +1343,7 @@ def suggest_panels(panels, pheno, top=5, method=None):
     out = []
     for k, p in panels.items():
         green = [g for g, (r, _m) in p["genes"].items() if r == "green"]
-        if not green or len(green) > PANEL_SUGGEST_MAX_GENES:
+        if not green or is_superpanel(p):
             continue
         s = sorted((share.get(g, 0.0) for g in green), reverse=True)
         if not s[0]:
@@ -1404,8 +1416,8 @@ def panel_section(R, panels, src, keys, missing, suggestions, pheno, gene_cov, d
     else:
         R.h("<p class='none'>No panel applied (give panel ids, e.g. a test code such as R169, or ge:ID / au:ID).</p>")
     if suggestions:
-        R.h("<h3>Panels suggested by the patient's phenotype</h3><p class='small'>Panels of at most "
-            f"{PANEL_SUGGEST_MAX_GENES} green genes, ranked by the share of the patient's HPO phenotype (terms weighted "
+        R.h("<h3>Panels suggested by the patient's phenotype</h3><p class='small'>Panels other than superpanels "
+            f"(PanelApp type Super Panel, or more than {PANEL_SUGGEST_MAX_GENES} green genes), ranked by the share of the patient's HPO phenotype (terms weighted "
             "by information content) that their best-matching green gene explains, ties broken by the sum over their "
             f"green genes ({esc(PANEL_SUGGEST)}). Genes listed explain at least a quarter of it. In simulated patients "
             "the right panel was first for 89% (five terms) and 56% (two general terms) (README section 7). A "
