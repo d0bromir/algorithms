@@ -151,17 +151,21 @@ def previous_datasets(name):
 
 def upload(data_dir, history, snpeff_db, previous=""):
     """Upload the files of MANIFEST.tsv into a new history. With the name of the previous release's history, files
-    with the same name and size there are copied (Galaxy shares their storage) instead of uploaded again, and so is
-    the SnpEff database."""
+    with the same name and size there (and not listed in CHANGES.tsv) are copied (Galaxy shares their storage)
+    instead of uploaded again, and so is the SnpEff database."""
     rows = list(csv.DictReader(open(os.path.join(data_dir, "MANIFEST.tsv")), delimiter="\t"))
     prev = previous_datasets(previous) if previous else {}
+    # a changed file can keep its size (rows in another order, a corrected value): the files update.sh found changed
+    # are always uploaded
+    ch = os.path.join(data_dir, "CHANGES.tsv")
+    changed = {r["file"] for r in csv.DictReader(open(ch), delimiter="\t")} if os.path.exists(ch) else set()
     h = gi.histories.create_history(history)
     print(f"  history '{history}' ({h['id']})" + (f", reusing '{previous}'" if prev else ""))
     ids = []
     for r in rows:
         p = os.path.join(data_dir, r["file"])
         old = prev.get(r["file"])
-        if old and str(old[1]) == r["bytes"]:
+        if old and str(old[1]) == r["bytes"] and r["file"] not in changed:
             gi.histories.copy_dataset(h["id"], old[0])
             print(f"  {r['file']}: unchanged, copied from the previous release", flush=True)
             continue

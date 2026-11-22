@@ -115,7 +115,7 @@ def rules(cspec_dir):
                 for g in genes:
                     out.append([g, sid, ver, panel, code, ";".join(strength_label(s["label"]) for s in ok),
                                 f"{val:g}" if val is not None else "", text])
-    return out
+    return sorted(out)  # the registry returns specifications and codes in varying order
 
 
 ACMG_ORDER = {k: i for i, k in enumerate(("PVS", "PS", "PM", "PP", "BA", "BS", "BP"))}
