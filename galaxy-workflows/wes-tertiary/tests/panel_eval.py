@@ -24,7 +24,7 @@ import random
 import statistics
 import time
 
-METHODS = ("max", "sum", "sum_sqrt", "sum_log", "share")
+METHODS = ("max", "max_sum", "sum", "sum_sqrt", "sum_log", "share")
 
 
 def load_report(path):
@@ -112,10 +112,11 @@ def main(argv=None):
                 x[2] += s >= 0.5
         out = {}
         for m in METHODS:
-            sc = {k: {"max": x[1], "sum": x[0], "sum_sqrt": x[0] / math.sqrt(size[k]),
+            sc = {k: {"max": x[1], "max_sum": x[1], "sum": x[0], "sum_sqrt": x[0] / math.sqrt(size[k]),
                       "sum_log": x[0] / math.log(size[k] + math.e), "share": x[2] / size[k]}[m]
                   for k, x in agg.items() if x[1] > 0}
-            out[m] = sorted(sc, key=lambda k: (-sc[k], len(panels[k]["genes"]), k))
+            sec = {k: agg[k][0] if m == "max_sum" else 0.0 for k in sc}
+            out[m] = sorted(sc, key=lambda k: (-sc[k], -sec[k], len(panels[k]["genes"]), k))
         return out
 
     def ranks(terms, gene):

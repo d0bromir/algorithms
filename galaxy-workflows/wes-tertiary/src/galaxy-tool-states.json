@@ -600,6 +600,13 @@
       "mother_vcf": {
         "__class__": "ConnectedValue"
       },
+      "panel_ids": {
+        "__class__": "ConnectedValue"
+      },
+      "panel_scope": "flag",
+      "panels": {
+        "__class__": "ConnectedValue"
+      },
       "pext": {
         "__class__": "ConnectedValue"
       },
@@ -632,7 +639,7 @@
         "__class__": "ConnectedValue"
       }
     },
-    "tool_version": "0.16.0+galaxy0"
+    "tool_version": "0.17.0+galaxy0"
   },
   "WES tertiary analysis from FASTQ (v1)/tertiary/clinvar_annotation": {
     "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
@@ -1409,6 +1416,13 @@
       "mother_vcf": {
         "__class__": "ConnectedValue"
       },
+      "panel_ids": {
+        "__class__": "ConnectedValue"
+      },
+      "panel_scope": "flag",
+      "panels": {
+        "__class__": "ConnectedValue"
+      },
       "pext": {
         "__class__": "ConnectedValue"
       },
@@ -1441,7 +1455,7 @@
         "__class__": "ConnectedValue"
       }
     },
-    "tool_version": "0.16.0+galaxy0"
+    "tool_version": "0.17.0+galaxy0"
   },
   "WES tertiary analysis from VCF (v2)/clinvar_annotation": {
     "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",

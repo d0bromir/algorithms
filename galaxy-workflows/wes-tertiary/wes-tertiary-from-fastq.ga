@@ -13,7 +13,7 @@
         "tertiary-analysis"
     ],
     "license": "MIT",
-    "release": "0.16",
+    "release": "0.17",
     "uuid": "e4cd5a16-74be-4629-a676-4542c043ea15",
     "comments": [],
     "steps": {
@@ -965,6 +965,50 @@
         },
         "43": {
             "id": 43,
+            "name": "Gene panels (PanelApp snapshot)",
+            "type": "data_input",
+            "label": "Gene panels (PanelApp snapshot)",
+            "annotation": "panelapp_panels.tsv (data/build_panelapp.py, made by install.sh data and update.sh): the gene panels of Genomics England PanelApp and PanelApp Australia, kept on the server. Non-commercial use, with acknowledgement.",
+            "tool_state": "{\"name\": \"Gene panels (PanelApp snapshot)\", \"optional\": true, \"format\": [\"tabular\"]}",
+            "position": {
+                "top": 5740,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "Gene panels (PanelApp snapshot)",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "44": {
+            "id": 44,
+            "name": "Panels to apply",
+            "type": "parameter_input",
+            "label": "Panels to apply",
+            "annotation": "Comma-separated panels for the report: a Genomics England test code (R59), ge:ID or au:ID, or an exact panel name. Empty: no panel applied; panels are still suggested from the HPO terms.",
+            "tool_state": "{\"name\": \"Panels to apply\", \"parameter_type\": \"text\", \"optional\": true}",
+            "position": {
+                "top": 5860,
+                "left": 0
+            },
+            "input_connections": {},
+            "inputs": [
+                {
+                    "name": "Panels to apply",
+                    "description": ""
+                }
+            ],
+            "outputs": [],
+            "workflow_outputs": [],
+            "post_job_actions": {}
+        },
+        "45": {
+            "id": 45,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/fastqc/fastqc/0.74+galaxy1",
             "type": "tool",
             "label": "fastqc_raw",
@@ -1002,8 +1046,8 @@
                 }
             }
         },
-        "44": {
-            "id": 44,
+        "46": {
+            "id": 46,
             "name": "__FLATTEN__",
             "type": "tool",
             "label": "flatten_fastqc",
@@ -1018,7 +1062,7 @@
             "input_connections": {
                 "input": [
                     {
-                        "id": 43,
+                        "id": 45,
                         "output_name": "text_file"
                     }
                 ]
@@ -1034,8 +1078,8 @@
                 }
             }
         },
-        "45": {
-            "id": 45,
+        "47": {
+            "id": 47,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/fastp/fastp/1.4.0+galaxy0",
             "type": "tool",
             "label": "trimming",
@@ -1078,8 +1122,8 @@
                 }
             }
         },
-        "46": {
-            "id": 46,
+        "48": {
+            "id": 48,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/bwa/bwa_mem/0.7.19+galaxy2",
             "type": "tool",
             "label": "mapping",
@@ -1100,7 +1144,7 @@
                 ],
                 "fastq_input|fastq_input1": [
                     {
-                        "id": 45,
+                        "id": 47,
                         "output_name": "output_paired_coll"
                     }
                 ]
@@ -1116,8 +1160,8 @@
                 }
             }
         },
-        "47": {
-            "id": 47,
+        "49": {
+            "id": 49,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/picard/picard_MarkDuplicates/3.1.1.0",
             "type": "tool",
             "label": "mark_duplicates",
@@ -1132,7 +1176,7 @@
             "input_connections": {
                 "inputFile": [
                     {
-                        "id": 46,
+                        "id": 48,
                         "output_name": "bam_output"
                     }
                 ]
@@ -1160,8 +1204,8 @@
                 }
             }
         },
-        "48": {
-            "id": 48,
+        "50": {
+            "id": 50,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/samtools_stats/samtools_stats/2.0.9",
             "type": "tool",
             "label": "alignment_stats",
@@ -1176,7 +1220,7 @@
             "input_connections": {
                 "input": [
                     {
-                        "id": 47,
+                        "id": 49,
                         "output_name": "outFile"
                     }
                 ]
@@ -1192,8 +1236,8 @@
                 }
             }
         },
-        "49": {
-            "id": 49,
+        "51": {
+            "id": 51,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/picard/picard_BedToIntervalList/3.1.1.0",
             "type": "tool",
             "label": "target_intervals",
@@ -1230,8 +1274,8 @@
                 }
             }
         },
-        "50": {
-            "id": 50,
+        "52": {
+            "id": 52,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/picard/picard_CollectHsMetrics/3.1.1",
             "type": "tool",
             "label": "hs_metrics",
@@ -1246,19 +1290,19 @@
             "input_connections": {
                 "inputFile": [
                     {
-                        "id": 47,
+                        "id": 49,
                         "output_name": "outFile"
                     }
                 ],
                 "baitFile": [
                     {
-                        "id": 49,
+                        "id": 51,
                         "output_name": "outFile"
                     }
                 ],
                 "targetFile": [
                     {
-                        "id": 49,
+                        "id": 51,
                         "output_name": "outFile"
                     }
                 ]
@@ -1281,8 +1325,8 @@
                 }
             }
         },
-        "51": {
-            "id": 51,
+        "53": {
+            "id": 53,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/mosdepth/mosdepth/0.3.14+galaxy0",
             "type": "tool",
             "label": "target_coverage",
@@ -1297,7 +1341,7 @@
             "input_connections": {
                 "input_alignment": [
                     {
-                        "id": 47,
+                        "id": 49,
                         "output_name": "outFile"
                     }
                 ],
@@ -1358,8 +1402,8 @@
                 }
             }
         },
-        "52": {
-            "id": 52,
+        "54": {
+            "id": 54,
             "name": "wes_cnv",
             "type": "tool",
             "label": "cnv_calling",
@@ -1374,13 +1418,13 @@
             "input_connections": {
                 "sample": [
                     {
-                        "id": 51,
+                        "id": 53,
                         "output_name": "output_regions_bed"
                     }
                 ],
                 "panel": [
                     {
-                        "id": 51,
+                        "id": 53,
                         "output_name": "output_regions_bed"
                     }
                 ],
@@ -1449,8 +1493,8 @@
                 }
             }
         },
-        "53": {
-            "id": 53,
+        "55": {
+            "id": 55,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/mosdepth/mosdepth/0.3.14+galaxy0",
             "type": "tool",
             "label": "coding_coverage",
@@ -1465,7 +1509,7 @@
             "input_connections": {
                 "input_alignment": [
                     {
-                        "id": 47,
+                        "id": 49,
                         "output_name": "outFile"
                     }
                 ],
@@ -1514,8 +1558,8 @@
                 }
             }
         },
-        "54": {
-            "id": 54,
+        "56": {
+            "id": 56,
             "name": "toolshed.g2.bx.psu.edu/repos/devteam/freebayes/freebayes/1.3.10+galaxy1",
             "type": "tool",
             "label": "variant_calling",
@@ -1530,7 +1574,7 @@
             "input_connections": {
                 "reference_source|batchmode|input_bams": [
                     {
-                        "id": 47,
+                        "id": 49,
                         "output_name": "outFile"
                     }
                 ],
@@ -1559,8 +1603,8 @@
                 }
             }
         },
-        "55": {
-            "id": 55,
+        "57": {
+            "id": 57,
             "name": "wes_mito",
             "type": "tool",
             "label": "mito_calling",
@@ -1575,7 +1619,7 @@
             "input_connections": {
                 "bam": [
                     {
-                        "id": 47,
+                        "id": 49,
                         "output_name": "outFile"
                     }
                 ],
@@ -1627,8 +1671,8 @@
                 }
             }
         },
-        "56": {
-            "id": 56,
+        "58": {
+            "id": 58,
             "name": "wes_hla",
             "type": "tool",
             "label": "hla_typing",
@@ -1643,7 +1687,7 @@
             "input_connections": {
                 "bam": [
                     {
-                        "id": 47,
+                        "id": 49,
                         "output_name": "outFile"
                     }
                 ],
@@ -1690,8 +1734,8 @@
                 }
             }
         },
-        "57": {
-            "id": 57,
+        "59": {
+            "id": 59,
             "name": "wes_kir",
             "type": "tool",
             "label": "kir_typing",
@@ -1706,7 +1750,7 @@
             "input_connections": {
                 "bam": [
                     {
-                        "id": 47,
+                        "id": 49,
                         "output_name": "outFile"
                     }
                 ],
@@ -1718,7 +1762,7 @@
                 ],
                 "hla": [
                     {
-                        "id": 56,
+                        "id": 58,
                         "output_name": "summary"
                     }
                 ]
@@ -1752,8 +1796,8 @@
                 }
             }
         },
-        "58": {
-            "id": 58,
+        "60": {
+            "id": 60,
             "name": "wes_yhaplo",
             "type": "tool",
             "label": "y_haplogroup",
@@ -1768,7 +1812,7 @@
             "input_connections": {
                 "bam": [
                     {
-                        "id": 47,
+                        "id": 49,
                         "output_name": "outFile"
                     }
                 ],
@@ -1808,8 +1852,8 @@
                 }
             }
         },
-        "59": {
-            "id": 59,
+        "61": {
+            "id": 61,
             "type": "subworkflow",
             "label": "tertiary",
             "annotation": "Tertiary analysis of each sample's VCF (embedded workflow \"WES tertiary analysis from VCF (v2)\").",
@@ -1821,7 +1865,7 @@
             "input_connections": {
                 "Variant calls (VCF)": [
                     {
-                        "id": 54,
+                        "id": 56,
                         "output_name": "output_vcf",
                         "input_subworkflow_step_id": 0
                     }
@@ -1982,42 +2026,42 @@
                 ],
                 "Aligned reads (BAM)": [
                     {
-                        "id": 47,
+                        "id": 49,
                         "output_name": "outFile",
                         "input_subworkflow_step_id": 13
                     }
                 ],
                 "Per-target coverage (mosdepth thresholds)": [
                     {
-                        "id": 51,
+                        "id": 53,
                         "output_name": "output_thresholds_bed",
                         "input_subworkflow_step_id": 14
                     }
                 ],
                 "Coverage summary (mosdepth)": [
                     {
-                        "id": 51,
+                        "id": 53,
                         "output_name": "output_summary",
                         "input_subworkflow_step_id": 15
                     }
                 ],
                 "Coding-exon coverage (mosdepth thresholds)": [
                     {
-                        "id": 53,
+                        "id": 55,
                         "output_name": "output_thresholds_bed",
                         "input_subworkflow_step_id": 16
                     }
                 ],
                 "Copy-number calls (wes_cnv TSV)": [
                     {
-                        "id": 52,
+                        "id": 54,
                         "output_name": "calls",
                         "input_subworkflow_step_id": 27
                     }
                 ],
                 "Copy-number summary (wes_cnv JSON)": [
                     {
-                        "id": 52,
+                        "id": 54,
                         "output_name": "summary",
                         "input_subworkflow_step_id": 28
                     }
@@ -2094,14 +2138,14 @@
                 ],
                 "Mitochondrial calls (wes_mito TSV)": [
                     {
-                        "id": 55,
+                        "id": 57,
                         "output_name": "calls",
                         "input_subworkflow_step_id": 39
                     }
                 ],
                 "Mitochondrial summary (wes_mito JSON)": [
                     {
-                        "id": 55,
+                        "id": 57,
                         "output_name": "summary",
                         "input_subworkflow_step_id": 40
                     }
@@ -2136,30 +2180,44 @@
                 ],
                 "HLA types (wes_hla summary)": [
                     {
-                        "id": 56,
+                        "id": 58,
                         "output_name": "summary",
                         "input_subworkflow_step_id": 45
                     }
                 ],
                 "HLA outside calls (PharmCAT TSV)": [
                     {
-                        "id": 56,
+                        "id": 58,
                         "output_name": "outside_calls",
                         "input_subworkflow_step_id": 46
                     }
                 ],
                 "Y haplogroup (wes_yhaplo summary)": [
                     {
-                        "id": 58,
+                        "id": 60,
                         "output_name": "summary",
                         "input_subworkflow_step_id": 47
                     }
                 ],
                 "KIR genes (wes_kir summary)": [
                     {
-                        "id": 57,
+                        "id": 59,
                         "output_name": "summary",
                         "input_subworkflow_step_id": 48
+                    }
+                ],
+                "Gene panels (PanelApp snapshot)": [
+                    {
+                        "id": 43,
+                        "output_name": "output",
+                        "input_subworkflow_step_id": 49
+                    }
+                ],
+                "Panels to apply": [
+                    {
+                        "id": 44,
+                        "output_name": "output",
+                        "input_subworkflow_step_id": 50
                     }
                 ]
             },
@@ -2225,7 +2283,7 @@
                     "tertiary-analysis"
                 ],
                 "license": "MIT",
-                "release": "0.16",
+                "release": "0.17",
                 "uuid": "78531b7b-9f58-49a0-8829-d8f09d35d038",
                 "comments": [],
                 "steps": {
@@ -3309,6 +3367,50 @@
                     },
                     "49": {
                         "id": 49,
+                        "name": "Gene panels (PanelApp snapshot)",
+                        "type": "data_input",
+                        "label": "Gene panels (PanelApp snapshot)",
+                        "annotation": "panelapp_panels.tsv (data/build_panelapp.py, made by install.sh data and update.sh): the gene panels of Genomics England PanelApp and PanelApp Australia, kept on the server. Non-commercial use, with acknowledgement.",
+                        "tool_state": "{\"name\": \"Gene panels (PanelApp snapshot)\", \"optional\": true, \"format\": [\"tabular\"]}",
+                        "position": {
+                            "top": 5880,
+                            "left": 0
+                        },
+                        "input_connections": {},
+                        "inputs": [
+                            {
+                                "name": "Gene panels (PanelApp snapshot)",
+                                "description": ""
+                            }
+                        ],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {}
+                    },
+                    "50": {
+                        "id": 50,
+                        "name": "Panels to apply",
+                        "type": "parameter_input",
+                        "label": "Panels to apply",
+                        "annotation": "Comma-separated panels for the report: a Genomics England test code (R59), ge:ID or au:ID, or an exact panel name. Empty: no panel applied; panels are still suggested from the HPO terms.",
+                        "tool_state": "{\"name\": \"Panels to apply\", \"parameter_type\": \"text\", \"optional\": true}",
+                        "position": {
+                            "top": 6000,
+                            "left": 0
+                        },
+                        "input_connections": {},
+                        "inputs": [
+                            {
+                                "name": "Panels to apply",
+                                "description": ""
+                            }
+                        ],
+                        "outputs": [],
+                        "workflow_outputs": [],
+                        "post_job_actions": {}
+                    },
+                    "51": {
+                        "id": 51,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/samtools_faidx/samtools_faidx/1.22+galaxy1",
                         "type": "tool",
                         "label": "chrom_sizes",
@@ -3339,8 +3441,8 @@
                             }
                         }
                     },
-                    "50": {
-                        "id": 50,
+                    "52": {
+                        "id": 52,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bedtools/bedtools_slopbed/2.31.1+galaxy1",
                         "type": "tool",
                         "label": "pad_targets",
@@ -3361,7 +3463,7 @@
                             ],
                             "genome_file_opts|genome": [
                                 {
-                                    "id": 49,
+                                    "id": 51,
                                     "output_name": "output"
                                 }
                             ],
@@ -3390,8 +3492,8 @@
                             }
                         }
                     },
-                    "51": {
-                        "id": 51,
+                    "53": {
+                        "id": 53,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_norm/bcftools_norm/1.24+galaxy0",
                         "type": "tool",
                         "label": "normalize",
@@ -3435,8 +3537,8 @@
                             }
                         }
                     },
-                    "52": {
-                        "id": 52,
+                    "54": {
+                        "id": 54,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_filter/bcftools_filter/1.24+galaxy0",
                         "type": "tool",
                         "label": "target_filter",
@@ -3451,13 +3553,13 @@
                         "input_connections": {
                             "input_file": [
                                 {
-                                    "id": 51,
+                                    "id": 53,
                                     "output_name": "output_file"
                                 }
                             ],
                             "sec_restrict|regions|regions_file": [
                                 {
-                                    "id": 50,
+                                    "id": 52,
                                     "output_name": "output"
                                 }
                             ],
@@ -3486,8 +3588,8 @@
                             }
                         }
                     },
-                    "53": {
-                        "id": 53,
+                    "55": {
+                        "id": 55,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
                         "type": "tool",
                         "label": "clinvar_annotation",
@@ -3502,7 +3604,7 @@
                         "input_connections": {
                             "input_file": [
                                 {
-                                    "id": 52,
+                                    "id": 54,
                                     "output_name": "output_file"
                                 }
                             ],
@@ -3531,8 +3633,8 @@
                             }
                         }
                     },
-                    "54": {
-                        "id": 54,
+                    "56": {
+                        "id": 56,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
                         "type": "tool",
                         "label": "population_annotation",
@@ -3547,7 +3649,7 @@
                         "input_connections": {
                             "input_file": [
                                 {
-                                    "id": 53,
+                                    "id": 55,
                                     "output_name": "output_file"
                                 }
                             ],
@@ -3576,8 +3678,8 @@
                             }
                         }
                     },
-                    "55": {
-                        "id": 55,
+                    "57": {
+                        "id": 57,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_annotate/bcftools_annotate/1.24+galaxy0",
                         "type": "tool",
                         "label": "missense_annotation",
@@ -3592,7 +3694,7 @@
                         "input_connections": {
                             "input_file": [
                                 {
-                                    "id": 54,
+                                    "id": 56,
                                     "output_name": "output_file"
                                 }
                             ],
@@ -3621,8 +3723,8 @@
                             }
                         }
                     },
-                    "56": {
-                        "id": 56,
+                    "58": {
+                        "id": 58,
                         "name": "spliceai_score",
                         "type": "tool",
                         "label": "splice_prediction",
@@ -3637,7 +3739,7 @@
                         "input_connections": {
                             "input": [
                                 {
-                                    "id": 55,
+                                    "id": 57,
                                     "output_name": "output_file"
                                 }
                             ],
@@ -3666,8 +3768,8 @@
                             }
                         }
                     },
-                    "57": {
-                        "id": 57,
+                    "59": {
+                        "id": 59,
                         "name": "pharmcat_pgx",
                         "type": "tool",
                         "label": "pharmacogenomics",
@@ -3727,8 +3829,8 @@
                             }
                         }
                     },
-                    "58": {
-                        "id": 58,
+                    "60": {
+                        "id": 60,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpeff/snpEff/5.4+galaxy0",
                         "type": "tool",
                         "label": "functional_annotation",
@@ -3743,7 +3845,7 @@
                         "input_connections": {
                             "input": [
                                 {
-                                    "id": 56,
+                                    "id": 58,
                                     "output_name": "output"
                                 }
                             ],
@@ -3801,8 +3903,8 @@
                             }
                         }
                     },
-                    "59": {
-                        "id": 59,
+                    "61": {
+                        "id": 61,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_filter/5.4.0c+galaxy1",
                         "type": "tool",
                         "label": "prioritize",
@@ -3817,7 +3919,7 @@
                         "input_connections": {
                             "input": [
                                 {
-                                    "id": 58,
+                                    "id": 60,
                                     "output_name": "snpeff_output"
                                 }
                             ],
@@ -3846,8 +3948,8 @@
                             }
                         }
                     },
-                    "60": {
-                        "id": 60,
+                    "62": {
+                        "id": 62,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1",
                         "type": "tool",
                         "label": "candidate_table",
@@ -3862,7 +3964,7 @@
                         "input_connections": {
                             "input": [
                                 {
-                                    "id": 59,
+                                    "id": 61,
                                     "output_name": "output"
                                 }
                             ]
@@ -3885,8 +3987,8 @@
                             }
                         }
                     },
-                    "61": {
-                        "id": 61,
+                    "63": {
+                        "id": 63,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/snpsift/snpSift_extractFields/5.4.0c+galaxy1",
                         "type": "tool",
                         "label": "annotated_table",
@@ -3901,7 +4003,7 @@
                         "input_connections": {
                             "input": [
                                 {
-                                    "id": 58,
+                                    "id": 60,
                                     "output_name": "snpeff_output"
                                 }
                             ]
@@ -3924,8 +4026,8 @@
                             }
                         }
                     },
-                    "62": {
-                        "id": 62,
+                    "64": {
+                        "id": 64,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_stats/bcftools_stats/1.24+galaxy0",
                         "type": "tool",
                         "label": "variant_stats",
@@ -3940,7 +4042,7 @@
                         "input_connections": {
                             "input_file": [
                                 {
-                                    "id": 58,
+                                    "id": 60,
                                     "output_name": "snpeff_output"
                                 }
                             ]
@@ -3963,8 +4065,8 @@
                             }
                         }
                     },
-                    "63": {
-                        "id": 63,
+                    "65": {
+                        "id": 65,
                         "name": "toolshed.g2.bx.psu.edu/repos/iuc/bcftools_roh/bcftools_roh/1.24+galaxy1",
                         "type": "tool",
                         "label": "runs_of_homozygosity",
@@ -3979,7 +4081,7 @@
                         "input_connections": {
                             "input_file": [
                                 {
-                                    "id": 58,
+                                    "id": 60,
                                     "output_name": "snpeff_output"
                                 }
                             ]
@@ -4002,15 +4104,15 @@
                             }
                         }
                     },
-                    "64": {
-                        "id": 64,
+                    "66": {
+                        "id": 66,
                         "name": "wes_clinical_report",
                         "type": "tool",
                         "label": "clinical_report",
                         "annotation": "Human-readable clinical interpretation report and findings table (local tool tools/wes_clinical_report; install it on the Galaxy server, see README).",
-                        "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"affected_parents\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"artefacts\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clingen_dosage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clingen_regions\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clinvar_protein\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"cnv_calls\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"cnv_summary\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"collins_dosage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"constraint\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"coverage_summary\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"erepo\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"father_bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"father_cnv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"father_vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gencc\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gene_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gene_disease\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gnomad_cnv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gnomad_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hla\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_annotations\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_genes\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_terms\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"kir\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mane\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mave\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"max_af\": \"\\\"0.01\\\"\", \"max_candidates\": \"\\\"60\\\"\", \"min_ref_depth\": \"\\\"15\\\"\", \"mito_json\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mito_tsv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mother_bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mother_cnv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mother_vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"pext\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"pharmcat\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"previous_tsv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"reference\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"roh\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"sample_name\": \"\\\"\\\"\", \"target_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"uniprot_features\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"vcep_rules\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"yhaplo\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\"}",
+                        "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"affected_parents\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"artefacts\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clingen_dosage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clingen_regions\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clinvar_protein\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"cnv_calls\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"cnv_summary\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"collins_dosage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"constraint\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"coverage_summary\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"erepo\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"father_bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"father_cnv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"father_vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gencc\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gene_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gene_disease\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gnomad_cnv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gnomad_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hla\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_annotations\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_genes\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_terms\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"kir\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mane\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mave\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"max_af\": \"\\\"0.01\\\"\", \"max_candidates\": \"\\\"60\\\"\", \"min_ref_depth\": \"\\\"15\\\"\", \"mito_json\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mito_tsv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mother_bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mother_cnv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mother_vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"panel_ids\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"panel_scope\": \"\\\"flag\\\"\", \"panels\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"pext\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"pharmcat\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"previous_tsv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"reference\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"roh\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"sample_name\": \"\\\"\\\"\", \"target_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"uniprot_features\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"vcep_rules\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"yhaplo\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\"}",
                         "tool_id": "wes_clinical_report",
-                        "tool_version": "0.16.0+galaxy0",
+                        "tool_version": "0.17.0+galaxy0",
                         "position": {
                             "top": 300,
                             "left": 2380
@@ -4018,7 +4120,7 @@
                         "input_connections": {
                             "vcf": [
                                 {
-                                    "id": 58,
+                                    "id": 60,
                                     "output_name": "snpeff_output"
                                 }
                             ],
@@ -4030,13 +4132,13 @@
                             ],
                             "roh": [
                                 {
-                                    "id": 63,
+                                    "id": 65,
                                     "output_name": "output_file"
                                 }
                             ],
                             "pharmcat": [
                                 {
-                                    "id": 57,
+                                    "id": 59,
                                     "output_name": "calls"
                                 }
                             ],
@@ -4267,6 +4369,18 @@
                                     "id": 48,
                                     "output_name": "output"
                                 }
+                            ],
+                            "panels": [
+                                {
+                                    "id": 49,
+                                    "output_name": "output"
+                                }
+                            ],
+                            "panel_ids": [
+                                {
+                                    "id": 50,
+                                    "output_name": "output"
+                                }
                             ]
                         },
                         "inputs": [],
@@ -4301,8 +4415,8 @@
                 }
             }
         },
-        "60": {
-            "id": 60,
+        "62": {
+            "id": 62,
             "name": "toolshed.g2.bx.psu.edu/repos/iuc/multiqc/multiqc/1.35+galaxy5",
             "type": "tool",
             "label": "multiqc",
@@ -4317,43 +4431,43 @@
             "input_connections": {
                 "results_0|software_cond|output_0|input": [
                     {
-                        "id": 44,
+                        "id": 46,
                         "output_name": "output"
                     }
                 ],
                 "results_1|software_cond|input": [
                     {
-                        "id": 45,
+                        "id": 47,
                         "output_name": "report_json"
                     }
                 ],
                 "results_2|software_cond|output_0|input": [
                     {
-                        "id": 47,
+                        "id": 49,
                         "output_name": "metrics_file"
                     }
                 ],
                 "results_2|software_cond|output_1|input": [
                     {
-                        "id": 50,
+                        "id": 52,
                         "output_name": "outFile"
                     }
                 ],
                 "results_3|software_cond|output_0|type|input": [
                     {
-                        "id": 48,
+                        "id": 50,
                         "output_name": "output"
                     }
                 ],
                 "results_4|software_cond|input": [
                     {
-                        "id": 59,
+                        "id": 61,
                         "output_name": "variant_stats"
                     }
                 ],
                 "results_5|software_cond|input": [
                     {
-                        "id": 59,
+                        "id": 61,
                         "output_name": "snpeff_csv_stats"
                     }
                 ]

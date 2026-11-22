@@ -220,7 +220,7 @@ and VCFs. A naming mismatch does not raise an error. ClinVar/gnomAD annotations 
 | **HLA alleles (IPD-IMGT/HLA hla.dat)** (FASTQ workflow, optional) | [`hla.dat`](https://ftp.ebi.ac.uk/pub/databases/ipd/imgt/hla/) of the current IPD-IMGT/HLA release (350 MB, CC BY-ND 4.0; `install.sh data` downloads it and records the release) | HLA typing of the reads with T1K (`wes_hla`, section 4c). Without it the HLA genes are not typed. |
 | **KIR alleles (IPD-KIR kir.dat)** (FASTQ workflow, optional) | [`kir.dat`](https://ftp.ebi.ac.uk/pub/databases/ipd/kir/) of the current IPD-KIR release (37 MB, CC BY-ND 4.0; `install.sh data` downloads it and records the release) | KIR gene content of the reads with T1K (`wes_kir`, section 4e). Without it the KIR genes are not typed. |
 | **Gene panels (PanelApp snapshot)** (optional) | `panelapp_panels.tsv`, built by [`data/build_panelapp.py`](data/build_panelapp.py) (`install.sh data`, refreshed by `update.sh`): the 691 panels of Genomics England PanelApp and PanelApp Australia with each gene's rating and mode of inheritance (20 MB; non-commercial use, with acknowledgement) | Panels applied to the report and panels suggested from the HPO terms (section 4f) |
-| **Panels to apply** (optional text) | A Genomics England test code (e.g. `R59`), `ge:ID` / `au:ID`, or an exact panel name; comma separated | Which panels the report applies |
+| **Panels to apply** (optional text) | A Genomics England test code (e.g. `R169`), `ge:ID` / `au:ID`, or an exact panel name; comma separated | Which panels the report applies |
 | **KIR genes (wes_kir summary)** (VCF workflow, optional) | The *KIR summary* of `wes_kir` on the sample's reads (the FASTQ workflow connects it) | KIR genes, A/B genotype, B content and KIR-HLA ligand pairs in the report. |
 | **HLA types (wes_hla summary)**, **HLA outside calls (PharmCAT TSV)** (VCF workflow, optional) | The *HLA summary* and *HLA outside calls (PharmCAT)* of `wes_hla` on the sample's reads (the FASTQ workflow connects them) | HLA alleles and associations in the report; HLA-A/B drug recommendations in PharmCAT. |
 
@@ -559,14 +559,15 @@ asks for) and `update.sh` refreshes it with the other sources. The snapshot keep
 codes, and each gene with its rating and mode of inheritance; phenotype text is left out (part of it comes from
 OMIM). PanelApp's terms allow non-commercial use with acknowledgement.
 
-* **Applying panels**: *Panels to apply* takes test codes (`R59` selects the Genomics England panels that list it),
-  `ge:ID` / `au:ID`, or exact names. Every variant in the report shows the gene's rating; the *Gene panels* section
+* **Applying panels**: *Panels to apply* takes test codes where PanelApp lists them (`R169` selects the Genomics
+  England panels that list it), `ge:ID` / `au:ID`, or an exact panel or disorder name (e.g. *Early onset or
+  syndromic epilepsy*). Every variant in the report shows the gene's rating; the *Gene panels* section
   gives the coverage of each panel's green genes (from the coding-exon coverage) and the findings in panel genes.
 * **Scope**: *flag* (default) keeps all findings and marks them; *restrict* lists diagnostic, candidate and de novo
   findings only in green or amber panel genes, as a panel test would, and names the genes that were left out.
 * **Suggestions**: with the patient's HPO terms the report lists the five panels whose best green gene explains the
-  largest share of the phenotype (terms weighted by information content, as for the disease match), among panels of
-  at most 500 green genes; broad superpanels (Paediatric disorders, Mendeliome, DDG2P: thousands of genes) would
+  largest share of the phenotype (terms weighted by information content, as for the disease match; ties broken by
+  the sum over their green genes), among panels of at most 500 green genes; broad superpanels (Paediatric disorders, Mendeliome, DDG2P: thousands of genes) would
   always rank first and are not suggested, but can be applied. Suggestions do not change the analysis.
 
 ## 5. Filters and how to change them
@@ -1510,27 +1511,34 @@ lists the KIR genes, genotype, motifs, B-content group and ligand pairs, and the
 ### Gene panels (report 0.17.0, PanelApp snapshot of 22 November 2026)
 
 **Panel suggestions** (`tests/panel_eval.py`): simulated patients from the 7,117 diseases of `phenotype.hpoa` that
-HPO links to exactly one gene and that have ≥ 5 phenotype terms. Each patient gets 5 of the disease's own terms
-(at random) and 1 term of another disease; a suggestion is right when the panel has the disease gene rated green.
-1,500 patients per half (diseases at even/odd positions); the ranking method was chosen on the even half by the
-share of patients with a right panel among the first three, and the scoring is checked against the report's own
-function. The first criterion counted any panel; it chose *sum*, which put a superpanel first for most patients
-(median 4,449 green genes: Mendeliome, Paediatric disorders), right but useless as a suggestion. Superpanels (> 500
-green genes, above the 95th percentile of panel size) are therefore not suggested, and the method was chosen again
-on new patient draws.
+HPO links to exactly one gene and that have ≥ 5 phenotype terms. Each patient gets 5 (or 2) of the disease's own
+terms at random and 1 term of another disease; a suggestion is right when the panel has the disease gene rated
+green. 1,500 patients per half (diseases at even/odd positions); the ranking method was chosen on the even half by
+the share of patients with a right panel among the first three, and the scoring is checked against the report's
+own function.
 
-| Method (panels ≤ 500 green genes) | Held-out: right panel first | in first 3 | in first 5 | Green genes of the first panel (median) | Time per patient |
+How the method came about: the first criterion counted any panel and chose *sum*, which put a superpanel first for
+most patients (median 4,449 green genes: Mendeliome, Paediatric disorders), right but useless as a suggestion.
+Superpanels (> 500 green genes, above the 95th percentile of panel size) are therefore not suggested. *max* (the
+best green gene) then won on new patient draws, but a Galaxy run with two general terms (seizure, developmental
+delay) showed its weakness: many genes explain such terms fully, the scores tie and single-gene panels came first.
+*max_sum* (ties broken by the sum over the green genes) was added and chosen on the tuning half for both patient
+types.
+
+| Method (panels ≤ 500 green genes) | Held-out, 5 terms: right panel first | in first 3 | Held-out, 2 terms: first | in first 3 | Green genes of the first panel (median, 5 / 2 terms) |
 |---|---|---|---|---|---|
-| **max** (best green gene; chosen) | 1,058/1,398 (75.7 %) | 83.2 % | 86.9 % | 18 | 6.5 ms |
-| sum_sqrt | 64.4 % | 78.2 % | 84.1 % | 256 | |
-| sum_log | 58.7 % | 74.0 % | 81.6 % | 361 | |
-| sum | 55.7 % | 71.7 % | 80.0 % | 370 | |
-| share | 38.5 % | 58.6 % | 70.0 % | 5 | |
+| **max_sum** (chosen) | 1,238/1,398 (88.6 %) | 94.3 % | 780/1,387 (56.2 %) | 71.9 % | 353 / 353 |
+| max | 75.7 % | 83.2 % | 27.0 % | 38.2 % | 18 / 9 |
+| sum_sqrt | 64.4 % | 78.2 % | 45.3 % | 62.1 % | 256 / 231 |
+| sum_log | 58.7 % | 74.0 % | 43.7 % | 61.3 % | 361 / 353 |
+| sum | 55.7 % | 71.7 % | 42.4 % | 61.9 % | 370 / 357 |
+| share | 38.5 % | 58.6 % | 22.1 % | 36.8 % | 5 / 1 |
 
-For 102 of the 1,500 held-out diseases (6.8 %) the gene is green on no panel of ≤ 500 genes, so no suggestion
-could be right; the rates above exclude them. The benchmark ran in 31 s with 287 MB. The patients' terms come from
-the same annotations the matching uses, so real patients (fewer, less specific and partly wrong terms) will see
-lower rates: the figures are an upper bound and a comparison between methods.
+For 6.8 % (5 terms) and 7.5 % (2 terms) of the held-out diseases the gene is green on no panel of ≤ 500 genes, so
+no suggestion could be right; the rates exclude them. The benchmark took about 8 ms per patient (31 s and 287 MB
+for both halves). The patients' terms come from the same annotations the matching uses, so real patients will see
+lower rates: the figures are an upper bound and a comparison between methods. *max_sum* prefers the larger of the
+panels that contain a well-matching gene (median 353 green genes, a common size for diagnostic panels).
 
 ## 8. Scope and limitations
 
@@ -1552,7 +1560,7 @@ alt read among ≥ 15) is read as reference. UPD detection needs both parents; h
 (two-field alleles that differ in the antigen-recognition exons), not three- or four-field alleles, null alleles
 caused outside these exons, or new alleles; HLA-DQA1 was the least reliable gene in the GIAB exomes (section 7), and
 an HLA-B\*57:01 or HLA-B\*15:02 result should be confirmed by a clinical HLA test before a drug decision.
-Panel suggestions rank panels by their best-matching gene and depend on the HPO terms given; they were measured on
+Panel suggestions rank panels by their best-matching gene (ties by the sum) and depend on the HPO terms given; they were measured on
 simulated patients only, and the PanelApp snapshot is as current as the last update. KIR typing gives gene content,
 not copy number; KIR2DL5A and KIR2DL5B are the genes most often called present
 wrongly (paralogues), and three-digit KIR alleles were not validated. Haplogroups from an exome are often less resolved than from a genome (the Y call in 63 of 104

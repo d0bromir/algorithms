@@ -1255,8 +1255,8 @@ PANEL = {}  # gene -> [(panel label, rating, mode of inheritance)] of the applie
 # how suggested panels are ranked from the patient's HPO terms; chosen on the tuning half of simulated patients
 # (tests/panel_eval.py): "max" best green gene, "sum" sum over green genes, "sum_sqrt" sum / sqrt(number of green
 # genes), "sum_log" sum / ln(number of green genes + e), "share" fraction of green genes that explain at least half
-# of the phenotype
-PANEL_SUGGEST = "max"
+# of the phenotype, "max_sum" best green gene, ties (common with few, general terms) broken by the sum
+PANEL_SUGGEST = "max_sum"
 # Only panels with at most this many green genes are suggested: the broad "superpanels" (Paediatric disorders,
 # Mendeliome, DDG2P: thousands of genes) contain nearly every gene and would always rank first; they can still be
 # applied by name. 500 is above the 95th percentile of panel size (352 green genes, November 2026 snapshot).
@@ -1294,8 +1294,9 @@ def panel_label(p):
 
 
 def select_panels(panels, spec):
-    """'R59, ge:486, au:3149, Hereditary ataxia' -> (panel keys, tokens that matched nothing). A test code (R59)
-    selects the Genomics England panels that list it; ge:/au: give a panel id; anything else is an exact panel name."""
+    """'R169, ge:486, au:3149, Hereditary ataxia' -> (panel keys, tokens that matched nothing). A test code (R169)
+    selects the Genomics England panels that list it; ge:/au: give a panel id; anything else is an exact panel name
+    or a disorder name a panel lists (case-insensitive)."""
     keys, missing = [], []
     for tok in [x.strip() for x in re.split(r"[,;]", spec or "") if x.strip()]:
         m = re.match(r"^(ge|au)[:\s]*(\d+)$", tok, re.I)
@@ -1303,8 +1304,9 @@ def select_panels(panels, spec):
             hit = [k for k in panels if k == (m.group(1).lower(), m.group(2))]
         elif re.match(r"^R\d+$", tok, re.I):
             hit = [k for k, p in panels.items() if tok.upper() in p["disorders"]]
-        else:
-            hit = [k for k, p in panels.items() if p["panel"].lower() == tok.lower()]
+        else:  # a panel name, or a disorder name the panel lists
+            hit = [k for k, p in panels.items() if p["panel"].lower() == tok.lower()
+                   or tok.lower() in (d.lower() for d in p["disorders"])]
         keys += [k for k in sorted(hit) if k not in keys]
         if not hit:
             missing.append(tok)
@@ -1334,13 +1336,13 @@ def suggest_panels(panels, pheno, top=5, method=None):
         s = sorted((share.get(g, 0.0) for g in green), reverse=True)
         if not s[0]:
             continue
-        score = {"max": s[0], "sum": sum(s), "sum_sqrt": sum(s) / math.sqrt(len(green)),
+        score = {"max": s[0], "max_sum": s[0], "sum": sum(s), "sum_sqrt": sum(s) / math.sqrt(len(green)),
                  "sum_log": sum(s) / math.log(len(green) + math.e),
                  "share": sum(1 for x in s if x >= 0.5) / len(green)}[method]
         genes = sorted((g for g in green if share.get(g, 0) >= 0.25), key=lambda g: -share[g])
-        out.append((score, k, genes))
-    out.sort(key=lambda x: (-x[0], len(panels[x[1]]["genes"]), x[1]))
-    return out[:top]
+        out.append((score, k, genes, sum(s) if method == "max_sum" else 0.0))
+    out.sort(key=lambda x: (-x[0], -x[3], len(panels[x[1]]["genes"]), x[1]))
+    return [x[:3] for x in out[:top]]
 
 
 def panel_tag(gene):
@@ -1400,15 +1402,15 @@ def panel_section(R, panels, src, keys, missing, suggestions, pheno, gene_cov, d
             R.rows.append(("panel_applied", None, (panels[k]["panel"], panel_label(panels[k]),
                                                     f"{len(panels[k]['genes'])} genes")))
     else:
-        R.h("<p class='none'>No panel applied (give panel ids, e.g. a test code such as R59, or ge:ID / au:ID).</p>")
+        R.h("<p class='none'>No panel applied (give panel ids, e.g. a test code such as R169, or ge:ID / au:ID).</p>")
     if suggestions:
         R.h("<h3>Panels suggested by the patient's phenotype</h3><p class='small'>Panels of at most "
             f"{PANEL_SUGGEST_MAX_GENES} green genes, ranked by the share of the patient's HPO phenotype (terms weighted "
-            f"by information content) that their best-matching green gene explains ({esc(PANEL_SUGGEST)}); smaller "
-            "panels first on ties. Genes listed explain at least a quarter of it. In simulated patients the right "
-            "panel was first for 76% and among the first three for 83% (README section 7). A suggestion, not a "
-            "selection: the panel is chosen by the requesting clinician; broad superpanels are not suggested but "
-            "can be applied.</p>")
+            "by information content) that their best-matching green gene explains, ties broken by the sum over their "
+            f"green genes ({esc(PANEL_SUGGEST)}). Genes listed explain at least a quarter of it. In simulated patients "
+            "the right panel was first for 89% (five terms) and 56% (two general terms) (README section 7). A "
+            "suggestion, not a selection: the panel is chosen by the requesting clinician; broad superpanels are not "
+            "suggested but can be applied.</p>")
         R.table(["Panel", "Score", "Green genes matching the phenotype"],
                 [[esc(panel_label(panels[k])), f"{sc:.3f}", esc(", ".join(gs[:12]) + (" ..." if len(gs) > 12 else ""))]
                  for sc, k, gs in suggestions])
@@ -5186,7 +5188,7 @@ def main(argv=None):
     ap.add_argument("--kir", help="wes_kir summary (JSON): KIR gene content, genotype, B content, HLA ligands")
     ap.add_argument("--panels", help="PanelApp snapshot (data/build_panelapp.py): gene panels of Genomics England and "
                                      "PanelApp Australia")
-    ap.add_argument("--panel-ids", help="panels to apply, comma separated: test codes (R59), ge:ID, au:ID or names")
+    ap.add_argument("--panel-ids", help="panels to apply, comma separated: test codes (R169), ge:ID, au:ID or names")
     ap.add_argument("--panel-scope", choices=("flag", "restrict"), default="flag",
                     help="flag: mark every finding as in or outside the panels (default); restrict: list diagnostic, "
                          "candidate and de novo findings only in panel genes (green or amber)")

@@ -394,7 +394,7 @@ inputs:
     type: string
     optional: true
     doc: >-
-      Comma-separated panels for the report: a Genomics England test code (R59), ge:ID or au:ID, or an exact panel
+      Comma-separated panels for the report: a Genomics England test code (R169), ge:ID or au:ID, or an exact panel
       name. Empty: no panel applied; panels are still suggested from the HPO terms.
     position: {left: 0, top: 6000}
 

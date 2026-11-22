@@ -258,7 +258,7 @@ python3 '$__tool_directory__/wes_clinical_report.py'
         <param name="panels" type="data" format="tabular" optional="true" label="Gene panels (PanelApp snapshot)"
                help="panelapp_panels.tsv from data/build_panelapp.py (install.sh data): the gene panels of Genomics England PanelApp and PanelApp Australia, kept on the server. Non-commercial use, with acknowledgement."/>
         <param name="panel_ids" type="text" value="" optional="true" label="Panels to apply"
-               help="Comma separated: a Genomics England test code (R59), ge:ID or au:ID, or an exact panel name. Empty: no panel applied (panels are still suggested from the HPO terms).">
+               help="Comma separated: a Genomics England test code (R169), ge:ID or au:ID, or an exact panel name. Empty: no panel applied (panels are still suggested from the HPO terms).">
             <sanitizer invalid_char="">
                 <valid initial="string.ascii_letters,string.digits"><add value=" "/><add value=","/><add value=";"/><add value=":"/><add value="-"/><add value="("/><add value=")"/><add value="/"/><add value="."/><add value="'"/></valid>
             </sanitizer>
@@ -501,7 +501,7 @@ with a warning when the Y result and the sex disagree; the mitochondrial section
 alternatives, missing expected variants and private variants. The wes_kir summary adds the KIR gene content, A/B
 genotype, centromeric/telomeric motifs, B-content group and KIR-HLA ligand pairs to section 8.
 
-**Gene panels.** With the PanelApp snapshot, the panels given (a test code such as R59, ge:ID, au:ID or a name) are
+**Gene panels.** With the PanelApp snapshot, the panels given (a test code such as R169, ge:ID, au:ID or a name) are
 applied: every finding shows its gene's rating in them (green, amber, red, not in panel), a *Gene panels* section
 lists the panels with the coverage of their green genes and the findings in panel genes, and the findings TSV has a
 *panel* column. *Restrict* lists diagnostic, candidate and de novo findings only in green or amber panel genes and
