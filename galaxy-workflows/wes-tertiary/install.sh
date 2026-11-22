@@ -351,6 +351,11 @@ stage_data() {
     fetch https://ftp.ebi.ac.uk/pub/databases/ipd/kir/kir.dat kir.dat
     local kir_v; kir_v="$(grep -m1 -o 'IPD-KIR Release Version [0-9.]*' kir.dat | cut -d' ' -f4 || true)"
     manifest kir.dat txt "https://ftp.ebi.ac.uk/pub/databases/ipd/kir/ (IPD-KIR ${kir_v:-release unknown}, CC BY-ND 4.0; KIR typing with wes_kir)"
+    if [[ ! -s panelapp_panels.tsv ]]; then
+        echo "  panelapp_panels.tsv <- PanelApp Genomics England + Australia (about 20 min at 1 request/s)"
+        python3 "$HERE/data/build_panelapp.py" panelapp_panels.tsv.tmp && mv panelapp_panels.tsv.tmp panelapp_panels.tsv
+    fi
+    manifest panelapp_panels.tsv tabular "PanelApp (Genomics England) and PanelApp Australia gene panels via data/build_panelapp.py (non-commercial use, with acknowledgement)"
     manifest gene_disease.tsv tabular "ClinGen gene-disease validity (CC0), G2P (CC0), Orphanet (CC BY 4.0) via data/build_gene_disease.py"
     local GS=https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/genome-stratifications/v3.6/GRCh38@all
     if [[ ! -s GRCh38_segdups.bed ]]; then  # Ensembl names, like the reference

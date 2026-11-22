@@ -1,0 +1,6 @@
+# source	Genomics England PanelApp, PanelApp Australia	2026-11-22	non-commercial use, with acknowledgement (PanelApp terms of use)
+source	panel_id	panel	version	version_created	signed_off	disorders	gene	hgnc_id	rating	moi
+ge	1	Epilepsy test panel	2.1	2026-10-01	2.0	R59	GENEP	HGNC:1	green	MONOALLELIC
+ge	1	Epilepsy test panel	2.1	2026-10-01	2.0	R59	GENEX	HGNC:2	amber	MONOALLELIC
+ge	2	Phenylketonuria test	1.0	2026-10-01		R98	PAH	HGNC:8582	green	BIALLELIC
+au	3	Breast cancer test	1.5	2026-10-01			BRCA2	HGNC:1101	green	MONOALLELIC

@@ -1,6 +1,6 @@
 class: GalaxyWorkflow
 label: WES tertiary analysis from VCF (v2)
-release: "0.16"
+release: "0.17"
 license: MIT
 tags:
   - WES
@@ -382,6 +382,21 @@ inputs:
       The summary (JSON) of the KIR tool (wes_kir) on the sample's reads: KIR gene content, A/B genotype, B-content
       group and KIR-HLA ligand pairs for the report.
     position: {left: 0, top: 5760}
+  "Gene panels (PanelApp snapshot)":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: >-
+      panelapp_panels.tsv (data/build_panelapp.py, made by install.sh data and update.sh): the gene panels of Genomics
+      England PanelApp and PanelApp Australia, kept on the server. Non-commercial use, with acknowledgement.
+    position: {left: 0, top: 5880}
+  "Panels to apply":
+    type: string
+    optional: true
+    doc: >-
+      Comma-separated panels for the report: a Genomics England test code (R59), ge:ID or au:ID, or an exact panel
+      name. Empty: no panel applied; panels are still suggested from the HPO terms.
+    position: {left: 0, top: 6000}
 
 outputs:
   annotated_vcf:
@@ -781,7 +796,7 @@ steps:
       Human-readable clinical interpretation report and findings table (local tool tools/wes_clinical_report;
       install it on the Galaxy server, see README).
     tool_id: wes_clinical_report
-    tool_version: 0.16.0+galaxy0
+    tool_version: 0.17.0+galaxy0
     position: {left: 2380, top: 300}
     in:
       vcf: functional_annotation/snpeff_output
@@ -826,10 +841,13 @@ steps:
       hla: "HLA types (wes_hla summary)"
       yhaplo: "Y haplogroup (wes_yhaplo summary)"
       kir: "KIR genes (wes_kir summary)"
+      panels: "Gene panels (PanelApp snapshot)"
+      panel_ids: "Panels to apply"
     state:
       max_af: 0.01
       min_ref_depth: 15
       max_candidates: 60
+      panel_scope: flag
     out:
       report: {rename: "Clinical interpretation report"}
       findings: {rename: "Clinical findings (table)"}

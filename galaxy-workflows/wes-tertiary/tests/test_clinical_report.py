@@ -229,7 +229,7 @@ def test_pharmacogenomics_vcf_only():
     pgx = {r["gene"]: (r["genotype"], r["note"]) for r in rows if r["category"] == "pgx"}
     assert pgx["CYP2C19"] == ("*2/*2", "Poor metabolizer")
     assert pgx["CYP2C9"][1].startswith("Normal metabolizer")
-    assert all(len(r) == 31 and None not in r.values() for r in rows)
+    assert all(len(r) == 32 and None not in r.values() for r in rows)
     assert "absence of a variant is assumed to be the reference allele" in html
 
 
@@ -239,7 +239,7 @@ def test_pharmcat_calls():
     assert pc["CYP2C19"] == ("*1/*2", "Intermediate Metabolizer"), "PharmCAT 3.4.0 on HG001 (GeT-RM: *1/*2)"
     assert pc["CYP3A5"] == ("*3/*3", "Poor Metabolizer")
     assert "<h3>PharmCAT 3.4.0</h3>" in html and "Missing positions" in html
-    assert all(len(r) == 31 for r in rows)
+    assert all(len(r) == 32 for r in rows)
     _, html = run_report()
     assert "PharmCAT" not in html.split("<h2>7. Pharmacogenomics")[1].split("<h2>8.")[0]
 
@@ -930,3 +930,27 @@ def test_kir_section():
     assert ("kir_genotype", "KIR") in {(r["category"], r["gene"]) for r in rows}
     _, html0 = run_report()
     assert "Not typed: no KIR summary given" in html0
+
+
+def test_gene_panels():
+    hpo = ["--hpo-genes", os.path.join(DATA, "p2g.txt"), "--hpo-terms", "HP:0001250,HP:0001263"]
+    rows, html = run_report(["--panels", os.path.join(DATA, "panels.tsv"), "--panel-ids", "R59, au:3, ge:99"] + hpo)
+    sec = html.split("<h2>Gene panels</h2>")[1].split("<h2>")[0]
+    assert "GE 1 Epilepsy test panel v2.1 (R59)" in sec and "AU 3 Breast cancer test v1.5" in sec
+    assert "Panels not found in the snapshot: ge:99" in sec
+    assert "Panels suggested by the patient's phenotype" in sec and sec.index("Epilepsy test panel", sec.index(
+        "suggested")) < sec.index("Phenylketonuria test", sec.index("suggested")), "GENEP explains both terms"
+    brca2 = [r for r in rows if r["gene"] == "BRCA2" and r["category"] == "diagnostic"]
+    assert brca2 and brca2[0]["panel"].startswith("green in AU 3 Breast cancer test")
+    assert any(r["panel"] == "not in the applied panels" for r in rows if r["gene"] == "PAH")
+    assert "panel: green" in html and "not in panel" in html
+    assert {"panel_applied", "panel_suggested"} <= {r["category"] for r in rows}
+    rows_r, html_r = run_report(["--panels", os.path.join(DATA, "panels.tsv"), "--panel-ids", "R59",
+                                 "--panel-scope", "restrict"])
+    assert not [r for r in rows_r if r["category"] == "diagnostic" and r["gene"] == "BRCA2"], \
+        "restrict: BRCA2 is outside the R59 panel"
+    assert "Not listed because outside the panels" in html_r and "BRCA2" in html_r.split("Not listed because")[1]
+    assert [r for r in rows_r if r["category"].startswith("acmg_sf") and r["gene"] == "BRCA2"], \
+        "secondary findings are reported regardless of the panels"
+    _, html0 = run_report()
+    assert "<h2>Gene panels</h2>" not in html0 and "panel:" not in html0
