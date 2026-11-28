@@ -1936,8 +1936,13 @@ int main(int argc, char** argv) {
   auto planted_bound = [&](size_t i) { return i >= bounds_first; };
 
   std::fprintf(stderr, "computing oracle for %zu reads over %zu bases...\n", reads.size(), ref.seq.size());
-  std::vector<std::vector<Hit>> truth;
-  for (auto& r : reads) truth.push_back(oracle(ref.seq.owned, r.seq.data(), static_cast<int>(r.seq.size()), KMAX));
+  // Each read's whole-reference Sellers oracle is independent (oracle() is pure),
+  // so parallelize across reads; this is the dominant cost of the test. The pragma
+  // is a no-op when built without OpenMP.
+  std::vector<std::vector<Hit>> truth(reads.size());
+  #pragma omp parallel for schedule(static)
+  for (size_t i = 0; i < reads.size(); ++i)
+    truth[i] = oracle(ref.seq.owned, reads[i].seq.data(), static_cast<int>(reads[i].seq.size()), KMAX);
 
   ReadBatch batch;
   for (size_t i = 0; i < reads.size(); ++i) {
