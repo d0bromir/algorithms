@@ -1,0 +1,6 @@
+loading reference + segdups...
+segdup reads: 554,575; loci: 7,011
+
+loci used (>=10 reads): 3,111; divergent-position loci drive assignment
+phantom-assigned (missing-copy candidates): 1,099 reads | no-linear-truth 0 (0.0%) | misplaced 0 (0.00%) | confident-misplaced 0
+reference-assigned: 536,118 reads | no-linear-truth 609 (0.1%) | misplaced 3,893 (0.73%) | confident-misplaced 728

@@ -21,9 +21,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
+        # OpenMP ships with gcc (libgomp1); there is no separate libgomp-dev package.
         run: sudo apt-get update && sudo apt-get install -y cmake zlib1g-dev
       - name: Build and test
         run: CERTA_CUDA=OFF BUILD_DIR=certa/build bash certa/scripts/build.sh
+      - name: Confirm OpenMP linked into test_certa
+        run: ldd certa/build/test_certa | grep -i gomp || { echo "OpenMP NOT linked"; exit 1; }
       - name: Certificate test, more seeds
         run: for s in 11 12 13 14 15; do certa/build/test_certa $s; done
       - name: Exhaustive lemma checks
