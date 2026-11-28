@@ -231,12 +231,13 @@ class Variant:
                  "zyg", "gene", "effect", "impact", "hgvs_c", "hgvs_p", "feature", "af", "clnsig", "revstat",
                  "clndn", "stars", "rs", "ab", "flags",
                  "an", "nhomalt", "grpmax", "grpmax_af", "faf", "faf_grp", "gfilter", "gdisc", "artefact",
-                 "am", "sai", "sai_gene", "repeat", "mane", "refseq", "hgvs_g", "revel", "cov", "pext")
+                 "am", "sai", "sai_gene", "repeat", "mane", "refseq", "hgvs_g", "revel", "cadd", "cov", "pext")
 
     def __init__(self):
         self.repeat = None  # repeat context of an in-frame change (repeat_flag), set when the reference is given
         self.mane, self.refseq, self.hgvs_g = "", "", ""
         self.revel = None
+        self.cadd = None
         self.cov, self.pext = None, {}
 
     def key(self):
@@ -334,6 +335,7 @@ def parse_vcf(path, sample_index=0):
                 v.gfilter, v.gdisc = gn.get("gnomAD_filter"), fnum(gn.get("gnomAD_discordance_p"))
                 v.am = fnum(str(info["AM_score"]).split(",")[0]) if info.get("AM_score") not in (None, True) else None
                 v.revel = fnum(str(info["REVEL"]).split(",")[0]) if info.get("REVEL") not in (None, True) else None
+                v.cadd = fnum(str(info["CADD"]).split(",")[0]) if info.get("CADD") not in (None, True) else None
                 v.sai, v.sai_gene = spliceai_max(info.get("SpliceAI"), alt)
                 v.clnsig = str(info.get("CLNSIG", "")) if info.get("CLNSIG") not in (None, True, ".") else ""
                 v.revstat = str(info.get("CLNREVSTAT", "")) if info.get("CLNREVSTAT") not in (None, True) else ""
@@ -372,9 +374,13 @@ CODE_RANK = {"PP3_Supporting": 1, "PP3_Moderate": 2, "PP3_Strong": 3}
 REVEL_PP3 = ((0.932, "PP3_Strong"), (0.773, "PP3_Moderate"), (0.644, "PP3_Supporting"))
 REVEL_BP4 = ((0.016, "BP4_Strong"), (0.183, "BP4_Moderate"), (0.290, "BP4_Supporting"))
 BP4_RANK = {"BP4_Supporting": 1, "BP4_Moderate": 2, "BP4_Strong": 3}
-# How the two calibrated missense predictors are combined (one predictor per variant, ClinGen SVI):
+# CADD PHRED (Pejaver et al., AJHG 2022, Table 2): no PP3 Strong level; BP4 Strong <= 0.15.
+CADD_PP3 = ((28.1, "PP3_Moderate"), (25.3, "PP3_Supporting"))
+CADD_BP4 = ((0.15, "BP4_Strong"), (17.3, "BP4_Moderate"), (22.7, "BP4_Supporting"))
+# How the calibrated missense predictors are combined (one predictor per variant, ClinGen SVI):
 #   "alphamissense": AlphaMissense only (report <= 0.10); "revel": REVEL, AlphaMissense where REVEL has no score;
-#   "concordant": both must point the same way and the weaker strength is used (one score alone counts as itself).
+#   "concordant": both must point the same way and the weaker strength is used (one score alone counts as itself);
+#   "revel_cadd": as "revel", and CADD where neither REVEL nor AlphaMissense has a score; "cadd": CADD only.
 MISSENSE_POLICY = "revel"  # chosen on the tuning half (README section 7)
 
 
@@ -404,9 +410,28 @@ def revel_code(score):
     return None
 
 
+def cadd_code(score):
+    if score is None:
+        return None
+    s = round(score, 2)
+    for t, c in CADD_PP3:
+        if s >= t:
+            return c
+    for t, c in CADD_BP4:
+        if s <= t:
+            return c
+    return None
+
+
 def missense_code(v, policy=None):
-    """The missense PP3/BP4 code from AlphaMissense and REVEL under MISSENSE_POLICY."""
+    """The missense PP3/BP4 code from AlphaMissense, REVEL and CADD under MISSENSE_POLICY."""
     policy = policy or MISSENSE_POLICY
+    if policy == "cadd":
+        return cadd_code(getattr(v, "cadd", None))
+    if policy == "revel_cadd" and getattr(v, "revel", None) is None and v.am is None:
+        return cadd_code(getattr(v, "cadd", None))
+    if policy == "revel_cadd":
+        policy = "revel"
     am, rv = am_code(v.am), revel_code(getattr(v, "revel", None))
     if policy == "alphamissense" or getattr(v, "revel", None) is None:
         return am
@@ -455,6 +480,8 @@ def predictor_text(v):
         parts.append(f"AlphaMissense {v.am:.3f}")
     if getattr(v, "revel", None) is not None:
         parts.append(f"REVEL {v.revel:.3f}")
+    if getattr(v, "cadd", None) is not None:
+        parts.append(f"CADD {v.cadd:.1f}")
     if v.sai is not None:
         parts.append(f"SpliceAI {v.sai:.2f}")
     return ", ".join(parts)
