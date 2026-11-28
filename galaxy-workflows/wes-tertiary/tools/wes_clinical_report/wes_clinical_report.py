@@ -40,7 +40,7 @@ import statistics
 import subprocess
 import sys
 
-VERSION = "0.16.0"
+VERSION = "0.18.0"
 
 # --------------------------------------------------------------------------------------------- rules
 # ACMG secondary findings v3.3 (ACMG policy statement, Genet Med 2025;27:101454): the 81 genes of v3.2 (Miller et al.,
