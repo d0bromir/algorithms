@@ -1120,7 +1120,7 @@
             "name": "Panels to apply",
             "type": "parameter_input",
             "label": "Panels to apply",
-            "annotation": "Comma-separated panels for the report: a Genomics England test code (R59), ge:ID or au:ID, or an exact panel name. Empty: no panel applied; panels are still suggested from the HPO terms.",
+            "annotation": "Comma-separated panels for the report: a Genomics England test code (R169), ge:ID or au:ID, or an exact panel name. Empty: no panel applied; panels are still suggested from the HPO terms.",
             "tool_state": "{\"name\": \"Panels to apply\", \"parameter_type\": \"text\", \"optional\": true}",
             "position": {
                 "top": 6000,
