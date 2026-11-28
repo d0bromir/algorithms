@@ -1250,6 +1250,193 @@ def load_hpo(path, terms):
     return ph
 
 
+# ---------------------------------------------------------------- gene panels (PanelApp snapshot)
+PANEL = {}  # gene -> [(panel label, rating, mode of inheritance)] of the applied panels (set in main)
+# how suggested panels are ranked from the patient's HPO terms; chosen on the tuning half of simulated patients
+# (tests/panel_eval.py): "max" best green gene, "sum" sum over green genes, "sum_sqrt" sum / sqrt(number of green
+# genes), "sum_log" sum / ln(number of green genes + e), "share" fraction of green genes that explain at least half
+# of the phenotype, "max_sum" best green gene, ties (common with few, general terms) broken by the sum
+PANEL_SUGGEST = "max_sum"
+# Superpanels are not suggested (they contain nearly every gene and would always rank first; they can still be
+# applied): panels PanelApp types as Super Panel / Superpanel, and untyped exome-wide lists, caught by size (more
+# than this many green genes: Mendeliome, DDG2P, the fetal-anomaly and intellectual-disability lists). The diagnostic
+# epilepsy panels (632 and 916 green genes) stay below it.
+PANEL_SUGGEST_MAX_GENES = 1000
+SUPERPANEL_TYPES = {"super panel", "superpanel"}
+# lists that are not diagnostic panels (population or carrier screening, research) are not suggested either
+NOT_DIAGNOSTIC = re.compile(r"screening|babyscreen|prepair|carrier|research|covid", re.I)
+
+
+def is_superpanel(p):
+    """True for panels that are not suggested: superpanels, exome-wide lists, screening and research lists."""
+    green = sum(1 for r, _m in p["genes"].values() if r == "green")
+    return (green > PANEL_SUGGEST_MAX_GENES or any(t.lower() in SUPERPANEL_TYPES for t in p.get("types", ()))
+            or bool(NOT_DIAGNOSTIC.search(p["panel"])) or any(t.lower() == "research" for t in p.get("types", ())))
+
+
+def load_panels(path):
+    """data/build_panelapp.py snapshot -> ({(source, panel_id): panel dict with genes {gene: (rating, moi)}}, source)."""
+    out, src = {}, ""
+    if not path:
+        return out, src
+    with opener(path) as f:
+        head = None
+        for line in f:
+            t = line.rstrip("\r\n").split("\t")
+            if line.startswith("#"):
+                src = " ".join(t[1:3])
+                continue
+            if head is None:
+                head = t
+                continue
+            r = dict(zip(head, t + [""] * (len(head) - len(t))))
+            k = (r["source"], r["panel_id"])
+            p = out.setdefault(k, {"source": r["source"], "id": r["panel_id"], "panel": r["panel"],
+                                   "version": r["version"], "signed_off": r["signed_off"],
+                                   "disorders": [d for d in r["disorders"].split(";") if d],
+                                   "types": [x for x in r.get("types", "").split(";") if x], "genes": {}})
+            p["genes"][r["gene"]] = (r["rating"], r["moi"])
+    return out, src
+
+
+def panel_label(p):
+    codes = [d for d in p["disorders"] if re.match(r"^R\d+$", d)]
+    return (f"{'GE' if p['source'] == 'ge' else 'AU'} {p['id']} {p['panel']} v{p['version']}"
+            + (f" ({', '.join(codes)})" if codes else ""))
+
+
+def select_panels(panels, spec):
+    """'R169, ge:486, au:3149, Hereditary ataxia' -> (panel keys, tokens that matched nothing). A test code (R169)
+    selects the Genomics England panels that list it; ge:/au: give a panel id; anything else is an exact panel name
+    or a disorder name a panel lists (case-insensitive)."""
+    keys, missing = [], []
+    for tok in [x.strip() for x in re.split(r"[,;]", spec or "") if x.strip()]:
+        m = re.match(r"^(ge|au)[:\s]*(\d+)$", tok, re.I)
+        if m:
+            hit = [k for k in panels if k == (m.group(1).lower(), m.group(2))]
+        elif re.match(r"^R\d+$", tok, re.I):
+            hit = [k for k, p in panels.items() if tok.upper() in p["disorders"]]
+        else:  # a panel name, or a disorder name the panel lists
+            hit = [k for k, p in panels.items() if p["panel"].lower() == tok.lower()
+                   or tok.lower() in (d.lower() for d in p["disorders"])]
+        keys += [k for k in sorted(hit) if k not in keys]
+        if not hit:
+            missing.append(tok)
+    return keys, missing
+
+
+def gene_phenotype_share(pheno):
+    """gene -> fraction of the patient's phenotype information (HPO terms weighted by information content) that the
+    gene's annotations explain."""
+    tot = sum(pheno.ic.get(t, 0.0) for t in pheno.terms)
+    if not tot:
+        return {}
+    return {g: sum(pheno.ic.get(t, 0.0) for t in ts) / tot for g, ts in pheno.gene_terms.items()}
+
+
+def suggest_panels(panels, pheno, top=5, method=None):
+    """Panels ranked by how well their green genes explain the patient's HPO terms -> [(score, key, genes)]."""
+    share = gene_phenotype_share(pheno)
+    if not share:
+        return []
+    method = method or PANEL_SUGGEST
+    out = []
+    for k, p in panels.items():
+        green = [g for g, (r, _m) in p["genes"].items() if r == "green"]
+        if not green or is_superpanel(p):
+            continue
+        s = sorted((share.get(g, 0.0) for g in green), reverse=True)
+        if not s[0]:
+            continue
+        score = {"max": s[0], "max_sum": s[0], "sum": sum(s), "sum_sqrt": sum(s) / math.sqrt(len(green)),
+                 "sum_log": sum(s) / math.log(len(green) + math.e),
+                 "share": sum(1 for x in s if x >= 0.5) / len(green)}[method]
+        genes = sorted((g for g in green if share.get(g, 0) >= 0.25), key=lambda g: -share[g])
+        out.append((score, k, genes, sum(s) if method == "max_sum" else 0.0))
+    out.sort(key=lambda x: (-x[0], -x[3], len(panels[x[1]]["genes"]), x[1]))
+    return [x[:3] for x in out[:top]]
+
+
+def panel_tag(gene):
+    """HTML tag for a gene's rating in the applied panels."""
+    hits = PANEL.get(gene)
+    if not PANEL and not hits:
+        return ""
+    if not hits:
+        return tag("not in panel", "t-amb")
+    best = min(hits, key=lambda x: {"green": 0, "amber": 1, "red": 2}.get(x[1], 3))
+    return tag(f"panel: {best[1]}", "t-grn" if best[1] == "green" else "t-amb" if best[1] == "amber" else "")
+
+
+def panel_section(R, panels, src, keys, missing, suggestions, pheno, gene_cov, diag_review, cands, carrier, hidden,
+                  scope):
+    """Gene panels: the applied panels with their green-gene coverage and findings, and panels suggested by the
+    patient's HPO terms."""
+    if not panels:
+        return
+    R.h("<h2>Gene panels</h2>")
+    R.h(f"<p class='small'>PanelApp snapshot: {esc(src)}; {len(panels)} panels. Green = diagnostic-grade gene-disease "
+        "evidence, amber = moderate, red = low (PanelApp ratings). Non-commercial use, with acknowledgement of Genomics "
+        "England PanelApp and PanelApp Australia.</p>")
+    if missing:
+        R.h(f"<div class='box warn'>Panels not found in the snapshot: {esc(', '.join(missing))}.</div>")
+    if keys:
+        rows = []
+        for k in keys:
+            p = panels[k]
+            n = collections.Counter(r for r, _m in p["genes"].values())
+            green = [g for g, (r, _m) in p["genes"].items() if r == "green"]
+            cov = [(g, gene_cov[g][1] / gene_cov[g][0]) for g in green if g in gene_cov and gene_cov[g][0]]
+            low = sorted(g for g, f in cov if f < 0.95)
+            rows.append([esc(panel_label(p)) + (f"<br><span class='small'>signed off v{esc(p['signed_off'])}</span>"
+                                                if p["signed_off"] else ""),
+                         f"{n['green']} / {n['amber']} / {n['red']}",
+                         (f"{len(cov) - len(low)} of {len(cov)} green genes &ge; 95% at &ge; 20x"
+                          + (f"<br><span class='small'>below: {esc(', '.join(low[:30]))}"
+                             + (" ..." if len(low) > 30 else "") + "</span>" if low else ""))
+                         if cov else "coverage not given"])
+        R.h("<h3>Applied panels</h3>")
+        R.table(["Panel", "Genes green / amber / red", "Coverage of the green genes (coding bases)"], rows)
+        inp = [(v, "diagnostic or review") for v, _w in diag_review] + [(c[1], "candidate") for c in cands] \
+            + [(v, "carrier") for v in carrier]
+        rows = [[var_cell(v), esc(kind), esc(panel_text(v.gene))] for v, kind in inp if PANEL.get(v.gene)]
+        R.h(f"<p>Findings in panel genes: <b>{len(rows)}</b> of {len(inp)} "
+            + ("(primary findings outside the panels are not listed: scope <i>restrict</i>)" if scope == "restrict"
+               else "(findings outside the panels stay listed, marked <i>not in panel</i>)") + ".</p>")
+        if rows:
+            R.table(["Variant", "Finding", "Panels"], rows)
+        if scope == "restrict" and any(hidden.values()):
+            R.h("<p class='small'>Not listed because outside the panels (genes): " + "; ".join(
+                f"{esc(k)}: {esc(', '.join(v[:15]))}" + (" ..." if len(v) > 15 else "")
+                for k, v in hidden.items() if v) + ". Secondary findings, carrier status and pharmacogenomics are "
+                "reported regardless of the panels.</p>")
+        for k in keys:
+            R.rows.append(("panel_applied", None, (panels[k]["panel"], panel_label(panels[k]),
+                                                    f"{len(panels[k]['genes'])} genes")))
+    else:
+        R.h("<p class='none'>No panel applied (give panel ids, e.g. a test code such as R169, or ge:ID / au:ID).</p>")
+    if suggestions:
+        R.h("<h3>Panels suggested by the patient's phenotype</h3><p class='small'>Panels other than superpanels "
+            f"(PanelApp type Super Panel, or more than {PANEL_SUGGEST_MAX_GENES} green genes), ranked by the share of the patient's HPO phenotype (terms weighted "
+            "by information content) that their best-matching green gene explains, ties broken by the sum over their "
+            f"green genes ({esc(PANEL_SUGGEST)}). Genes listed explain at least a quarter of it. In simulated patients "
+            "the right panel was first for 89% (five terms) and 56% (two general terms) (README section 7). A "
+            "suggestion, not a selection: the panel is chosen by the requesting clinician; broad superpanels are not "
+            "suggested but can be applied.</p>")
+        R.table(["Panel", "Score", "Green genes matching the phenotype"],
+                [[esc(panel_label(panels[k])), f"{sc:.3f}", esc(", ".join(gs[:12]) + (" ..." if len(gs) > 12 else ""))]
+                 for sc, k, gs in suggestions])
+        for sc, k, _gs in suggestions:
+            R.rows.append(("panel_suggested", None, (panels[k]["panel"], panel_label(panels[k]), f"score {sc:.3f}")))
+
+
+def panel_text(gene):
+    hits = PANEL.get(gene)
+    if not PANEL:
+        return ""
+    return "; ".join(f"{r} in {lab}" for lab, r, _m in hits) if hits else "not in the applied panels"
+
+
 # HPO clinical-course terms (aspect C) and inheritance terms (aspect I) used in phenotype.hpoa.
 HPO_ONSET = {"HP:0030674": "antenatal", "HP:0011460": "embryonal", "HP:0011461": "fetal", "HP:0034199": "first trimester",
              "HP:0034198": "second trimester", "HP:0034197": "third trimester", "HP:0003577": "congenital",
@@ -1892,7 +2079,7 @@ def tag(text, kind=""):
 
 
 def var_cell(v):
-    s = f"<b>{esc(v.gene)}</b><br><code>{esc(v.hgvs_c)}</code>"
+    s = f"<b>{esc(v.gene)}</b>" + (" " + panel_tag(v.gene) if PANEL else "") + f"<br><code>{esc(v.hgvs_c)}</code>"
     if v.hgvs_p:
         s += f"<br><code>{esc(v.hgvs_p)}</code>"
     s += f'<br><span class="small">{esc(v.chrom)}:{v.pos} {esc(v.ref)}&gt;{esc(v.alt)}'
@@ -3014,7 +3201,7 @@ def cnv_evidence(c, K, constraint, regions, origin):
 TSV_COLS = ["sample", "category", "gene", "chrom", "pos", "ref", "alt", "genotype", "depth", "alt_fraction", "hgvs_c",
             "hgvs_p", "effect", "gnomad_af", "gnomad_grpmax_af", "gnomad_faf95", "gnomad_nhomalt", "alphamissense",
             "spliceai", "clinvar", "clinvar_review", "clinvar_condition", "qc_flags", "confidence", "note",
-            "acmg_class", "acmg_points", "acmg_codes", "transcript", "hgvs_refseq", "hgvs_g"]
+            "acmg_class", "acmg_points", "acmg_codes", "transcript", "hgvs_refseq", "hgvs_g", "panel"]
 # how much a finding matters when it appears, changes or disappears: 3 reported result, 2 needs review, 1 listed,
 # 0 not compared (low-confidence CNVs are mostly artefacts and change with every panel)
 CHANGE_TIER = {"diagnostic": 3, "acmg_sf_reportable": 3, "de_novo": 3, "upd": 3, "cnv_pathogenic": 3,
@@ -3381,6 +3568,13 @@ def build(args):
     hpo_terms = {t if t.startswith("HP:") else "HP:" + t for t in hpo_terms if re.match(r"(HP:)?\d{7}$", t)}
     pheno = load_hpo(args.hpo_genes, hpo_terms)
     hpo_match, hpo_names = pheno.gene_terms, pheno.names
+    panels, panels_src = load_panels(args.panels)
+    panel_keys, panel_missing = select_panels(panels, args.panel_ids)
+    PANEL.clear()
+    for k in panel_keys:
+        for g, (rating, moi) in panels[k]["genes"].items():
+            PANEL.setdefault(g, []).append((panel_label(panels[k]), rating, moi))
+    panel_suggestions = suggest_panels(panels, pheno) if panels and hpo_terms else []
     hpoa = load_hpoa(args.hpo_annotations)
     dosage = load_dosage(args.clingen_dosage)
     cvp = load_clinvar_protein(args.clinvar_protein)
@@ -3850,6 +4044,15 @@ def build(args):
     sf = conf_sorted(sf, key=lambda x: x[0])
     cands = conf_sorted(cands, key=lambda x: x[1])
     denovo = conf_sorted(denovo, key=lambda x: x[1])
+    panel_hidden = {}
+    if PANEL and args.panel_scope == "restrict":  # primary findings in panel genes only (green or amber)
+        def in_panel(g):
+            return any(r in ("green", "amber") for _l, r, _m in PANEL.get(g, ()))
+        for name, lst, gene_of in (("diagnostic", diag, lambda x: x[0].gene), ("review", review, lambda x: x[0].gene),
+                                   ("candidate", cands, lambda x: x[2]), ("de novo", denovo, lambda x: x[2])):
+            keep = [x for x in lst if in_panel(gene_of(x))]
+            panel_hidden[name] = sorted({gene_of(x) for x in lst if not in_panel(gene_of(x))})
+            lst[:] = keep
 
     def short(v, gene=True):
         txt = f"{v.gene} {v.hgvs_p or v.hgvs_c}" if gene else v.gene
@@ -4086,6 +4289,8 @@ def build(args):
         R.h("<div class='box warn'>" + "<br>".join(esc(w) for w in warn) + "</div>")
 
     # diagnostic
+    panel_section(R, panels, panels_src, panel_keys, panel_missing, panel_suggestions, pheno, gene_cov,
+                  diag + review, cands, carrier, panel_hidden, args.panel_scope)
     R.h("<h2>2. Diagnostic findings</h2><p class='small'>ClinVar pathogenic or likely pathogenic variants (not "
         "conflicting) whose genotype fits the gene's mode of inheritance (GenCC): one allele in dominant or X-linked "
         "genes, two alleles in recessive genes. Whether a finding explains the patient's condition depends on the "
@@ -4865,11 +5070,13 @@ def tsv_records(R, sample):
             genes, genotype, txt, (chrom, start, end) = note
             out.append([sample, cat, genes, chrom, str(start), "", f"<{genotype.split()[0]}>", genotype]
                        + [""] * 15 + [txt.split("; ")[2] if txt.count("; ") >= 2 else "",
-                                      txt.replace("\t", " ") + f"; end {end}", "", "", "", "", "", ""])
+                                      txt.replace("\t", " ") + f"; end {end}", "", "", "", "", "", "",
+                                      panel_text(genes.split(",")[0]) if genes else ""])
             continue
         if v is None:  # gene-level result: (gene, genotype, phenotype)
             gene, genotype, pheno = note
-            out.append([sample, cat, gene, "", "", "", "", genotype] + [""] * 16 + [pheno, "", "", "", "", "", ""])
+            out.append([sample, cat, gene, "", "", "", "", genotype] + [""] * 16 + [pheno, "", "", "", "", "", "",
+                                                                                   panel_text(gene)])
             continue
         lc = low_confidence(v)
         out.append([str(x) for x in (
@@ -4881,7 +5088,7 @@ def tsv_records(R, sample):
             v.revstat, v.clndn, ";".join(v.flags), "low: " + ", ".join(lc) if lc else "high",
             note.replace("\t", " "))]
             + ([acmg[id(v)][0], str(acmg[id(v)][1]), ",".join(acmg[id(v)][2])] if id(v) in acmg else ["", "", ""])
-            + [v.feature, v.refseq, v.hgvs_g])
+            + [v.feature, v.refseq, v.hgvs_g, panel_text(v.gene)])
     return out
 
 
@@ -4892,7 +5099,7 @@ def change_records(changes, sample):
         r = c["row"]
         rec = [sample, "change_" + c["kind"]] + [r.get(k, "") for k in TSV_COLS[2:24]] \
             + [f"tier {c['tier']}; previous: {c['before']}; now: {c['now']}; {c['why']}".replace("\t", " "),
-               "", "", "", r.get("transcript", ""), r.get("hgvs_refseq", ""), r.get("hgvs_g", "")]
+               "", "", "", r.get("transcript", ""), r.get("hgvs_refseq", ""), r.get("hgvs_g", ""), r.get("panel", "")]
         out.append(rec)
     return out
 
@@ -4928,7 +5135,7 @@ def provenance(args):
 def write_tsv(R, path, sample):
     with open(path, "w") as f:
         f.write("\t".join(TSV_COLS) + "\n")
-        meta = [[sample, "report_meta", k] + [""] * 21 + [str(val), "", "", "", "", "", ""] for k, val in getattr(R, "meta", {}).items()]
+        meta = [[sample, "report_meta", k] + [""] * 21 + [str(val), "", "", "", "", "", "", ""] for k, val in getattr(R, "meta", {}).items()]
         for rec in meta + tsv_records(R, sample) + getattr(R, "change_rows", []):
             f.write("\t".join(rec) + "\n")
 
@@ -4991,6 +5198,12 @@ def main(argv=None):
     ap.add_argument("--hla", help="wes_hla summary (JSON): HLA types, pharmacogenomic HLA alleles, disease associations")
     ap.add_argument("--yhaplo", help="wes_yhaplo summary (JSON): Y-chromosome haplogroup")
     ap.add_argument("--kir", help="wes_kir summary (JSON): KIR gene content, genotype, B content, HLA ligands")
+    ap.add_argument("--panels", help="PanelApp snapshot (data/build_panelapp.py): gene panels of Genomics England and "
+                                     "PanelApp Australia")
+    ap.add_argument("--panel-ids", help="panels to apply, comma separated: test codes (R169), ge:ID, au:ID or names")
+    ap.add_argument("--panel-scope", choices=("flag", "restrict"), default="flag",
+                    help="flag: mark every finding as in or outside the panels (default); restrict: list diagnostic, "
+                         "candidate and de novo findings only in panel genes (green or amber)")
     ap.add_argument("--mito-json", help="wes_mito summary (JSON): chrM coverage, detection limit, mixture check")
     ap.add_argument("--previous-tsv", help="TSV output of an earlier report of the same sample: lists what changed")
     ap.add_argument("--previous-name", help="name of the earlier report shown in the comparison")

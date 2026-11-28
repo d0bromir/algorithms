@@ -8,7 +8,7 @@
 # 1. Takes the current release (ROOT/current, else the newest ROOT/release-*/ with a MANIFEST.tsv) and makes
 #    ROOT/release-YYYY-MM-DD with hard links to all its files (no extra disk space).
 # 2. Removes the files of the sources that change (FREQUENT below: ClinVar, GenCC, HPO, ClinGen, G2P/Orphanet,
-#    UniProt, IPD-IMGT/HLA, IPD-KIR and the tables built from them) and runs "install.sh data" on the new release,
+#    UniProt, IPD-IMGT/HLA, IPD-KIR, PanelApp and the tables built from them) and runs "install.sh data" on the new release,
 #    which downloads and rebuilds only what is missing. Version-pinned files (genome, Ensembl CDS, gnomAD, MANE,
 #    AlphaMissense, REVEL, Collins, MaveDB, segmental duplications) stay linked; change them with install.sh.
 # 3. Compares the refreshed files with the current release (content, not timestamps). Nothing changed: the new
@@ -41,7 +41,7 @@ DRY=0
 # Sources that change between releases, and the files built from them (install.sh data rebuilds what is missing).
 FREQUENT=(clinvar.GRCh38.vcf.gz clinvar_protein.tsv.gz gencc-submissions.tsv phenotype_to_genes.txt phenotype.hpoa
           ClinGen_gene_curation_list_GRCh38.tsv ClinGen_region_curation_list_GRCh38.tsv gene_disease.tsv
-          vcep_rules.tsv erepo_variants.tsv uniprot_features.tsv.gz hla.dat kir.dat carrier_genes.tsv)
+          vcep_rules.tsv erepo_variants.tsv uniprot_features.tsv.gz hla.dat kir.dat carrier_genes.tsv panelapp_panels.tsv)
 
 while (($#)); do
     case "$1" in

@@ -75,7 +75,7 @@ meant to run unattended:
 ```
 - It hard-links every file of the current release into `release-YYYY-MM-DD` (no extra disk space), deletes the
   files of the sources that change (ClinVar, GenCC, HPO, ClinGen dosage/validity/expert panels, G2P/Orphanet,
-  UniProt, IPD-IMGT/HLA, IPD-KIR and the tables built from them) and lets the `data` stage download and rebuild
+  UniProt, IPD-IMGT/HLA, IPD-KIR, PanelApp and the tables built from them) and lets the `data` stage download and rebuild
   only those. Version-pinned files (genome, gnomAD, MANE, AlphaMissense, REVEL, Collins, MaveDB) stay as they are;
   they change only with a new `install.sh data` release.
 - It compares the refreshed files with the current release by content. Nothing changed: the new release is removed.
@@ -219,6 +219,8 @@ and VCFs. A naming mismatch does not raise an error. ClinVar/gnomAD annotations 
 | **Mitochondrial frequencies (gnomAD chrM VCF)** (FASTQ workflow, optional) | `gnomad.genomes.v3.1.sites.chrM.vcf.bgz` (5 MB, CC0) with `chrM` renamed to the reference's name (`install.sh data` does it) | mtDNA frequencies, haplogroup-defining flags and tRNA predictions for `wes_mito`. |
 | **HLA alleles (IPD-IMGT/HLA hla.dat)** (FASTQ workflow, optional) | [`hla.dat`](https://ftp.ebi.ac.uk/pub/databases/ipd/imgt/hla/) of the current IPD-IMGT/HLA release (350 MB, CC BY-ND 4.0; `install.sh data` downloads it and records the release) | HLA typing of the reads with T1K (`wes_hla`, section 4c). Without it the HLA genes are not typed. |
 | **KIR alleles (IPD-KIR kir.dat)** (FASTQ workflow, optional) | [`kir.dat`](https://ftp.ebi.ac.uk/pub/databases/ipd/kir/) of the current IPD-KIR release (37 MB, CC BY-ND 4.0; `install.sh data` downloads it and records the release) | KIR gene content of the reads with T1K (`wes_kir`, section 4e). Without it the KIR genes are not typed. |
+| **Gene panels (PanelApp snapshot)** (optional) | `panelapp_panels.tsv`, built by [`data/build_panelapp.py`](data/build_panelapp.py) (`install.sh data`, refreshed by `update.sh`): the 691 panels of Genomics England PanelApp and PanelApp Australia with each gene's rating and mode of inheritance (20 MB; non-commercial use, with acknowledgement) | Panels applied to the report and panels suggested from the HPO terms (section 4f) |
+| **Panels to apply** (optional text) | A Genomics England test code (e.g. `R169`), `ge:ID` / `au:ID`, or an exact panel name; comma separated | Which panels the report applies |
 | **KIR genes (wes_kir summary)** (VCF workflow, optional) | The *KIR summary* of `wes_kir` on the sample's reads (the FASTQ workflow connects it) | KIR genes, A/B genotype, B content and KIR-HLA ligand pairs in the report. |
 | **HLA types (wes_hla summary)**, **HLA outside calls (PharmCAT TSV)** (VCF workflow, optional) | The *HLA summary* and *HLA outside calls (PharmCAT)* of `wes_hla` on the sample's reads (the FASTQ workflow connects them) | HLA alleles and associations in the report; HLA-A/B drug recommendations in PharmCAT. |
 
@@ -393,6 +395,7 @@ laboratory.
 | Runs of homozygosity and uniparental disomy | Total length of runs ≥ 1 Mb (consanguinity), runs concentrated on one chromosome, homozygous findings inside runs. With both parents: **uniparental disomy** (whole chromosome or segment, maternal or paternal, isodisomy or heterodisomy) from common SNVs where the proband lacks one parent's alleles, with the imprinting disorder (chromosomes 6, 7, 11, 14, 15, 16, 20), a CNV deletion that would explain it, and homozygous findings that only one parent carries. The **parent of origin** of a chromosome gain and of the X chromosomes in a sex-chromosome aneuploidy appears beside the chromosome dosage (section 4) |
 | Mitochondrial DNA (with the *Mitochondrial calls/summary* of `wes_mito`) | Homoplasmic (≥ 90 % of ≥ 5 reads) and heteroplasmic (≥ 10 % of ≥ 20 reads, ≥ 3 reads) mtDNA variants from the exome's off-target chrM reads: chrM coverage and the heteroplasmy detectable at the median depth; ClinVar pathogenic/likely pathogenic variants with their level; rare tRNA variants predicted pathogenic by MitoTIP or PON-mt-tRNA; gnomAD v3.1 homoplasmic/heteroplasmic frequencies; MT-RNR1 m.1555A>G, m.1494C>T, m.1095T>C for aminoglycosides (CPIC), with the read depth so that *not carried* is told apart from *not covered*; a mixture check (heteroplasmy at ≥ 3 common variants of other haplogroups: contamination or nuclear mitochondrial segments); with `wes_mito` 0.2 the haplogroup with its quality, coverage, the next best haplogroups, the expected variants not found and the private variants |
 | HLA (with the *HLA summary* of `wes_hla`), in the pharmacogenomics section | The two alleles of HLA-A, -B, -C, -DRB1, -DRB3/4/5, -DQA1, -DQB1, -DPA1, -DPB1 with confidence; the CPIC pharmacogenomic alleles HLA-B\*57:01 (abacavir), HLA-B\*15:02 (carbamazepine, oxcarbazepine, phenytoin), HLA-A\*31:01 (carbamazepine), HLA-B\*58:01 (allopurinol); disease associations HLA-B\*27, HLA-B\*51, HLA-DQB1\*06:02 and the celiac-disease heterodimers DQ2.5/DQ2.2/DQ8 (their absence makes celiac disease very unlikely). With the *HLA outside calls*, PharmCAT adds the CPIC/DPWG/FDA recommendations for these drugs |
+| Gene panels (with the *PanelApp snapshot*) | The applied panels (version, signed-off version, green/amber/red gene counts) and how many of their green genes reach 95 % of coding bases at 20× (the genes below listed); the findings in panel genes; every variant marked *panel: green / amber / red* or *not in panel*, and a `panel` column in the findings TSV; with *restrict*, diagnostic, candidate and de novo findings only in green or amber panel genes (the genes left out are named; secondary findings, carrier status and PGx are not restricted); with HPO terms, suggested panels (section 4f) |
 | KIR (with the *KIR summary* of `wes_kir`), in section 8 | The KIR genes present and absent, alleles at three digits, the A/B genotype, centromeric/telomeric motifs and the B-content group (Cooley et al. 2010: Best / Better / Neutral, for unrelated-donor selection in acute myeloid leukaemia), and the KIR-HLA ligand pairs (KIR2DL1-C2, KIR2DL2/3-C1, KIR3DL1-Bw4, KIR2DS1-C2, KIR3DS1-Bw4-80I) with the ligand groups that `wes_hla` 0.2 reads from each HLA-A/B/C allele's exon 2 |
 | Changes since the previous report | With the findings TSV of an earlier report of the same sample (*Previous report: findings (TSV)*): the results that are **new**, **changed** or **no longer reported**, matched by variant, by gene for gene-level results (pharmacogenomics, APOE) and by ≥ 50 % reciprocal overlap for CNVs and UPD. Each change shows what both reports said and the evidence that differs: category, ClinVar classification and review status, automated ACMG class, genotype, gnomAD frequency, QC flags, or a variant no longer called. Results and findings to review (diagnostic, secondary findings, de novo, UPD, pathogenic CNVs; candidates, carrier status, pharmacogenomics) come first, other listed variants after. The TSV records the report version and the HPO, GenCC, ClinGen and SnpEff releases (`report_meta` rows), shown beside the previous report's. A **same-person check**: if < 65 % of the previous report's listed variants have the same genotype in the current calls, the section warns that the previous report is probably of another sample |
 | Coverage | Per-gene coding coverage at 10/20×; clinically relevant genes below 95 % at 20× are listed, because a negative result there is not reliable |
@@ -545,6 +548,28 @@ reference genome only one haplotype, so the reads of the other genes map to thei
 |---|---|
 | *KIR genes* | The 17 genes: present, alleles, T1K quality, abundance relative to the framework genes, note |
 | *KIR summary* (JSON) | The same, the genotype, motifs, B-content group and the KIR-HLA ligand pairs, for the report |
+
+## 4f. Gene panels
+
+Clinical laboratories usually analyse an exome through a virtual gene panel chosen for the referral. The report can
+apply the panels of [Genomics England PanelApp](https://panelapp.genomicsengland.co.uk) and
+[PanelApp Australia](https://panelapp-aus.org) from a snapshot kept on the server (`panelapp_panels.tsv`): the
+data stage reads each public panel once (panel numbers only, about 20 min at one request per second, which PanelApp
+asks for) and `update.sh` refreshes it with the other sources. The snapshot keeps the panel, its version and test
+codes, and each gene with its rating and mode of inheritance; phenotype text is left out (part of it comes from
+OMIM). PanelApp's terms allow non-commercial use with acknowledgement.
+
+* **Applying panels**: *Panels to apply* takes test codes where PanelApp lists them (`R169` selects the Genomics
+  England panels that list it), `ge:ID` / `au:ID`, or an exact panel or disorder name (e.g. *Early onset or
+  syndromic epilepsy*). Every variant in the report shows the gene's rating; the *Gene panels* section
+  gives the coverage of each panel's green genes (from the coding-exon coverage) and the findings in panel genes.
+* **Scope**: *flag* (default) keeps all findings and marks them; *restrict* lists diagnostic, candidate and de novo
+  findings only in green or amber panel genes, as a panel test would, and names the genes that were left out.
+* **Suggestions**: with the patient's HPO terms the report lists the five panels whose best green gene explains the
+  largest share of the phenotype (terms weighted by information content, as for the disease match; ties broken by
+  the sum over their green genes). Superpanels (PanelApp type *Super Panel*, or more than 1,000 green genes, such as
+  Paediatric disorders or Mendeliome) would always rank first and are not suggested, nor are screening and research
+  lists; all can still be applied. Suggestions do not change the analysis.
 
 ## 5. Filters and how to change them
 
@@ -1484,6 +1509,40 @@ Bw6/Bw6): KIR2DL1 and KIR3DL1 without their ligands. The VCF workflow 0.16 on HG
 inputs and the Galaxy outputs of `wes_hla` 0.2.0 and `wes_kir` ran 16/16 jobs ok (13 min); the report's section 8
 lists the KIR genes, genotype, motifs, B-content group and ligand pairs, and the findings TSV a `kir_genotype` row.
 
+### Gene panels (report 0.17.0, PanelApp snapshot of 22 November 2026)
+
+**Panel suggestions** (`tests/panel_eval.py`): simulated patients from the 7,117 diseases of `phenotype.hpoa` that
+HPO links to exactly one gene and that have ≥ 5 phenotype terms. Each patient gets 5 (or 2) of the disease's own
+terms at random and 1 term of another disease; a suggestion is right when the panel has the disease gene rated
+green. 1,500 patients per half (diseases at even/odd positions); the ranking method was chosen on the even half by
+the share of patients with a right panel among the first three, and the evaluation's scoring is checked against the
+report's own function.
+
+How the rule came about (each step changed what is suggested, not how the methods are scored):
+1. Counting any panel, *sum* won by putting a superpanel first (median 4,449 green genes: Mendeliome, Paediatric
+   disorders): right, but useless as a suggestion.
+2. A cap of 500 green genes made *max* (the best green gene) win, but a Galaxy run with two general terms (seizure,
+   developmental delay) showed ties at full score and single-gene panels first. *max_sum* (ties broken by the sum
+   over the green genes) was added; it won on the tuning half with 5 and with 2 terms.
+3. The cap also hid the epilepsy panels (GE 402: 632 green genes). Superpanels are now recognised by PanelApp's own
+   panel type (*Super Panel*, *Superpanel*), untyped exome-wide lists by size (> 1,000 green genes), and screening
+   and research lists by name; 45 of the 685 panels are not suggested. *max_sum* won again on the tuning half.
+
+| Method (final rule) | Held-out, 5 terms: right panel first | in first 3 | Held-out, 2 terms: first | in first 3 | Green genes of the first panel (median, 5 / 2 terms) |
+|---|---|---|---|---|---|
+| **max_sum** (chosen) | 1,226/1,403 (87.4 %) | 93.8 % | 768/1,396 (55.0 %) | 71.1 % | 547 / 547 |
+| max | 75.6 % | 82.9 % | 27.2 % | 38.2 % | 18 / 9 |
+| sum_sqrt | 64.9 % | 80.4 % | 46.7 % | 65.5 % | 370 / 250 |
+| sum_log | 52.0 % | 72.7 % | 43.4 % | 64.8 % | 795 / 547 |
+| sum | 47.3 % | 66.6 % | 40.9 % | 60.8 % | 795 / 795 |
+| share | 38.4 % | 58.4 % | 22.1 % | 36.7 % | 5 / 1 |
+
+For 6.5 % (5 terms) and 6.9 % (2 terms) of the held-out diseases the gene is green on no suggestible panel, so no
+suggestion could be right; the rates exclude them. About 8 ms per patient (31 s and 287 MB for both halves). The
+patients' terms come from the same annotations the matching uses, so real patients will see lower rates: the figures
+are an upper bound and a comparison between methods. *max_sum* buys its accuracy with broader panels (median 547
+green genes against 18 for *max*).
+
 ## 8. Scope and limitations
 
 Germline SNVs and short indels in the exome targets, and CNVs of several exons from read depth (section 7).
@@ -1504,7 +1563,9 @@ alt read among ≥ 15) is read as reference. UPD detection needs both parents; h
 (two-field alleles that differ in the antigen-recognition exons), not three- or four-field alleles, null alleles
 caused outside these exons, or new alleles; HLA-DQA1 was the least reliable gene in the GIAB exomes (section 7), and
 an HLA-B\*57:01 or HLA-B\*15:02 result should be confirmed by a clinical HLA test before a drug decision.
-KIR typing gives gene content, not copy number; KIR2DL5A and KIR2DL5B are the genes most often called present
+Panel suggestions rank panels by their best-matching gene (ties by the sum) and depend on the HPO terms given; they were measured on
+simulated patients only, and the PanelApp snapshot is as current as the last update. KIR typing gives gene content,
+not copy number; KIR2DL5A and KIR2DL5B are the genes most often called present
 wrongly (paralogues), and three-digit KIR alleles were not validated. Haplogroups from an exome are often less resolved than from a genome (the Y call in 63 of 104
 1000 Genomes exomes, the mtDNA call in 13 of 99); with less than 40 % of the mtDNA covered the mtDNA haplogroup is low
 confidence and can be wrong (3 of 15 such samples). Haplogroups describe one maternal and one paternal line, not

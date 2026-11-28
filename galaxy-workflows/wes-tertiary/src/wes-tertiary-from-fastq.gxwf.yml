@@ -1,6 +1,6 @@
 class: GalaxyWorkflow
 label: WES tertiary analysis from FASTQ (v1)
-release: "0.16"
+release: "0.17"
 license: MIT
 tags:
   - WES
@@ -343,6 +343,21 @@ inputs:
       data stage downloads it): KIR gene content of the sample's reads with T1K. Without it the KIR genes are not
       typed.
     position: {left: 0, top: 5620}
+  "Gene panels (PanelApp snapshot)":
+    type: data
+    format: [tabular]
+    optional: true
+    doc: >-
+      panelapp_panels.tsv (data/build_panelapp.py, made by install.sh data and update.sh): the gene panels of Genomics
+      England PanelApp and PanelApp Australia, kept on the server. Non-commercial use, with acknowledgement.
+    position: {left: 0, top: 5740}
+  "Panels to apply":
+    type: string
+    optional: true
+    doc: >-
+      Comma-separated panels for the report: a Genomics England test code (R169), ge:ID or au:ID, or an exact panel
+      name. Empty: no panel applied; panels are still suggested from the HPO terms.
+    position: {left: 0, top: 5860}
 
 outputs:
   multiqc_report:
@@ -814,6 +829,8 @@ steps:
       "HLA outside calls (PharmCAT TSV)": hla_typing/outside_calls
       "Y haplogroup (wes_yhaplo summary)": y_haplogroup/summary
       "KIR genes (wes_kir summary)": kir_typing/summary
+      "Gene panels (PanelApp snapshot)": "Gene panels (PanelApp snapshot)"
+      "Panels to apply": "Panels to apply"
 
   multiqc:
     doc: One QC report for all samples.
