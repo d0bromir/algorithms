@@ -145,24 +145,17 @@ def main():
             continue
         n_loci_used += 1
         c, ls, le = loc
-        # per-position mismatch count + coverage
+        # per-position mismatch count across the locus's reads
         mmcount = defaultdict(int)
-        cov = defaultdict(int)
         for i, m, mm in reads:
             for pos in mm:
                 mmcount[pos] += 1
-        # coverage: reads spanning each position (approx via read start..end)
-        # use mismatch-bearing positions only; divergent = freq among reads covering
-        # approximate coverage by number of reads whose span includes pos
-        spans = []
-        for i, m, mm in reads:
-            spans.append((mm[0] if mm else ls, mm[-1] if mm else ls))
-        # divergent positions: mismatched by >= div-freq of reads (and >=3 reads)
-        div = set()
-        for pos, cnt in mmcount.items():
-            covering = sum(1 for s, e in spans if s <= pos <= e)
-            if covering >= 3 and cnt / max(covering, 1) >= a.div_freq and cnt >= 3:
-                div.add(pos)
+        # divergent positions: mismatched by >= div-freq of the locus reads (and
+        # >=3). Using the locus read count (not per-position coverage) keeps this
+        # O(mismatches) and is conservative for a prototype.
+        n = len(reads)
+        thresh = max(3, a.div_freq * n)
+        div = {pos for pos, cnt in mmcount.items() if cnt >= thresh}
         if not div:
             for i, m, mm in reads:
                 ref_reads.append((i, m))
