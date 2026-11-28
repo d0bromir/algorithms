@@ -11,7 +11,7 @@
         "tertiary-analysis"
     ],
     "license": "MIT",
-    "release": "0.17",
+    "release": "0.18",
     "uuid": "325a3624-2876-419f-9805-0558388e1825",
     "comments": [],
     "steps": {
@@ -416,7 +416,7 @@
             "name": "Missense predictions (AlphaMissense BCF)",
             "type": "data_input",
             "label": "Missense predictions (AlphaMissense BCF)",
-            "annotation": "AlphaMissense hg38 predictions as an indexed BCF with INFO/AM_score, built with data/build_alphamissense.sh (CC BY 4.0), optionally joined with REVEL (INFO/REVEL, data/build_revel.sh; non-commercial use). All INFO fields of the file are transferred. Gives the missense PP3/BP4 evidence of the report at the ClinGen-calibrated strengths.",
+            "annotation": "AlphaMissense hg38 predictions as an indexed BCF with INFO/AM_score, built with data/build_alphamissense.sh (CC BY 4.0), optionally joined with REVEL (INFO/REVEL, data/build_revel.sh) and CADD v1.7 (INFO/CADD, data/build_cadd.sh and data/build_insilico.sh: insilico_scores.hg38.bcf; REVEL and CADD for non-commercial use). All INFO fields of the file are transferred. Gives the missense PP3/BP4 evidence of the report at the ClinGen-calibrated strengths.",
             "tool_state": "{\"name\": \"Missense predictions (AlphaMissense BCF)\", \"format\": [\"bcf\", \"vcf_bgzip\"]}",
             "position": {
                 "top": 2160,
@@ -1840,7 +1840,7 @@
             "annotation": "Human-readable clinical interpretation report and findings table (local tool tools/wes_clinical_report; install it on the Galaxy server, see README).",
             "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null, \"affected_parents\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"artefacts\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clingen_dosage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clingen_regions\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"clinvar_protein\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"cnv_calls\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"cnv_summary\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"collins_dosage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"constraint\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"coverage_summary\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"erepo\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"father_bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"father_cnv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"father_vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gencc\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gene_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gene_disease\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gnomad_cnv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"gnomad_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hla\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_annotations\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_genes\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"hpo_terms\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"kir\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mane\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mave\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"max_af\": \"\\\"0.01\\\"\", \"max_candidates\": \"\\\"60\\\"\", \"min_ref_depth\": \"\\\"15\\\"\", \"mito_json\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mito_tsv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mother_bam\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mother_cnv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"mother_vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"panel_ids\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"panel_scope\": \"\\\"flag\\\"\", \"panels\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"pext\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"pharmcat\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"previous_tsv\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"reference\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"roh\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"sample_name\": \"\\\"\\\"\", \"target_coverage\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"uniprot_features\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"vcep_rules\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"vcf\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\", \"yhaplo\": \"{\\\"__class__\\\": \\\"ConnectedValue\\\"}\"}",
             "tool_id": "wes_clinical_report",
-            "tool_version": "0.17.0+galaxy0",
+            "tool_version": "0.18.0+galaxy0",
             "position": {
                 "top": 300,
                 "left": 2380
