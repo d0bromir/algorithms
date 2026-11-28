@@ -28,6 +28,8 @@ endif()
 
 find_package(Threads REQUIRED)
 find_package(ZLIB)
+# OpenMP speeds the brute-force certificate oracle (parallel across reads); optional.
+find_package(OpenMP)
 
 set(USE_CUDA OFF)
 if(NOT CERTA_CUDA STREQUAL "OFF")
@@ -66,6 +68,9 @@ target_link_libraries(certa PRIVATE certa_core)
 enable_testing()
 add_executable(test_certa tests/test_certa.cpp src/gpu_stub.cpp)
 target_link_libraries(test_certa PRIVATE certa_core)
+if(OpenMP_CXX_FOUND)
+  target_link_libraries(test_certa PRIVATE OpenMP::OpenMP_CXX)
+endif()
 add_test(NAME certificate COMMAND test_certa)
 # Exhaustive checks of the finite lemmas behind the bounds (THEORY.md).
 add_executable(verify_lemmas tests/verify_lemmas.cpp)

@@ -38,6 +38,8 @@ else
   else
     echo "== zlib headers not found: gzip input disabled (plain FASTA/FASTQ only)"
   fi
+  omp=()
+  if "$cxx" -fopenmp -x c++ -E /dev/null >/dev/null 2>&1; then omp=(-fopenmp); flags+=(-fopenmp); fi
   objs=()
   cli=(main cmd_map map_config map_pipeline map_stats sam_output)  # the certa program's own sources
   for f in index seqio mapper_cpu check "${cli[@]}"; do
@@ -68,7 +70,7 @@ else
   else
     "$cxx" -pthread -o "$build/certa" "${cli_objs[@]}" "$build/gpu_stub.o" "${core[@]}" "${libs[@]}"
   fi
-  "$cxx" -pthread -o "$build/test_certa" "$build/test_certa.o" "$build/gpu_stub.o" "${core[@]}" "${libs[@]}"
+  "$cxx" -pthread "${omp[@]}" -o "$build/test_certa" "$build/test_certa.o" "$build/gpu_stub.o" "${core[@]}" "${libs[@]}"
   wait
 fi
 "$build/test_certa"

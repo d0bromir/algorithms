@@ -1,7 +1,10 @@
 name: certa
 
 on:
+  # Push only on main; feature branches are validated by their pull_request run.
+  # (Previously push fired on every branch too, duplicating each PR's validation.)
   push:
+    branches: [main]
     paths: ["certa/**", ".github/workflows/certa.yml"]
   pull_request:
     paths: ["certa/**", ".github/workflows/certa.yml"]
