@@ -965,10 +965,13 @@ def test_cadd_codes():
     assert rep.cadd_code(None) is None
 
     class V:
-        am, revel, cadd = None, None, 30.0
+        am, revel, cadd, ref, alt = None, None, 30.0, "A", "G"
     assert rep.missense_code(V(), "revel") is None, "no REVEL, no AlphaMissense: nothing under the old policy"
     assert rep.missense_code(V(), "revel_cadd") == "PP3_Moderate", "CADD fills in"
     v = V()
     v.revel = 0.10
     assert rep.missense_code(v, "revel_cadd") == "BP4_Moderate", "REVEL first when it has a score"
     assert rep.missense_code(v, "cadd") == "PP3_Moderate"
+    d = V()
+    d.ref, d.alt = "ATCT", "A"
+    assert rep.missense_code(d, "revel_cadd") is None, "in-frame deletion: CADD is calibrated on missense SNVs only"

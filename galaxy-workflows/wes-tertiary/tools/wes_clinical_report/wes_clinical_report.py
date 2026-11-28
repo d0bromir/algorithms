@@ -381,7 +381,7 @@ CADD_BP4 = ((0.15, "BP4_Strong"), (17.3, "BP4_Moderate"), (22.7, "BP4_Supporting
 #   "alphamissense": AlphaMissense only (report <= 0.10); "revel": REVEL, AlphaMissense where REVEL has no score;
 #   "concordant": both must point the same way and the weaker strength is used (one score alone counts as itself);
 #   "revel_cadd": as "revel", and CADD where neither REVEL nor AlphaMissense has a score; "cadd": CADD only.
-MISSENSE_POLICY = "revel"  # chosen on the tuning half (README section 7)
+MISSENSE_POLICY = "revel_cadd"  # chosen on the tuning half (README section 7)
 
 
 def am_code(score):
@@ -423,13 +423,18 @@ def cadd_code(score):
     return None
 
 
-def missense_code(v, policy=None):
+def missense_code(v, policy=None, gene=None):
     """The missense PP3/BP4 code from AlphaMissense, REVEL and CADD under MISSENSE_POLICY."""
     policy = policy or MISSENSE_POLICY
+    # CADD's calibration covers missense SNVs only; it also scores indels and stop-lost changes, which the report's
+    # missense effects include (AlphaMissense and REVEL score missense SNVs only)
+    a = (ann_for_gene(v, gene) if gene else (v.anns[0] if getattr(v, "anns", None) else None))
+    snv = (len(getattr(v, "ref", "") or "") == 1 and len(getattr(v, "alt", "") or "") == 1
+           and (a is None or "missense_variant" in a[1]))
     if policy == "cadd":
-        return cadd_code(getattr(v, "cadd", None))
+        return cadd_code(getattr(v, "cadd", None)) if snv else None
     if policy == "revel_cadd" and getattr(v, "revel", None) is None and v.am is None:
-        return cadd_code(getattr(v, "cadd", None))
+        return cadd_code(getattr(v, "cadd", None)) if snv else None
     if policy == "revel_cadd":
         policy = "revel"
     am, rv = am_code(v.am), revel_code(getattr(v, "revel", None))
@@ -452,7 +457,7 @@ def predictor_codes(v, gene):
     """PP3/BP4 from one calibrated missense predictor (AlphaMissense) and SpliceAI (Walker et al. 2023: max delta
     >= 0.2 PP3, <= 0.1 BP4, Supporting, outside the canonical +/-1,2 positions). The two PP3s are never summed: the
     stronger one is used. BP4 for a missense variant needs SpliceAI <= 0.1 (or no splice score)."""
-    am = missense_code(v) if is_missense(v, gene) else None
+    am = missense_code(v, gene=gene) if is_missense(v, gene) else None
     sp = None
     if v.sai is not None and not is_canonical_splice(v, gene):
         sp = "PP3_Supporting" if v.sai >= 0.2 else ("BP4_Supporting" if v.sai <= 0.1 else None)
@@ -3889,7 +3894,7 @@ def build(args):
         for g in genes_of(v)[:3]:
             if g in gencc or g in ACMG_SF:
                 if (is_lof(v, g) or (is_missense(v, g) and hpo_match.get(g))
-                        or (is_missense(v, g) and CODE_RANK.get(missense_code(v), 0) >= 2)
+                        or (is_missense(v, g) and CODE_RANK.get(missense_code(v, gene=g), 0) >= 2)
                         or splice_candidate(v, g, bool(hpo_match.get(g)))
                         or {"PS1", "PM5"} & set(protein_evidence(v, g, cvp)[0])):
                     rare_by_gene[g].append(v)
