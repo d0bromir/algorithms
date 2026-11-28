@@ -126,7 +126,7 @@ def test_predictor_candidates():
     assert p["category"] == "candidate" and "PP3_Strong" in p["note"] and p["alphamissense"] == "0.995"
     s = next(r for r in rows if r["gene"] == "GENES")
     assert s["category"] == "candidate" and "PP3_Supporting" in s["note"] and s["spliceai"] == "0.71"
-    assert "AlphaMissense 0.995" in html and "Scores present for this sample: AlphaMissense 1, SpliceAI 2" in html
+    assert "AlphaMissense 0.995" in html and "Scores present for this sample: REVEL 0, AlphaMissense 1, CADD 0, SpliceAI 2" in html
 
 
 def test_predictor_codes():

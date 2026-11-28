@@ -5024,12 +5024,19 @@ def build(args):
         "phenotype assignments for single-nucleotide alleles.</li>")
     n_am = sum(1 for v in variants if v.am is not None)
     n_sai = sum(1 for v in variants if v.sai is not None)
-    R.h("<li>In-silico predictors (one calibrated tool per mechanism, ClinGen SVI): missense PP3/BP4 from AlphaMissense "
-        "(Cheng et al. 2023) at the calibrated strengths of Bergquist et al. 2025 (PP3 Supporting &ge; 0.792, Moderate "
-        "&ge; 0.906, Strong &ge; 0.990; BP4 Supporting &le; 0.169, Moderate &le; 0.099); splicing PP3 (max delta &ge; 0.2) "
-        "and BP4 (&le; 0.1) at Supporting strength from SpliceAI outside the canonical &plusmn;1,2 positions (Walker et al. "
-        "2023). The two PP3s are not summed, PP3 is not combined with PVS1, and missense BP4 needs SpliceAI &le; 0.1. "
-        f"Scores present for this sample: AlphaMissense {n_am}, SpliceAI {n_sai} variants"
+    n_rv = sum(1 for v in variants if getattr(v, "revel", None) is not None)
+    n_cadd = sum(1 for v in variants if getattr(v, "cadd", None) is not None)
+    R.h("<li>In-silico predictors (one calibrated tool per variant and mechanism, ClinGen SVI): missense PP3/BP4 from "
+        "REVEL at the calibration of Pejaver et al. 2022 (PP3 Supporting &ge; 0.644, Moderate &ge; 0.773, Strong "
+        "&ge; 0.932; BP4 Supporting &le; 0.290, Moderate &le; 0.183, Strong &le; 0.016); where REVEL has no score, "
+        "AlphaMissense (Cheng et al. 2023; Bergquist et al. 2025: PP3 Supporting &ge; 0.792, Moderate &ge; 0.906, "
+        "Strong &ge; 0.990; BP4 Supporting &le; 0.169, Moderate &le; 0.099); where neither has one, CADD v1.7 for "
+        "missense SNVs (Pejaver et al. 2022: PP3 Supporting &ge; 25.3, Moderate &ge; 28.1; BP4 Supporting &le; 22.7, "
+        "Moderate &le; 17.3, Strong &le; 0.15). CADD is shown for all variants but scored only for missense SNVs. "
+        "Splicing PP3 (max delta &ge; 0.2) and BP4 (&le; 0.1) at Supporting strength from SpliceAI outside the "
+        "canonical &plusmn;1,2 positions (Walker et al. 2023). The two PP3s are not summed, PP3 is not combined with "
+        "PVS1, and missense BP4 needs SpliceAI &le; 0.1. "
+        f"Scores present for this sample: REVEL {n_rv}, AlphaMissense {n_am}, CADD {n_cadd}, SpliceAI {n_sai} variants"
         + ("" if n_am and n_sai else " (a missing predictor gives no PP3/BP4)") + ".</li>")
     if trio:
         R.h("<li>Trio: parental genotypes from the parents' calls (multi-allelic and complex records split and trimmed "
