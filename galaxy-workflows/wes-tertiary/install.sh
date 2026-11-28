@@ -373,7 +373,18 @@ stage_data() {
         echo "  missense_scores.hg38.bcf <- AlphaMissense + REVEL v1.3 (Zenodo 7072866; about 10 min)"
         bash "$HERE/data/build_revel.sh" "$FA" alphamissense.hg38.bcf missense_scores.hg38.bcf
     fi
-    manifest missense_scores.hg38.bcf bcf "AlphaMissense (CC BY 4.0) + REVEL v1.3 (non-commercial) via data/build_revel.sh; use as the missense predictions"
+    manifest missense_scores.hg38.bcf bcf "AlphaMissense (CC BY 4.0) + REVEL v1.3 (non-commercial) via data/build_revel.sh"
+    if [[ ! -s cadd.v1.7.cds.bcf ]]; then
+        have tabix && have bedtools || die "tabix and bedtools needed for the CADD extract: run the 'system' stage"
+        echo "  cadd.v1.7.cds.bcf <- CADD v1.7 SNVs and gnomAD indels, coding exons +/- 50 bp (remote reads; about 1 h)"
+        bash "$HERE/data/build_cadd.sh" "$CDS" "$FA" cadd.v1.7.cds.bcf "$JOBS"
+    fi
+    manifest cadd.v1.7.cds.bcf bcf "https://cadd.bihealth.org CADD GRCh38 v1.7 via data/build_cadd.sh (free for non-commercial use)"
+    if [[ ! -s insilico_scores.hg38.bcf ]]; then
+        echo "  insilico_scores.hg38.bcf <- missense_scores + CADD (one file for the workflows' missense input)"
+        bash "$HERE/data/build_insilico.sh" missense_scores.hg38.bcf cadd.v1.7.cds.bcf insilico_scores.hg38.bcf
+    fi
+    manifest insilico_scores.hg38.bcf bcf "AlphaMissense + REVEL + CADD via data/build_insilico.sh; use as the missense predictions (REVEL and CADD non-commercial)"
 
     if [[ -n "$REGIONS" ]]; then
         if [[ ! -s gnomad.v4.1.joint.targets.GRCh38.bcf ]]; then

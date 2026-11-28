@@ -1,6 +1,6 @@
 class: GalaxyWorkflow
 label: WES tertiary analysis from FASTQ (v1)
-release: "0.17"
+release: "0.18"
 license: MIT
 tags:
   - WES
@@ -130,7 +130,9 @@ inputs:
     format: [bcf, vcf_bgzip]
     doc: >-
       AlphaMissense hg38 predictions as an indexed BCF with INFO/AM_score, built with data/build_alphamissense.sh
-      (CC BY 4.0). Gives the missense PP3/BP4 evidence of the report at the ClinGen-calibrated strengths.
+      (CC BY 4.0), optionally joined with REVEL and CADD v1.7 (insilico_scores.hg38.bcf from data/build_insilico.sh;
+      REVEL and CADD for non-commercial use). Gives the missense PP3/BP4 evidence of the report at the
+      ClinGen-calibrated strengths.
     position: {left: 0, top: 2100}
   "HPO disease annotations (phenotype.hpoa)":
     type: data

@@ -206,7 +206,7 @@ and VCFs. A naming mismatch does not raise an error. ClinVar/gnomAD annotations 
 | **Mother / Father: CNV per-target ratios** (optional) | The parents' *CNV per-target ratios* from v1 | The parents' read depth at each of the proband's CNVs: inherited (present in a parent), de novo (both parents normal) or unclear. |
 | **Recurrent artefacts (VCF)** (optional) | The laboratory's own list, built with [`data/build_artefact_list.sh`](data/build_artefact_list.sh) from earlier samples (below) | Alleles called in many of the laboratory's samples but rare or absent in gnomAD: systematic errors of the assay. The report marks matching calls low confidence. |
 | **Population allele frequencies (VCF)** | gnomAD v4.1 joint (exome + genome) frequencies reduced to the padded targets, as an indexed **BCF** built with [`data/build_gnomad_extract.sh`](data/build_gnomad_extract.sh) (below) | Transferred fields: `gnomAD_AF`, `_AN`, `_nhomalt` (homozygotes), `_grpmax` / `_grpmax_AF` / `_grpmax_AN` (genetic ancestry group with the highest AF), `_FAF95` / `_FAF95_grp` (highest filtering allele frequency, the statistic of the ACMG BA1/BS1 rules), `_filter` (gnomAD PASS / EXOMES_FILTERED / GENOMES_FILTERED / BOTH_FILTERED) and `_discordance_p` (exome vs genome frequency test). The caller's own `INFO/AF` is untouched. A file without these fields (e.g. an AF-only one) stops the annotation step with "tag not defined". |
-| **Missense predictions (AlphaMissense BCF)** | AlphaMissense hg38 predictions as an indexed **BCF** with `INFO/AM_score`, built with [`data/build_alphamissense.sh`](data/build_alphamissense.sh) (below) | Missense PP3/BP4 at the ClinGen-calibrated strengths. CC BY 4.0. |
+| **Missense predictions (AlphaMissense BCF)** | AlphaMissense hg38 predictions as an indexed **BCF** with `INFO/AM_score`, built with [`data/build_alphamissense.sh`](data/build_alphamissense.sh) (below); preferably `insilico_scores.hg38.bcf` (`install.sh data`), which adds REVEL (`INFO/REVEL`) and CADD v1.7 (`INFO/CADD`, coding exons ± 50 bp, [`data/build_cadd.sh`](data/build_cadd.sh), [`data/build_insilico.sh`](data/build_insilico.sh)) | Missense PP3/BP4 at the ClinGen-calibrated strengths (REVEL, then AlphaMissense, then CADD); CADD is shown for every variant. AlphaMissense CC BY 4.0; REVEL and CADD free for non-commercial use. |
 | **MANE transcripts (summary)** (optional) | [`MANE.GRCh38.v1.5.summary.txt.gz`](https://ftp.ncbi.nlm.nih.gov/refseq/MANE/MANE_human/release_1.5/) (1.1 MB, public domain) | MANE Select naming and classification, RefSeq names. |
 | **Curated gene-disease table** (optional) | Built with [`data/build_gene_disease.py`](data/build_gene_disease.py) from ClinGen validity, G2P and Orphanet (below; 3 MB) | Disease context section, curated inheritance and mechanism. |
 | **ClinGen expert-panel rules (VCEP)** / **classifications (ERepo)** (optional) | Built with [`data/build_vcep.py`](data/build_vcep.py) from the ClinGen CSpec registry and Evidence Repository (below; 1 MB and 4 MB) | Gene-specific ACMG rules; expert classifications next to ClinVar. |
@@ -1288,6 +1288,32 @@ On the three GIAB exomes (0.10 against 0.11 with all inputs):
 | HG005 | 15.7 s, 1.52 GiB | 24.7 s, 1.70 GiB |
 | HG001 | 13.0 s, 1.50 GiB | 21.1 s, 1.68 GiB |
 
+### CADD (report 0.18.0, CADD v1.7)
+
+**Extract.** `data/build_cadd.sh` reads CADD v1.7 (all SNVs, 87 GB; gnomAD v4.0 indels, 1.3 GB) only where it
+overlaps the canonical coding exons ± 50 bp, by remote tabix: 159.5 million alleles, 1.0 GB, in 79 min with 32
+readers (peak memory 1.9 GB). Nothing is downloaded in full. `data/build_insilico.sh` joins it with AlphaMissense and
+REVEL into the workflows' missense input.
+
+**Thresholds.** CADD PHRED at the ClinGen calibration (Pejaver et al., AJHG 2022, Table 2): PP3 Supporting
+[25.3, 28.1), Moderate ≥ 28.1; BP4 Supporting (17.3, 22.7], Moderate (0.15, 17.3], Strong ≤ 0.15. The calibration was
+made on an earlier CADD version, so v1.7 was measured on the ClinVar benchmark above (same inputs as report 0.12:
+MANE, curated gene-disease table, expert-panel rules, MaveDB, gnomAD coverage and pext), odd chromosomes for tuning:
+
+| Missense policy | Tuning: P/LP → P/LP (wrong) | Tuning: B/LB → B/LB (wrong) | Held-out: P/LP → P/LP (wrong) | Held-out: B/LB → B/LB (wrong) | Held-out expert B/LB | Time | Memory |
+|---|---|---|---|---|---|---|---|
+| REVEL, AlphaMissense where no REVEL (report 0.17) | 74.8 % (0.2 %) | 43.7 % (0.1 %) | 73.4 % (0.2 %) | 46.3 % (0.0 %) | 70.3 % | 9 s | 0.84 GiB |
+| **same, CADD where neither has a score** (chosen) | 74.8 % (0.2 %) | 44.0 % (0.1 %) | 73.4 % (0.2 %) | 46.7 % (0.0 %) | 70.5 % | 9 s | 0.84 GiB |
+| CADD alone | 70.4 % (0.3 %) | 44.9 % (0.1 %) | 69.7 % (0.2 %) | 46.1 % (0.0 %) | 68.8 % | 9 s | 0.84 GiB |
+
+CADD alone is weaker than REVEL on pathogenic variants (73.4 → 69.7 % held-out), so it only fills in: on the
+held-out half it gave codes to 27 missense SNVs without a REVEL or AlphaMissense score (all ClinVar benign or likely
+benign; 16 moved from VUS to likely benign) and changed nothing on the pathogenic side. A first version also
+applied CADD to the other effects the report treats like missense (in-frame indels, stop-lost SNVs), which CADD
+scores but its calibration does not cover; it gave BP4 to pathogenic in-frame deletions (MSH6) and stop-lost
+variants (GCK, IDUA, FGFR3, HBA2), so CADD codes are limited to missense SNVs. For all other variants the score is
+shown, not scored.
+
 ### gnomAD coverage and exon expression (report 0.12.0)
 
 Two ClinGen considerations were added and tested on the ClinVar benchmark above (tuning half first):
@@ -1551,8 +1577,8 @@ breakpoints, CNVs in segmental duplications (marked low confidence), large mtDNA
 expansions. mtDNA variants come from the off-target reads: heteroplasmy below about 25 % is not detectable in
 low-coverage exomes (median 11-14× in one GIAB batch), and NUMT reads can mimic low heteroplasmy (the mixture check
 flags it). MITOMAP refuses automated downloads, so mtDNA classifications come from ClinVar and gnomAD only. dbNSFP
-(BayesDel, CADD, MetaRNN and others) needs a registration with an institutional address and is not used; REVEL
-and AlphaMissense are the missense predictors. VCEP frequency cut-offs are read from the panels' free text and the
+(BayesDel, CADD, MetaRNN and others) needs a registration with an institutional address and is not used; REVEL,
+AlphaMissense and CADD (fallback for missense SNVs without the others) are the missense predictors. VCEP frequency cut-offs are read from the panels' free text and the
 panels' gene-specific rules that need case or functional data are not applied. CNV calls need ≥ 3 other samples of the same kit; with a small or mixed-batch panel they miss small
 events, and relatives in the same run share their inherited CNVs. The automated ACMG/AMP class uses only the evidence a VCF supports (no functional, segregation, case-count or
 literature evidence) and is a draft for review, and the HPO ranking depends on the terms given. Trio analysis needs the parents' calls on the same reference and

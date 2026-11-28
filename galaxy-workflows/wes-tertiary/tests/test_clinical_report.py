@@ -126,7 +126,7 @@ def test_predictor_candidates():
     assert p["category"] == "candidate" and "PP3_Strong" in p["note"] and p["alphamissense"] == "0.995"
     s = next(r for r in rows if r["gene"] == "GENES")
     assert s["category"] == "candidate" and "PP3_Supporting" in s["note"] and s["spliceai"] == "0.71"
-    assert "AlphaMissense 0.995" in html and "Scores present for this sample: AlphaMissense 1, SpliceAI 2" in html
+    assert "AlphaMissense 0.995" in html and "Scores present for this sample: REVEL 0, AlphaMissense 1, CADD 0, SpliceAI 2" in html
 
 
 def test_predictor_codes():
@@ -954,3 +954,24 @@ def test_gene_panels():
         "secondary findings are reported regardless of the panels"
     _, html0 = run_report()
     assert "<h2>Gene panels</h2>" not in html0 and "panel:" not in html0
+
+
+def test_cadd_codes():
+    """CADD PHRED at the ClinGen-calibrated cut-offs (Pejaver et al. 2022, Table 2) and the missense policies."""
+    assert rep.cadd_code(28.1) == "PP3_Moderate" and rep.cadd_code(28.09) == "PP3_Supporting"
+    assert rep.cadd_code(25.3) == "PP3_Supporting" and rep.cadd_code(25.29) is None
+    assert rep.cadd_code(22.7) == "BP4_Supporting" and rep.cadd_code(22.71) is None
+    assert rep.cadd_code(17.3) == "BP4_Moderate" and rep.cadd_code(0.15) == "BP4_Strong"
+    assert rep.cadd_code(None) is None
+
+    class V:
+        am, revel, cadd, ref, alt = None, None, 30.0, "A", "G"
+    assert rep.missense_code(V(), "revel") is None, "no REVEL, no AlphaMissense: nothing under the old policy"
+    assert rep.missense_code(V(), "revel_cadd") == "PP3_Moderate", "CADD fills in"
+    v = V()
+    v.revel = 0.10
+    assert rep.missense_code(v, "revel_cadd") == "BP4_Moderate", "REVEL first when it has a score"
+    assert rep.missense_code(v, "cadd") == "PP3_Moderate"
+    d = V()
+    d.ref, d.alt = "ATCT", "A"
+    assert rep.missense_code(d, "revel_cadd") is None, "in-frame deletion: CADD is calibrated on missense SNVs only"

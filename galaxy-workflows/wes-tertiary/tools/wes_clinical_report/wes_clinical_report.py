@@ -40,7 +40,7 @@ import statistics
 import subprocess
 import sys
 
-VERSION = "0.16.0"
+VERSION = "0.18.0"
 
 # --------------------------------------------------------------------------------------------- rules
 # ACMG secondary findings v3.3 (ACMG policy statement, Genet Med 2025;27:101454): the 81 genes of v3.2 (Miller et al.,
@@ -231,12 +231,13 @@ class Variant:
                  "zyg", "gene", "effect", "impact", "hgvs_c", "hgvs_p", "feature", "af", "clnsig", "revstat",
                  "clndn", "stars", "rs", "ab", "flags",
                  "an", "nhomalt", "grpmax", "grpmax_af", "faf", "faf_grp", "gfilter", "gdisc", "artefact",
-                 "am", "sai", "sai_gene", "repeat", "mane", "refseq", "hgvs_g", "revel", "cov", "pext")
+                 "am", "sai", "sai_gene", "repeat", "mane", "refseq", "hgvs_g", "revel", "cadd", "cov", "pext")
 
     def __init__(self):
         self.repeat = None  # repeat context of an in-frame change (repeat_flag), set when the reference is given
         self.mane, self.refseq, self.hgvs_g = "", "", ""
         self.revel = None
+        self.cadd = None
         self.cov, self.pext = None, {}
 
     def key(self):
@@ -334,6 +335,7 @@ def parse_vcf(path, sample_index=0):
                 v.gfilter, v.gdisc = gn.get("gnomAD_filter"), fnum(gn.get("gnomAD_discordance_p"))
                 v.am = fnum(str(info["AM_score"]).split(",")[0]) if info.get("AM_score") not in (None, True) else None
                 v.revel = fnum(str(info["REVEL"]).split(",")[0]) if info.get("REVEL") not in (None, True) else None
+                v.cadd = fnum(str(info["CADD"]).split(",")[0]) if info.get("CADD") not in (None, True) else None
                 v.sai, v.sai_gene = spliceai_max(info.get("SpliceAI"), alt)
                 v.clnsig = str(info.get("CLNSIG", "")) if info.get("CLNSIG") not in (None, True, ".") else ""
                 v.revstat = str(info.get("CLNREVSTAT", "")) if info.get("CLNREVSTAT") not in (None, True) else ""
@@ -372,10 +374,14 @@ CODE_RANK = {"PP3_Supporting": 1, "PP3_Moderate": 2, "PP3_Strong": 3}
 REVEL_PP3 = ((0.932, "PP3_Strong"), (0.773, "PP3_Moderate"), (0.644, "PP3_Supporting"))
 REVEL_BP4 = ((0.016, "BP4_Strong"), (0.183, "BP4_Moderate"), (0.290, "BP4_Supporting"))
 BP4_RANK = {"BP4_Supporting": 1, "BP4_Moderate": 2, "BP4_Strong": 3}
-# How the two calibrated missense predictors are combined (one predictor per variant, ClinGen SVI):
+# CADD PHRED (Pejaver et al., AJHG 2022, Table 2): no PP3 Strong level; BP4 Strong <= 0.15.
+CADD_PP3 = ((28.1, "PP3_Moderate"), (25.3, "PP3_Supporting"))
+CADD_BP4 = ((0.15, "BP4_Strong"), (17.3, "BP4_Moderate"), (22.7, "BP4_Supporting"))
+# How the calibrated missense predictors are combined (one predictor per variant, ClinGen SVI):
 #   "alphamissense": AlphaMissense only (report <= 0.10); "revel": REVEL, AlphaMissense where REVEL has no score;
-#   "concordant": both must point the same way and the weaker strength is used (one score alone counts as itself).
-MISSENSE_POLICY = "revel"  # chosen on the tuning half (README section 7)
+#   "concordant": both must point the same way and the weaker strength is used (one score alone counts as itself);
+#   "revel_cadd": as "revel", and CADD where neither REVEL nor AlphaMissense has a score; "cadd": CADD only.
+MISSENSE_POLICY = "revel_cadd"  # chosen on the tuning half (README section 7)
 
 
 def am_code(score):
@@ -404,9 +410,33 @@ def revel_code(score):
     return None
 
 
-def missense_code(v, policy=None):
-    """The missense PP3/BP4 code from AlphaMissense and REVEL under MISSENSE_POLICY."""
+def cadd_code(score):
+    if score is None:
+        return None
+    s = round(score, 2)
+    for t, c in CADD_PP3:
+        if s >= t:
+            return c
+    for t, c in CADD_BP4:
+        if s <= t:
+            return c
+    return None
+
+
+def missense_code(v, policy=None, gene=None):
+    """The missense PP3/BP4 code from AlphaMissense, REVEL and CADD under MISSENSE_POLICY."""
     policy = policy or MISSENSE_POLICY
+    # CADD's calibration covers missense SNVs only; it also scores indels and stop-lost changes, which the report's
+    # missense effects include (AlphaMissense and REVEL score missense SNVs only)
+    a = (ann_for_gene(v, gene) if gene else (v.anns[0] if getattr(v, "anns", None) else None))
+    snv = (len(getattr(v, "ref", "") or "") == 1 and len(getattr(v, "alt", "") or "") == 1
+           and (a is None or "missense_variant" in a[1]))
+    if policy == "cadd":
+        return cadd_code(getattr(v, "cadd", None)) if snv else None
+    if policy == "revel_cadd" and getattr(v, "revel", None) is None and v.am is None:
+        return cadd_code(getattr(v, "cadd", None)) if snv else None
+    if policy == "revel_cadd":
+        policy = "revel"
     am, rv = am_code(v.am), revel_code(getattr(v, "revel", None))
     if policy == "alphamissense" or getattr(v, "revel", None) is None:
         return am
@@ -427,7 +457,7 @@ def predictor_codes(v, gene):
     """PP3/BP4 from one calibrated missense predictor (AlphaMissense) and SpliceAI (Walker et al. 2023: max delta
     >= 0.2 PP3, <= 0.1 BP4, Supporting, outside the canonical +/-1,2 positions). The two PP3s are never summed: the
     stronger one is used. BP4 for a missense variant needs SpliceAI <= 0.1 (or no splice score)."""
-    am = missense_code(v) if is_missense(v, gene) else None
+    am = missense_code(v, gene=gene) if is_missense(v, gene) else None
     sp = None
     if v.sai is not None and not is_canonical_splice(v, gene):
         sp = "PP3_Supporting" if v.sai >= 0.2 else ("BP4_Supporting" if v.sai <= 0.1 else None)
@@ -455,6 +485,8 @@ def predictor_text(v):
         parts.append(f"AlphaMissense {v.am:.3f}")
     if getattr(v, "revel", None) is not None:
         parts.append(f"REVEL {v.revel:.3f}")
+    if getattr(v, "cadd", None) is not None:
+        parts.append(f"CADD {v.cadd:.1f}")
     if v.sai is not None:
         parts.append(f"SpliceAI {v.sai:.2f}")
     return ", ".join(parts)
@@ -3862,7 +3894,7 @@ def build(args):
         for g in genes_of(v)[:3]:
             if g in gencc or g in ACMG_SF:
                 if (is_lof(v, g) or (is_missense(v, g) and hpo_match.get(g))
-                        or (is_missense(v, g) and CODE_RANK.get(missense_code(v), 0) >= 2)
+                        or (is_missense(v, g) and CODE_RANK.get(missense_code(v, gene=g), 0) >= 2)
                         or splice_candidate(v, g, bool(hpo_match.get(g)))
                         or {"PS1", "PM5"} & set(protein_evidence(v, g, cvp)[0])):
                     rare_by_gene[g].append(v)
@@ -4992,12 +5024,19 @@ def build(args):
         "phenotype assignments for single-nucleotide alleles.</li>")
     n_am = sum(1 for v in variants if v.am is not None)
     n_sai = sum(1 for v in variants if v.sai is not None)
-    R.h("<li>In-silico predictors (one calibrated tool per mechanism, ClinGen SVI): missense PP3/BP4 from AlphaMissense "
-        "(Cheng et al. 2023) at the calibrated strengths of Bergquist et al. 2025 (PP3 Supporting &ge; 0.792, Moderate "
-        "&ge; 0.906, Strong &ge; 0.990; BP4 Supporting &le; 0.169, Moderate &le; 0.099); splicing PP3 (max delta &ge; 0.2) "
-        "and BP4 (&le; 0.1) at Supporting strength from SpliceAI outside the canonical &plusmn;1,2 positions (Walker et al. "
-        "2023). The two PP3s are not summed, PP3 is not combined with PVS1, and missense BP4 needs SpliceAI &le; 0.1. "
-        f"Scores present for this sample: AlphaMissense {n_am}, SpliceAI {n_sai} variants"
+    n_rv = sum(1 for v in variants if getattr(v, "revel", None) is not None)
+    n_cadd = sum(1 for v in variants if getattr(v, "cadd", None) is not None)
+    R.h("<li>In-silico predictors (one calibrated tool per variant and mechanism, ClinGen SVI): missense PP3/BP4 from "
+        "REVEL at the calibration of Pejaver et al. 2022 (PP3 Supporting &ge; 0.644, Moderate &ge; 0.773, Strong "
+        "&ge; 0.932; BP4 Supporting &le; 0.290, Moderate &le; 0.183, Strong &le; 0.016); where REVEL has no score, "
+        "AlphaMissense (Cheng et al. 2023; Bergquist et al. 2025: PP3 Supporting &ge; 0.792, Moderate &ge; 0.906, "
+        "Strong &ge; 0.990; BP4 Supporting &le; 0.169, Moderate &le; 0.099); where neither has one, CADD v1.7 for "
+        "missense SNVs (Pejaver et al. 2022: PP3 Supporting &ge; 25.3, Moderate &ge; 28.1; BP4 Supporting &le; 22.7, "
+        "Moderate &le; 17.3, Strong &le; 0.15). CADD is shown for all variants but scored only for missense SNVs. "
+        "Splicing PP3 (max delta &ge; 0.2) and BP4 (&le; 0.1) at Supporting strength from SpliceAI outside the "
+        "canonical &plusmn;1,2 positions (Walker et al. 2023). The two PP3s are not summed, PP3 is not combined with "
+        "PVS1, and missense BP4 needs SpliceAI &le; 0.1. "
+        f"Scores present for this sample: REVEL {n_rv}, AlphaMissense {n_am}, CADD {n_cadd}, SpliceAI {n_sai} variants"
         + ("" if n_am and n_sai else " (a missing predictor gives no PP3/BP4)") + ".</li>")
     if trio:
         R.h("<li>Trio: parental genotypes from the parents' calls (multi-allelic and complex records split and trimmed "
