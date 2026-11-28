@@ -48,7 +48,8 @@ def read_bed(path):
             p = line.split()
             if len(p) < 3 or p[0].startswith(("#", "track", "browser")):
                 continue
-            iv[p[0]].append((int(p[1]), int(p[2])))
+            c = p[0][3:] if p[0].startswith("chr") else p[0]  # UCSC BED vs Ensembl SAM/ref
+            iv[c].append((int(p[1]), int(p[2])))
     for c in iv:
         iv[c].sort()
     return iv
